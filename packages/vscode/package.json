@@ -1,0 +1,42 @@
+{
+	"private": true,
+	"name": "vscode-tsslint",
+	"version": "0.0.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/johnsoncodehk/tsslint.git",
+		"directory": "packages/vscode"
+	},
+	"sponsor": {
+		"url": "https://github.com/sponsors/johnsoncodehk"
+	},
+	"displayName": "TSSLint",
+	"description": "The TSSLint VSCode Extension",
+	"author": "johnsoncodehk",
+	"publisher": "johnsoncodehk",
+	"engines": {
+		"vscode": "*"
+	},
+	"contributes": {
+		"typescriptServerPlugins": [
+			{
+				"name": "@tsslint/plugin-bundle",
+				"enableForWorkspaceTypeScriptVersions": true
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run build",
+		"prebuild": "cd ../.. && npm run build",
+		"build": "node scripts/build",
+		"watch": "node scripts/build --watch",
+		"pack": "vsce package",
+		"release": "vsce publish",
+		"release:next": "vsce publish --pre-release"
+	},
+	"devDependencies": {
+		"@tsslint/plugin": "0.0.0",
+		"esbuild": "0.15.18",
+		"vsce": "latest"
+	}
+}

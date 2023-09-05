@@ -1,0 +1,8 @@
+{
+	"$schema": "https://raw.githubusercontent.com/lerna-lite/lerna-lite/main/packages/cli/schemas/lerna-schema.json",
+	"npmClient": "pnpm",
+	"packages": [
+		"packages/*"
+	],
+	"version": "0.0.0"
+}
