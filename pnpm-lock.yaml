@@ -22,7 +22,13 @@ importers:
         specifier: latest
         version: 5.2.2
 
-  packages/plugin:
+  packages/tsslint:
+    dependencies:
+      esbuild:
+        specifier: ^0.19.9
+        version: 0.19.9
+
+  packages/typescript-plugin:
     dependencies:
       error-stack-parser:
         specifier: ^2.1.4
@@ -31,17 +37,11 @@ importers:
         specifier: 0.0.0
         version: link:../tsslint
 
-  packages/tsslint:
-    dependencies:
-      esbuild:
-        specifier: ^0.19.9
-        version: 0.19.9
-
   packages/vscode:
     devDependencies:
-      '@tsslint/plugin':
+      '@tsslint/typescript-plugin':
         specifier: 0.0.0
-        version: link:../plugin
+        version: link:../typescript-plugin
       esbuild:
         specifier: ^0.19.9
         version: 0.19.9

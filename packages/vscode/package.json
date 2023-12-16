@@ -35,7 +35,7 @@
 		"release:next": "vsce publish --pre-release"
 	},
 	"devDependencies": {
-		"@tsslint/plugin": "0.0.0",
+		"@tsslint/typescript-plugin": "0.0.0",
 		"esbuild": "^0.19.9",
 		"vsce": "latest"
 	}

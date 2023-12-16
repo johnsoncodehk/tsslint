@@ -7,6 +7,6 @@
 	"include": [ "src" ],
 	"references": [
 		{ "path": "../tsslint/tsconfig.json" },
-		{ "path": "../plugin/tsconfig.json" },
+		{ "path": "../typescript-plugin/tsconfig.json" },
 	],
 }

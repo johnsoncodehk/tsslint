@@ -1,7 +1,7 @@
 require('esbuild').context({
-	entryPoints: ['./node_modules/@tsslint/plugin/out/index.js'],
+	entryPoints: ['./node_modules/@tsslint/typescript-plugin/index.js'],
 	bundle: true,
-	outfile: './node_modules/@tsslint/plugin-bundle/index.js',
+	outfile: './node_modules/@tsslint/typescript-plugin-bundle/index.js',
 	external: ['vscode'],
 	format: 'cjs',
 	platform: 'node',

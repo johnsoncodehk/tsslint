@@ -1,7 +1,6 @@
 {
 	"name": "tsslint",
 	"version": "0.0.0",
-	"main": "out/index.js",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
