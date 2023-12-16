@@ -4,9 +4,13 @@ import type {
 	LanguageServiceHost,
 	SourceFile,
 	Diagnostic,
+	ApplicableRefactorInfo,
+	TextRange,
 } from 'typescript/lib/tsserverlibrary';
+import { LoadConfigResult } from './loadConfig';
 
 export interface ProjectContext {
+	configFile: string;
 	typescript: typeof import('typescript/lib/tsserverlibrary.js');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
@@ -15,8 +19,18 @@ export interface ProjectContext {
 
 export interface Config {
 	rules?: Rules;
-	resolveRules?(context: ProjectContext, rules: Rules): Rules;
-	resolveResult?(context: ProjectContext, results: Diagnostic[]): Diagnostic[];
+	plugins?: Plugin[];
+}
+
+export interface Plugin {
+	(projectContext: ProjectContext, loadConfigResult: LoadConfigResult): PluginInstance | Promise<PluginInstance>;
+}
+
+export interface PluginInstance {
+	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
+	getFixes?(sourceFile: SourceFile, positionOrRange: number | TextRange): ApplicableRefactorInfo[];
+	fix?(sourceFile: SourceFile, refactorName: string, actionName: string): FileTextChanges[] | undefined;
+	resolveResult?(results: Diagnostic[]): Diagnostic[];
 }
 
 export interface Rules {
