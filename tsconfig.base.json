@@ -2,7 +2,6 @@
 	"compilerOptions": {
 		"target": "ES2021",
 		"lib": [
-			"WebWorker",
 			"ES2021",
 		],
 		"module": "Node16",

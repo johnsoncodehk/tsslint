@@ -2,9 +2,7 @@
 	"private": true,
 	"scripts": {
 		"build": "tsc -b",
-		"watch": "npm run build && (npm run watch:base & npm run watch:vscode)",
-		"watch:base": "tsc -b -w",
-		"watch:vscode": "cd packages/vscode && npm run watch",
+		"watch": "tsc -b -w",
 		"prerelease": "npm run build && npm run test",
 		"release": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
 		"release:next": "npm run release -- --dist-tag next"
