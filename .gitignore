@@ -1,3 +1,5 @@
 node_modules
-out
 *.tsbuildinfo
+*.d.ts
+*.js
+*.map
