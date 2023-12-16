@@ -1,6 +1,6 @@
 import * as ErrorStackParser from 'error-stack-parser';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
-import { loadConfig, Config, ProjectContext, Reporter, RuleContext } from 'tsslint';
+import { watchConfig, ProjectContext, Reporter, RuleContext, LoadConfigResult } from 'tsslint';
 
 const sourceFiles = new Map<string, ts.SourceFile>();
 
@@ -9,7 +9,7 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 	const pluginModule: ts.server.PluginModule = {
 		create(info) {
 
-			let config: Config | undefined;
+			let loadConfigResult: LoadConfigResult | undefined;
 
 			const languageServiceHost = info.languageServiceHost;
 			const languageService = info.languageService;
@@ -20,26 +20,72 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 				getEdits: () => ts.FileTextChanges[];
 			}[]>>();
 
-			load();
+			decorateLanguageService();
 
-			return {
-				...info.languageService,
-				getSemanticDiagnostics: fileName => {
+			watchConfig(
+				languageServiceHost.getCurrentDirectory(),
+				result => {
+					loadConfigResult = result;
+					info.project.refreshDiagnostics();
+				},
+			);
+
+			return languageService;
+
+			function decorateLanguageService() {
+
+				const getSemanticDiagnostics = languageService.getSemanticDiagnostics;
+				const getApplicableRefactors = languageService.getApplicableRefactors;
+				const getEditsForRefactor = languageService.getEditsForRefactor;
+
+				languageService.getSemanticDiagnostics = fileName => {
 
 					let currentRuleId: string;
-					let errors = languageService.getSemanticDiagnostics(fileName);
+					let errors = getSemanticDiagnostics(fileName);
 
-					const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
+					const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
 					if (!sourceFile) {
 						return errors;
+					}
+
+					if (fileName === loadConfigResult?.configFile) {
+						return [
+							...errors,
+							...[
+								...loadConfigResult.errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
+								...loadConfigResult.warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
+							].map(([error, category]) => {
+								const diag: ts.Diagnostic = {
+									category,
+									source: 'tsslint-esbuild',
+									// @ts-expect-error
+									code: error.code,
+									messageText: error.text,
+									file: sourceFile,
+									start: 0,
+									length: 0,
+								};
+								if (
+									error.location
+									// TODO: configFile starts with '/', but error.location.file not
+									// && error.location?.file === loadConfigResult?.configFile
+								) {
+									const offset = sourceFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column);
+									diag.start = offset;
+									diag.length = error.location.length;
+								}
+								// TODO: parse error.notes for relatedInformation
+								return diag;
+							}),
+						];
 					}
 
 					const fixes = getFileFixes(fileName);
 					const token = languageServiceHost.getCancellationToken?.();
 					const rulesContext: RuleContext = {
 						sourceFile,
-						languageServiceHost: languageServiceHost,
-						languageService: languageService,
+						languageServiceHost,
+						languageService,
 						typescript: ts,
 						reportError,
 						reportWarning,
@@ -56,10 +102,10 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 
 					fixes.clear();
 
-					let rules = config?.rules ?? {};
+					let rules = loadConfigResult?.config?.rules ?? {};
 
-					if (config?.resolveRules) {
-						rules = config.resolveRules(projectContext, rules);
+					if (loadConfigResult?.config?.resolveRules) {
+						rules = loadConfigResult?.config.resolveRules(projectContext, rules);
 					}
 
 					for (const [id, rule] of Object.entries(rules)) {
@@ -70,8 +116,8 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 						rule(rulesContext);
 					}
 
-					if (config?.resolveResults) {
-						errors = config.resolveResults(projectContext, errors);
+					if (loadConfigResult?.config?.resolveResult) {
+						errors = loadConfigResult?.config.resolveResult(projectContext, errors);
 					}
 
 					return errors;
@@ -173,13 +219,13 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 							},
 						};
 					}
-				},
-				getApplicableRefactors(fileName, positionOrRange, ...rest) {
+				};
+				languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
 
 					const start = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.pos;
 					const end = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.end;
 					const fixes = getFileFixes(fileName);
-					const refactors = languageService.getApplicableRefactors(fileName, positionOrRange, ...rest);
+					const refactors = getApplicableRefactors(fileName, positionOrRange, ...rest);
 
 					for (const [errorCode, _fixes] of fixes) {
 						for (let i = 0; i < _fixes.length; i++) {
@@ -192,7 +238,7 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 								if (refactors[refactors.length - 1]?.name !== 'tsslint/fix') {
 									refactors.push({
 										name: 'tsslint/fix',
-										description: 'TSSLint Rules Fix',
+										description: 'Fix ' + errorCode,
 										actions: [],
 									});
 								}
@@ -205,8 +251,8 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 					}
 
 					return refactors;
-				},
-				getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) {
+				};
+				languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) => {
 					if (refactorName === 'tsslint/fix') {
 						const errorCode = actionName.substring(0, actionName.lastIndexOf('-'));
 						const fixIndex = actionName.substring(actionName.lastIndexOf('-') + 1);
@@ -214,14 +260,9 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 						return { edits: fix.getEdits() };
 					}
 					else {
-						return languageService.getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest);
+						return getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest);
 					}
-				},
-			};
-
-			async function load() {
-				config = await loadConfig(languageServiceHost.getCurrentDirectory());
-				info.project.refreshDiagnostics();
+				};
 			}
 
 			function getFileFixes(fileName: string) {

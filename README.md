@@ -101,7 +101,7 @@ Execute the `TypeScript: Restart TS Server` command in VSCode. Now you can see i
 
 ### Modify the Error
 
-You cannot configure the severity of a rule, it should be determined internally by rules. But in the config file, you can modify the reported errors through the `resolveResults()` API, and even add additional errors.
+You cannot configure the severity of a rule, it should be determined internally by rules. But in the config file, you can modify the reported errors through the `resolveResult()` API, and even add additional errors.
 
 The following example shows changing no-console from Warning to Error.
 
@@ -115,12 +115,13 @@ export default defineConfig({
 	rules: {
 		'no-console': noConsoleRule
 	},
-	resolveResults({ typescript: ts }, errors) {
+	resolveResult({ typescript: ts }, errors) {
 		for (const error of errors) {
 			if (error.code === 'no-console') {
 				error.category = ts.DiagnosticCategory.Error;
 			}
 		}
+		return errors;
 	},
 });
 ```

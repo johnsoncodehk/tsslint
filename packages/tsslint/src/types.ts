@@ -16,7 +16,7 @@ export interface ProjectContext {
 export interface Config {
 	rules?: Rules;
 	resolveRules?(context: ProjectContext, rules: Rules): Rules;
-	resolveResults?(context: ProjectContext, results: Diagnostic[]): Diagnostic[];
+	resolveResult?(context: ProjectContext, results: Diagnostic[]): Diagnostic[];
 }
 
 export interface Rules {

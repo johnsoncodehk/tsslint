@@ -36,7 +36,7 @@
 	},
 	"devDependencies": {
 		"@tsslint/plugin": "0.0.0",
-		"esbuild": "0.15.18",
+		"esbuild": "^0.19.9",
 		"vsce": "latest"
 	}
 }

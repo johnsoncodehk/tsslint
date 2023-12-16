@@ -11,5 +11,8 @@
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/tsslint"
+	},
+	"dependencies": {
+		"esbuild": "^0.19.9"
 	}
 }
