@@ -1,0 +1,11 @@
+{
+	"include": [ "fixture.ts" ],
+	"compilerOptions": {
+		"plugins": [
+			{
+				"name": "@tsslint/typescript-plugin",
+				"configFile": "./tsslint.config.ts",
+			},
+		],
+	},
+}

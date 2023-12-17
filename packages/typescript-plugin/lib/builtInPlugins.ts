@@ -3,7 +3,7 @@ import * as ErrorStackParser from 'error-stack-parser';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 
 export const builtInPlugins: Plugin[] = [
-	(ctx, loadConfigResult) => {
+	(ctx, { warnings, errors }) => {
 		const ts = ctx.typescript;
 
 		return {
@@ -12,14 +12,13 @@ export const builtInPlugins: Plugin[] = [
 					return [];
 				}
 				return [
-					...loadConfigResult.errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
-					...loadConfigResult.warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
+					...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
+					...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
 				].map(([error, category]) => {
 					const diag: ts.Diagnostic = {
 						category,
 						source: 'tsslint-esbuild',
-						// @ts-expect-error
-						code: error.code,
+						code: error.id as any,
 						messageText: JSON.stringify(error, null, 2),
 						file: sourceFile,
 						start: 0,
@@ -84,8 +83,7 @@ export const builtInPlugins: Plugin[] = [
 
 					const error: ts.Diagnostic = {
 						category,
-						// @ts-expect-error
-						code: currentRuleId,
+						code: currentRuleId as any,
 						messageText: message,
 						file: sourceFile,
 						start,
@@ -135,7 +133,7 @@ export const builtInPlugins: Plugin[] = [
 								file: stackFile,
 								start: pos,
 								length: reportNode?.end ? reportNode.end - pos : 0,
-								messageText: '👈 Reported from here',
+								messageText: '👈 Reporter',
 							});
 						}
 					}

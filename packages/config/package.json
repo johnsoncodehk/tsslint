@@ -10,5 +10,13 @@
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/config"
+	},
+	"peerDependencies": {
+		"tslint": "*"
+	},
+	"peerDependenciesMeta": {
+		"tslint": {
+			"optional": true
+		}
 	}
 }

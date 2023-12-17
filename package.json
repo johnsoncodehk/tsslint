@@ -8,11 +8,12 @@
 		"release:next": "npm run release -- --dist-tag next"
 	},
 	"devDependencies": {
-		"@types/node": "latest",
-		"typescript": "latest"
-	},
-	"optionalDependencies": {
 		"@lerna-lite/cli": "latest",
-		"@lerna-lite/publish": "latest"
+		"@lerna-lite/publish": "latest",
+		"@tsslint/config": "0.0.0",
+		"@tsslint/typescript-plugin": "0.0.0",
+		"@types/node": "latest",
+		"tslint": "latest",
+		"typescript": "latest"
 	}
 }

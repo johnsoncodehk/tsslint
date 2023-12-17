@@ -115,13 +115,17 @@ export default defineConfig({
 	rules: {
 		'no-console': noConsoleRule
 	},
-	resolveResult({ typescript: ts }, errors) {
-		for (const error of errors) {
-			if (error.code === 'no-console') {
-				error.category = ts.DiagnosticCategory.Error;
-			}
-		}
-		return errors;
-	},
+	plugins: [
+		() => ({
+			resolveResult({ typescript: ts }, errors) {
+				for (const error of errors) {
+					if (error.code === 'no-console') {
+						error.category = ts.DiagnosticCategory.Error;
+					}
+				}
+				return errors;
+			},
+		}),
+	],
 });
 ```

@@ -1,14 +1,30 @@
-import { Config, PluginInstance, ProjectContext, findConfigFile } from '@tsslint/config';
+import { Config, PluginInstance, ProjectContext } from '@tsslint/config';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 import { watchConfig } from './lib/watchConfig';
 import { builtInPlugins } from './lib/builtInPlugins';
+import * as path from 'path';
 
 const init: ts.server.PluginModuleFactory = (modules) => {
 	const { typescript: ts } = modules;
 	const pluginModule: ts.server.PluginModule = {
 		create(info) {
 
-			const configFile = findConfigFile(info.project.getCurrentDirectory());
+			const tsconfig = info.project.projectKind === ts.server.ProjectKind.Configured
+				? info.project.getProjectName()
+				: undefined;
+			if (!tsconfig) {
+				return info.languageService;
+			}
+
+			if (!info.config.configFile) {
+				return info.languageService;
+			}
+			let configFile: string | undefined;
+			try {
+				configFile = path.resolve(tsconfig, '..', info.config.configFile);
+			} catch (err) {
+				// TODO: show error in tsconfig.json
+			}
 			if (!configFile) {
 				return info.languageService;
 			}
@@ -20,11 +36,9 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 			const languageService = info.languageService;
 			const projectContext: ProjectContext = {
 				configFile,
-				tsconfig: info.project.projectKind === ts.server.ProjectKind.Configured
-					? info.project.getProjectName()
-					: undefined,
-				languageServiceHost: languageServiceHost,
-				languageService: languageService,
+				tsconfig,
+				languageServiceHost,
+				languageService,
 				typescript: ts,
 			};
 
