@@ -15,6 +15,12 @@ importers:
         specifier: latest
         version: 3.1.0(typescript@5.2.2)
     devDependencies:
+      '@tsslint/config':
+        specifier: 0.0.0
+        version: link:packages/config
+      '@tsslint/typescript-plugin':
+        specifier: 0.0.0
+        version: link:packages/typescript-plugin
       '@types/node':
         specifier: latest
         version: 20.5.9
@@ -22,20 +28,19 @@ importers:
         specifier: latest
         version: 5.2.2
 
-  packages/tsslint:
-    dependencies:
-      esbuild:
-        specifier: ^0.19.9
-        version: 0.19.9
+  packages/config: {}
 
   packages/typescript-plugin:
     dependencies:
+      '@tsslint/config':
+        specifier: 0.0.0
+        version: link:../config
       error-stack-parser:
         specifier: ^2.1.4
         version: 2.1.4
-      tsslint:
-        specifier: 0.0.0
-        version: link:../tsslint
+      esbuild:
+        specifier: ^0.19.9
+        version: 0.19.9
 
 packages:
 

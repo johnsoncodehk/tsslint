@@ -12,7 +12,8 @@
 		"directory": "packages/typescript-plugin"
 	},
 	"dependencies": {
+		"@tsslint/config": "0.0.0",
 		"error-stack-parser": "^2.1.4",
-		"tsslint": "0.0.0"
+		"esbuild": "^0.19.9"
 	}
 }

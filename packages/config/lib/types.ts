@@ -7,7 +7,7 @@ import type {
 	ApplicableRefactorInfo,
 	TextRange,
 } from 'typescript/lib/tsserverlibrary';
-import { LoadConfigResult } from './loadConfig';
+import type * as esbuild from 'esbuild';
 
 export interface ProjectContext {
 	configFile: string;
@@ -23,13 +23,14 @@ export interface Config {
 }
 
 export interface Plugin {
-	(projectContext: ProjectContext, loadConfigResult: LoadConfigResult): PluginInstance | Promise<PluginInstance>;
+	(projectContext: ProjectContext, configBuildResult: esbuild.BuildResult): PluginInstance | Promise<PluginInstance>;
 }
 
 export interface PluginInstance {
 	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
 	getFixes?(sourceFile: SourceFile, positionOrRange: number | TextRange): ApplicableRefactorInfo[];
 	fix?(sourceFile: SourceFile, refactorName: string, actionName: string): FileTextChanges[] | undefined;
+	resolveRules?(rules: Rules): Rules;
 	resolveResult?(results: Diagnostic[]): Diagnostic[];
 }
 
