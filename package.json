@@ -3,7 +3,7 @@
 	"scripts": {
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
-		"prerelease": "npm run build && npm run test",
+		"prerelease": "npm run build",
 		"release": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
 		"release:next": "npm run release -- --dist-tag next"
 	},

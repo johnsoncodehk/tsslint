@@ -1,111 +1,120 @@
 # TSSLint
 
-> The *zero overhead* "Linter" integrated with TypeScript Language Server.
+> A lightweight inspection tool that seamlessly integrates with TypeScript Language Server
 
-Status: PoC
+TSSLint is not your typical linter. Its main purpose is to expose the TypeScript Language Server diagnostic interface, allowing you to add your own diagnostic rules without additional overhead to creating a TypeChecker.
 
-This is not the traditional Linter you know, the main purpose of TSSLinter is to expose the TypeScript Language Server diagnostic interface. You can add your own diagnostic rules without additional TypeChecker overhead, or modify TypeScript's original diagnostic results.
+## Why TSSLint?
 
-## Why?
+The performance of TypeScript in code editors has always been a crucial concern. Most TypeScript tools integrate TypeScript libraries to enable type checking and query code types through the LanguageService or TypeChecker API.
 
-The performance of TS in Editor has long been a topic that cannot be ignored. Most TS tools integrate TS libraries to obtain type checking capabilities, and query code types through LanguageService or TypeChecker API.
+However, for complex types or large codebases, the tsserver process can consume significant memory and CPU resources. When linter tools integrate with TypeScript and create their own LanguageService instances, memory and CPU usage can continue to increase. In some cases, this has caused projects to experience long save times when codeActionOnSave is enabled in VSCode.
 
-But for complex types or large code bases, tsserver may already take up a lot of memory and CPU. When Linter tools integrated with TS create and maintain their LanguageService instances, memory and CPU will continue to increase. More seriously, this has caused some projects to save for too long when codeActionOnSave is enabled in VSCode.
-
-The purpose of TSSLint is to perfectly integrate tsserver to avoid the overhead that we should be able to avoid, and to expose linting capabilities on top of it.
-
-TSSLint will also be compatible with TSLint rules to reduce duplication of work.
+TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overhead and provide linting capabilities on top of it. It also supports reusing TSLint rules to reduce duplication of work.
 
 ## Features
 
-- Integrate with tsserver to minimize semantic linting overhead in IDE
-- Integrate with tsc to minimize linting time in CI
-- Traceable error reporting
-- Support ESM config file
+- Integration with tsserver to minimize semantic linting overhead in IDEs
+- Integration with tsc to minimize linting time in continuous integration (CI) pipelines
+- Compatibility with TSLint rules
+- No need for IDE extensions
+- Writing config in typescript
+- Direct support for meta framework files based on TS Plugin without a parser (e.g., Vue)
 
 ## Usage
 
-To make TSSLint work in the IDE (here specifically refers to VSCode), you need to install the [TSSLint VSCode Extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint), and create a configuration file in the project root directory, the effective file name is `tsslint.config.js` (could be CJS or ESM, depending on the `type` field of `pakcage.json`) / `tsslint.config.cjs` (CJS) / `tsslint.config.mjs` (ESM).
+To enable TSSLint in your IDE, follow these steps:
 
-`[project root]/tsslint.config.mjs`:
+1. Add the `@tsslint/typescript-plugin` dependency to your project.
+2. Open your `tsconfig.json` file.
+3. In the `compilerOptions` section, add the following code:
+	```jsonc
+	{
+		"compilerOptions": {
+			"plugins": [
+				{
+					"name": "@tsslint/typescript-plugin",
+					"configFile": "./tsslint.config.ts"
+				}
+			]
+		}
+	}
+	```
+4. Create the `tsslint.config.ts` config file:
+	```js
+	import { defineConfig } from '@tsslint/config';
 
-```js
-import { defineConfig } from 'tsslint';
-
-export default defineConfig({
-	rules: {
-		// ... your rules
-	},
-});
-```
-
-> Wrapping into `defineConfig()` is optional, it's just for having IntelliSense support.
+	export default defineConfig({
+		rules: {
+			// ... your rules
+		},
+	});
+	```
+	> Wrapping into `defineConfig()` is optional for having IntelliSense support.
 
 ### Create a Rule
 
-Each rule is a function that receives the context of the current diagnostic task. You can call `reportError()` / `reportWarning()` to report an error.
+To create a rule, you need to define a function that receives the context of the current diagnostic task. Within this function, you can call `reportError()` or `reportWarning()` to report an error.
 
-Let's create a `no-console` rule under `[project root]/rules/` as an example.
+As an example, let's create a `no-console` rule under `[project root]/rules/`.
 
-`[project root]/rules/no-console.mjs`:
+Here's the code for `[project root]/rules/noConsoleRule.ts`:
 
 ```js
-import { defineRule } from 'tsslint';
+import type { Rule } from '@tsslint/config';
 
-export default defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
-    sourceFile.forEachChild(function walk(node) {
-        if (
-            ts.isPropertyAccessExpression(node) &&
-            ts.isIdentifier(node.expression) &&
-            node.expression.text === 'console'
-        ) {
-            reportWarning(
-                `Calls to 'console.x' are not allowed.`,
-                node.parent.getStart(sourceFile),
-                node.parent.getEnd()
-            ).withFix(
-                'Remove this console expression',
-                () => [{
-                    fileName: sourceFile.fileName,
-                    textChanges: [{
-                        newText: '/* deleted */',
-                        span: {
-                            start: node.parent.getStart(sourceFile),
-                            length: node.parent.end,
-                        },
-                    }],
-                }]
-            );
-        }
-        node.forEachChild(walk);
-    });
-});
+const rule: Rule = ({ typescript: ts, sourceFile, reportWarning }) => {
+	ts.forEachChild(sourceFile, function walk(node) {
+		if (
+			ts.isPropertyAccessExpression(node) &&
+			ts.isIdentifier(node.expression) &&
+			node.expression.text === 'console'
+		) {
+			reportWarning(
+				`Calls to 'console.x' are not allowed.`,
+				node.parent.getStart(sourceFile),
+				node.parent.getEnd()
+			).withFix(
+				'Remove this console expression',
+				() => [{
+					fileName: sourceFile.fileName,
+					textChanges: [{
+						newText: '/* deleted */',
+						span: {
+							start: node.parent.getStart(sourceFile),
+							length: node.parent.end,
+						},
+					}],
+				}]
+			);
+		}
+		ts.forEachChild(node, walk);
+	});
+}
+
+export default rule;
 ```
 
-Then add it to config.
+Then add it to the `tsslint.config.ts` config file.
 
-`[project root]/tsslint.config.mjs`:
-
-```js
-import { defineConfig } from 'tsslint';
-import noConsoleRule from './rules/no-console.mjs';
+```diff
+import { defineConfig } from '@tsslint/config';
++ import noConsoleRule from './rules/noConsoleRule.ts';
 
 export default defineConfig({
 	rules: {
-		'no-console': noConsoleRule
++ 		'no-console': noConsoleRule
 	},
 });
 ```
 
-Execute the `TypeScript: Restart TS Server` command in VSCode. Now you can see in the editor that `console.log` is reporting errors. At the same time, the error message will display the actual code line reporting the error. When you click it, it will jump to the `reportWarning()` code at line 10 in `no-console.mjs`.
+After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `reportWarning()` code is located.
 
 ### Modify the Error
 
-You cannot configure the severity of a rule, it should be determined internally by rules. But in the config file, you can modify the reported errors through the `resolveResult()` API, and even add additional errors.
+While you cannot directly configure the severity of a rule, you can modify the reported errors through the `resolveResult()` API in the config file. This allows you to customize the severity of specific rules and even add additional errors.
 
-The following example shows changing no-console from Warning to Error.
-
-`[project root]/tsslint.config.mjs`:
+Here's an example of changing the severity of the `no-console` rule from Warning to Error in the `tsslint.config.ts` file:
 
 ```js
 import { defineConfig } from 'tsslint';
@@ -129,3 +138,27 @@ export default defineConfig({
 	],
 });
 ```
+
+## Using TSLint Rules
+
+TSSLint supports the reuse of TSLint rules. This feature allows you to avoid duplicating work when you want to use existing TSLint rules. To use TSLint rules, you need to parse them using the `parseTSLintRules` function from `@tsslint/config` as shown in the example below:
+
+```typescript
+import { defineConfig, parseTSLintRules } from '@tsslint/config';
+
+export default defineConfig({
+	rules: {
+		...parseTSLintRules([
+			new (require('tslint/lib/rules/banTsIgnoreRule').Rule)({
+				ruleName: 'ban-ts-ignore',
+				ruleArguments: [],
+				ruleSeverity: 'warning',
+			}),
+		]),
+	},
+});
+```
+
+In the above example, the `ban-ts-ignore` rule from TSLint is being used. The `parseTSLintRules` function takes an array of TSLint rules and returns an object that can be spread into the `rules` property of the config object passed to `defineConfig`.
+
+Please refer to the `fixtures/parse-tslint-rules/` file for a complete example.
