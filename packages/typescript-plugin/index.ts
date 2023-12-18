@@ -21,24 +21,34 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 			}
 			let configFile: string | undefined;
 			try {
-				configFile = path.resolve(tsconfig, '..', info.config.configFile);
+				configFile = require.resolve(info.config.configFile, { paths: [path.dirname(tsconfig)] });
 			} catch (err) {
-				// TODO: show error in tsconfig.json
-			}
-			if (!configFile) {
+				const getCompilerOptionsDiagnostics = info.languageService.getCompilerOptionsDiagnostics;
+
+				info.languageService.getCompilerOptionsDiagnostics = () => {
+					const configFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
+					const start = configFile.text.indexOf(info.config.configFile);
+					return getCompilerOptionsDiagnostics().concat([{
+						category: ts.DiagnosticCategory.Warning,
+						code: 0,
+						messageText: String(err),
+						file: configFile,
+						start: start - 1,
+						length: info.config.configFile.length + 2,
+					}]);
+				};
+
 				return info.languageService;
 			}
 
 			let config: Config | undefined;
 			let plugins: PluginInstance[] = [];
 
-			const languageServiceHost = info.languageServiceHost;
-			const languageService = info.languageService;
 			const projectContext: ProjectContext = {
 				configFile,
 				tsconfig,
-				languageServiceHost,
-				languageService,
+				languageServiceHost: info.languageServiceHost,
+				languageService: info.languageService,
 				typescript: ts,
 			};
 
@@ -63,24 +73,24 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 				},
 			);
 
-			return languageService;
+			return info.languageService;
 
 			function decorateLanguageService() {
 
-				const getSyntacticDiagnostics = languageService.getSyntacticDiagnostics;
-				const getApplicableRefactors = languageService.getApplicableRefactors;
-				const getEditsForRefactor = languageService.getEditsForRefactor;
+				const getSyntacticDiagnostics = info.languageService.getSyntacticDiagnostics;
+				const getApplicableRefactors = info.languageService.getApplicableRefactors;
+				const getEditsForRefactor = info.languageService.getEditsForRefactor;
 
-				languageService.getSyntacticDiagnostics = fileName => {
+				info.languageService.getSyntacticDiagnostics = fileName => {
 
 					let errors: ts.Diagnostic[] = getSyntacticDiagnostics(fileName);
 
-					const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
+					const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 					if (!sourceFile) {
 						return errors as ts.DiagnosticWithLocation[];
 					}
 
-					const token = languageServiceHost.getCancellationToken?.();
+					const token = info.languageServiceHost.getCancellationToken?.();
 
 					for (const plugin of plugins) {
 						if (token?.isCancellationRequested()) {
@@ -99,16 +109,16 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 
 					return errors as ts.DiagnosticWithLocation[];
 				};
-				languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
+				info.languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
 
 					let refactors = getApplicableRefactors(fileName, positionOrRange, ...rest);
 
-					const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
+					const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 					if (!sourceFile) {
 						return refactors;
 					}
 
-					const token = languageServiceHost.getCancellationToken?.();
+					const token = info.languageServiceHost.getCancellationToken?.();
 
 					for (const plugin of plugins) {
 						if (token?.isCancellationRequested()) {
@@ -119,9 +129,9 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 
 					return refactors;
 				};
-				languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) => {
+				info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) => {
 
-					const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
+					const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 					if (!sourceFile) {
 						return;
 					}
