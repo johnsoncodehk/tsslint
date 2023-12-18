@@ -16,10 +16,10 @@ importers:
         version: 3.1.0(typescript@5.2.2)
       '@tsslint/config':
         specifier: 0.0.0
-        version: link:packages/config
+        version: 0.0.0(tslint@6.1.3)
       '@tsslint/typescript-plugin':
         specifier: 0.0.0
-        version: link:packages/typescript-plugin
+        version: 0.0.0(tslint@6.1.3)
       '@types/node':
         specifier: latest
         version: 20.5.9
@@ -39,7 +39,7 @@ importers:
   packages/typescript-plugin:
     dependencies:
       '@tsslint/config':
-        specifier: 0.0.0
+        specifier: 0.0.1
         version: link:../config
       error-stack-parser:
         specifier: ^2.1.4
@@ -81,7 +81,6 @@ packages:
     cpu: [arm64]
     os: [android]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/android-arm@0.19.9:
@@ -90,7 +89,6 @@ packages:
     cpu: [arm]
     os: [android]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/android-x64@0.19.9:
@@ -99,7 +97,6 @@ packages:
     cpu: [x64]
     os: [android]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/darwin-arm64@0.19.9:
@@ -108,7 +105,6 @@ packages:
     cpu: [arm64]
     os: [darwin]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/darwin-x64@0.19.9:
@@ -117,7 +113,6 @@ packages:
     cpu: [x64]
     os: [darwin]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/freebsd-arm64@0.19.9:
@@ -126,7 +121,6 @@ packages:
     cpu: [arm64]
     os: [freebsd]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/freebsd-x64@0.19.9:
@@ -135,7 +129,6 @@ packages:
     cpu: [x64]
     os: [freebsd]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-arm64@0.19.9:
@@ -144,7 +137,6 @@ packages:
     cpu: [arm64]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-arm@0.19.9:
@@ -153,7 +145,6 @@ packages:
     cpu: [arm]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-ia32@0.19.9:
@@ -162,7 +153,6 @@ packages:
     cpu: [ia32]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-loong64@0.19.9:
@@ -171,7 +161,6 @@ packages:
     cpu: [loong64]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-mips64el@0.19.9:
@@ -180,7 +169,6 @@ packages:
     cpu: [mips64el]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-ppc64@0.19.9:
@@ -189,7 +177,6 @@ packages:
     cpu: [ppc64]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-riscv64@0.19.9:
@@ -198,7 +185,6 @@ packages:
     cpu: [riscv64]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-s390x@0.19.9:
@@ -207,7 +193,6 @@ packages:
     cpu: [s390x]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/linux-x64@0.19.9:
@@ -216,7 +201,6 @@ packages:
     cpu: [x64]
     os: [linux]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/netbsd-x64@0.19.9:
@@ -225,7 +209,6 @@ packages:
     cpu: [x64]
     os: [netbsd]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/openbsd-x64@0.19.9:
@@ -234,7 +217,6 @@ packages:
     cpu: [x64]
     os: [openbsd]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/sunos-x64@0.19.9:
@@ -243,7 +225,6 @@ packages:
     cpu: [x64]
     os: [sunos]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/win32-arm64@0.19.9:
@@ -252,7 +233,6 @@ packages:
     cpu: [arm64]
     os: [win32]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/win32-ia32@0.19.9:
@@ -261,7 +241,6 @@ packages:
     cpu: [ia32]
     os: [win32]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@esbuild/win32-x64@0.19.9:
@@ -270,7 +249,6 @@ packages:
     cpu: [x64]
     os: [win32]
     requiresBuild: true
-    dev: false
     optional: true
 
   /@hutson/parse-repository-url@5.0.0:
@@ -857,6 +835,27 @@ packages:
     resolution: {integrity: sha512-rUV5WyJrJLoloD4NDN1V1+LDMDWOa4OTsT4yYJwQNpTU6FWxkxHpL7eu4w+DmiH8x/EAM1otkPE1+LaspIbplw==}
     engines: {node: '>=18'}
     requiresBuild: true
+    dev: true
+
+  /@tsslint/config@0.0.0(tslint@6.1.3):
+    resolution: {integrity: sha512-IO7yh2YdOH5Yq5gLp6J8dvbbPOw6H1PO3sjORKFgtUgISRDQLZb7TdcFgWYrF35syh4vLNcMQ4w5mhTWZkkHvg==}
+    peerDependencies:
+      tslint: '*'
+    peerDependenciesMeta:
+      tslint:
+        optional: true
+    dependencies:
+      tslint: 6.1.3(typescript@5.2.2)
+    dev: true
+
+  /@tsslint/typescript-plugin@0.0.0(tslint@6.1.3):
+    resolution: {integrity: sha512-T8NpdzklSxq8B+nikZysaj9l4IYGqdlY98qAtiaQk1jOMk3SEvuPc42hPRG7u4p3CdJFFAmo1GycG0PT9FskhQ==}
+    dependencies:
+      '@tsslint/config': 0.0.0(tslint@6.1.3)
+      error-stack-parser: 2.1.4
+      esbuild: 0.19.9
+    transitivePeerDependencies:
+      - tslint
     dev: true
 
   /@tufjs/canonical-json@2.0.0:
@@ -1543,7 +1542,6 @@ packages:
     resolution: {integrity: sha512-Sk5V6wVazPhq5MhpO+AUxJn5x7XSXGl1R93Vn7i+zS15KDVxQijejNCrz8340/2bgLBjR9GtEG8ZVKONDjcqGQ==}
     dependencies:
       stackframe: 1.3.4
-    dev: false
 
   /esbuild@0.19.9:
     resolution: {integrity: sha512-U9CHtKSy+EpPsEBa+/A2gMs/h3ylBC0H0KSqIg7tpztHerLi6nrrcoUJAkNCEPumx8yJ+Byic4BVwHgRbN0TBg==}
@@ -1573,7 +1571,6 @@ packages:
       '@esbuild/win32-arm64': 0.19.9
       '@esbuild/win32-ia32': 0.19.9
       '@esbuild/win32-x64': 0.19.9
-    dev: false
 
   /escalade@3.1.1:
     resolution: {integrity: sha512-k0er2gUkLf8O0zKJiAhmkTnJlTvINGv7ygDNPbeIsX/TJjGJZHuh9B2UxbsaEkmlEo9MfhrSzmhIlhRlI2GXnw==}
@@ -3405,7 +3402,6 @@ packages:
 
   /stackframe@1.3.4:
     resolution: {integrity: sha512-oeVtt7eWQS+Na6F//S4kJ2K2VbRlS9D43mAlMyVpVWovy9o+jfgH8O9agzANzaiLjclA0oYzUXEM4PurhSUChw==}
-    dev: false
 
   /string-width@4.2.3:
     resolution: {integrity: sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==}
