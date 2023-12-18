@@ -11,6 +11,7 @@ export async function watchConfig(
 			require.resolve('@tsslint/typescript-plugin/package.json')
 		),
 		'..',
+		'..',
 		'.tsslint',
 	);
 	const outFileName = path
