@@ -122,17 +122,40 @@ function decorateLanguageService(
 
 	async function update(pluginConfig: { configFile: string; }) {
 
-		config = undefined;
-		plugins = [];
-		configFileBuildContext?.dispose();
-		compilerOptionsDiagnostics = [];
-
 		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
 		const start = jsonConfigFile.text.indexOf(pluginConfig.configFile) - 1;
 		const length = pluginConfig.configFile.length + 2;
 
+		let newConfigFile: string | undefined;
+		let configResolveError: any;
+
 		try {
-			configFile = require.resolve(pluginConfig.configFile, { paths: [path.dirname(tsconfig)] });
+			newConfigFile = require.resolve(pluginConfig.configFile, { paths: [path.dirname(tsconfig)] });
+		} catch (err) {
+			configResolveError = err;
+		}
+
+		if (newConfigFile !== configFile) {
+			configFile = newConfigFile;
+			config = undefined;
+			plugins = [];
+			configFileBuildContext?.dispose();
+			compilerOptionsDiagnostics = [];
+
+			if (configResolveError) {
+				compilerOptionsDiagnostics.push({
+					category: ts.DiagnosticCategory.Error,
+					code: 0,
+					messageText: String(configResolveError),
+					file: jsonConfigFile,
+					start: start,
+					length: length,
+				});
+			}
+
+			if (!configFile) {
+				return;
+			}
 
 			const projectContext: ProjectContext = {
 				configFile,
@@ -157,22 +180,7 @@ function decorateLanguageService(
 							file: jsonConfigFile,
 							start: start,
 							length: length,
-							relatedInformation: [],
 						};
-						if (error.location) {
-							const filePath = path.resolve(error.location.file);
-							if (info.languageServiceHost.fileExists(filePath)) {
-								const file = ts.createSourceFile(filePath, info.languageServiceHost.readFile(filePath) ?? '', ts.ScriptTarget.ESNext);
-								diag.relatedInformation!.push({
-									category: ts.DiagnosticCategory.Message,
-									code: 0,
-									messageText: error.location.lineText,
-									file: file,
-									start: file.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
-									length: error.location.lineText.length,
-								});
-							}
-						}
 						return diag;
 					});
 					if (config) {
@@ -189,15 +197,6 @@ function decorateLanguageService(
 					info.project.refreshDiagnostics();
 				},
 			);
-		} catch (err) {
-			compilerOptionsDiagnostics = [{
-				category: ts.DiagnosticCategory.Error,
-				code: 0,
-				messageText: String(err),
-				file: jsonConfigFile,
-				start: start,
-				length: length,
-			}];
 		}
 	}
 }
