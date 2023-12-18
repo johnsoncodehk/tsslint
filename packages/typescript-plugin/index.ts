@@ -4,31 +4,26 @@ import { watchConfig } from './lib/watchConfig';
 import { builtInPlugins } from './lib/builtInPlugins';
 import * as path from 'path';
 
-const languageServiceDecorator = new WeakMap<ts.LanguageService, ReturnType<typeof decorateLanguageService>>();
+const languageServiceDecorators = new WeakMap<ts.LanguageService, ReturnType<typeof decorateLanguageService>>();
 
 const init: ts.server.PluginModuleFactory = (modules) => {
 	const { typescript: ts } = modules;
 	const pluginModule: ts.server.PluginModule = {
 		create(info) {
 
-			if (!languageServiceDecorator.has(info.languageService)) {
+			if (!languageServiceDecorators.has(info.languageService)) {
 				const tsconfig = info.project.projectKind === ts.server.ProjectKind.Configured
 					? info.project.getProjectName()
 					: undefined;
 				if (tsconfig) {
-					languageServiceDecorator.set(
+					languageServiceDecorators.set(
 						info.languageService,
-						decorateLanguageService(
-							ts,
-							tsconfig,
-							info.languageServiceHost,
-							info.languageService,
-						),
+						decorateLanguageService(ts, tsconfig, info),
 					);
 				}
 			}
 
-			languageServiceDecorator.get(info.languageService)?.update(info);
+			languageServiceDecorators.get(info.languageService)?.update(info.config);
 
 			return info.languageService;
 		},
@@ -41,14 +36,13 @@ export = init;
 function decorateLanguageService(
 	ts: typeof import('typescript/lib/tsserverlibrary'),
 	tsconfig: string,
-	languageServiceHost: ts.LanguageServiceHost,
-	languageService: ts.LanguageService,
+	info: ts.server.PluginCreateInfo,
 ) {
 
-	const getCompilerOptionsDiagnostics = languageService.getCompilerOptionsDiagnostics;
-	const getSyntacticDiagnostics = languageService.getSyntacticDiagnostics;
-	const getApplicableRefactors = languageService.getApplicableRefactors;
-	const getEditsForRefactor = languageService.getEditsForRefactor;
+	const getCompilerOptionsDiagnostics = info.languageService.getCompilerOptionsDiagnostics;
+	const getSyntacticDiagnostics = info.languageService.getSyntacticDiagnostics;
+	const getApplicableRefactors = info.languageService.getApplicableRefactors;
+	const getEditsForRefactor = info.languageService.getEditsForRefactor;
 
 	let compilerOptionsDiagnostics: ts.Diagnostic[] = [];
 	let configFile: string | undefined;
@@ -56,19 +50,19 @@ function decorateLanguageService(
 	let config: Config | undefined;
 	let plugins: PluginInstance[] = [];
 
-	languageService.getCompilerOptionsDiagnostics = () => {
+	info.languageService.getCompilerOptionsDiagnostics = () => {
 		return getCompilerOptionsDiagnostics().concat(compilerOptionsDiagnostics);
 	};
-	languageService.getSyntacticDiagnostics = fileName => {
+	info.languageService.getSyntacticDiagnostics = fileName => {
 
 		let errors: ts.Diagnostic[] = getSyntacticDiagnostics(fileName);
 
-		const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
+		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 		if (!sourceFile) {
 			return errors as ts.DiagnosticWithLocation[];
 		}
 
-		const token = languageServiceHost.getCancellationToken?.();
+		const token = info.languageServiceHost.getCancellationToken?.();
 
 		for (const plugin of plugins) {
 			if (token?.isCancellationRequested()) {
@@ -87,16 +81,16 @@ function decorateLanguageService(
 
 		return errors as ts.DiagnosticWithLocation[];
 	};
-	languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
+	info.languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
 
 		let refactors = getApplicableRefactors(fileName, positionOrRange, ...rest);
 
-		const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
+		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 		if (!sourceFile) {
 			return refactors;
 		}
 
-		const token = languageServiceHost.getCancellationToken?.();
+		const token = info.languageServiceHost.getCancellationToken?.();
 
 		for (const plugin of plugins) {
 			if (token?.isCancellationRequested()) {
@@ -107,9 +101,9 @@ function decorateLanguageService(
 
 		return refactors;
 	};
-	languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) => {
+	info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) => {
 
-		const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
+		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 		if (!sourceFile) {
 			return;
 		}
@@ -126,18 +120,19 @@ function decorateLanguageService(
 
 	return { update };
 
-	async function update(info: ts.server.PluginCreateInfo) {
+	async function update(pluginConfig: { configFile: string; }) {
+
+		config = undefined;
+		plugins = [];
+		configFileBuildContext?.dispose();
+		compilerOptionsDiagnostics = [];
 
 		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-		const start = jsonConfigFile.text.indexOf(info.config.configFile) - 1;
-		const length = info.config.configFile.length + 2;
+		const start = jsonConfigFile.text.indexOf(pluginConfig.configFile) - 1;
+		const length = pluginConfig.configFile.length + 2;
 
 		try {
-			const newConfigFile = require.resolve(info.config.configFile, { paths: [path.dirname(tsconfig)] });
-			if (newConfigFile === configFile) {
-				return;
-			}
-			configFile = newConfigFile;
+			configFile = require.resolve(pluginConfig.configFile, { paths: [path.dirname(tsconfig)] });
 
 			const projectContext: ProjectContext = {
 				configFile,
@@ -147,7 +142,6 @@ function decorateLanguageService(
 				typescript: ts,
 			};
 
-			configFileBuildContext?.dispose();
 			configFileBuildContext = await watchConfig(
 				configFile,
 				async (_config, { errors, warnings }) => {
@@ -167,8 +161,8 @@ function decorateLanguageService(
 						};
 						if (error.location) {
 							const filePath = path.resolve(error.location.file);
-							if (languageServiceHost.fileExists(filePath)) {
-								const file = ts.createSourceFile(filePath, languageServiceHost.readFile(filePath) ?? '', ts.ScriptTarget.ESNext);
+							if (info.languageServiceHost.fileExists(filePath)) {
+								const file = ts.createSourceFile(filePath, info.languageServiceHost.readFile(filePath) ?? '', ts.ScriptTarget.ESNext);
 								diag.relatedInformation!.push({
 									category: ts.DiagnosticCategory.Message,
 									code: 0,
@@ -197,7 +191,7 @@ function decorateLanguageService(
 			);
 		} catch (err) {
 			compilerOptionsDiagnostics = [{
-				category: ts.DiagnosticCategory.Warning,
+				category: ts.DiagnosticCategory.Error,
 				code: 0,
 				messageText: String(err),
 				file: jsonConfigFile,
