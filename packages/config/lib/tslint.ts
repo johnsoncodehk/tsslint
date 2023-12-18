@@ -26,6 +26,7 @@ export function parseTSLintRule(rule: TSLint.IRule): Rule {
 					failure.getFailure(),
 					failure.getStartPosition().getPosition(),
 					failure.getEndPosition().getPosition(),
+					false,
 				);
 				if (failure.hasFix()) {
 					const fix = failure.getFix();

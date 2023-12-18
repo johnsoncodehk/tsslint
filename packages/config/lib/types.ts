@@ -46,9 +46,9 @@ export interface RuleContext {
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	sourceFile: SourceFile;
-	reportError(message: string, start: number, end: number): Reporter;
-	reportWarning(message: string, start: number, end: number): Reporter;
-	reportSuggestion(message: string, start: number, end: number): Reporter;
+	reportError(message: string, start: number, end: number, trace?: boolean): Reporter;
+	reportWarning(message: string, start: number, end: number, trace?: boolean): Reporter;
+	reportSuggestion(message: string, start: number, end: number, trace?: boolean): Reporter;
 }
 
 export interface Reporter {

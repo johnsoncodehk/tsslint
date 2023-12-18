@@ -2,6 +2,8 @@ import { Plugin, Reporter, RuleContext } from '@tsslint/config';
 import * as ErrorStackParser from 'error-stack-parser';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 
+require('source-map-support').install();
+
 export const builtInPlugins: Plugin[] = [
 	ctx => {
 		const ts = ctx.typescript;
@@ -40,19 +42,19 @@ export const builtInPlugins: Plugin[] = [
 
 				return result;
 
-				function reportError(message: string, start: number, end: number) {
-					return report(ts.DiagnosticCategory.Error, message, start, end);
+				function reportError(message: string, start: number, end: number, trace = true) {
+					return report(ts.DiagnosticCategory.Error, message, start, end, trace);
 				}
 
-				function reportWarning(message: string, start: number, end: number) {
-					return report(ts.DiagnosticCategory.Warning, message, start, end);
+				function reportWarning(message: string, start: number, end: number, trace = true) {
+					return report(ts.DiagnosticCategory.Warning, message, start, end, trace);
 				}
 
-				function reportSuggestion(message: string, start: number, end: number) {
-					return report(ts.DiagnosticCategory.Suggestion, message, start, end);
+				function reportSuggestion(message: string, start: number, end: number, trace = true) {
+					return report(ts.DiagnosticCategory.Suggestion, message, start, end, trace);
 				}
 
-				function report(category: ts.DiagnosticCategory, message: string, start: number, end: number): Reporter {
+				function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, trace: boolean): Reporter {
 
 					const error: ts.Diagnostic = {
 						category,
@@ -64,7 +66,7 @@ export const builtInPlugins: Plugin[] = [
 						source: 'tsslint',
 						relatedInformation: [],
 					};
-					const stacks = ErrorStackParser.parse(new Error());
+					const stacks = trace ? ErrorStackParser.parse(new Error()) : [];
 
 					if (stacks.length >= 3) {
 						const stack = stacks[2];
@@ -74,14 +76,10 @@ export const builtInPlugins: Plugin[] = [
 								fileName = fileName.substring('file://'.length);
 							}
 							if (!sourceFiles.has(fileName)) {
+								const text = ctx.languageServiceHost.readFile(fileName) ?? '';
 								sourceFiles.set(
 									fileName,
-									ts.createSourceFile(
-										fileName,
-										ctx.languageServiceHost.readFile(fileName)!,
-										ts.ScriptTarget.Latest,
-										true
-									)
+									ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true),
 								);
 							}
 							const stackFile = sourceFiles.get(fileName)!;

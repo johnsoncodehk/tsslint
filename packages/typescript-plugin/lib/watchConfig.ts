@@ -14,15 +14,12 @@ export async function watchConfig(
 		'..',
 		'.tsslint',
 	);
-	const outFileName = path
-		.relative(outDir, tsConfigPath)
-		.replace(/\.\./g, '__up')
-		.replace(/\//g, '__slash')
-		+ '.cjs';
+	const outFileName = btoa(path.relative(outDir, tsConfigPath)) + '.cjs';
 	const outFile = path.join(outDir, outFileName);
 	const ctx = await esbuild.context({
 		entryPoints: [tsConfigPath],
 		bundle: true,
+		sourcemap: true,
 		outfile: outFile,
 		format: 'cjs',
 		platform: 'node',
