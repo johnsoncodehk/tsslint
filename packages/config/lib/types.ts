@@ -17,6 +17,7 @@ export interface ProjectContext {
 }
 
 export interface Config {
+	debug?: boolean;
 	rules?: Rules;
 	plugins?: Plugin[];
 }

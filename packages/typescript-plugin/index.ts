@@ -81,6 +81,23 @@ function decorateLanguageService(
 			}
 		}
 
+		if (config?.debug) {
+			errors.push({
+				category: ts.DiagnosticCategory.Message,
+				source: 'tsslint',
+				code: 'debug-info' as any,
+				messageText: JSON.stringify({
+					rules: Object.keys(config?.rules ?? {}),
+					plugins: plugins.length,
+					configFile,
+					tsconfig,
+				}, null, 2),
+				file: sourceFile,
+				start: 0,
+				length: 0,
+			});
+		}
+
 		return errors as ts.DiagnosticWithLocation[];
 	};
 	info.languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
