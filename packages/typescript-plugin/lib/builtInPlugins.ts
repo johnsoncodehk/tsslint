@@ -14,6 +14,7 @@ export const builtInPlugins: Plugin[] = [
 			getEdits: () => ts.FileTextChanges[];
 		}[]>>();
 		const sourceFiles = new Map<string, ts.SourceFile>();
+		const configSourceFile = ts.createSourceFile(ctx.configFile, ts.sys.readFile(ctx.configFile) ?? '', ts.ScriptTarget.Latest, true);
 
 		return {
 			lint(sourceFile, rules) {
@@ -84,27 +85,21 @@ export const builtInPlugins: Plugin[] = [
 							}
 							const stackFile = sourceFiles.get(fileName)!;
 							const pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1);
-							let reportNode: ts.Node | undefined;
-							stackFile.forEachChild(function visit(node) {
-								if (node.end < pos || reportNode) {
-									return;
-								}
-								if (node.pos <= pos) {
-									if (node.getStart() === pos) {
-										reportNode = node;
-									}
-									else {
-										node.forEachChild(visit);
-									}
-								}
-							});
 							error.relatedInformation?.push({
 								category: ts.DiagnosticCategory.Message,
 								code: 0,
 								file: stackFile,
 								start: pos,
-								length: reportNode?.end ? reportNode.end - pos : 0,
-								messageText: '👈 Reporter',
+								length: 0,
+								messageText: 'Related rule file',
+							});
+							error.relatedInformation?.push({
+								category: ts.DiagnosticCategory.Message,
+								code: 0,
+								file: configSourceFile,
+								start: 0,
+								length: 0,
+								messageText: 'Related config file',
 							});
 						}
 					}

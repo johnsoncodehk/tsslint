@@ -7,9 +7,7 @@ export async function watchConfig(
 	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
 ) {
 	const outDir = path.resolve(
-		path.dirname(
-			require.resolve('@tsslint/typescript-plugin/package.json')
-		),
+		__dirname,
 		'..',
 		'..',
 		'.tsslint',

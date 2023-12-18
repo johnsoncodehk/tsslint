@@ -15,9 +15,7 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 ## Features
 
 - Integration with tsserver to minimize semantic linting overhead in IDEs
-- Integration with tsc to minimize linting time in continuous integration (CI) pipelines
 - Compatibility with TSLint rules
-- No need for IDE extensions
 - Writing config in typescript
 - Direct support for meta framework files based on TS Plugin without a parser (e.g., Vue)
 
@@ -25,23 +23,9 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 To enable TSSLint in your IDE, follow these steps:
 
-1. **Ensure that you are using the workspace TSDK.**
-2. Add the `@tsslint/typescript-plugin` dependency to your project.
-3. Open your `tsconfig.json` file.
-4. In the `compilerOptions` section, add the following code:
-	```jsonc
-	{
-		"compilerOptions": {
-			"plugins": [
-				{
-					"name": "@tsslint/typescript-plugin",
-					"configFile": "./tsslint.config.ts"
-				}
-			]
-		}
-	}
-	```
-5. Create the `tsslint.config.ts` config file:
+1. Install the TSSLint VSCode Extension
+2. Add the `@tsslint/config` dependency to your project.
+3. Create the `tsslint.config.ts` config file:
 	```js
 	import { defineConfig } from '@tsslint/config';
 

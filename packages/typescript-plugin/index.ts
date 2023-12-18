@@ -1,4 +1,4 @@
-import { Config, PluginInstance, ProjectContext } from '@tsslint/config';
+import { Config, PluginInstance, ProjectContext, findConfigFile } from '@tsslint/config';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 import { watchConfig } from './lib/watchConfig';
 import { builtInPlugins } from './lib/builtInPlugins';
@@ -44,18 +44,20 @@ function decorateLanguageService(
 	const getApplicableRefactors = info.languageService.getApplicableRefactors;
 	const getEditsForRefactor = info.languageService.getEditsForRefactor;
 
-	let compilerOptionsDiagnostics: ts.Diagnostic[] = [];
 	let configFile: string | undefined;
 	let configFileBuildContext: Awaited<ReturnType<typeof watchConfig>> | undefined;
+	let configFileDiagnostics: ts.Diagnostic[] = [];
 	let config: Config | undefined;
 	let plugins: PluginInstance[] = [];
 
 	info.languageService.getCompilerOptionsDiagnostics = () => {
-		return getCompilerOptionsDiagnostics().concat(compilerOptionsDiagnostics);
+		return getCompilerOptionsDiagnostics().concat(configFileDiagnostics);
 	};
 	info.languageService.getSyntacticDiagnostics = fileName => {
 
 		let errors: ts.Diagnostic[] = getSyntacticDiagnostics(fileName);
+
+		errors = errors.concat(configFileDiagnostics);
 
 		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 		if (!sourceFile) {
@@ -120,19 +122,27 @@ function decorateLanguageService(
 
 	return { update };
 
-	async function update(pluginConfig: { configFile: string; }) {
+	async function update(pluginConfig?: { configFile?: string; }) {
 
 		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-		const start = jsonConfigFile.text.indexOf(pluginConfig.configFile) - 1;
-		const length = pluginConfig.configFile.length + 2;
 
+		let configOptionSpan: ts.TextSpan = { start: 0, length: 0 };
 		let newConfigFile: string | undefined;
 		let configResolveError: any;
 
-		try {
-			newConfigFile = require.resolve(pluginConfig.configFile, { paths: [path.dirname(tsconfig)] });
-		} catch (err) {
-			configResolveError = err;
+		if (pluginConfig?.configFile) {
+			configOptionSpan = {
+				start: jsonConfigFile.text.indexOf(pluginConfig.configFile) - 1,
+				length: pluginConfig.configFile.length + 2,
+			};
+			try {
+				newConfigFile = require.resolve(pluginConfig.configFile, { paths: [path.dirname(tsconfig)] });
+			} catch (err) {
+				configResolveError = err;
+			}
+		}
+		else {
+			newConfigFile = findConfigFile(tsconfig);
 		}
 
 		if (newConfigFile !== configFile) {
@@ -140,16 +150,16 @@ function decorateLanguageService(
 			config = undefined;
 			plugins = [];
 			configFileBuildContext?.dispose();
-			compilerOptionsDiagnostics = [];
+			configFileDiagnostics = [];
 
 			if (configResolveError) {
-				compilerOptionsDiagnostics.push({
+				configFileDiagnostics.push({
 					category: ts.DiagnosticCategory.Error,
 					code: 0,
 					messageText: String(configResolveError),
 					file: jsonConfigFile,
-					start: start,
-					length: length,
+					start: configOptionSpan.start,
+					length: configOptionSpan.length,
 				});
 			}
 
@@ -169,18 +179,32 @@ function decorateLanguageService(
 				configFile,
 				async (_config, { errors, warnings }) => {
 					config = _config;
-					compilerOptionsDiagnostics = [
+					configFileDiagnostics = [
 						...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
 						...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
 					].map(([error, category]) => {
 						const diag: ts.Diagnostic = {
 							category,
+							source: 'tsslint',
 							code: 0,
-							messageText: error.text,
+							messageText: 'Failed to build config',
 							file: jsonConfigFile,
-							start: start,
-							length: length,
+							start: configOptionSpan.start,
+							length: configOptionSpan.length,
 						};
+						if (error.location) {
+							const fileName = path.resolve(error.location.file);
+							const fileText = ts.sys.readFile(error.location.file);
+							const sourceFile = ts.createSourceFile(fileName, fileText ?? '', ts.ScriptTarget.Latest, true);
+							diag.relatedInformation = [{
+								category,
+								code: error.id as any,
+								messageText: error.text,
+								file: sourceFile,
+								start: sourceFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
+								length: error.location.lineText.length,
+							}];
+						}
 						return diag;
 					});
 					if (config) {

@@ -8,10 +8,11 @@
 			"request": "launch",
 			"runtimeExecutable": "${execPath}",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceRoot}/packages/vscode"
+				"--extensionDevelopmentPath=${workspaceRoot}/packages/vscode",
+				"--folder-uri=${workspaceRoot}/fixtures",
 			],
 			"outFiles": [
-				"${workspaceRoot}/*/*/out/**/*.js"
+				"${workspaceRoot}/**/*.js"
 			],
 		},
 	],
