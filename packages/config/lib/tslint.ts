@@ -20,14 +20,14 @@ export function parseTSLintRule(rule: TSLint.IRule): Rule {
 		for (const failure of failures) {
 			failure.setRuleSeverity(ruleSeverity);
 			const report = failure.getRuleSeverity() === 'error' ? reportError : reportWarning;
+			const reporter = report(
+				failure.getFailure(),
+				failure.getStartPosition().getPosition(),
+				failure.getEndPosition().getPosition(),
+				false,
+			);
 			for (let i = 0; i < failures.length; i++) {
 				const failure = failures[i];
-				const reporter = report(
-					failure.getFailure(),
-					failure.getStartPosition().getPosition(),
-					failure.getEndPosition().getPosition(),
-					false,
-				);
 				if (failure.hasFix()) {
 					const fix = failure.getFix();
 					const replaces = Array.isArray(fix) ? fix : [fix];
