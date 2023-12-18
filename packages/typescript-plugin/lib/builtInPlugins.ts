@@ -3,33 +3,6 @@ import * as ErrorStackParser from 'error-stack-parser';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 
 export const builtInPlugins: Plugin[] = [
-	(ctx, { warnings, errors }) => {
-		const ts = ctx.typescript;
-
-		return {
-			lint(sourceFile) {
-				if (sourceFile.fileName !== ctx.configFile) {
-					return [];
-				}
-				return [
-					...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
-					...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
-				].map(([error, category]) => {
-					const diag: ts.Diagnostic = {
-						category,
-						source: 'tsslint-esbuild',
-						code: error.id as any,
-						messageText: JSON.stringify(error, null, 2),
-						file: sourceFile,
-						start: 0,
-						length: 0,
-					};
-					// TODO: parse error.notes for relatedInformation
-					return diag;
-				});
-			},
-		};
-	},
 	ctx => {
 		const ts = ctx.typescript;
 		const fileFixes = new Map<string, Map<string, {

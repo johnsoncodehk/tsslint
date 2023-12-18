@@ -7,7 +7,6 @@ import type {
 	ApplicableRefactorInfo,
 	TextRange,
 } from 'typescript/lib/tsserverlibrary';
-import type * as esbuild from 'esbuild';
 
 export interface ProjectContext {
 	configFile: string;
@@ -23,7 +22,7 @@ export interface Config {
 }
 
 export interface Plugin {
-	(projectContext: ProjectContext, configBuildResult: esbuild.BuildResult): PluginInstance | Promise<PluginInstance>;
+	(projectContext: ProjectContext): PluginInstance | Promise<PluginInstance>;
 }
 
 export interface PluginInstance {

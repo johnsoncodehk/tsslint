@@ -127,6 +127,11 @@ function decorateLanguageService(
 	return { update };
 
 	async function update(info: ts.server.PluginCreateInfo) {
+
+		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
+		const start = jsonConfigFile.text.indexOf(info.config.configFile) - 1;
+		const length = info.config.configFile.length + 2;
+
 		try {
 			const newConfigFile = require.resolve(info.config.configFile, { paths: [path.dirname(tsconfig)] });
 			if (newConfigFile === configFile) {
@@ -145,13 +150,42 @@ function decorateLanguageService(
 			configFileBuildContext?.dispose();
 			configFileBuildContext = await watchConfig(
 				configFile,
-				async (_config, result) => {
+				async (_config, { errors, warnings }) => {
 					config = _config;
+					compilerOptionsDiagnostics = [
+						...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
+						...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
+					].map(([error, category]) => {
+						const diag: ts.Diagnostic = {
+							category,
+							code: 0,
+							messageText: error.text,
+							file: jsonConfigFile,
+							start: start,
+							length: length,
+							relatedInformation: [],
+						};
+						if (error.location) {
+							const filePath = path.resolve(error.location.file);
+							if (languageServiceHost.fileExists(filePath)) {
+								const file = ts.createSourceFile(filePath, languageServiceHost.readFile(filePath) ?? '', ts.ScriptTarget.ESNext);
+								diag.relatedInformation!.push({
+									category: ts.DiagnosticCategory.Message,
+									code: 0,
+									messageText: error.location.lineText,
+									file: file,
+									start: file.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
+									length: error.location.lineText.length,
+								});
+							}
+						}
+						return diag;
+					});
 					if (config) {
 						plugins = await Promise.all([
 							...builtInPlugins,
 							...config.plugins ?? []
-						].map(plugin => plugin(projectContext, result)));
+						].map(plugin => plugin(projectContext)));
 						for (const plugin of plugins) {
 							if (plugin.resolveRules) {
 								config.rules = plugin.resolveRules(config.rules ?? {});
@@ -162,15 +196,13 @@ function decorateLanguageService(
 				},
 			);
 		} catch (err) {
-			const configFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-			const start = configFile.text.indexOf(info.config.configFile);
 			compilerOptionsDiagnostics = [{
 				category: ts.DiagnosticCategory.Warning,
 				code: 0,
 				messageText: String(err),
-				file: configFile,
-				start: start - 1,
-				length: info.config.configFile.length + 2,
+				file: jsonConfigFile,
+				start: start,
+				length: length,
 			}];
 		}
 	}
