@@ -25,9 +25,10 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 To enable TSSLint in your IDE, follow these steps:
 
-1. Add the `@tsslint/typescript-plugin` dependency to your project.
-2. Open your `tsconfig.json` file.
-3. In the `compilerOptions` section, add the following code:
+1. **Ensure that you are using the workspace TSDK.**
+2. Add the `@tsslint/typescript-plugin` dependency to your project.
+3. Open your `tsconfig.json` file.
+4. In the `compilerOptions` section, add the following code:
 	```jsonc
 	{
 		"compilerOptions": {
@@ -40,7 +41,7 @@ To enable TSSLint in your IDE, follow these steps:
 		}
 	}
 	```
-4. Create the `tsslint.config.ts` config file:
+5. Create the `tsslint.config.ts` config file:
 	```js
 	import { defineConfig } from '@tsslint/config';
 
@@ -50,7 +51,7 @@ To enable TSSLint in your IDE, follow these steps:
 		},
 	});
 	```
-	> Wrapping into `defineConfig()` is optional for having IntelliSense support.
+	> Wrapping the configuration in `defineConfig()` is optional but provides IntelliSense support.
 
 ### Create a Rule
 
