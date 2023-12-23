@@ -1,4 +1,4 @@
-import { Plugin, Reporter, RuleContext } from '@tsslint/config';
+import type { Plugin, Reporter, RuleContext } from '@tsslint/config';
 import * as ErrorStackParser from 'error-stack-parser';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 

@@ -1,8 +1,8 @@
-import type { Config } from '@tsslint/config';
 import esbuild = require('esbuild');
 import path = require('path');
+import type { Config } from './types';
 
-export async function watchConfig(
+export async function watchConfigFile(
 	tsConfigPath: string,
 	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
 ) {

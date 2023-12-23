@@ -1,4 +1,5 @@
-export * from './lib/findConfigFile';
+export * from './lib/find';
+export * from './lib/watch';
 export * from './lib/tslint';
 export * from './lib/types';
 

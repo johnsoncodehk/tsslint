@@ -11,6 +11,9 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/config"
 	},
+	"dependencies": {
+		"esbuild": "^0.19.0"
+	},
 	"peerDependencies": {
 		"tslint": "*"
 	},

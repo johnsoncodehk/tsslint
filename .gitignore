@@ -1,6 +1,7 @@
 node_modules
 *.tsbuildinfo
 *.d.ts
-*.js
 *.map
+packages/*/*.js
+packages/*/lib/**/*.js
 .tsslint/

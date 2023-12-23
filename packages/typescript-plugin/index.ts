@@ -1,4 +1,4 @@
-import { Config, PluginInstance, ProjectContext, findConfigFile } from '@tsslint/config';
+import type { Config, PluginInstance, ProjectContext } from '@tsslint/config';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 import { watchConfig } from './lib/watchConfig';
 import { builtInPlugins } from './lib/builtInPlugins';
@@ -141,11 +141,29 @@ function decorateLanguageService(
 
 	async function update(pluginConfig?: { configFile?: string; }) {
 
-		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-
 		let configOptionSpan: ts.TextSpan = { start: 0, length: 0 };
 		let newConfigFile: string | undefined;
+		let configImportPath: string | undefined;
 		let configResolveError: any;
+
+		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
+
+		try {
+			configImportPath = require.resolve('@tsslint/config', { paths: [path.dirname(tsconfig)] });
+		} catch (err) {
+			configResolveError = err;
+			configFileDiagnostics = [{
+				category: ts.DiagnosticCategory.Error,
+				code: 0,
+				messageText: String(err),
+				file: jsonConfigFile,
+				start: 0,
+				length: 0,
+			}];
+			return;
+		}
+
+		const { findConfigFile, watchConfigFile }: typeof import('@tsslint/config') = require(configImportPath);
 
 		if (pluginConfig?.configFile) {
 			configOptionSpan = {
@@ -192,7 +210,7 @@ function decorateLanguageService(
 				typescript: ts,
 			};
 
-			configFileBuildContext = await watchConfig(
+			configFileBuildContext = await watchConfigFile(
 				configFile,
 				async (_config, { errors, warnings }) => {
 					config = _config;
