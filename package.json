@@ -6,8 +6,9 @@
 		"watch:base": "tsc -b -w",
 		"watch:vscode": "cd packages/vscode && npm run watch",
 		"prerelease": "npm run build",
-		"release": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
-		"release:next": "npm run release -- --dist-tag next"
+		"release": "npm run release:base && npm run release:vscode",
+		"release:base": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
+		"release:vscode": "cd packages/vscode && npm run release"
 	},
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
