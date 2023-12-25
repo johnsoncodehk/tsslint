@@ -71,8 +71,8 @@ function decorateLanguageService(
 			if (plugin.lint) {
 				let pluginResult = plugin.lint?.(sourceFile, config?.rules ?? {});
 				for (const plugin of plugins) {
-					if (plugin.resolveResult) {
-						pluginResult = plugin.resolveResult(pluginResult);
+					if (plugin.resolveDiagnostics) {
+						pluginResult = plugin.resolveDiagnostics(pluginResult);
 					}
 				}
 				errors = errors.concat(pluginResult);

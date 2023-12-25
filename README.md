@@ -96,7 +96,7 @@ After saving the config file, you will notice that `console.log` is now reportin
 
 ### Modify the Error
 
-While you cannot directly configure the severity of a rule, you can modify the reported errors through the `resolveResult()` API in the config file. This allows you to customize the severity of specific rules and even add additional errors.
+While you cannot directly configure the severity of a rule, you can modify the reported errors through the `resolveDiagnostics()` API in the config file. This allows you to customize the severity of specific rules and even add additional errors.
 
 Here's an example of changing the severity of the `no-console` rule from Warning to Error in the `tsslint.config.ts` file:
 
@@ -110,7 +110,7 @@ export default defineConfig({
 	},
 	plugins: [
 		() => ({
-			resolveResult({ typescript: ts }, errors) {
+			resolveDiagnostics({ typescript: ts }, errors) {
 				for (const error of errors) {
 					if (error.code === 'no-console') {
 						error.category = ts.DiagnosticCategory.Error;

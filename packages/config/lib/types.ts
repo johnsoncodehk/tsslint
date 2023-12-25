@@ -29,7 +29,7 @@ export interface PluginInstance {
 	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
 	getFixes?(fileName: string, start: number, end: number, diagnostics?: Diagnostic[]): CodeFixAction[];
 	resolveRules?(rules: Rules): Rules;
-	resolveResult?(results: Diagnostic[]): Diagnostic[];
+	resolveDiagnostics?(results: Diagnostic[]): Diagnostic[];
 }
 
 export interface Rules {

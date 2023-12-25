@@ -126,8 +126,8 @@ import glob = require('glob');
 						.flat()
 						.filter((diag): diag is ts.Diagnostic => !!diag);
 					for (const plugin of plugins) {
-						if (plugin.resolveResult) {
-							diagnostics = plugin.resolveResult(diagnostics);
+						if (plugin.resolveDiagnostics) {
+							diagnostics = plugin.resolveDiagnostics(diagnostics);
 						}
 					}
 					const fixes = plugins
@@ -172,8 +172,8 @@ import glob = require('glob');
 				}
 				let diagnostics = plugins.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {})).flat().filter((diag): diag is ts.Diagnostic => !!diag);
 				for (const plugin of plugins) {
-					if (plugin.resolveResult) {
-						diagnostics = plugin.resolveResult(diagnostics);
+					if (plugin.resolveDiagnostics) {
+						diagnostics = plugin.resolveDiagnostics(diagnostics);
 					}
 				}
 				const output = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
