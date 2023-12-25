@@ -67,7 +67,7 @@ const rule: Rule = ({ typescript: ts, sourceFile, reportWarning }) => {
 						newText: '/* deleted */',
 						span: {
 							start: node.parent.getStart(sourceFile),
-							length: node.parent.end,
+							length: node.parent.getEnd() - node.parent.getStart(sourceFile),
 						},
 					}],
 				}]
