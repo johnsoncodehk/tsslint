@@ -3,7 +3,7 @@
 	"version": "0.0.4",
 	"license": "MIT",
 	"bin": {
-		"tsslint": "./bin/tsslint"
+		"tsslint": "./bin/tsslint.js"
 	},
 	"files": [
 		"**/*.js",
