@@ -1,7 +1,7 @@
 {
 	"private": true,
 	"name": "vscode-tsslint",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
@@ -44,7 +44,7 @@
 		"release": "vsce publish --pre-release"
 	},
 	"devDependencies": {
-		"@tsslint/typescript-plugin": "0.0.3",
+		"@tsslint/typescript-plugin": "0.0.4",
 		"esbuild": "^0.19.9",
 		"vsce": "latest"
 	}
