@@ -1,5 +1,5 @@
 {
-	"name": "@tsslint/typescript-plugin",
+	"name": "@tsslint/core",
 	"version": "0.0.3",
 	"license": "MIT",
 	"files": [
@@ -9,10 +9,11 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
-		"directory": "packages/typescript-plugin"
+		"directory": "packages/core"
 	},
 	"dependencies": {
-		"@tsslint/core": "0.0.3"
+		"error-stack-parser": "^2.1.4",
+		"source-map-support": "^0.5.19"
 	},
 	"devDependencies": {
 		"@tsslint/config": "0.0.3"

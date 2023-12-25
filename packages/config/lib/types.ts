@@ -27,7 +27,7 @@ export interface Plugin {
 
 export interface PluginInstance {
 	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
-	getFixes?(fileName: string, start: number, end: number, errorCodes: readonly number[]): CodeFixAction[];
+	getFixes?(fileName: string, start: number, end: number): CodeFixAction[];
 	resolveRules?(rules: Rules): Rules;
 	resolveResult?(results: Diagnostic[]): Diagnostic[];
 }

@@ -1,7 +1,6 @@
-import type { Config, PluginInstance, ProjectContext } from '@tsslint/config';
+import type { Config, PluginInstance, ProjectContext, watchConfigFile } from '@tsslint/config';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
-import { watchConfig } from './lib/watchConfig';
-import { builtInPlugins } from './lib/builtInPlugins';
+import { getBuiltInPlugins } from '@tsslint/core';
 import * as path from 'path';
 
 const languageServiceDecorators = new WeakMap<ts.LanguageService, ReturnType<typeof decorateLanguageService>>();
@@ -44,7 +43,7 @@ function decorateLanguageService(
 	const getCodeFixesAtPosition = info.languageService.getCodeFixesAtPosition;
 
 	let configFile: string | undefined;
-	let configFileBuildContext: Awaited<ReturnType<typeof watchConfig>> | undefined;
+	let configFileBuildContext: Awaited<ReturnType<typeof watchConfigFile>> | undefined;
 	let configFileDiagnostics: ts.Diagnostic[] = [];
 	let config: Config | undefined;
 	let plugins: PluginInstance[] = [];
@@ -109,7 +108,7 @@ function decorateLanguageService(
 			if (token?.isCancellationRequested()) {
 				break;
 			}
-			fixes = fixes.concat(plugin.getFixes?.(fileName, start, end, errorCodes) ?? []);
+			fixes = fixes.concat(plugin.getFixes?.(fileName, start, end) ?? []);
 		}
 
 		return fixes;
@@ -141,7 +140,7 @@ function decorateLanguageService(
 			return;
 		}
 
-		const { findConfigFile, watchConfigFile }: typeof import('@tsslint/config') = require(configImportPath);
+		const { watchConfigFile }: typeof import('@tsslint/config') = require(configImportPath);
 
 		if (pluginConfig?.configFile) {
 			configOptionSpan = {
@@ -155,7 +154,7 @@ function decorateLanguageService(
 			}
 		}
 		else {
-			newConfigFile = findConfigFile(tsconfig);
+			newConfigFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 		}
 
 		if (newConfigFile !== configFile) {
@@ -222,7 +221,7 @@ function decorateLanguageService(
 					});
 					if (config) {
 						plugins = await Promise.all([
-							...builtInPlugins,
+							...getBuiltInPlugins(true),
 							...config.plugins ?? []
 						].map(plugin => plugin(projectContext)));
 						for (const plugin of plugins) {
