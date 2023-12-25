@@ -10,6 +10,7 @@ export function getBuiltInPlugins(withStack: boolean): Plugin[] {
 		ctx => {
 			const ts = ctx.typescript;
 			const fileFixes = new Map<string, Map<string, {
+				diagnostic: ts.Diagnostic;
 				title: string;
 				start: number;
 				end: number;
@@ -124,6 +125,7 @@ export function getBuiltInPlugins(withStack: boolean): Plugin[] {
 									fixes.set(currentRuleId, []);
 								}
 								fixes.get(currentRuleId)!.push(({
+									diagnostic: error,
 									title,
 									start,
 									end,
@@ -134,14 +136,17 @@ export function getBuiltInPlugins(withStack: boolean): Plugin[] {
 						};
 					}
 				},
-				getFixes(fileName, start, end) {
+				getFixes(fileName, start, end, diagnostics) {
 
 					const fixesMap = getFileFixes(fileName);
 					const result: ts.CodeFixAction[] = [];
 
-					for (const [_errorCode, fixes] of fixesMap) {
+					for (const [_ruleId, fixes] of fixesMap) {
 						for (let i = 0; i < fixes.length; i++) {
 							const fix = fixes[i];
+							if (diagnostics && !diagnostics.includes(fix.diagnostic)) {
+								continue;
+							}
 							if (
 								(fix.start >= start && fix.start <= end) ||
 								(fix.end >= start && fix.end <= end) ||

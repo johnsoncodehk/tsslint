@@ -5,9 +5,46 @@ import core = require('@tsslint/core');
 import glob = require('glob');
 
 (async () => {
-	const { log, text } = await import('@clack/prompts');
 
 	let errors = 0;
+	let projectVersion = 0;
+	let typeRootsVersion = 0;
+	let parsed: ts.ParsedCommandLine;
+
+	const { log, text } = await import('@clack/prompts');
+	const snapshots = new Map<string, ts.IScriptSnapshot>();
+	const versions = new Map<string, number>();
+	const languageServiceHost: ts.LanguageServiceHost = {
+		...ts.sys,
+		getProjectVersion() {
+			return projectVersion.toString();
+		},
+		getTypeRootsVersion() {
+			return typeRootsVersion;
+		},
+		useCaseSensitiveFileNames() {
+			return ts.sys.useCaseSensitiveFileNames;
+		},
+		getCompilationSettings() {
+			return parsed.options;
+		},
+		getScriptFileNames() {
+			return parsed.fileNames;
+		},
+		getScriptVersion(fileName) {
+			return versions.get(fileName)?.toString() ?? '0';
+		},
+		getScriptSnapshot(fileName) {
+			if (!snapshots.has(fileName)) {
+				snapshots.set(fileName, ts.ScriptSnapshot.fromString(ts.sys.readFile(fileName)!));
+			}
+			return snapshots.get(fileName);
+		},
+		getDefaultLibFileName(options) {
+			return ts.getDefaultLibFilePath(options);
+		},
+	};
+	const languageService = ts.createLanguageService(languageServiceHost);
 
 	if (process.argv.includes('--project')) {
 		const projectIndex = process.argv.indexOf('--project');
@@ -31,9 +68,9 @@ import glob = require('glob');
 
 	process.exit(errors ? 1 : 0);
 
-	async function projectWorker(tsconfig?: string) {
+	async function projectWorker(tsconfigOption?: string) {
 
-		tsconfig = await getTsconfigPath(tsconfig);
+		const tsconfig = await getTsconfigPath(tsconfigOption);
 
 		log.info(`tsconfig path: ${tsconfig} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
 
@@ -44,43 +81,13 @@ import glob = require('glob');
 		log.info(`config path: ${configFile}`);
 
 		const tsslintConfig = await config.buildConfigFile(configFile);
-		const parsed = parseCommonLine(tsconfig);
+		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames) {
 			throw new Error('No input files found in tsconfig!');
 		}
+		projectVersion++;
+		typeRootsVersion++;
 
-		let projectVersion = 0;
-
-		const snapshots = new Map<string, ts.IScriptSnapshot>();
-		const versions = new Map<string, number>();
-		const languageServiceHost: ts.LanguageServiceHost = {
-			...ts.sys,
-			getProjectVersion() {
-				return projectVersion.toString();
-			},
-			useCaseSensitiveFileNames() {
-				return ts.sys.useCaseSensitiveFileNames;
-			},
-			getCompilationSettings() {
-				return parsed.options;
-			},
-			getScriptFileNames() {
-				return parsed.fileNames;
-			},
-			getScriptVersion(fileName) {
-				return versions.get(fileName)?.toString() ?? '0';
-			},
-			getScriptSnapshot(fileName) {
-				if (!snapshots.has(fileName)) {
-					snapshots.set(fileName, ts.ScriptSnapshot.fromString(ts.sys.readFile(fileName)!));
-				}
-				return snapshots.get(fileName);
-			},
-			getDefaultLibFileName(options) {
-				return ts.getDefaultLibFilePath(options);
-			},
-		};
-		const languageService = ts.createLanguageService(languageServiceHost);
 		const plugins = await Promise.all([
 			...core.getBuiltInPlugins(false),
 			...tsslintConfig.plugins ?? [],
@@ -114,9 +121,17 @@ import glob = require('glob');
 					if (!sourceFile) {
 						throw new Error(`No source file found for ${fileName}`);
 					}
-					plugins.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {})).flat().filter((diag): diag is ts.Diagnostic => !!diag);
+					let diagnostics = plugins
+						.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {}))
+						.flat()
+						.filter((diag): diag is ts.Diagnostic => !!diag);
+					for (const plugin of plugins) {
+						if (plugin.resolveResult) {
+							diagnostics = plugin.resolveResult(diagnostics);
+						}
+					}
 					const fixes = plugins
-						.map(plugin => plugin.getFixes?.(fileName, 0, sourceFile.text.length))
+						.map(plugin => plugin.getFixes?.(fileName, 0, sourceFile.text.length, diagnostics))
 						.flat()
 						.filter((fix): fix is ts.CodeFixAction => !!fix);
 					const changes = fixes
@@ -155,16 +170,21 @@ import glob = require('glob');
 				if (!sourceFile) {
 					throw new Error(`No source file found for ${fileName}`);
 				}
-				const diagnostics = plugins.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {})).flat().filter((diag): diag is ts.Diagnostic => !!diag);
+				let diagnostics = plugins.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {})).flat().filter((diag): diag is ts.Diagnostic => !!diag);
+				for (const plugin of plugins) {
+					if (plugin.resolveResult) {
+						diagnostics = plugin.resolveResult(diagnostics);
+					}
+				}
 				const output = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
 					getCurrentDirectory: ts.sys.getCurrentDirectory,
 					getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
 					getNewLine: () => ts.sys.newLine,
 				});
 				if (output) {
-					errors++;
 					log.info(output);
 				}
+				errors += diagnostics.filter(diag => diag.category === ts.DiagnosticCategory.Error).length;
 			}
 		}
 

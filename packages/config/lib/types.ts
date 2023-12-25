@@ -12,7 +12,7 @@ export interface ProjectContext {
 	typescript: typeof import('typescript/lib/tsserverlibrary.js');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
-	tsconfig?: string;
+	tsconfig: string;
 }
 
 export interface Config {
@@ -27,7 +27,7 @@ export interface Plugin {
 
 export interface PluginInstance {
 	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
-	getFixes?(fileName: string, start: number, end: number): CodeFixAction[];
+	getFixes?(fileName: string, start: number, end: number, diagnostics?: Diagnostic[]): CodeFixAction[];
 	resolveRules?(rules: Rules): Rules;
 	resolveResult?(results: Diagnostic[]): Diagnostic[];
 }

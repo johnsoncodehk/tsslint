@@ -23,7 +23,7 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 To enable TSSLint in your IDE, follow these steps:
 
-1. Install the TSSLint VSCode Extension
+1. Install the [TSSLint VSCode Extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
 2. Add the `@tsslint/config` dependency to your project.
 3. Create the `tsslint.config.ts` config file:
 	```js
@@ -35,7 +35,6 @@ To enable TSSLint in your IDE, follow these steps:
 		},
 	});
 	```
-	> Wrapping the configuration in `defineConfig()` is optional but provides IntelliSense support.
 
 ### Create a Rule
 
