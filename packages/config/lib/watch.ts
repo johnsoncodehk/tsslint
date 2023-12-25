@@ -3,8 +3,9 @@ import path = require('path');
 import type { Config } from './types';
 
 export async function watchConfigFile(
-	tsConfigPath: string,
+	configFilePath: string,
 	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
+	watch = true,
 ) {
 	const outDir = path.resolve(
 		__dirname,
@@ -12,10 +13,10 @@ export async function watchConfigFile(
 		'..',
 		'.tsslint',
 	);
-	const outFileName = btoa(path.relative(outDir, tsConfigPath)) + '.cjs';
+	const outFileName = btoa(path.relative(outDir, configFilePath)) + '.cjs';
 	const outFile = path.join(outDir, outFileName);
 	const ctx = await esbuild.context({
-		entryPoints: [tsConfigPath],
+		entryPoints: [configFilePath],
 		bundle: true,
 		sourcemap: true,
 		outfile: outFile,
@@ -51,6 +52,11 @@ export async function watchConfigFile(
 			},
 		}],
 	});
-	await ctx.watch();
+	if (watch) {
+		await ctx.watch();
+	}
+	else {
+		await ctx.rebuild();
+	}
 	return ctx;
 }

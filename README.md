@@ -4,6 +4,16 @@
 
 TSSLint is not your typical linter. Its main purpose is to expose the TypeScript Language Server diagnostic interface, allowing you to add your own diagnostic rules without additional overhead to creating a TypeChecker.
 
+## Packages
+
+This repository is a monorepo that we manage using [Lerna](https://github.com/lerna/lerna). That means that we actually publish several packages to npm from the same codebase, including:
+
+- [`@tsslint/cli`](packages/cli): This package provides the command line interface for TSSLint.
+- [`@tsslint/config`](packages/config): This package allows you to define and build configuration files for TSSLint.
+- [`@tsslint/core`](packages/core): This is the core package for TSSLint, which provides the main functionality of the tool.
+- [`@tsslint/typescript-plugin`](packages/typescript-plugin): This package integrates TSSLint with the TypeScript language server.
+- [`@tsslint/vscode`](packages/vscode): This package is a Visual Studio Code extension that integrates TSSLint into the editor.
+
 ## Why TSSLint?
 
 The performance of TypeScript in code editors has always been a crucial concern. Most TypeScript tools integrate TypeScript libraries to enable type checking and query code types through the LanguageService or TypeChecker API.
@@ -23,7 +33,7 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 To enable TSSLint in your IDE, follow these steps:
 
-1. Install the TSSLint VSCode Extension
+1. Install the [TSSLint VSCode Extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
 2. Add the `@tsslint/config` dependency to your project.
 3. Create the `tsslint.config.ts` config file:
 	```js
@@ -35,7 +45,6 @@ To enable TSSLint in your IDE, follow these steps:
 		},
 	});
 	```
-	> Wrapping the configuration in `defineConfig()` is optional but provides IntelliSense support.
 
 ### Create a Rule
 
@@ -97,7 +106,7 @@ After saving the config file, you will notice that `console.log` is now reportin
 
 ### Modify the Error
 
-While you cannot directly configure the severity of a rule, you can modify the reported errors through the `resolveResult()` API in the config file. This allows you to customize the severity of specific rules and even add additional errors.
+While you cannot directly configure the severity of a rule, you can modify the reported errors through the `resolveDiagnostics()` API in the config file. This allows you to customize the severity of specific rules and even add additional errors.
 
 Here's an example of changing the severity of the `no-console` rule from Warning to Error in the `tsslint.config.ts` file:
 
@@ -111,7 +120,7 @@ export default defineConfig({
 	},
 	plugins: [
 		() => ({
-			resolveResult({ typescript: ts }, errors) {
+			resolveDiagnostics({ typescript: ts }, errors) {
 				for (const error of errors) {
 					if (error.code === 'no-console') {
 						error.category = ts.DiagnosticCategory.Error;

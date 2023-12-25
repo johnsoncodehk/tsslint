@@ -19,9 +19,8 @@
 	"files.exclude": {
 		"packages/*/index.d.ts": true,
 		"packages/*/index.js": true,
-		"packages/*/index.map": true,
 		"packages/*/lib/**/*.d.ts": true,
 		"packages/*/lib/**/*.js": true,
-		"packages/*/lib/**/*.map": true
+		"packages/**/*.map": true
 	}
 }

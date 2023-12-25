@@ -1,0 +1,26 @@
+{
+	"name": "@tsslint/cli",
+	"version": "0.0.3",
+	"license": "MIT",
+	"bin": {
+		"tsslint": "./bin/tsslint"
+	},
+	"files": [
+		"**/*.js",
+		"**/*.d.ts"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/johnsoncodehk/tsslint.git",
+		"directory": "packages/cli"
+	},
+	"dependencies": {
+		"@clack/prompts": "^0.7.0",
+		"@tsslint/config": "0.0.3",
+		"@tsslint/core": "0.0.3",
+		"glob": "^10.3.10"
+	},
+	"peerDependencies": {
+		"typescript": "*"
+	}
+}
