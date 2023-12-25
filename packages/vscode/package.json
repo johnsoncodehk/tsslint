@@ -10,14 +10,24 @@
 	"sponsor": {
 		"url": "https://github.com/sponsors/johnsoncodehk"
 	},
+	"main": "./extension.js",
 	"displayName": "TSSLint",
 	"description": "The TSSLint VSCode Extension",
 	"author": "johnsoncodehk",
 	"publisher": "johnsoncodehk",
 	"engines": {
-		"vscode": "*"
+		"vscode": "^1.82.0"
 	},
+	"activationEvents": [
+		"onStartupFinished"
+	],
 	"contributes": {
+		"languages": [
+			{
+				"id": "plaintext",
+				"configuration": "./xxx.json"
+			}
+		],
 		"typescriptServerPlugins": [
 			{
 				"name": "tsslint-typescript-plugin-bundled",

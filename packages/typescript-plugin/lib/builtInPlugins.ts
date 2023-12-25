@@ -130,45 +130,35 @@ export const builtInPlugins: Plugin[] = [
 					};
 				}
 			},
-			getFixes(sourceFile, positionOrRange) {
+			getFixes(fileName, start, end, errorCodes) {
 
-				const start = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.pos;
-				const end = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.end;
-				const fixes = getFileFixes(sourceFile.fileName);
-				const refactors: ts.ApplicableRefactorInfo[] = [];
+				const isRuleError = errorCodes.includes(null as any);
+				if (!isRuleError) {
+					return [];
+				}
 
-				for (const [errorCode, _fixes] of fixes) {
-					for (let i = 0; i < _fixes.length; i++) {
-						const fix = _fixes[i];
+				const fixesMap = getFileFixes(fileName);
+				const result: ts.CodeFixAction[] = [];
+
+				for (const [_errorCode, fixes] of fixesMap) {
+					for (let i = 0; i < fixes.length; i++) {
+						const fix = fixes[i];
 						if (
-							(start <= fix.start && end >= fix.end) ||
+							(fix.start >= start && fix.start <= end) ||
+							(fix.end >= start && fix.end <= end) ||
 							(start >= fix.start && start <= fix.end) ||
 							(end >= fix.start && end <= fix.end)
 						) {
-							if (refactors[refactors.length - 1]?.name !== 'tsslint/fix') {
-								refactors.push({
-									name: 'tsslint/fix',
-									description: 'Fix ' + errorCode,
-									actions: [],
-								});
-							}
-							refactors[refactors.length - 1].actions.push({
-								name: errorCode + '-' + i,
+							result.push({
+								fixName: `tsslint: ${fix.title}`,
 								description: fix.title,
+								changes: fix.getEdits(),
 							});
 						}
 					}
 				}
 
-				return refactors;
-			},
-			fix(sourceFile, refactorName, actionName) {
-				if (refactorName === 'tsslint/fix') {
-					const errorCode = actionName.substring(0, actionName.lastIndexOf('-'));
-					const fixIndex = actionName.substring(actionName.lastIndexOf('-') + 1);
-					const fix = getFileFixes(sourceFile.fileName).get(errorCode)![Number(fixIndex)];
-					return fix.getEdits();
-				}
+				return result;
 			},
 		};
 

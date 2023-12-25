@@ -1,11 +1,10 @@
 import type {
+	CodeFixAction,
+	Diagnostic,
 	FileTextChanges,
 	LanguageService,
 	LanguageServiceHost,
 	SourceFile,
-	Diagnostic,
-	ApplicableRefactorInfo,
-	TextRange,
 } from 'typescript/lib/tsserverlibrary';
 
 export interface ProjectContext {
@@ -28,8 +27,7 @@ export interface Plugin {
 
 export interface PluginInstance {
 	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
-	getFixes?(sourceFile: SourceFile, positionOrRange: number | TextRange): ApplicableRefactorInfo[];
-	fix?(sourceFile: SourceFile, refactorName: string, actionName: string): FileTextChanges[] | undefined;
+	getFixes?(fileName: string, start: number, end: number, errorCodes: readonly number[]): CodeFixAction[];
 	resolveRules?(rules: Rules): Rules;
 	resolveResult?(results: Diagnostic[]): Diagnostic[];
 }

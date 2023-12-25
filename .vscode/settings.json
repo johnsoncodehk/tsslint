@@ -17,9 +17,9 @@
 		"editor.defaultFormatter": "vscode.json-language-features"
 	},
 	"files.exclude": {
-		"packages/*/*.d.ts": true,
-		"packages/*/*.js": true,
-		"packages/*/*.map": true,
+		"packages/*/index.d.ts": true,
+		"packages/*/index.js": true,
+		"packages/*/index.map": true,
 		"packages/*/lib/**/*.d.ts": true,
 		"packages/*/lib/**/*.js": true,
 		"packages/*/lib/**/*.map": true

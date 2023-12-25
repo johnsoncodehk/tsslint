@@ -41,8 +41,7 @@ function decorateLanguageService(
 
 	const getCompilerOptionsDiagnostics = info.languageService.getCompilerOptionsDiagnostics;
 	const getSyntacticDiagnostics = info.languageService.getSyntacticDiagnostics;
-	const getApplicableRefactors = info.languageService.getApplicableRefactors;
-	const getEditsForRefactor = info.languageService.getEditsForRefactor;
+	const getCodeFixesAtPosition = info.languageService.getCodeFixesAtPosition;
 
 	let configFile: string | undefined;
 	let configFileBuildContext: Awaited<ReturnType<typeof watchConfig>> | undefined;
@@ -60,7 +59,7 @@ function decorateLanguageService(
 		errors = errors.concat(configFileDiagnostics);
 
 		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
-		if (!sourceFile) {
+		if (!sourceFile || sourceFile.text.length > 20000) {
 			return errors as ts.DiagnosticWithLocation[];
 		}
 
@@ -83,7 +82,7 @@ function decorateLanguageService(
 
 		if (config?.debug) {
 			errors.push({
-				category: ts.DiagnosticCategory.Message,
+				category: ts.DiagnosticCategory.Warning,
 				source: 'tsslint',
 				code: 'debug-info' as any,
 				messageText: JSON.stringify({
@@ -100,14 +99,9 @@ function decorateLanguageService(
 
 		return errors as ts.DiagnosticWithLocation[];
 	};
-	info.languageService.getApplicableRefactors = (fileName, positionOrRange, ...rest) => {
+	info.languageService.getCodeFixesAtPosition = (fileName, start, end, errorCodes, formatOptions, preferences) => {
 
-		let refactors = getApplicableRefactors(fileName, positionOrRange, ...rest);
-
-		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
-		if (!sourceFile) {
-			return refactors;
-		}
+		let fixes = getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences);
 
 		const token = info.languageServiceHost.getCancellationToken?.();
 
@@ -115,26 +109,10 @@ function decorateLanguageService(
 			if (token?.isCancellationRequested()) {
 				break;
 			}
-			refactors = refactors.concat(plugin.getFixes?.(sourceFile, positionOrRange) ?? []);
+			fixes = fixes.concat(plugin.getFixes?.(fileName, start, end, errorCodes) ?? []);
 		}
 
-		return refactors;
-	};
-	info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest) => {
-
-		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
-		if (!sourceFile) {
-			return;
-		}
-
-		for (const plugin of plugins) {
-			const edits = plugin.fix?.(sourceFile, refactorName, actionName);
-			if (edits) {
-				return { edits };
-			}
-		}
-
-		return getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, ...rest);
+		return fixes;
 	};
 
 	return { update };
