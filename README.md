@@ -4,9 +4,11 @@
 
 TSSLint is not your typical linter. Its main purpose is to expose the TypeScript Language Server diagnostic interface, allowing you to add your own diagnostic rules without additional overhead to creating a TypeChecker.
 
+Discord Server: https://discord.gg/NpdmPEUNjE
+
 ## Packages
 
-This repository is a monorepo that we manage using [Lerna](https://github.com/lerna/lerna). That means that we actually publish several packages to npm from the same codebase, including:
+This repository is a monorepo that we manage using [Lerna-Lite](https://github.com/lerna-lite/lerna-lite). That means that we actually publish several packages to npm from the same codebase, including:
 
 - [`@tsslint/cli`](packages/cli): This package provides the command line interface for TSSLint.
 - [`@tsslint/config`](packages/config): This package allows you to define and build configuration files for TSSLint.
@@ -112,7 +114,7 @@ Here's an example of changing the severity of the `no-console` rule from Warning
 
 ```js
 import { defineConfig } from 'tsslint';
-import noConsoleRule from './rules/no-console.mjs';
+import noConsoleRule from './rules/noConsoleRule.ts';
 
 export default defineConfig({
 	rules: {
