@@ -130,12 +130,7 @@ export const builtInPlugins: Plugin[] = [
 					};
 				}
 			},
-			getFixes(fileName, start, end, errorCodes) {
-
-				const isRuleError = errorCodes.includes(null as any);
-				if (!isRuleError) {
-					return [];
-				}
+			getFixes(fileName, start, end) {
 
 				const fixesMap = getFileFixes(fileName);
 				const result: ts.CodeFixAction[] = [];

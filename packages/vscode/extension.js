@@ -10,8 +10,14 @@ try {
 	require('fs').readFileSync = (...args) => {
 		if (args[0] === extensionJsPath) {
 			let text = readFileSync(...args);
+
 			// patch getFixableDiagnosticsForContext
 			text = text.replace('t.has(e.code+"")', s => `(${s}||e.source==="tsslint")`);
+
+			// patch buildIndividualFixes
+			text = text.replace('!r.has(s.code)', s => `${s}&&s.source!=="tsslint"`);
+			text = text.replace('e.fixName===o', s => `${s}||s.source==="tsslint"`);
+
 			return text;
 		}
 		return readFileSync(...args);
