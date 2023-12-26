@@ -53,13 +53,18 @@ import glob = require('glob');
 	}
 	else if (process.argv.includes('--projects')) {
 		const projectsIndex = process.argv.indexOf('--projects');
-		const searchGlob = process.argv.slice(projectsIndex + 1);
-		const tsconfigs = glob.sync(searchGlob[0], { cwd: process.cwd() });
-		for (let tsconfig of tsconfigs) {
-			if (!tsconfig.startsWith('.')) {
-				tsconfig = `./${tsconfig}`;
+		for (let i = projectsIndex + 1; i < process.argv.length; i++) {
+			if (process.argv[i].startsWith('-')) {
+				break;
 			}
-			errors += await projectWorker(tsconfig);
+			const searchGlob = process.argv[i];
+			const tsconfigs = glob.sync(searchGlob);
+			for (let tsconfig of tsconfigs) {
+				if (!tsconfig.startsWith('.')) {
+					tsconfig = `./${tsconfig}`;
+				}
+				errors += await projectWorker(tsconfig);
+			}
 		}
 	}
 	else {
