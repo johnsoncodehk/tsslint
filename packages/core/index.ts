@@ -20,7 +20,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	const configSourceFile = ts.createSourceFile(ctx.configFile, ts.sys.readFile(ctx.configFile) ?? '', ts.ScriptTarget.Latest, true);
 	const plugins = (config.plugins ?? []).map(plugin => plugin(ctx));
 
-	let rules = config.rules ?? {};
+	let rules = { ...config.rules } ?? {};
 
 	for (const plugin of plugins) {
 		if (plugin.resolveRules) {
