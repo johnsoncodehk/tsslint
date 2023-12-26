@@ -1,5 +1,4 @@
 import type {
-	CodeFixAction,
 	Diagnostic,
 	FileTextChanges,
 	LanguageService,
@@ -22,12 +21,10 @@ export interface Config {
 }
 
 export interface Plugin {
-	(projectContext: ProjectContext): PluginInstance | Promise<PluginInstance>;
+	(projectContext: ProjectContext): PluginInstance;
 }
 
 export interface PluginInstance {
-	lint?(sourceFile: SourceFile, rules: Rules): Diagnostic[];
-	getFixes?(fileName: string, start: number, end: number, diagnostics?: Diagnostic[]): CodeFixAction[];
 	resolveRules?(rules: Rules): Rules;
 	resolveDiagnostics?(results: Diagnostic[]): Diagnostic[];
 }

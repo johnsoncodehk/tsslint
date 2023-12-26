@@ -1,7 +1,7 @@
-import type { Config, PluginInstance, ProjectContext, watchConfigFile } from '@tsslint/config';
-import type * as ts from 'typescript/lib/tsserverlibrary.js';
-import { getBuiltInPlugins } from '@tsslint/core';
+import type { Config, ProjectContext, watchConfigFile } from '@tsslint/config';
+import { Linter, createLinter } from '@tsslint/core';
 import * as path from 'path';
+import type * as ts from 'typescript/lib/tsserverlibrary.js';
 
 const languageServiceDecorators = new WeakMap<ts.LanguageService, ReturnType<typeof decorateLanguageService>>();
 
@@ -46,38 +46,17 @@ function decorateLanguageService(
 	let configFileBuildContext: Awaited<ReturnType<typeof watchConfigFile>> | undefined;
 	let configFileDiagnostics: ts.Diagnostic[] = [];
 	let config: Config | undefined;
-	let plugins: PluginInstance[] = [];
+	let linter: Linter | undefined;
 
 	info.languageService.getCompilerOptionsDiagnostics = () => {
 		return getCompilerOptionsDiagnostics().concat(configFileDiagnostics);
 	};
 	info.languageService.getSyntacticDiagnostics = fileName => {
 
-		let errors: ts.Diagnostic[] = getSyntacticDiagnostics(fileName);
-
-		errors = errors.concat(configFileDiagnostics);
-
-		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
-		if (!sourceFile || sourceFile.text.length > 20000) {
-			return errors as ts.DiagnosticWithLocation[];
-		}
-
-		const token = info.languageServiceHost.getCancellationToken?.();
-
-		for (const plugin of plugins) {
-			if (token?.isCancellationRequested()) {
-				break;
-			}
-			if (plugin.lint) {
-				let pluginResult = plugin.lint?.(sourceFile, config?.rules ?? {});
-				for (const plugin of plugins) {
-					if (plugin.resolveDiagnostics) {
-						pluginResult = plugin.resolveDiagnostics(pluginResult);
-					}
-				}
-				errors = errors.concat(pluginResult);
-			}
-		}
+		const errors = [
+			...getSyntacticDiagnostics(fileName),
+			...linter?.lint(fileName) ?? [],
+		];
 
 		if (config?.debug) {
 			errors.push({
@@ -86,11 +65,11 @@ function decorateLanguageService(
 				code: 'debug-info' as any,
 				messageText: JSON.stringify({
 					rules: Object.keys(config?.rules ?? {}),
-					plugins: plugins.length,
+					plugins: config.plugins?.length,
 					configFile,
 					tsconfig,
 				}, null, 2),
-				file: sourceFile,
+				file: info.languageService.getProgram()?.getSourceFile(fileName),
 				start: 0,
 				length: 0,
 			});
@@ -99,19 +78,10 @@ function decorateLanguageService(
 		return errors as ts.DiagnosticWithLocation[];
 	};
 	info.languageService.getCodeFixesAtPosition = (fileName, start, end, errorCodes, formatOptions, preferences) => {
-
-		let fixes = getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences);
-
-		const token = info.languageServiceHost.getCancellationToken?.();
-
-		for (const plugin of plugins) {
-			if (token?.isCancellationRequested()) {
-				break;
-			}
-			fixes = fixes.concat(plugin.getFixes?.(fileName, start, end) ?? []);
-		}
-
-		return fixes;
+		return [
+			...getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences),
+			...linter?.getFixes(fileName, start, end) ?? [],
+		];
 	};
 
 	return { update };
@@ -160,7 +130,7 @@ function decorateLanguageService(
 		if (newConfigFile !== configFile) {
 			configFile = newConfigFile;
 			config = undefined;
-			plugins = [];
+			linter = undefined;
 			configFileBuildContext?.dispose();
 			configFileDiagnostics = [];
 
@@ -220,15 +190,7 @@ function decorateLanguageService(
 						return diag;
 					});
 					if (config) {
-						plugins = await Promise.all([
-							...getBuiltInPlugins(true),
-							...config.plugins ?? []
-						].map(plugin => plugin(projectContext)));
-						for (const plugin of plugins) {
-							if (plugin.resolveRules) {
-								config.rules = plugin.resolveRules(config.rules ?? {});
-							}
-						}
+						linter = createLinter(projectContext, config, true);
 					}
 					info.project.refreshDiagnostics();
 				},

@@ -98,22 +98,13 @@ import glob = require('glob');
 		projectVersion++;
 		typeRootsVersion++;
 
-		const plugins = await Promise.all([
-			...core.getBuiltInPlugins(false),
-			...tsslintConfig.plugins ?? [],
-		].map(plugin => plugin({
+		const linter = core.createLinter({
 			configFile,
 			languageService,
 			languageServiceHost,
 			typescript: ts,
 			tsconfig,
-		})));
-
-		for (const plugin of plugins) {
-			if (plugin.resolveRules) {
-				tsslintConfig.rules = plugin.resolveRules(tsslintConfig.rules ?? {});
-			}
-		}
+		}, tsslintConfig, false);
 
 		let errors = 0;
 		let warnings = 0;
@@ -128,31 +119,17 @@ import glob = require('glob');
 				while (shouldRetry && retry) {
 					shouldRetry = false;
 					retry--;
-					const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
-					if (!sourceFile) {
-						throw new Error(`No source file found for ${fileName}`);
-					}
-					let diagnostics = plugins
-						.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {}))
-						.flat()
-						.filter((diag): diag is ts.Diagnostic => !!diag);
-					for (const plugin of plugins) {
-						if (plugin.resolveDiagnostics) {
-							diagnostics = plugin.resolveDiagnostics(diagnostics);
-						}
-					}
-					const fixes = plugins
-						.map(plugin => plugin.getFixes?.(fileName, 0, sourceFile.text.length, diagnostics))
-						.flat()
-						.filter((fix): fix is ts.CodeFixAction => !!fix);
+					const diagnostics = linter.lint(fileName);
+					const fixes = linter.getFixes(fileName, 0, Number.MAX_VALUE, diagnostics);
 					const changes = fixes
 						.map(fix => fix.changes)
 						.flat()
-						.filter(change => change.fileName === sourceFile.fileName && change.textChanges.length)
+						.filter(change => change.fileName === fileName && change.textChanges.length)
 						.sort((a, b) => b.textChanges[0].span.start - a.textChanges[0].span.start);
-					let lastChangeAt = sourceFile.text.length;
+					let lastChangeAt = Number.MAX_VALUE;
 					if (changes.length) {
-						let text = sourceFile.text;
+						const oldSnapshot = snapshots.get(fileName)!;
+						let text = oldSnapshot.getText(0, oldSnapshot.getLength());
 						for (const change of changes) {
 							const textChanges = [...change.textChanges].sort((a, b) => b.span.start - a.span.start);
 							const lastChange = textChanges[0];
@@ -165,8 +142,8 @@ import glob = require('glob');
 							}
 						}
 						newSnapshot = ts.ScriptSnapshot.fromString(text);
-						snapshots.set(sourceFile.fileName, newSnapshot);
-						versions.set(sourceFile.fileName, (versions.get(sourceFile.fileName) ?? 0) + 1);
+						snapshots.set(fileName, newSnapshot);
+						versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 						projectVersion++;
 						shouldRetry = true;
 					}
@@ -181,12 +158,7 @@ import glob = require('glob');
 				if (!sourceFile) {
 					throw new Error(`No source file found for ${fileName}`);
 				}
-				let diagnostics = plugins.map(plugin => plugin.lint?.(sourceFile, tsslintConfig.rules ?? {})).flat().filter((diag): diag is ts.Diagnostic => !!diag);
-				for (const plugin of plugins) {
-					if (plugin.resolveDiagnostics) {
-						diagnostics = plugin.resolveDiagnostics(diagnostics);
-					}
-				}
+				const diagnostics = linter.lint(fileName);
 				const output = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
 					getCurrentDirectory: ts.sys.getCurrentDirectory,
 					getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
