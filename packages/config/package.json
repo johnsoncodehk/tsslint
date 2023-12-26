@@ -14,12 +14,7 @@
 	"dependencies": {
 		"esbuild": "^0.19.0"
 	},
-	"peerDependencies": {
-		"tslint": "*"
-	},
-	"peerDependenciesMeta": {
-		"tslint": {
-			"optional": true
-		}
+	"devDependencies": {
+		"tslint": "latest"
 	}
 }

@@ -1,4 +1,4 @@
-import * as TSLint from 'tslint';
+import type * as TSLint from 'tslint';
 import type { Rule } from './types';
 
 export function parseTSLintRules(rules: TSLint.IRule[]) {
