@@ -57,6 +57,7 @@ export async function watchConfigFile(
 	}
 	else {
 		await ctx.rebuild();
+		await ctx.dispose();
 	}
 	return ctx;
 }

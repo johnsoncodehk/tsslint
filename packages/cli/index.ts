@@ -14,6 +14,7 @@ import glob = require('glob');
 	const { log, text } = await import('@clack/prompts');
 	const snapshots = new Map<string, ts.IScriptSnapshot>();
 	const versions = new Map<string, number>();
+	const configs = new Map<string, config.Config | undefined>();
 	const languageServiceHost: ts.LanguageServiceHost = {
 		...ts.sys,
 		useCaseSensitiveFileNames() {
@@ -85,7 +86,11 @@ import glob = require('glob');
 		}
 		log.info(`config path: ${configFile}`);
 
-		const tsslintConfig = await config.buildConfigFile(configFile);
+		if (!configs.has(configFile)) {
+			configs.set(configFile, await config.buildConfigFile(configFile));
+		}
+		const tsslintConfig = configs.get(configFile)!;
+
 		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames) {
 			throw new Error('No input files found in tsconfig!');
