@@ -15,6 +15,18 @@ export async function watchConfigFile(
 	);
 	const outFileName = btoa(path.relative(outDir, configFilePath)) + '.cjs';
 	const outFile = path.join(outDir, outFileName);
+	const resultHandler = (result: esbuild.BuildResult) => {
+		let config: Config | undefined;
+		if (!result.errors.length) {
+			try {
+				config = require(outFile).default;
+				delete require.cache[outFile!];
+			} catch (e) {
+				result.errors.push({ text: String(e) } as any);
+			}
+		}
+		onBuild(config, result);
+	};
 	const ctx = await esbuild.context({
 		entryPoints: [configFilePath],
 		bundle: true,
@@ -37,18 +49,9 @@ export async function watchConfigFile(
 					}
 					return {};
 				});
-				build.onEnd(result => {
-					let config: Config | undefined;
-					if (!result.errors.length) {
-						try {
-							config = require(outFile).default;
-							delete require.cache[outFile!];
-						} catch (e) {
-							result.errors.push({ text: String(e) } as any);
-						}
-					}
-					onBuild(config, result);
-				});
+				if (watch) {
+					build.onEnd(resultHandler);
+				}
 			},
 		}],
 	});
@@ -56,8 +59,9 @@ export async function watchConfigFile(
 		await ctx.watch();
 	}
 	else {
-		await ctx.rebuild();
+		const result = await ctx.rebuild();
 		await ctx.dispose();
+		resultHandler(result);
 	}
 	return ctx;
 }
