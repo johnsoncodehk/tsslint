@@ -45,7 +45,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const fixes = getFileFixes(sourceFile.fileName);
 
-			let result: ts.Diagnostic[] = [];
+			let result: ts.DiagnosticWithLocation[] = [];
 			let currentRuleId: string;
 
 			fixes.clear();
@@ -80,11 +80,11 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, trace: boolean): Reporter {
 
-				const error: ts.Diagnostic = {
+				const error: ts.DiagnosticWithLocation = {
 					category,
 					code: currentRuleId as any,
 					messageText: message,
-					file: sourceFile,
+					file: sourceFile!,
 					start,
 					length: end - start,
 					source: 'tsslint',

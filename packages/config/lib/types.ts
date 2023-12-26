@@ -1,6 +1,6 @@
 import type {
 	CodeFixAction,
-	Diagnostic,
+	DiagnosticWithLocation,
 	FileTextChanges,
 	LanguageService,
 	LanguageServiceHost,
@@ -27,7 +27,7 @@ export interface Plugin {
 
 export interface PluginInstance {
 	resolveRules?(rules: Rules): Rules;
-	resolveDiagnostics?(fileName: string, results: Diagnostic[]): Diagnostic[];
+	resolveDiagnostics?(fileName: string, results: DiagnosticWithLocation[]): DiagnosticWithLocation[];
 	resolveCodeFixes?(fileName: string, results: CodeFixAction[]): CodeFixAction[];
 }
 

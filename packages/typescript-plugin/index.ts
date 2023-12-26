@@ -52,30 +52,29 @@ function decorateLanguageService(
 		return getCompilerOptionsDiagnostics().concat(configFileDiagnostics);
 	};
 	info.languageService.getSyntacticDiagnostics = fileName => {
-
-		const errors = [
-			...getSyntacticDiagnostics(fileName),
-			...linter?.lint(fileName) ?? [],
-		];
-
-		if (config?.debug) {
-			errors.push({
-				category: ts.DiagnosticCategory.Warning,
-				source: 'tsslint',
-				code: 'debug-info' as any,
-				messageText: JSON.stringify({
-					rules: Object.keys(config?.rules ?? {}),
-					plugins: config.plugins?.length,
-					configFile,
-					tsconfig,
-				}, null, 2),
-				file: info.languageService.getProgram()?.getSourceFile(fileName),
-				start: 0,
-				length: 0,
-			});
+		let result = getSyntacticDiagnostics(fileName);
+		if (info.languageServiceHost.getScriptFileNames().includes(fileName)) {
+			if (linter) {
+				result = result.concat(linter.lint(fileName));
+			}
+			if (config?.debug) {
+				result.push({
+					category: ts.DiagnosticCategory.Warning,
+					source: 'tsslint',
+					code: 'debug-info' as any,
+					messageText: JSON.stringify({
+						rules: Object.keys(config?.rules ?? {}),
+						plugins: config.plugins?.length,
+						configFile,
+						tsconfig,
+					}, null, 2),
+					file: info.languageService.getProgram()!.getSourceFile(fileName)!,
+					start: 0,
+					length: 0,
+				});
+			}
 		}
-
-		return errors as ts.DiagnosticWithLocation[];
+		return result;
 	};
 	info.languageService.getCodeFixesAtPosition = (fileName, start, end, errorCodes, formatOptions, preferences) => {
 		return [
