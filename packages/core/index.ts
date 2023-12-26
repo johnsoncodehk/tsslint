@@ -60,7 +60,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			for (const plugin of plugins) {
 				if (plugin.resolveDiagnostics) {
-					result = plugin.resolveDiagnostics(result);
+					result = plugin.resolveDiagnostics(fileName, result);
 				}
 			}
 
@@ -185,7 +185,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			for (const plugin of plugins) {
 				if (plugin.resolveCodeFixes) {
-					result = plugin.resolveCodeFixes(result);
+					result = plugin.resolveCodeFixes(fileName, result);
 				}
 			}
 
