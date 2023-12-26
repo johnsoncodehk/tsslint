@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/cli",
-	"version": "0.0.6",
+	"version": "0.0.7",
 	"license": "MIT",
 	"bin": {
 		"tsslint": "./bin/tsslint.js"
@@ -16,8 +16,8 @@
 	},
 	"dependencies": {
 		"@clack/prompts": "^0.7.0",
-		"@tsslint/config": "0.0.6",
-		"@tsslint/core": "0.0.6",
+		"@tsslint/config": "0.0.7",
+		"@tsslint/core": "0.0.7",
 		"glob": "^10.3.10"
 	},
 	"peerDependencies": {
