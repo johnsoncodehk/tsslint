@@ -90,27 +90,9 @@ function decorateLanguageService(
 
 		let configOptionSpan: ts.TextSpan = { start: 0, length: 0 };
 		let newConfigFile: string | undefined;
-		let configImportPath: string | undefined;
 		let configResolveError: any;
 
 		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-
-		try {
-			configImportPath = require.resolve('@tsslint/config', { paths: [path.dirname(tsconfig)] });
-		} catch (err) {
-			configResolveError = err;
-			configFileDiagnostics = [{
-				category: ts.DiagnosticCategory.Error,
-				code: 0,
-				messageText: String(err),
-				file: jsonConfigFile,
-				start: 0,
-				length: 0,
-			}];
-			return;
-		}
-
-		const { watchConfigFile }: typeof import('@tsslint/config') = require(configImportPath);
 
 		if (pluginConfig?.configFile) {
 			configOptionSpan = {
@@ -149,6 +131,23 @@ function decorateLanguageService(
 				return;
 			}
 
+			let configImportPath: string | undefined;
+
+			try {
+				configImportPath = require.resolve('@tsslint/config', { paths: [configFile] });
+			} catch (err) {
+				configFileDiagnostics = [{
+					category: ts.DiagnosticCategory.Error,
+					code: 0,
+					messageText: String(err),
+					file: jsonConfigFile,
+					start: 0,
+					length: 0,
+				}];
+				return;
+			}
+
+			const { watchConfigFile }: typeof import('@tsslint/config') = require(configImportPath);
 			const projectContext: ProjectContext = {
 				configFile,
 				tsconfig,
