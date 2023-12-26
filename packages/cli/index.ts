@@ -120,7 +120,7 @@ import glob = require('glob');
 					shouldRetry = false;
 					retry--;
 					const diagnostics = linter.lint(fileName);
-					const fixes = linter.getFixes(fileName, 0, Number.MAX_VALUE, diagnostics);
+					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics);
 					const changes = fixes
 						.map(fix => fix.changes)
 						.flat()

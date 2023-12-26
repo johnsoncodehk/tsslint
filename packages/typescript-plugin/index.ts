@@ -80,7 +80,7 @@ function decorateLanguageService(
 	info.languageService.getCodeFixesAtPosition = (fileName, start, end, errorCodes, formatOptions, preferences) => {
 		return [
 			...getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences),
-			...linter?.getFixes(fileName, start, end) ?? [],
+			...linter?.getCodeFixes(fileName, start, end) ?? [],
 		];
 	};
 

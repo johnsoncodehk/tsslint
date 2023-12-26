@@ -20,7 +20,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	const configSourceFile = ts.createSourceFile(ctx.configFile, ts.sys.readFile(ctx.configFile) ?? '', ts.ScriptTarget.Latest, true);
 	const plugins = (config.plugins ?? []).map(plugin => plugin(ctx));
 
-	let rules = { ...config.rules } ?? {};
+	let rules = { ...config.rules };
 
 	for (const plugin of plugins) {
 		if (plugin.resolveRules) {
@@ -156,10 +156,11 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				};
 			}
 		},
-		getFixes(fileName: string, start: number, end: number, diagnostics?: ts.Diagnostic[]) {
+		getCodeFixes(fileName: string, start: number, end: number, diagnostics?: ts.Diagnostic[]) {
 
 			const fixesMap = getFileFixes(fileName);
-			const result: ts.CodeFixAction[] = [];
+
+			let result: ts.CodeFixAction[] = [];
 
 			for (const [_ruleId, fixes] of fixesMap) {
 				for (let i = 0; i < fixes.length; i++) {
@@ -179,6 +180,12 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 							changes: fix.getEdits(),
 						});
 					}
+				}
+			}
+
+			for (const plugin of plugins) {
+				if (plugin.resolveCodeFixes) {
+					result = plugin.resolveCodeFixes(result);
 				}
 			}
 
