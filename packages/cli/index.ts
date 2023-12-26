@@ -16,14 +16,14 @@ import glob = require('glob');
 	const versions = new Map<string, number>();
 	const languageServiceHost: ts.LanguageServiceHost = {
 		...ts.sys,
+		useCaseSensitiveFileNames() {
+			return ts.sys.useCaseSensitiveFileNames;
+		},
 		getProjectVersion() {
 			return projectVersion.toString();
 		},
 		getTypeRootsVersion() {
 			return typeRootsVersion;
-		},
-		useCaseSensitiveFileNames() {
-			return ts.sys.useCaseSensitiveFileNames;
 		},
 		getCompilationSettings() {
 			return parsed.options;
@@ -106,6 +106,7 @@ import glob = require('glob');
 		}
 
 		let errors = 0;
+		let warnings = 0;
 
 		for (const fileName of parsed.fileNames) {
 			if (process.argv.includes('--fix')) {
@@ -185,10 +186,11 @@ import glob = require('glob');
 					log.info(output);
 				}
 				errors += diagnostics.filter(diag => diag.category === ts.DiagnosticCategory.Error).length;
+				warnings += diagnostics.filter(diag => diag.category === ts.DiagnosticCategory.Warning).length;
 			}
 		}
 
-		if (errors) {
+		if (errors || warnings) {
 			log.info(`Use --fix to apply fixes.`);
 		}
 
