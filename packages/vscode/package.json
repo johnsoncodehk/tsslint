@@ -41,7 +41,7 @@
 		"build": "node scripts/build",
 		"watch": "node scripts/build --watch",
 		"pack": "vsce package",
-		"release": "vsce publish --pre-release"
+		"release": "vsce publish"
 	},
 	"devDependencies": {
 		"@tsslint/typescript-plugin": "0.0.7",
