@@ -121,14 +121,14 @@ export default defineConfig({
 		'no-console': noConsoleRule
 	},
 	plugins: [
-		() => ({
-			resolveDiagnostics({ typescript: ts }, errors) {
-				for (const error of errors) {
-					if (error.code === 'no-console') {
-						error.category = ts.DiagnosticCategory.Error;
+		({ typescript: ts }) => ({
+			resolveDiagnostics(_fileName, diagnostics) {
+				for (const diagnostic of diagnostics) {
+					if (diagnostic.code === 'no-console') {
+						diagnostic.category = ts.DiagnosticCategory.Error;
 					}
 				}
-				return errors;
+				return diagnostics;
 			},
 		}),
 	],
