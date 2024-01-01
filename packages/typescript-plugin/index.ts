@@ -38,9 +38,11 @@ function decorateLanguageService(
 	info: ts.server.PluginCreateInfo,
 ) {
 
-	const getCompilerOptionsDiagnostics = info.languageService.getCompilerOptionsDiagnostics;
-	const getSyntacticDiagnostics = info.languageService.getSyntacticDiagnostics;
-	const getCodeFixesAtPosition = info.languageService.getCodeFixesAtPosition;
+	const {
+		getCompilerOptionsDiagnostics,
+		getSyntacticDiagnostics,
+		getCodeFixesAtPosition,
+	} = info.languageService;
 
 	let configFile: string | undefined;
 	let configFileBuildContext: Awaited<ReturnType<typeof watchConfigFile>> | undefined;
@@ -53,26 +55,25 @@ function decorateLanguageService(
 	};
 	info.languageService.getSyntacticDiagnostics = fileName => {
 		let result = getSyntacticDiagnostics(fileName);
-		if (info.languageServiceHost.getScriptFileNames().includes(fileName)) {
-			if (linter) {
-				result = result.concat(linter.lint(fileName));
-			}
-			if (config?.debug) {
-				result.push({
-					category: ts.DiagnosticCategory.Warning,
-					source: 'tsslint',
-					code: 'debug-info' as any,
-					messageText: JSON.stringify({
-						rules: Object.keys(config?.rules ?? {}),
-						plugins: config.plugins?.length,
-						configFile,
-						tsconfig,
-					}, null, 2),
-					file: info.languageService.getProgram()!.getSourceFile(fileName)!,
-					start: 0,
-					length: 0,
-				});
-			}
+		if (!linter || !info.languageServiceHost.getScriptFileNames().includes(fileName)) {
+			return result;
+		}
+		result = result.concat(linter.lint(fileName));
+		if (config?.debug) {
+			result.push({
+				category: ts.DiagnosticCategory.Warning,
+				source: 'tsslint',
+				code: 'debug-info' as any,
+				messageText: JSON.stringify({
+					rules: Object.keys(config?.rules ?? {}),
+					plugins: config.plugins?.length,
+					configFile,
+					tsconfig,
+				}, null, 2),
+				file: info.languageService.getProgram()!.getSourceFile(fileName)!,
+				start: 0,
+				length: 0,
+			});
 		}
 		return result;
 	};

@@ -6,7 +6,7 @@ import glob = require('glob');
 
 (async () => {
 
-	let errors = 0;
+	let hasError = false;
 	let projectVersion = 0;
 	let typeRootsVersion = 0;
 	let parsed: ts.ParsedCommandLine;
@@ -50,7 +50,7 @@ import glob = require('glob');
 	if (process.argv.includes('--project')) {
 		const projectIndex = process.argv.indexOf('--project');
 		const tsconfig = process.argv[projectIndex + 1];
-		errors += await projectWorker(tsconfig);
+		await projectWorker(tsconfig);
 	}
 	else if (process.argv.includes('--projects')) {
 		const projectsIndex = process.argv.indexOf('--projects');
@@ -64,27 +64,28 @@ import glob = require('glob');
 				if (!tsconfig.startsWith('.')) {
 					tsconfig = `./${tsconfig}`;
 				}
-				errors += await projectWorker(tsconfig);
+				await projectWorker(tsconfig);
 			}
 		}
 	}
 	else {
-		errors += await projectWorker();
+		await projectWorker();
 	}
 
-	process.exit(errors ? 1 : 0);
+	process.exit(hasError ? 1 : 0);
 
 	async function projectWorker(tsconfigOption?: string) {
 
 		const tsconfig = await getTsconfigPath(tsconfigOption);
 
-		log.info(`tsconfig path: ${tsconfig} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
+		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
 
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 		if (!configFile) {
-			throw new Error('No tsslint.config.ts file found!');
+			log.error('No tsslint.config.ts file found!');
+			return 1;
 		}
-		log.info(`config path: ${configFile}`);
+		log.message(`Config: ${path.relative(process.cwd(), configFile)}`);
 
 		if (!configs.has(configFile)) {
 			configs.set(configFile, await config.buildConfigFile(configFile));
@@ -106,8 +107,7 @@ import glob = require('glob');
 			tsconfig,
 		}, tsslintConfig, false);
 
-		let errors = 0;
-		let warnings = 0;
+		let hasFix = false;
 
 		for (const fileName of parsed.fileNames) {
 			if (process.argv.includes('--fix')) {
@@ -159,24 +159,32 @@ import glob = require('glob');
 					throw new Error(`No source file found for ${fileName}`);
 				}
 				const diagnostics = linter.lint(fileName);
-				const output = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-					getCurrentDirectory: ts.sys.getCurrentDirectory,
-					getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
-					getNewLine: () => ts.sys.newLine,
-				});
-				if (output) {
-					log.info(output);
+				for (const diagnostic of diagnostics) {
+					const output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
+						getCurrentDirectory: ts.sys.getCurrentDirectory,
+						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
+						getNewLine: () => ts.sys.newLine,
+					});
+					if (diagnostic.category === ts.DiagnosticCategory.Error) {
+						log.error(output);
+					}
+					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+						log.warn(output);
+					}
+					else {
+						log.info(output);
+					}
 				}
-				errors += diagnostics.filter(diag => diag.category === ts.DiagnosticCategory.Error).length;
-				warnings += diagnostics.filter(diag => diag.category === ts.DiagnosticCategory.Warning).length;
+				if (diagnostics.length) {
+					hasFix ||= linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics).length >= 1;
+					hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
+				}
 			}
 		}
 
-		if (errors || warnings) {
+		if (hasFix) {
 			log.info(`Use --fix to apply fixes.`);
 		}
-
-		return errors;
 	}
 
 	async function getTsconfigPath(tsconfig?: string) {
