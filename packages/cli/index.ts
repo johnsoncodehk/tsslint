@@ -83,7 +83,7 @@ import glob = require('glob');
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 		if (!configFile) {
 			log.error('No tsslint.config.ts file found!');
-			return 1;
+			return;
 		}
 		log.message(`Config: ${path.relative(process.cwd(), configFile)}`);
 
@@ -124,7 +124,7 @@ import glob = require('glob');
 					const textChanges = core.combineCodeFixes(fileName, fixes);
 					if (textChanges.length) {
 						const oldSnapshot = snapshots.get(fileName)!;
-						const newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
+						newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
 						snapshots.set(fileName, newSnapshot);
 						versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 						projectVersion++;
