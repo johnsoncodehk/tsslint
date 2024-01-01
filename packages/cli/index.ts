@@ -121,27 +121,10 @@ import glob = require('glob');
 					retry--;
 					const diagnostics = linter.lint(fileName);
 					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics);
-					const changes = fixes
-						.map(fix => fix.changes)
-						.flat()
-						.filter(change => change.fileName === fileName && change.textChanges.length)
-						.sort((a, b) => b.textChanges[0].span.start - a.textChanges[0].span.start);
-					let lastChangeAt = Number.MAX_VALUE;
-					if (changes.length) {
+					const textChanges = core.combineCodeFixes(fileName, fixes);
+					if (textChanges.length) {
 						const oldSnapshot = snapshots.get(fileName)!;
-						let text = oldSnapshot.getText(0, oldSnapshot.getLength());
-						for (const change of changes) {
-							const textChanges = [...change.textChanges].sort((a, b) => b.span.start - a.span.start);
-							const lastChange = textChanges[0];
-							const firstChange = textChanges[textChanges.length - 1];
-							if (lastChangeAt >= lastChange.span.start + lastChange.span.length) {
-								lastChangeAt = firstChange.span.start;
-								for (const change of textChanges) {
-									text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
-								}
-							}
-						}
-						newSnapshot = ts.ScriptSnapshot.fromString(text);
+						const newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
 						snapshots.set(fileName, newSnapshot);
 						versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 						projectVersion++;

@@ -1,5 +1,5 @@
 import type { Config, ProjectContext, watchConfigFile } from '@tsslint/config';
-import { Linter, createLinter } from '@tsslint/core';
+import { Linter, createLinter, combineCodeFixes } from '@tsslint/core';
 import * as path from 'path';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 
@@ -42,6 +42,7 @@ function decorateLanguageService(
 		getCompilerOptionsDiagnostics,
 		getSyntacticDiagnostics,
 		getCodeFixesAtPosition,
+		getCombinedCodeFix,
 	} = info.languageService;
 
 	let configFile: string | undefined;
@@ -82,6 +83,19 @@ function decorateLanguageService(
 			...getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences),
 			...linter?.getCodeFixes(fileName, start, end) ?? [],
 		];
+	};
+	info.languageService.getCombinedCodeFix = (scope, fixId, formatOptions, preferences) => {
+		if (fixId === 'tsslint' && linter) {
+			const fixes = linter.getCodeFixes(scope.fileName, 0, Number.MAX_VALUE);
+			const changes = combineCodeFixes(scope.fileName, fixes);
+			return {
+				changes: [{
+					fileName: scope.fileName,
+					textChanges: changes,
+				}],
+			};
+		}
+		return getCombinedCodeFix(scope, fixId, formatOptions, preferences);
 	};
 
 	return { update };

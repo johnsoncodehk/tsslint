@@ -11,6 +11,18 @@ export const noConsoleRule: Rule = ({ typescript: ts, sourceFile, reportWarning 
 				`Calls to 'console.x' are not allowed.`,
 				node.parent.getStart(sourceFile),
 				node.parent.getEnd()
+			).withFix(
+				`Remove 'console.${node.name.text}'`,
+				() => [{
+					fileName: sourceFile.fileName,
+					textChanges: [{
+						newText: '/* deleted */',
+						span: {
+							start: node.parent.getStart(sourceFile),
+							length: node.parent.getEnd() - node.parent.getStart(sourceFile),
+						},
+					}],
+				}]
 			);
 		}
 		ts.forEachChild(node, walk);

@@ -178,6 +178,8 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 							fixName: `tsslint: ${fix.title}`,
 							description: fix.title,
 							changes: fix.getEdits(),
+							fixId: 'tsslint',
+							fixAllDescription: 'Fix all TSSLint errors'
 						});
 					}
 				}
@@ -199,4 +201,50 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 		}
 		return fileFixes.get(fileName)!;
 	}
+}
+
+export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
+
+	const changes = fixes
+		.map(fix => fix.changes)
+		.flat()
+		.filter(change => change.fileName === fileName && change.textChanges.length)
+		.sort((a, b) => b.textChanges[0].span.start - a.textChanges[0].span.start);
+
+	let lastChangeAt = Number.MAX_VALUE;
+	let finalTextChanges: ts.TextChange[] = [];
+
+	for (const change of changes) {
+		const textChanges = [...change.textChanges].sort((a, b) => a.span.start - b.span.start);
+		const firstChange = textChanges[0];
+		const lastChange = textChanges[textChanges.length - 1];
+		if (lastChangeAt >= lastChange.span.start + lastChange.span.length) {
+			lastChangeAt = firstChange.span.start;
+			finalTextChanges = finalTextChanges.concat(textChanges);
+		}
+	}
+
+	return finalTextChanges;
+}
+
+export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: ts.TextChange[]): ts.IScriptSnapshot {
+	textChanges = [...textChanges].sort((a, b) => b.span.start - a.span.start);
+	let text = baseSnapshot.getText(0, baseSnapshot.getLength());
+	for (const change of textChanges) {
+		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
+	}
+	return {
+		getText(start, end) {
+			return text.substring(start, end);
+		},
+		getLength() {
+			return text.length;
+		},
+		getChangeRange(oldSnapshot) {
+			if (oldSnapshot === baseSnapshot) {
+				// TODO
+			}
+			return undefined;
+		},
+	};
 }
