@@ -22,12 +22,11 @@ The performance of TypeScript in code editors has always been a crucial concern.
 
 However, for complex types or large codebases, the tsserver process can consume significant memory and CPU resources. When linter tools integrate with TypeScript and create their own LanguageService instances, memory and CPU usage can continue to increase. In some cases, this has caused projects to experience long save times when codeActionOnSave is enabled in VSCode.
 
-TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overhead and provide linting capabilities on top of it. It also supports reusing TSLint rules to reduce duplication of work.
+TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overhead and provide linting capabilities on top of it.
 
 ## Features
 
 - Integration with tsserver to minimize semantic linting overhead in IDEs
-- Compatibility with TSLint rules
 - Writing config in typescript
 - Direct support for meta framework files based on TS Plugin without a parser (e.g., Vue)
 
@@ -134,27 +133,3 @@ export default defineConfig({
 	],
 });
 ```
-
-## Using TSLint Rules
-
-TSSLint supports the reuse of TSLint rules. This feature allows you to avoid duplicating work when you want to use existing TSLint rules. To use TSLint rules, you need to parse them using the `parseTSLintRules` function from `@tsslint/config` as shown in the example below:
-
-```typescript
-import { defineConfig, parseTSLintRules } from '@tsslint/config';
-
-export default defineConfig({
-	rules: {
-		...parseTSLintRules([
-			new (require('tslint/lib/rules/banTsIgnoreRule').Rule)({
-				ruleName: 'ban-ts-ignore',
-				ruleArguments: [],
-				ruleSeverity: 'warning',
-			}),
-		]),
-	},
-});
-```
-
-In the above example, the `ban-ts-ignore` rule from TSLint is being used. The `parseTSLintRules` function takes an array of TSLint rules and returns an object that can be spread into the `rules` property of the config object passed to `defineConfig`.
-
-Please refer to the `fixtures/parse-tslint-rules/` file for a complete example.
