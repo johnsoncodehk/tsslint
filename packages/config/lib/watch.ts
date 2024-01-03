@@ -6,6 +6,7 @@ export async function watchConfigFile(
 	configFilePath: string,
 	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
 	watch = true,
+	createHash: (path: string) => string = btoa,
 ) {
 	const outDir = path.resolve(
 		__dirname,
@@ -13,7 +14,7 @@ export async function watchConfigFile(
 		'..',
 		'.tsslint',
 	);
-	const outFileName = btoa(path.relative(outDir, configFilePath)) + '.cjs';
+	const outFileName = createHash(path.relative(outDir, configFilePath)) + '.cjs';
 	const outFile = path.join(outDir, outFileName);
 	const resultHandler = (result: esbuild.BuildResult) => {
 		let config: Config | undefined;

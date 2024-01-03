@@ -207,6 +207,8 @@ function decorateLanguageService(
 					}
 					info.project.refreshDiagnostics();
 				},
+				true,
+				ts.sys.createHash,
 			);
 		}
 	}

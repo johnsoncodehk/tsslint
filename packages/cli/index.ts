@@ -88,7 +88,7 @@ import glob = require('glob');
 		log.message(`Config: ${path.relative(process.cwd(), configFile)}`);
 
 		if (!configs.has(configFile)) {
-			configs.set(configFile, await config.buildConfigFile(configFile));
+			configs.set(configFile, await config.buildConfigFile(configFile, ts.sys.createHash));
 		}
 		const tsslintConfig = configs.get(configFile)!;
 
