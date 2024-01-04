@@ -1,6 +1,6 @@
-import type { Rule } from 'tsl';
+import { defineRule } from 'tsl';
 
-export const noConsoleRule: Rule = ({ typescript: ts, sourceFile, reportWarning }) => {
+export default defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
 	ts.forEachChild(sourceFile, function walk(node) {
 		if (
 			ts.isPropertyAccessExpression(node) &&
@@ -27,4 +27,4 @@ export const noConsoleRule: Rule = ({ typescript: ts, sourceFile, reportWarning 
 		}
 		ts.forEachChild(node, walk);
 	});
-};
+});

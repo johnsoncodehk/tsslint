@@ -65,9 +65,9 @@ As an example, let's create a `no-console` rule under `[project root]/rules/`.
 Here's the code for `[project root]/rules/noConsoleRule.ts`:
 
 ```js
-import type { Rule } from 'tsl';
+import { defineRule } from 'tsl';
 
-const rule: Rule = ({ typescript: ts, sourceFile, reportWarning }) => {
+export default defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
 	ts.forEachChild(sourceFile, function walk(node) {
 		if (
 			ts.isPropertyAccessExpression(node) &&
@@ -94,9 +94,7 @@ const rule: Rule = ({ typescript: ts, sourceFile, reportWarning }) => {
 		}
 		ts.forEachChild(node, walk);
 	});
-}
-
-export default rule;
+});
 ```
 
 Then add it to the `tsl.config.ts` config file.

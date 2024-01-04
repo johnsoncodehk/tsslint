@@ -1,5 +1,5 @@
 import { defineConfig } from 'tsl';
-import { noConsoleRule } from '../noConsoleRule';
+import noConsoleRule from '../noConsoleRule';
 
 export default defineConfig({
 	rules: {

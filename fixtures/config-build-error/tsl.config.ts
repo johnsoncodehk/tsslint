@@ -1,5 +1,5 @@
 import { defineConfig } from 'tsl';
-import { noConsoleRule } from './noExist.ts';
+import noConsoleRule from './noExist.ts';
 
 export default defineConfig({
 	rules: {
