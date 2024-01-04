@@ -80,9 +80,9 @@ import glob = require('glob');
 
 		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
 
-		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
+		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsl.config.ts');
 		if (!configFile) {
-			log.error('No tsslint.config.ts file found!');
+			log.error('No tsl.config.ts file found!');
 			return;
 		}
 		log.message(`Config: ${path.relative(process.cwd(), configFile)}`);
@@ -178,7 +178,7 @@ import glob = require('glob');
 				shortTsconfig = `./${shortTsconfig}`;
 			}
 			tsconfig = await text({
-				message: 'Select the tsconfig project. (You can use --project to skip this prompt.)',
+				message: 'Select the tsconfig project. (You can use --project or --projects to skip this prompt.)',
 				placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(tsconfig!).fileNames.length} input files)` : 'No tsconfig.json found, please enter the path to your tsconfig.json file.',
 				defaultValue: shortTsconfig,
 				validate(value) {

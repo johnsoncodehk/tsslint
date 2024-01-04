@@ -11,8 +11,8 @@
 		"url": "https://github.com/sponsors/johnsoncodehk"
 	},
 	"main": "./extension.js",
-	"displayName": "TSSLint",
-	"description": "The TSSLint VSCode Extension",
+	"displayName": "TypeScript Linter (TSL)",
+	"description": "The TSL VSCode Extension",
 	"author": "johnsoncodehk",
 	"publisher": "johnsoncodehk",
 	"engines": {
@@ -30,7 +30,7 @@
 		],
 		"typescriptServerPlugins": [
 			{
-				"name": "tsslint-typescript-plugin-bundled",
+				"name": "tsl-typescript-plugin-bundled",
 				"enableForWorkspaceTypeScriptVersions": true
 			}
 		]

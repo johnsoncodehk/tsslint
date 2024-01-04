@@ -61,6 +61,18 @@ importers:
         specifier: 0.0.8
         version: link:../config
 
+  packages/tsl:
+    dependencies:
+      '@tsslint/cli':
+        specifier: 0.0.8
+        version: link:../cli
+      '@tsslint/config':
+        specifier: 0.0.8
+        version: link:../config
+      '@tsslint/core':
+        specifier: 0.0.8
+        version: link:../core
+
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
