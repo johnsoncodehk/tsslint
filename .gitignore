@@ -4,4 +4,4 @@ node_modules
 *.map
 packages/*/index.js
 packages/*/lib/**/*.js
-.tsslint/
+.tsl/

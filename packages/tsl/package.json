@@ -1,0 +1,22 @@
+{
+	"name": "tsl",
+	"version": "0.0.8",
+	"license": "MIT",
+	"bin": {
+		"tsl": "./bin/tsl.js"
+	},
+	"files": [
+		"**/*.js",
+		"**/*.d.ts"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/johnsoncodehk/tsslint.git",
+		"directory": "packages/tsl"
+	},
+	"dependencies": {
+		"@tsslint/cli": "0.0.8",
+		"@tsslint/config": "0.0.8",
+		"@tsslint/core": "0.0.8"
+	}
+}
