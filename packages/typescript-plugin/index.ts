@@ -39,7 +39,6 @@ function decorateLanguageService(
 ) {
 
 	const {
-		getCompilerOptionsDiagnostics,
 		getSyntacticDiagnostics,
 		getCodeFixesAtPosition,
 		getCombinedCodeFix,
@@ -51,30 +50,40 @@ function decorateLanguageService(
 	let config: Config | undefined;
 	let linter: Linter | undefined;
 
-	info.languageService.getCompilerOptionsDiagnostics = () => {
-		return getCompilerOptionsDiagnostics().concat(configFileDiagnostics);
-	};
 	info.languageService.getSyntacticDiagnostics = fileName => {
 		let result = getSyntacticDiagnostics(fileName);
-		if (!linter || !info.languageServiceHost.getScriptFileNames().includes(fileName)) {
+		if (!info.languageServiceHost.getScriptFileNames().includes(fileName)) {
 			return result;
 		}
-		result = result.concat(linter.lint(fileName));
-		if (config?.debug) {
-			result.push({
-				category: ts.DiagnosticCategory.Warning,
-				source: 'tsl',
-				code: 'debug-info' as any,
-				messageText: JSON.stringify({
-					rules: Object.keys(config?.rules ?? {}),
-					plugins: config.plugins?.length,
-					configFile,
-					tsconfig,
-				}, null, 2),
-				file: info.languageService.getProgram()!.getSourceFile(fileName)!,
-				start: 0,
-				length: 0,
-			});
+		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
+		if (sourceFile) {
+			if (configFileDiagnostics.length) {
+				result = result.concat(configFileDiagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+					...diagnostic,
+					file: sourceFile,
+					start: 0,
+					length: 0,
+				})));
+			}
+			if (config?.debug) {
+				result.push({
+					category: ts.DiagnosticCategory.Warning,
+					source: 'tsl',
+					code: 'debug-info' as any,
+					messageText: JSON.stringify({
+						rules: Object.keys(config?.rules ?? {}),
+						plugins: config.plugins?.length,
+						configFile,
+						tsconfig,
+					}, null, 2),
+					file: sourceFile,
+					start: 0,
+					length: 0,
+				});
+			}
+		}
+		if (linter) {
+			result = result.concat(linter.lint(fileName));
 		}
 		return result;
 	};
