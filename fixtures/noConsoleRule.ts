@@ -1,4 +1,4 @@
-import type { Rule } from '@tsslint/config';
+import type { Rule } from 'tsl';
 
 export const noConsoleRule: Rule = ({ typescript: ts, sourceFile, reportWarning }) => {
 	ts.forEachChild(sourceFile, function walk(node) {

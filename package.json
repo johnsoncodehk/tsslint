@@ -13,8 +13,8 @@
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
-		"@tsslint/config": "0.0.8",
 		"@types/node": "latest",
+		"tsl": "0.0.8",
 		"typescript": "latest"
 	},
 	"version": "0.0.8"
