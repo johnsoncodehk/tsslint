@@ -14,8 +14,8 @@
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
 		"@types/node": "latest",
-		"tsl": "0.0.8",
+		"tsl": "0.0.9",
 		"typescript": "latest"
 	},
-	"version": "0.0.8"
+	"version": "0.0.9"
 }

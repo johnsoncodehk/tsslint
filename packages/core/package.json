@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/core",
-	"version": "0.0.8",
+	"version": "0.0.9",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -16,6 +16,6 @@
 		"source-map-support": "^0.5.19"
 	},
 	"devDependencies": {
-		"@tsslint/config": "0.0.8"
+		"@tsslint/config": "0.0.9"
 	}
 }
