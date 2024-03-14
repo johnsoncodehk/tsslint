@@ -5,11 +5,11 @@ import type {
 	LanguageService,
 	LanguageServiceHost,
 	SourceFile,
-} from 'typescript/lib/tsserverlibrary';
+} from 'typescript';
 
 export interface ProjectContext {
 	configFile: string;
-	typescript: typeof import('typescript/lib/tsserverlibrary.js');
+	typescript: typeof import('typescript');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	tsconfig: string;
@@ -40,7 +40,7 @@ export interface Rule {
 }
 
 export interface RuleContext {
-	typescript: typeof import('typescript/lib/tsserverlibrary.js');
+	typescript: typeof import('typescript');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	sourceFile: SourceFile;

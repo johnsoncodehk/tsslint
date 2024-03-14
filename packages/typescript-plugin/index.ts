@@ -1,7 +1,7 @@
 import type { Config, ProjectContext, watchConfigFile } from '@tsslint/config';
 import { Linter, createLinter, combineCodeFixes } from '@tsslint/core';
 import * as path from 'path';
-import type * as ts from 'typescript/lib/tsserverlibrary.js';
+import type * as ts from 'typescript';
 
 const languageServiceDecorators = new WeakMap<ts.server.Project, ReturnType<typeof decorateLanguageService>>();
 
@@ -33,7 +33,7 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 export = init;
 
 function decorateLanguageService(
-	ts: typeof import('typescript/lib/tsserverlibrary'),
+	ts: typeof import('typescript'),
 	tsconfig: string,
 	info: ts.server.PluginCreateInfo,
 ) {
