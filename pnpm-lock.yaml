@@ -18,7 +18,7 @@ importers:
         specifier: latest
         version: 20.10.5
       tsl:
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:packages/tsl
       typescript:
         specifier: latest
@@ -30,10 +30,10 @@ importers:
         specifier: ^0.7.0
         version: 0.7.0
       '@tsslint/config':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../config
       '@tsslint/core':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../core
       glob:
         specifier: ^10.3.10
@@ -58,35 +58,35 @@ importers:
         version: 0.5.21
     devDependencies:
       '@tsslint/config':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../config
 
   packages/tsl:
     dependencies:
       '@tsslint/cli':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../cli
       '@tsslint/config':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../config
       '@tsslint/core':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../core
 
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../core
     devDependencies:
       '@tsslint/config':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../config
 
   packages/vscode:
     devDependencies:
       '@tsslint/typescript-plugin':
-        specifier: 0.0.9
+        specifier: 0.0.10
         version: link:../typescript-plugin
       esbuild:
         specifier: ^0.19.9
