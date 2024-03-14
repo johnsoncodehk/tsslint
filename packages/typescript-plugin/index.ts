@@ -3,26 +3,26 @@ import { Linter, createLinter, combineCodeFixes } from '@tsslint/core';
 import * as path from 'path';
 import type * as ts from 'typescript/lib/tsserverlibrary.js';
 
-const languageServiceDecorators = new WeakMap<ts.LanguageService, ReturnType<typeof decorateLanguageService>>();
+const languageServiceDecorators = new WeakMap<ts.server.Project, ReturnType<typeof decorateLanguageService>>();
 
 const init: ts.server.PluginModuleFactory = (modules) => {
 	const { typescript: ts } = modules;
 	const pluginModule: ts.server.PluginModule = {
 		create(info) {
 
-			if (!languageServiceDecorators.has(info.languageService)) {
+			if (!languageServiceDecorators.has(info.project)) {
 				const tsconfig = info.project.projectKind === ts.server.ProjectKind.Configured
 					? info.project.getProjectName()
 					: undefined;
 				if (tsconfig) {
 					languageServiceDecorators.set(
-						info.languageService,
+						info.project,
 						decorateLanguageService(ts, tsconfig, info),
 					);
 				}
 			}
 
-			languageServiceDecorators.get(info.languageService)?.update(info.config);
+			languageServiceDecorators.get(info.project)?.update(info.config);
 
 			return info.languageService;
 		},
