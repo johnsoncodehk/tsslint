@@ -39,7 +39,7 @@ function decorateLanguageService(
 ) {
 
 	const {
-		getSyntacticDiagnostics,
+		getSemanticDiagnostics,
 		getCodeFixesAtPosition,
 		getCombinedCodeFix,
 	} = info.languageService;
@@ -50,8 +50,8 @@ function decorateLanguageService(
 	let config: Config | undefined;
 	let linter: Linter | undefined;
 
-	info.languageService.getSyntacticDiagnostics = fileName => {
-		let result = getSyntacticDiagnostics(fileName);
+	info.languageService.getSemanticDiagnostics = fileName => {
+		let result = getSemanticDiagnostics(fileName);
 		if (!info.languageServiceHost.getScriptFileNames().includes(fileName)) {
 			return result;
 		}
