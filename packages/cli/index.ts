@@ -77,15 +77,14 @@ import glob = require('glob');
 	async function projectWorker(tsconfigOption?: string) {
 
 		const tsconfig = await getTsconfigPath(tsconfigOption);
-
-		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
-
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
+
+		log.step(`Project: ${path.relative(process.cwd(), tsconfig)}, Config: ${configFile ? path.relative(process.cwd(), configFile) : undefined} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
+
 		if (!configFile) {
 			log.error('No tsslint.config.ts file found!');
 			return;
 		}
-		log.message(`Config: ${path.relative(process.cwd(), configFile)}`);
 
 		if (!configs.has(configFile)) {
 			configs.set(configFile, await config.buildConfigFile(configFile, ts.sys.createHash));
@@ -143,11 +142,12 @@ import glob = require('glob');
 				}
 				const diagnostics = linter.lint(fileName);
 				for (const diagnostic of diagnostics) {
-					const output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
+					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
 						getCurrentDirectory: ts.sys.getCurrentDirectory,
 						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
 						getNewLine: () => ts.sys.newLine,
 					});
+					output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
 					if (diagnostic.category === ts.DiagnosticCategory.Error) {
 						log.error(output);
 					}
@@ -178,8 +178,8 @@ import glob = require('glob');
 				shortTsconfig = `./${shortTsconfig}`;
 			}
 			tsconfig = await text({
-				message: 'Select the tsconfig project. (You can use --project or --projects to skip this prompt.)',
-				placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(tsconfig!).fileNames.length} input files)` : 'No tsconfig.json found, please enter the path to your tsconfig.json file.',
+				message: 'Select the tsconfig project. (Use --project or --projects to skip this prompt.)',
+				placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(tsconfig!).fileNames.length} input files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
 				defaultValue: shortTsconfig,
 				validate(value) {
 					value ||= shortTsconfig!;
