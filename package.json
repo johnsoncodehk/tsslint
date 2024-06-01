@@ -13,9 +13,9 @@
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
+		"@tsslint/config": "0.0.11",
 		"@types/node": "latest",
-		"@tsslint/config": "0.0.10",
 		"typescript": "latest"
 	},
-	"version": "0.0.10"
+	"version": "0.0.11"
 }
