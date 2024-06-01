@@ -12,11 +12,11 @@ try {
 			let text = readFileSync(...args);
 
 			// patch getFixableDiagnosticsForContext
-			text = text.replace('t.has(e.code+"")', s => `(${s}||e.source==="tsl")`);
+			text = text.replace('t.has(e.code+"")', s => `(${s}||e.source==="tsslint")`);
 
 			// patch buildIndividualFixes
-			text = text.replace('!r.has(s.code)', s => `${s}&&s.source!=="tsl"`);
-			text = text.replace('e.fixName===o', s => `${s}||s.source==="tsl"`);
+			text = text.replace('!r.has(s.code)', s => `${s}&&s.source!=="tsslint"`);
+			text = text.replace('e.fixName===o', s => `${s}||s.source==="tsslint"`);
 
 			return text;
 		}
