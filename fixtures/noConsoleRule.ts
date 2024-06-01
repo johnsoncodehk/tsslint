@@ -1,4 +1,4 @@
-import { defineRule } from 'tsl';
+import { defineRule } from '@tsslint/config';
 
 export default defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
 	ts.forEachChild(sourceFile, function walk(node) {

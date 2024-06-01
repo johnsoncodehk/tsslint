@@ -80,9 +80,9 @@ import glob = require('glob');
 
 		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
 
-		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsl.config.ts');
+		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 		if (!configFile) {
-			log.error('No tsl.config.ts file found!');
+			log.error('No tsslint.config.ts file found!');
 			return;
 		}
 		log.message(`Config: ${path.relative(process.cwd(), configFile)}`);

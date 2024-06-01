@@ -87,7 +87,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 					file: sourceFile!,
 					start,
 					length: end - start,
-					source: 'tsl',
+					source: 'tsslint',
 					relatedInformation: [],
 				};
 				const stacks = trace ? ErrorStackParser.parse(new Error()) : [];
@@ -175,11 +175,11 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						(end >= fix.start && end <= fix.end)
 					) {
 						result.push({
-							fixName: `tsl: ${fix.title}`,
+							fixName: `tsslint: ${fix.title}`,
 							description: fix.title,
 							changes: fix.getEdits(),
-							fixId: 'tsl',
-							fixAllDescription: 'Fix all TSL errors'
+							fixId: 'tsslint',
+							fixAllDescription: 'Fix all TSSLint errors'
 						});
 					}
 				}

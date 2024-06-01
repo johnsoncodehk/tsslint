@@ -1,4 +1,4 @@
-import { defineConfig } from 'tsl';
+import { defineConfig } from '@tsslint/config';
 import noConsoleRule from '../noConsoleRule';
 
 export default defineConfig({

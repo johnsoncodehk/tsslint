@@ -68,7 +68,7 @@ function decorateLanguageService(
 			if (config?.debug) {
 				result.push({
 					category: ts.DiagnosticCategory.Warning,
-					source: 'tsl',
+					source: 'tsslint',
 					code: 'debug-info' as any,
 					messageText: JSON.stringify({
 						rules: Object.keys(config?.rules ?? {}),
@@ -94,7 +94,7 @@ function decorateLanguageService(
 		];
 	};
 	info.languageService.getCombinedCodeFix = (scope, fixId, formatOptions, preferences) => {
-		if (fixId === 'tsl' && linter) {
+		if (fixId === 'tsslint' && linter) {
 			const fixes = linter.getCodeFixes(scope.fileName, 0, Number.MAX_VALUE);
 			const changes = combineCodeFixes(scope.fileName, fixes);
 			return {
@@ -129,7 +129,7 @@ function decorateLanguageService(
 			}
 		}
 		else {
-			newConfigFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsl.config.ts');
+			newConfigFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 		}
 
 		if (newConfigFile !== configFile) {
@@ -157,7 +157,7 @@ function decorateLanguageService(
 			let configImportPath: string | undefined;
 
 			try {
-				configImportPath = require.resolve('tsl', { paths: [configFile] });
+				configImportPath = require.resolve('@tsslint/config', { paths: [configFile] });
 			} catch (err) {
 				configFileDiagnostics = [{
 					category: ts.DiagnosticCategory.Error,
@@ -189,9 +189,9 @@ function decorateLanguageService(
 					].map(([error, category]) => {
 						const diag: ts.Diagnostic = {
 							category,
-							source: 'tsl',
+							source: 'tsslint',
 							code: 0,
-							messageText: 'Failed to build config',
+							messageText: 'Failed to build TSSLint config.',
 							file: jsonConfigFile,
 							start: configOptionSpan.start,
 							length: configOptionSpan.length,

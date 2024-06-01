@@ -12,7 +12,7 @@ export async function watchConfigFile(
 		__dirname,
 		'..',
 		'..',
-		'.tsl',
+		'.tsslint',
 	);
 	const outFileName = createHash(path.relative(outDir, configFilePath)) + '.cjs';
 	const outFile = path.join(outDir, outFileName);
@@ -36,7 +36,7 @@ export async function watchConfigFile(
 		format: 'cjs',
 		platform: 'node',
 		plugins: [{
-			name: 'tsl',
+			name: 'tsslint',
 			setup(build) {
 				build.onResolve({ filter: /.*/ }, args => {
 					if (!args.path.endsWith('.ts')) {

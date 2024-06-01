@@ -14,12 +14,12 @@ importers:
       '@lerna-lite/publish':
         specifier: latest
         version: 3.1.0(typescript@5.3.3)
+      '@tsslint/config':
+        specifier: 0.0.10
+        version: link:packages/config
       '@types/node':
         specifier: latest
         version: 20.10.5
-      tsl:
-        specifier: 0.0.10
-        version: link:packages/tsl
       typescript:
         specifier: latest
         version: 5.3.3

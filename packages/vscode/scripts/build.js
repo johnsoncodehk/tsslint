@@ -4,7 +4,7 @@ const esbuild = require('esbuild');
 
 esbuild.context({
 	entryPoints: {
-		'tsl-typescript-plugin-bundled/index': './node_modules/@tsslint/typescript-plugin/index.js',
+		'typescript-tsslint-plugin-bundled/index': './node_modules/@tsslint/typescript-plugin/index.js',
 	},
 	outdir: path.resolve(__dirname, '../node_modules'),
 	bundle: true,
