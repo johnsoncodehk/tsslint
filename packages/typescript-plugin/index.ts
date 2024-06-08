@@ -1,4 +1,5 @@
-import type { Config, ProjectContext, watchConfigFile } from '@tsslint/config';
+import type { Config, ProjectContext } from '@tsslint/config';
+import type { watchConfigFile } from '@tsslint/config/lib/watch';
 import { Linter, createLinter, combineCodeFixes } from '@tsslint/core';
 import * as path from 'path';
 import type * as ts from 'typescript';
@@ -157,7 +158,7 @@ function decorateLanguageService(
 			let configImportPath: string | undefined;
 
 			try {
-				configImportPath = require.resolve('@tsslint/config', { paths: [configFile] });
+				configImportPath = require.resolve('@tsslint/config/lib/watch', { paths: [path.dirname(configFile)] });
 			} catch (err) {
 				configFileDiagnostics = [{
 					category: ts.DiagnosticCategory.Error,
@@ -170,7 +171,7 @@ function decorateLanguageService(
 				return;
 			}
 
-			const { watchConfigFile }: typeof import('@tsslint/config') = require(configImportPath);
+			const { watchConfigFile }: typeof import('@tsslint/config/lib/watch') = require(configImportPath);
 			const projectContext: ProjectContext = {
 				configFile,
 				tsconfig,

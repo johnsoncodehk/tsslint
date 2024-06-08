@@ -28,9 +28,12 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 ## Features
 
-- Integration with tsserver to minimize semantic linting overhead in IDEs
-- Writing config in typescript
-- Direct support for meta framework files based on TS Plugin without a parser (e.g., Vue)
+- Integration with tsserver to minimize semantic linting overhead in IDEs.
+- Writing config in typescript.
+- Direct support for meta framework files based on TS Plugin without a parser. (e.g., Vue)
+- Pure ESM.
+- Supports HTTP URL import, no need to add dependencies in package.json.
+- Designed to allow simple, direct access to rule source code without an intermediary layer.
 
 ## Usage
 
@@ -65,52 +68,72 @@ As an example, let's create a `no-console` rule under `[project root]/rules/`.
 Here's the code for `[project root]/rules/noConsoleRule.ts`:
 
 ```js
-import { defineRule } from '@tsslint/config';
+import type { Rule } from '@tsslint/config';
 
-export default defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
-	ts.forEachChild(sourceFile, function walk(node) {
-		if (
-			ts.isPropertyAccessExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === 'console'
-		) {
-			reportWarning(
-				`Calls to 'console.x' are not allowed.`,
-				node.parent.getStart(sourceFile),
-				node.parent.getEnd()
-			).withFix(
-				'Remove this console expression',
-				() => [{
-					fileName: sourceFile.fileName,
-					textChanges: [{
-						newText: '/* deleted */',
-						span: {
-							start: node.parent.getStart(sourceFile),
-							length: node.parent.getEnd() - node.parent.getStart(sourceFile),
-						},
-					}],
-				}]
-			);
-		}
-		ts.forEachChild(node, walk);
-	});
-});
+export function create(): Rule {
+	return ({ typescript: ts, sourceFile, reportWarning }) => {
+		ts.forEachChild(sourceFile, function visit(node) {
+			if (
+				ts.isPropertyAccessExpression(node) &&
+				ts.isIdentifier(node.expression) &&
+				node.expression.text === 'console'
+			) {
+				reportWarning(
+					`Calls to 'console.x' are not allowed.`,
+					node.parent.getStart(sourceFile),
+					node.parent.getEnd()
+				).withFix(
+					'Remove this console expression',
+					() => [{
+						fileName: sourceFile.fileName,
+						textChanges: [{
+							newText: '/* deleted */',
+							span: {
+								start: node.parent.getStart(sourceFile),
+								length: node.parent.getEnd() - node.parent.getStart(sourceFile),
+							},
+						}],
+					}]
+				);
+			}
+			ts.forEachChild(node, visit);
+		});
+	};
+}
 ```
 
 Then add it to the `tsslint.config.ts` config file.
 
 ```diff
 import { defineConfig } from '@tsslint/config';
-+ import noConsoleRule from './rules/noConsoleRule.ts';
 
 export default defineConfig({
 	rules: {
-+ 		'no-console': noConsoleRule
++ 		'no-console': (await import('./rules/noConsoleRule.ts')).create(),
 	},
 });
 ```
 
 After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `reportWarning()` code is located.
+
+### Import Rules from HTTP URL
+
+You can directly import rules from other repositories using HTTP URLs. This allows you to easily share and reuse rules across different projects.
+
+Here's an example of how to import a rule from a HTTP URL:
+
+```diff
+import { defineConfig } from '@tsslint/config';
+
+export default defineConfig({
+	rules: {
+		'no-console': (await import('./rules/noConsoleRule.ts')).create(),
++ 		'no-alert': (await import('https://gist.githubusercontent.com/johnsoncodehk/55a4c45a5a35fc30b83de20507fb2bdc/raw/5f9c9a67ace76c0a77995fd71c3fb4fb504a40c8/TSSLint_noAlertRule.ts')).create(),
+	},
+});
+```
+
+In this example, the `no-alert` rule is imported from a file hosted on GitHub. After saving the config file, you will notice that `alert()` calls are now reporting errors in the editor.
 
 ### Modify the Error
 

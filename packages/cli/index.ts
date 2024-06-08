@@ -1,6 +1,7 @@
 import ts = require('typescript');
 import path = require('path');
-import config = require('@tsslint/config');
+import type config = require('@tsslint/config');
+import build = require('@tsslint/config/lib/build');
 import core = require('@tsslint/core');
 import glob = require('glob');
 
@@ -87,9 +88,17 @@ import glob = require('glob');
 		}
 
 		if (!configs.has(configFile)) {
-			configs.set(configFile, await config.buildConfigFile(configFile, ts.sys.createHash));
+			try {
+				configs.set(configFile, await build.buildConfigFile(configFile, ts.sys.createHash));
+			} catch (err) {
+				configs.set(configFile, undefined);
+				console.error(err);
+			}
 		}
-		const tsslintConfig = configs.get(configFile)!;
+		const tsslintConfig = configs.get(configFile);
+		if (!tsslintConfig) {
+			return;
+		}
 
 		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames) {
