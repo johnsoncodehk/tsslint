@@ -36,7 +36,7 @@ importers:
         specifier: 0.0.13
         version: link:../core
       glob:
-        specifier: ^10.3.10
+        specifier: ^10.4.1
         version: 10.4.1
       typescript:
         specifier: '*'
@@ -45,7 +45,7 @@ importers:
   packages/config:
     dependencies:
       esbuild:
-        specifier: ^0.21.0
+        specifier: ^0.21.4
         version: 0.21.4
 
   packages/core:
@@ -54,7 +54,7 @@ importers:
         specifier: ^2.1.4
         version: 2.1.4
       source-map-support:
-        specifier: ^0.5.19
+        specifier: ^0.5.21
         version: 0.5.21
     devDependencies:
       '@tsslint/config':
@@ -89,7 +89,7 @@ importers:
         specifier: 0.0.13
         version: link:../typescript-plugin
       esbuild:
-        specifier: ^0.21.0
+        specifier: ^0.21.4
         version: 0.21.4
       vsce:
         specifier: latest
