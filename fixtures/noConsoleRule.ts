@@ -2,7 +2,7 @@ import type { Rule } from '@tsslint/config';
 
 export function create(): Rule {
 	return ({ typescript: ts, sourceFile, reportWarning }) => {
-		ts.forEachChild(sourceFile, function walk(node) {
+		ts.forEachChild(sourceFile, function visit(node) {
 			if (
 				ts.isPropertyAccessExpression(node) &&
 				ts.isIdentifier(node.expression) &&
@@ -26,7 +26,7 @@ export function create(): Rule {
 					}]
 				);
 			}
-			ts.forEachChild(node, walk);
+			ts.forEachChild(node, visit);
 		});
 	};
 }

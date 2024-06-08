@@ -72,7 +72,7 @@ import type { Rule } from '@tsslint/config';
 
 export function create(): Rule {
 	return ({ typescript: ts, sourceFile, reportWarning }) => {
-		ts.forEachChild(sourceFile, function walk(node) {
+		ts.forEachChild(sourceFile, function visit(node) {
 			if (
 				ts.isPropertyAccessExpression(node) &&
 				ts.isIdentifier(node.expression) &&
@@ -96,7 +96,7 @@ export function create(): Rule {
 					}]
 				);
 			}
-			ts.forEachChild(node, walk);
+			ts.forEachChild(node, visit);
 		});
 	};
 }
@@ -115,6 +115,24 @@ export default defineConfig({
 ```
 
 After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `reportWarning()` code is located.
+
+### Import Rules from HTTP URL
+
+You can directly import rules from other repositories using HTTP URLs. This allows you to easily share and reuse rules across different projects.
+
+Here's an example of how to import a rule from a HTTP URL:
+
+```diff
+import { defineConfig } from '@tsslint/config';
+
+export default defineConfig({
+	rules: {
+		'no-console': (await import('./rules/noConsoleRule.ts')).create(),
++ 		'no-alert': (await import('https://gist.githubusercontent.com/johnsoncodehk/55a4c45a5a35fc30b83de20507fb2bdc/raw/5f9c9a67ace76c0a77995fd71c3fb4fb504a40c8/TSSLint_noAlertRule.ts')).create(),
+	},
+});
+
+In this example, the `no-alert` rule is imported from a file hosted on GitHub. After saving the config file, you will notice that `alert()` calls are now reporting errors in the editor.
 
 ### Modify the Error
 

@@ -99,6 +99,9 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						if (fileName.startsWith('file://')) {
 							fileName = fileName.substring('file://'.length);
 						}
+						if (fileName.includes('http-url:')) {
+							fileName = fileName.split('http-url:')[1];
+						}
 						if (!sourceFiles.has(fileName)) {
 							const text = ctx.languageServiceHost.readFile(fileName) ?? '';
 							sourceFiles.set(
@@ -106,8 +109,11 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 								ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true),
 							);
 						}
-						const stackFile = sourceFiles.get(fileName)!;
-						const pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1);
+						const stackFile = sourceFiles.get(fileName);
+						let pos = 0;
+						try {
+							pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
+						} catch { }
 						if (withStack) {
 							error.relatedInformation?.push({
 								category: ts.DiagnosticCategory.Message,

@@ -25,6 +25,8 @@ export async function watchConfigFile(
 		}
 		onBuild(config, result);
 	};
+	const cacheDir = _path.resolve(outDir, 'http_resources');
+	const cachePathToOriginalPath = new Map<string, string>();
 	const ctx = await esbuild.context({
 		entryPoints: [configFilePath],
 		bundle: true,
@@ -36,7 +38,9 @@ export async function watchConfigFile(
 			name: 'tsslint',
 			setup(build) {
 				build.onResolve({ filter: /^https?:\/\// }, ({ path }) => {
-					return { path, namespace: 'http-url' };
+					const cachePath = _path.join(cacheDir, createHash(path));
+					cachePathToOriginalPath.set(cachePath, path);
+					return { path: cachePath, namespace: 'http-url' };
 				});
 				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
 					if (!path.endsWith('.ts')) {
@@ -50,9 +54,8 @@ export async function watchConfigFile(
 					}
 					return {};
 				});
-				build.onLoad({ filter: /.*/, namespace: 'http-url' }, async ({ path }) => {
-					const cacheDir = _path.resolve(outDir, 'http_resources');
-					const cachePath = _path.join(cacheDir, createHash(path));
+				build.onLoad({ filter: /.*/, namespace: 'http-url' }, async ({ path: cachePath }) => {
+					const path = cachePathToOriginalPath.get(cachePath)!;
 					if (fs.existsSync(cachePath)) {
 						return {
 							contents: fs.readFileSync(cachePath, 'utf8'),
