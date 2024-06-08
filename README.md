@@ -65,47 +65,48 @@ As an example, let's create a `no-console` rule under `[project root]/rules/`.
 Here's the code for `[project root]/rules/noConsoleRule.ts`:
 
 ```js
-import { defineRule } from '@tsslint/config';
+import type { Rule } from '@tsslint/config';
 
-export default defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
-	ts.forEachChild(sourceFile, function walk(node) {
-		if (
-			ts.isPropertyAccessExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === 'console'
-		) {
-			reportWarning(
-				`Calls to 'console.x' are not allowed.`,
-				node.parent.getStart(sourceFile),
-				node.parent.getEnd()
-			).withFix(
-				'Remove this console expression',
-				() => [{
-					fileName: sourceFile.fileName,
-					textChanges: [{
-						newText: '/* deleted */',
-						span: {
-							start: node.parent.getStart(sourceFile),
-							length: node.parent.getEnd() - node.parent.getStart(sourceFile),
-						},
-					}],
-				}]
-			);
-		}
-		ts.forEachChild(node, walk);
-	});
-});
+export function create(): Rule {
+	return ({ typescript: ts, sourceFile, reportWarning }) => {
+		ts.forEachChild(sourceFile, function walk(node) {
+			if (
+				ts.isPropertyAccessExpression(node) &&
+				ts.isIdentifier(node.expression) &&
+				node.expression.text === 'console'
+			) {
+				reportWarning(
+					`Calls to 'console.x' are not allowed.`,
+					node.parent.getStart(sourceFile),
+					node.parent.getEnd()
+				).withFix(
+					'Remove this console expression',
+					() => [{
+						fileName: sourceFile.fileName,
+						textChanges: [{
+							newText: '/* deleted */',
+							span: {
+								start: node.parent.getStart(sourceFile),
+								length: node.parent.getEnd() - node.parent.getStart(sourceFile),
+							},
+						}],
+					}]
+				);
+			}
+			ts.forEachChild(node, walk);
+		});
+	};
+}
 ```
 
 Then add it to the `tsslint.config.ts` config file.
 
 ```diff
 import { defineConfig } from '@tsslint/config';
-+ import noConsoleRule from './rules/noConsoleRule.ts';
 
 export default defineConfig({
 	rules: {
-+ 		'no-console': noConsoleRule
++ 		'no-console': (await import('./rules/noConsoleRule.ts')).create(),
 	},
 });
 ```

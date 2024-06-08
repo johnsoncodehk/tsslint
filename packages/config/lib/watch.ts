@@ -1,5 +1,6 @@
 import esbuild = require('esbuild');
-import path = require('path');
+import _path = require('path');
+import fs = require('fs');
 import type { Config } from './types';
 
 export async function watchConfigFile(
@@ -8,21 +9,17 @@ export async function watchConfigFile(
 	watch = true,
 	createHash: (path: string) => string = btoa,
 ) {
-	const outDir = path.resolve(
-		__dirname,
-		'..',
-		'..',
-		'.tsslint',
-	);
-	const outFileName = createHash(path.relative(outDir, configFilePath)) + '.cjs';
-	const outFile = path.join(outDir, outFileName);
-	const resultHandler = (result: esbuild.BuildResult) => {
+	const outDir = _path.resolve(configFilePath, '..', 'node_modules', '.tsslint');
+	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
+	const outFile = _path.join(outDir, outFileName);
+	const resultHandler = async (result: esbuild.BuildResult) => {
 		let config: Config | undefined;
 		if (!result.errors.length) {
 			try {
-				config = require(outFile).default;
-				delete require.cache[outFile!];
+				config = (await import(outFile)).default;
+				delete require.cache[outFile];
 			} catch (e) {
+				debugger;
 				result.errors.push({ text: String(e) } as any);
 			}
 		}
@@ -33,15 +30,18 @@ export async function watchConfigFile(
 		bundle: true,
 		sourcemap: true,
 		outfile: outFile,
-		format: 'cjs',
+		format: 'esm',
 		platform: 'node',
 		plugins: [{
 			name: 'tsslint',
 			setup(build) {
-				build.onResolve({ filter: /.*/ }, args => {
-					if (!args.path.endsWith('.ts')) {
+				build.onResolve({ filter: /^https?:\/\// }, ({ path }) => {
+					return { path, namespace: 'http-url' };
+				});
+				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
+					if (!path.endsWith('.ts')) {
 						try {
-							const jsPath = require.resolve(args.path, { paths: [args.resolveDir] });
+							const jsPath = require.resolve(path, { paths: [resolveDir] });
 							return {
 								path: jsPath,
 								external: true,
@@ -49,6 +49,27 @@ export async function watchConfigFile(
 						} catch { }
 					}
 					return {};
+				});
+				build.onLoad({ filter: /.*/, namespace: 'http-url' }, async ({ path }) => {
+					const cacheDir = _path.resolve(outDir, 'http_resources');
+					const cachePath = _path.join(cacheDir, createHash(path));
+					if (fs.existsSync(cachePath)) {
+						return {
+							contents: fs.readFileSync(cachePath, 'utf8'),
+							loader: 'ts',
+						};
+					}
+					const response = await fetch(path);
+					if (!response.ok) {
+						throw new Error(`Failed to load ${path}`);
+					}
+					const text = await response.text();
+					fs.mkdirSync(cacheDir, { recursive: true });
+					fs.writeFileSync(cachePath, text, 'utf8');
+					return {
+						contents: text,
+						loader: path.substring(path.lastIndexOf('.') + 1) as 'ts' | 'js',
+					};
 				});
 				if (watch) {
 					build.onEnd(resultHandler);
