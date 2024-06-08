@@ -18,6 +18,9 @@ try {
 			text = text.replace('!r.has(s.code)', s => `${s}&&s.source!=="tsslint"`);
 			text = text.replace('e.fixName===o', s => `${s}||s.source==="tsslint"`);
 
+			// sort plugins
+			text = text.replace('"--globalPlugins",i.plugins', '"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="typescript-tsslint-plugin-bundled"?1:0)-(a.name==="typescript-tsslint-plugin-bundled"?1:0))');
+
 			return text;
 		}
 		return readFileSync(...args);
