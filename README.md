@@ -116,6 +116,8 @@ export default defineConfig({
 
 After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `reportWarning()` code is located.
 
+> Full example: https://github.com/johnsoncodehk/tsslint/tree/master/fixtures/define-a-rule
+
 ### Import Rules from HTTP URL
 
 You can directly import rules from other repositories using HTTP URLs. This allows you to easily share and reuse rules across different projects.
@@ -134,6 +136,8 @@ export default defineConfig({
 ```
 
 In this example, the `no-alert` rule is imported from a file hosted on GitHub. After saving the config file, you will notice that `alert()` calls are now reporting errors in the editor.
+
+> Full example: https://github.com/johnsoncodehk/tsslint/tree/master/fixtures/http-import
 
 ### Modify the Error
 
