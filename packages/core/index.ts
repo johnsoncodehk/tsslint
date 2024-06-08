@@ -106,7 +106,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 							const text = ctx.languageServiceHost.readFile(fileName) ?? '';
 							sourceFiles.set(
 								fileName,
-								ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true),
+								ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
 							);
 						}
 						const stackFile = sourceFiles.get(fileName);

@@ -191,7 +191,7 @@ import glob = require('glob');
 				placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(tsconfig!).fileNames.length} input files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
 				defaultValue: shortTsconfig,
 				validate(value) {
-					value ||= shortTsconfig!;
+					value ||= shortTsconfig;
 					try {
 						require.resolve(value, { paths: [process.cwd()] });
 					} catch {

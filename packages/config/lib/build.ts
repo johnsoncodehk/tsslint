@@ -1,7 +1,7 @@
 import type { Config } from './types';
 import { watchConfigFile } from './watch';
 
-export async function buildConfigFile(configFilePath: string, createHash?: (path: string) => string): Promise<Config> {
+export function buildConfigFile(configFilePath: string, createHash?: (path: string) => string): Promise<Config> {
 	return new Promise((resolve, reject) => {
 		watchConfigFile(
 			configFilePath,
@@ -14,7 +14,7 @@ export async function buildConfigFile(configFilePath: string, createHash?: (path
 				}
 			},
 			false,
-			createHash,
+			createHash
 		);
 	});
 }

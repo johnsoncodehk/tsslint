@@ -6,7 +6,7 @@ import type * as ts from 'typescript';
 
 const languageServiceDecorators = new WeakMap<ts.server.Project, ReturnType<typeof decorateLanguageService>>();
 
-const init: ts.server.PluginModuleFactory = (modules) => {
+const init: ts.server.PluginModuleFactory = modules => {
 	const { typescript: ts } = modules;
 	const pluginModule: ts.server.PluginModule = {
 		create(info) {
@@ -18,7 +18,7 @@ const init: ts.server.PluginModuleFactory = (modules) => {
 				if (tsconfig) {
 					languageServiceDecorators.set(
 						info.project,
-						decorateLanguageService(ts, tsconfig, info),
+						decorateLanguageService(ts, tsconfig, info)
 					);
 				}
 			}
@@ -36,7 +36,7 @@ export = init;
 function decorateLanguageService(
 	ts: typeof import('typescript'),
 	tsconfig: string,
-	info: ts.server.PluginCreateInfo,
+	info: ts.server.PluginCreateInfo
 ) {
 
 	const {
@@ -182,7 +182,7 @@ function decorateLanguageService(
 
 			configFileBuildContext = await watchConfigFile(
 				configFile,
-				async (_config, { errors, warnings }) => {
+				(_config, { errors, warnings }) => {
 					config = _config;
 					configFileDiagnostics = [
 						...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
@@ -218,7 +218,7 @@ function decorateLanguageService(
 					info.project.refreshDiagnostics();
 				},
 				true,
-				ts.sys.createHash,
+				ts.sys.createHash
 			);
 		}
 	}

@@ -7,7 +7,7 @@ export async function watchConfigFile(
 	configFilePath: string,
 	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
 	watch = true,
-	createHash: (path: string) => string = btoa,
+	createHash: (path: string) => string = btoa
 ) {
 	const outDir = _path.resolve(configFilePath, '..', 'node_modules', '.tsslint');
 	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
