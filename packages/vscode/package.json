@@ -45,7 +45,7 @@
 	},
 	"devDependencies": {
 		"@tsslint/typescript-plugin": "0.0.13",
-		"esbuild": "^0.19.9",
+		"esbuild": "^0.21.0",
 		"vsce": "latest"
 	}
 }
