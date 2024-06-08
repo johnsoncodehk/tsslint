@@ -28,9 +28,12 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 ## Features
 
-- Integration with tsserver to minimize semantic linting overhead in IDEs
-- Writing config in typescript
-- Direct support for meta framework files based on TS Plugin without a parser (e.g., Vue)
+- Integration with tsserver to minimize semantic linting overhead in IDEs.
+- Writing config in typescript.
+- Direct support for meta framework files based on TS Plugin without a parser. (e.g., Vue)
+- Pure ESM.
+- Supports HTTP URL import, no need to add dependencies in package.json.
+- Designed to allow simple, direct access to rule source code without an intermediary layer.
 
 ## Usage
 
