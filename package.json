@@ -8,7 +8,9 @@
 		"prerelease": "npm run build",
 		"release": "npm run release:base && npm run release:vscode",
 		"release:base": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
-		"release:vscode": "cd packages/vscode && npm run release"
+		"release:vscode": "cd packages/vscode && npm run release",
+		"lint": "node packages/cli/bin/tsslint.js --projects 'packages/*/tsconfig.json'",
+		"lint:fix": "npm run lint -- --fix"
 	},
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
