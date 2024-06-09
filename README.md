@@ -30,7 +30,7 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 
 - Integration with tsserver to minimize semantic linting overhead in IDEs.
 - Writing config in typescript.
-- Direct support for meta framework files based on TS Plugin without a parser. (e.g., Vue)
+- Direct support for meta framework files based on TS Plugin without a parser. (e.g., Vue, MDX)
 - Pure ESM.
 - Supports HTTP URL import, no need to add dependencies in package.json.
 - Designed to allow simple, direct access to rule source code without an intermediary layer.
@@ -167,3 +167,31 @@ export default defineConfig({
 	],
 });
 ```
+
+## CLI Usage
+
+The `@tsslint/cli` package provides a command-line interface for running the TSSLint tool across your TypeScript projects. It can be used by running the `tsslint` command in your terminal.
+
+Here is a basic example of how to use it:
+
+```sh
+npx tsslint --project ./path/to/your/tsconfig.json
+```
+
+This command will run the linter on the TypeScript project defined by the provided `tsconfig.json` file. Any linting errors will be output to the console.
+
+If you want to automatically fix any fixable linting errors, you can use the `--fix` option:
+
+```sh
+npx tsslint --project ./path/to/your/tsconfig.json --fix
+```
+
+This will run the linter and automatically apply any fixes that are available.
+
+You can also lint multiple projects at once by using the --projects option:
+
+```sh
+npx tsslint --projects './packages/*/tsconfig.json'
+```
+
+This command will run the linter on all TypeScript projects located in the subdirectories of the `packages` directory. Each subdirectory should contain a `tsconfig.json` file defining a TypeScript project. Any linting errors will be output to the console.
