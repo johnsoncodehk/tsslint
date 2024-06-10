@@ -44,6 +44,9 @@ importers:
 
   packages/config:
     dependencies:
+      '@tsslint/types':
+        specifier: 1.0.0
+        version: link:../types
       esbuild:
         specifier: ^0.21.4
         version: 0.21.4
@@ -72,6 +75,8 @@ importers:
       '@tsslint/core':
         specifier: 1.0.0
         version: link:../core
+
+  packages/types: {}
 
   packages/typescript-plugin:
     dependencies:

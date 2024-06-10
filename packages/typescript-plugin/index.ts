@@ -210,6 +210,9 @@ function decorateLanguageService(
 								length: error.location.lineText.length,
 							}];
 						}
+						else {
+							diag.messageText += `\n\n${error.text}`;
+						}
 						return diag;
 					});
 					if (config) {

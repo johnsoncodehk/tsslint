@@ -1,4 +1,4 @@
-import type { Config } from './types';
+import type { Config } from '@tsslint/types';
 import { watchConfigFile } from './watch';
 
 export function buildConfigFile(configFilePath: string, createHash?: (path: string) => string): Promise<Config> {

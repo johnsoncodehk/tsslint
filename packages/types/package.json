@@ -1,5 +1,5 @@
 {
-	"name": "@tsslint/config",
+	"name": "@tsslint/types",
 	"version": "1.0.0",
 	"license": "MIT",
 	"files": [
@@ -9,10 +9,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
-		"directory": "packages/config"
-	},
-	"dependencies": {
-		"@tsslint/types": "1.0.0",
-		"esbuild": "^0.21.4"
+		"directory": "packages/types"
 	}
 }
