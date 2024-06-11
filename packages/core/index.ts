@@ -55,7 +55,12 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 					break;
 				}
 				currentRuleId = id;
-				rule(rulesContext);
+				try {
+					rule(rulesContext);
+				} catch (err) {
+					console.error(`An unexpected error occurred in rule "${id}" in file ${fileName}.`);
+					console.error(err);
+				}
 			}
 
 			for (const plugin of plugins) {
@@ -93,46 +98,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				const stacks = trace ? ErrorStackParser.parse(new Error()) : [];
 
 				if (stacks.length >= 3) {
-					const stack = stacks[2];
-					if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
-						let fileName = stack.fileName.replace(/\\/g, '/');
-						if (fileName.startsWith('file://')) {
-							fileName = fileName.substring('file://'.length);
-						}
-						if (fileName.includes('http-url:')) {
-							fileName = fileName.split('http-url:')[1];
-						}
-						if (!sourceFiles.has(fileName)) {
-							const text = ctx.languageServiceHost.readFile(fileName) ?? '';
-							sourceFiles.set(
-								fileName,
-								ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
-							);
-						}
-						const stackFile = sourceFiles.get(fileName);
-						let pos = 0;
-						try {
-							pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
-						} catch { }
-						if (withStack) {
-							error.relatedInformation?.push({
-								category: ts.DiagnosticCategory.Message,
-								code: 0,
-								file: stackFile,
-								start: pos,
-								length: 0,
-								messageText: '',
-							});
-							error.relatedInformation?.push({
-								category: ts.DiagnosticCategory.Message,
-								code: 0,
-								file: configSourceFile,
-								start: 0,
-								length: 0,
-								messageText: '',
-							});
-						}
-					}
+					pushRelatedInformation(error, stacks[2]);
 				}
 
 				result.push(error);
@@ -160,6 +126,48 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						return this;
 					},
 				};
+			}
+
+			function pushRelatedInformation(error: ts.DiagnosticWithLocation, stack: ErrorStackParser.StackFrame) {
+				if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
+					let fileName = stack.fileName.replace(/\\/g, '/');
+					if (fileName.startsWith('file://')) {
+						fileName = fileName.substring('file://'.length);
+					}
+					if (fileName.includes('http-url:')) {
+						fileName = fileName.split('http-url:')[1];
+					}
+					if (!sourceFiles.has(fileName)) {
+						const text = ctx.languageServiceHost.readFile(fileName) ?? '';
+						sourceFiles.set(
+							fileName,
+							ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
+						);
+					}
+					const stackFile = sourceFiles.get(fileName);
+					let pos = 0;
+					try {
+						pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
+					} catch { }
+					if (withStack) {
+						error.relatedInformation?.push({
+							category: ts.DiagnosticCategory.Message,
+							code: 0,
+							file: stackFile,
+							start: pos,
+							length: 0,
+							messageText: '',
+						});
+						error.relatedInformation?.push({
+							category: ts.DiagnosticCategory.Message,
+							code: 0,
+							file: configSourceFile,
+							start: 0,
+							length: 0,
+							messageText: '',
+						});
+					}
+				}
 			}
 		},
 		hasCodeFixes(fileName: string) {
