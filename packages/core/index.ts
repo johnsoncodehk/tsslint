@@ -162,6 +162,18 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				};
 			}
 		},
+		hasCodeFixes(fileName: string) {
+
+			const fixesMap = getFileFixes(fileName);
+
+			for (const [_ruleId, fixes] of fixesMap) {
+				if (fixes.length) {
+					return true;
+				}
+			}
+
+			return false;
+		},
 		getCodeFixes(fileName: string, start: number, end: number, diagnostics?: ts.Diagnostic[]) {
 
 			const fixesMap = getFileFixes(fileName);

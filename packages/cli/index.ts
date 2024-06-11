@@ -168,7 +168,7 @@ import glob = require('glob');
 					}
 				}
 				if (diagnostics.length) {
-					hasFix ||= linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics).length >= 1;
+					hasFix ||= linter.hasCodeFixes(fileName);
 					hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
 				}
 			}
