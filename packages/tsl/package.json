@@ -1,6 +1,6 @@
 {
 	"name": "tsl",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"license": "MIT",
 	"bin": {
 		"tsl": "./bin/tsl.js"
@@ -15,8 +15,8 @@
 		"directory": "packages/tsl"
 	},
 	"dependencies": {
-		"@tsslint/cli": "1.0.0",
-		"@tsslint/config": "1.0.0",
-		"@tsslint/core": "1.0.0"
+		"@tsslint/cli": "1.0.1",
+		"@tsslint/config": "1.0.1",
+		"@tsslint/core": "1.0.1"
 	}
 }
