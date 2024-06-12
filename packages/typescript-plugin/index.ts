@@ -68,7 +68,7 @@ function decorateLanguageService(
 			}
 			if (config?.debug) {
 				result.push({
-					category: ts.DiagnosticCategory.Warning,
+					category: ts.DiagnosticCategory.Suggestion,
 					source: 'tsslint',
 					code: 'debug-info' as any,
 					messageText: JSON.stringify({
