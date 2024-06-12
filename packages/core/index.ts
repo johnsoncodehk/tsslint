@@ -71,20 +71,19 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			return result;
 
-			function reportError(message: string, start: number, end: number, trace = true) {
-				return report(ts.DiagnosticCategory.Error, message, start, end, trace);
+			function reportError(message: string, start: number, end: number, traceOffset: false | number = 0) {
+				return report(ts.DiagnosticCategory.Error, message, start, end, traceOffset);
 			}
 
-			function reportWarning(message: string, start: number, end: number, trace = true) {
-				return report(ts.DiagnosticCategory.Warning, message, start, end, trace);
+			function reportWarning(message: string, start: number, end: number, traceOffset: false | number = 0) {
+				return report(ts.DiagnosticCategory.Warning, message, start, end, traceOffset);
 			}
 
-			function reportSuggestion(message: string, start: number, end: number, trace = true) {
-				return report(ts.DiagnosticCategory.Suggestion, message, start, end, trace);
+			function reportSuggestion(message: string, start: number, end: number, traceOffset: false | number = 0) {
+				return report(ts.DiagnosticCategory.Suggestion, message, start, end, traceOffset);
 			}
 
-			function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, trace: boolean): Reporter {
-
+			function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, traceOffset: false | number): Reporter {
 				const error: ts.DiagnosticWithLocation = {
 					category,
 					code: currentRuleId as any,
@@ -95,10 +94,34 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 					source: 'tsslint',
 					relatedInformation: [],
 				};
-				const stacks = trace ? ErrorStackParser.parse(new Error()) : [];
 
-				if (stacks.length >= 3) {
-					pushRelatedInformation(error, stacks[2]);
+				if (withStack) {
+					const stacks = traceOffset === false
+						? []
+						: ErrorStackParser.parse(new Error());
+					if (typeof traceOffset === 'number') {
+						const baseOffset = 2 + traceOffset;
+						if (config.debug) {
+							for (let i = baseOffset; i < stacks.length; i++) {
+								pushRelatedInformation(error, stacks[i]);
+							}
+						}
+						else {
+							if (stacks.length > baseOffset) {
+								pushRelatedInformation(error, stacks[baseOffset]);
+							}
+						}
+					}
+					if (withStack) {
+						error.relatedInformation?.push({
+							category: ts.DiagnosticCategory.Message,
+							code: 0,
+							file: configSourceFile,
+							start: 0,
+							length: 0,
+							messageText: '',
+						});
+					}
 				}
 
 				result.push(error);
@@ -149,24 +172,14 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 					try {
 						pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
 					} catch { }
-					if (withStack) {
-						error.relatedInformation?.push({
-							category: ts.DiagnosticCategory.Message,
-							code: 0,
-							file: stackFile,
-							start: pos,
-							length: 0,
-							messageText: '',
-						});
-						error.relatedInformation?.push({
-							category: ts.DiagnosticCategory.Message,
-							code: 0,
-							file: configSourceFile,
-							start: 0,
-							length: 0,
-							messageText: '',
-						});
-					}
+					error.relatedInformation?.push({
+						category: ts.DiagnosticCategory.Message,
+						code: 0,
+						file: stackFile,
+						start: pos,
+						length: 0,
+						messageText: '',
+					});
 				}
 			}
 		},
