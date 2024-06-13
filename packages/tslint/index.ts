@@ -3,19 +3,23 @@ import type * as TSLint from 'tslint';
 import { WalkContext } from 'tslint/lib/language/walker';
 import type * as ts from 'typescript';
 
-export function convertRule(
-	Rule: import('tslint/lib/language/rule/rule').RuleConstructor,
-	severity: ts.DiagnosticCategory = 3
+export function convertRule<T extends import('tslint/lib/language/rule/rule').RuleConstructor>(
+	Rule: T,
+	ruleArguments: any[] = [],
+	severity: ts.DiagnosticCategory = 2
 ): TSSLint.Rule {
 	const rule = new Rule({
 		ruleName: '',
-		ruleArguments: [],
+		ruleArguments,
 		ruleSeverity: severity === 1 ? 'error' : severity === 2 ? 'warning' : 'off',
 		disabledIntervals: [],
 	});
-	return ({ sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
+	return ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
 		let lastFailure: TSLint.RuleFailure | undefined;
-		const report = severity === 1 ? reportError : severity === 2 ? reportWarning : reportSuggestion;
+		const report =
+			severity === ts.DiagnosticCategory.Error ? reportError
+				: severity === ts.DiagnosticCategory.Warning ? reportWarning
+					: reportSuggestion;
 		const onAddFailure = (failure: TSLint.RuleFailure) => {
 			if (lastFailure === failure) {
 				return;
