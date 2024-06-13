@@ -1,0 +1,7 @@
+{
+	"devDependencies": {
+		"@tsslint/config": "1.0.1",
+		"@tsslint/eslint": "1.0.1",
+		"@typescript-eslint/eslint-plugin": "^7.13.0"
+	}
+}

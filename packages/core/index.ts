@@ -119,7 +119,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 							file: configSourceFile,
 							start: 0,
 							length: 0,
-							messageText: '',
+							messageText: 'TSSLint configuration file',
 						});
 					}
 				}
@@ -178,7 +178,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						file: stackFile,
 						start: pos,
 						length: 0,
-						messageText: '',
+						messageText: 'Reported at',
 					});
 				}
 			}
