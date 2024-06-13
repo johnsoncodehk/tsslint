@@ -47,7 +47,7 @@ export function convertRule(
 				let message = 'message' in descriptor
 					? descriptor.message
 					: getMessage(descriptor.messageId);
-				message = message.replace(/\{\{(\w+)\}\}/gu, (key) => {
+				message = message.replace(/\{\{(\w+)\}\}/gu, key => {
 					return descriptor.data?.[key.slice(2, -2)] ?? key;
 				});
 				let start = 0;
@@ -121,7 +121,7 @@ export function convertRule(
 					// @ts-expect-error
 					cb: ruleListener[rawSelector],
 				});
-				visitors[selector] ??= (node) => {
+				visitors[selector] ??= node => {
 					for (const { cb, isFilter, isNotFilter } of visitorCbs[selector]) {
 						if (isFilter && node[isFilter.key as keyof TSESTree.Node] !== isFilter.value) {
 							continue;
@@ -130,7 +130,7 @@ export function convertRule(
 							continue;
 						}
 						try {
-							['test', 'argument', 'left', 'right'].forEach((key) => {
+							['test', 'argument', 'left', 'right'].forEach(key => {
 								// monkey-fix for @typescript-eslint/strict-boolean-expressions
 								// @ts-expect-error
 								if (key in node && node[key] && !node[key].parent) {
