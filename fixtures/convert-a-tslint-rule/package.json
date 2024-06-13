@@ -1,7 +1,7 @@
 {
 	"devDependencies": {
-		"@tsslint/config": "1.0.1",
-		"@tsslint/tslint": "1.0.1",
+		"@tsslint/config": "1.0.2",
+		"@tsslint/tslint": "1.0.2",
 		"tslint": "^6.1.3"
 	}
 }

@@ -1,12 +1,15 @@
 import type * as TSSLint from '@tsslint/types';
-import { analyze } from '@typescript-eslint/scope-manager';
 import type { TSESTree } from '@typescript-eslint/typescript-estree';
-import * as ESLint from 'eslint';
+import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
-import { astConverter } from './node_modules/@typescript-eslint/typescript-estree/dist/ast-converter';
-import { createParserServices } from './node_modules/@typescript-eslint/typescript-estree/dist/createParserServices';
-import { createParseSettings } from './node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings';
-import { simpleTraverse } from './node_modules/@typescript-eslint/typescript-estree/dist/simple-traverse';
+
+import ScopeManager = require('@typescript-eslint/scope-manager');
+// @ts-expect-error
+import SourceCode = require('./node_modules/eslint/lib/source-code/source-code.js');
+import AstConverter = require('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter');
+import CreateParserServices = require('./node_modules/@typescript-eslint/typescript-estree/dist/createParserServices');
+import CreateParseSettings = require('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings');
+import SimpleTraverse = require('./node_modules/@typescript-eslint/typescript-estree/dist/simple-traverse');
 
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
@@ -18,9 +21,9 @@ export function convertRule(
 			severity === ts.DiagnosticCategory.Error ? reportError
 				: severity === ts.DiagnosticCategory.Warning ? reportWarning
 					: reportSuggestion;
-		const { estree, astMaps } = astConverter(
+		const { estree, astMaps } = AstConverter.astConverter(
 			sourceFile,
-			createParseSettings(sourceFile, {
+			CreateParseSettings.createParseSettings(sourceFile, {
 				comment: true,
 				tokens: true,
 				range: true,
@@ -30,9 +33,9 @@ export function convertRule(
 			}),
 			true
 		);
-		const scopeManager = analyze(estree);
-		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
-		const sourceCode = new ESLint.SourceCode({
+		const scopeManager = ScopeManager.analyze(estree);
+		const parserServices = CreateParserServices.createParserServices(astMaps, languageService.getProgram() ?? null);
+		const sourceCode = new SourceCode({
 			ast: estree as ESLint.AST.Program,
 			text: sourceFile.text,
 			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
@@ -146,7 +149,7 @@ export function convertRule(
 				};
 			}
 		}
-		simpleTraverse(estree, { visitors }, true);
+		SimpleTraverse.simpleTraverse(estree, { visitors }, true);
 
 		function addFix(reporter: TSSLint.Reporter, title: string, fix: ESLint.Rule.ReportFixer) {
 			reporter.withFix(
