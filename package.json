@@ -20,5 +20,5 @@
 		"typescript": "latest"
 	},
 	"version": "1.0.1",
-	"packageManager": "pnpm@8.7.0+sha1.4a6f863625170af87d027789f72662e0601ecb57"
+	"packageManager": "pnpm@9.3.0"
 }
