@@ -27,11 +27,11 @@ importers:
   fixtures/convert-a-tslint-rule:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.0.2
-        version: 1.0.2
+        specifier: 1.0.3
+        version: link:../../packages/config
       '@tsslint/tslint':
-        specifier: 1.0.1
-        version: 1.0.1(tslint@6.1.3(typescript@5.4.5))
+        specifier: 1.0.3
+        version: link:../../packages/tslint
       tslint:
         specifier: ^6.1.3
         version: 6.1.3(typescript@5.4.5)
@@ -39,11 +39,11 @@ importers:
   fixtures/convert-eslint-rules:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.0.2
-        version: 1.0.2
+        specifier: 1.0.3
+        version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 1.0.2
-        version: 1.0.2(eslint@9.4.0)(typescript@5.4.5)
+        specifier: 1.0.3
+        version: link:../../packages/eslint
       '@typescript-eslint/eslint-plugin':
         specifier: ^7.13.0
         version: 7.13.0(@typescript-eslint/parser@7.13.0(eslint@9.4.0)(typescript@5.4.5))(eslint@9.4.0)(typescript@5.4.5)
@@ -553,22 +553,6 @@ packages:
   '@sindresorhus/merge-streams@2.3.0':
     resolution: {integrity: sha512-LtoMMhxAlorcGhmFYI+LhPgbPZCkgP6ra1YL604EeF6U98pLlQ3iWIGMdWSC+vWmPBWBNgmDBAhnAobLROJmwg==}
     engines: {node: '>=18'}
-
-  '@tsslint/config@1.0.2':
-    resolution: {integrity: sha512-sKemO/dfjfdZdWMd47h486fGOSEMYY2eeK8b1VVu/mdkdIfoE8umCnvp9JQewjlnqw+p93/hKzyJQ5TPeWgUoQ==}
-
-  '@tsslint/eslint@1.0.2':
-    resolution: {integrity: sha512-V/SIoj+9ewVW2p/d4T6/Xaye+fcds4vZ60p74ol2xg7DBODcJwm23UKLbqGXSJCv1TfAe04jRUvKPs4b3r9mfw==}
-    peerDependencies:
-      eslint: '*'
-
-  '@tsslint/tslint@1.0.1':
-    resolution: {integrity: sha512-CBLeHbOI9cjKW7GcAMySpEUGY7hCN0mD5hW/S8+iAP6/YxxyJmV+oGox5BxCM57nsW0yUuBwwFpBRZr3myafzA==}
-    peerDependencies:
-      tslint: '*'
-
-  '@tsslint/types@1.0.2':
-    resolution: {integrity: sha512-WCH7gP2zjIhx6vjTbDqITulozJ3Lo61rNR8pkKZ6rEIjEHGjym+0BuZALgkxfSbpY6Y3LZUa2tntxsqRaii4SQ==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -3052,26 +3036,6 @@ snapshots:
       '@sigstore/protobuf-specs': 0.3.2
 
   '@sindresorhus/merge-streams@2.3.0': {}
-
-  '@tsslint/config@1.0.2':
-    dependencies:
-      '@tsslint/types': 1.0.2
-      esbuild: 0.21.4
-
-  '@tsslint/eslint@1.0.2(eslint@9.4.0)(typescript@5.4.5)':
-    dependencies:
-      '@typescript-eslint/scope-manager': 7.13.0
-      '@typescript-eslint/typescript-estree': 7.13.0(typescript@5.4.5)
-      eslint: 9.4.0
-    transitivePeerDependencies:
-      - supports-color
-      - typescript
-
-  '@tsslint/tslint@1.0.1(tslint@6.1.3(typescript@5.4.5))':
-    dependencies:
-      tslint: 6.1.3(typescript@5.4.5)
-
-  '@tsslint/types@1.0.2': {}
 
   '@tufjs/canonical-json@2.0.0': {}
 

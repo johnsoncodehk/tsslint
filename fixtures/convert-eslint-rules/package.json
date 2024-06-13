@@ -1,7 +1,9 @@
 {
+	"private": true,
+	"version": "1.0.3",
 	"devDependencies": {
-		"@tsslint/config": "1.0.2",
-		"@tsslint/eslint": "1.0.2",
+		"@tsslint/config": "1.0.3",
+		"@tsslint/eslint": "1.0.3",
 		"@typescript-eslint/eslint-plugin": "^7.13.0",
 		"@typescript-eslint/typescript-estree": "^7.13.0",
 		"eslint": "^9.4.0"

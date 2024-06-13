@@ -1,7 +1,9 @@
 {
+	"private": true,
+	"version": "1.0.3",
 	"devDependencies": {
-		"@tsslint/config": "1.0.2",
-		"@tsslint/tslint": "1.0.2",
+		"@tsslint/config": "1.0.3",
+		"@tsslint/tslint": "1.0.3",
 		"tslint": "^6.1.3"
 	}
 }
