@@ -80,7 +80,7 @@ import glob = require('glob');
 		const tsconfig = await getTsconfigPath(tsconfigOption);
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
-		log.step(`Project: ${path.relative(process.cwd(), tsconfig)}, Config: ${configFile ? path.relative(process.cwd(), configFile) : undefined} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
+		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} input files)`);
 
 		if (!configFile) {
 			log.error('No tsslint.config.ts file found!');
@@ -89,10 +89,15 @@ import glob = require('glob');
 
 		if (!configs.has(configFile)) {
 			try {
-				configs.set(configFile, await build.buildConfigFile(configFile, ts.sys.createHash));
+				configs.set(configFile, await build.buildConfigFile(configFile, ts.sys.createHash, {
+					log: log.info,
+					warn: log.warn,
+					error: log.error,
+				}));
 			} catch (err) {
 				configs.set(configFile, undefined);
-				console.error(err);
+				// @ts-ignore
+				log.error(err);
 			}
 		}
 		const tsslintConfig = configs.get(configFile);

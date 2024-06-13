@@ -7,8 +7,10 @@ export async function watchConfigFile(
 	configFilePath: string,
 	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
 	watch = true,
-	createHash: (path: string) => string = btoa
+	createHash: (path: string) => string = btoa,
+	logger: Pick<typeof console, 'log' | 'warn' | 'error'> = console
 ) {
+	let start: number;
 	const outDir = _path.resolve(configFilePath, '..', 'node_modules', '.tsslint');
 	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
 	const outFile = _path.join(outDir, outFileName);
@@ -22,6 +24,7 @@ export async function watchConfigFile(
 				result.errors.push({ text: String(e) } as any);
 			}
 		}
+		logger.log(`Built ${_path.relative(process.cwd(), configFilePath)} in ${Date.now() - start}ms`);
 		onBuild(config, result);
 	};
 	const cacheDir = _path.resolve(outDir, 'http_resources');
@@ -36,6 +39,9 @@ export async function watchConfigFile(
 		plugins: [{
 			name: 'tsslint',
 			setup(build) {
+				build.onStart(() => {
+					start = Date.now();
+				});
 				build.onResolve({ filter: /^https?:\/\// }, ({ path }) => {
 					const cachePath = _path.join(cacheDir, createHash(path));
 					cachePathToOriginalPath.set(cachePath, path);

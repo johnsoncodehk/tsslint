@@ -1,7 +1,11 @@
 import type { Config } from '@tsslint/types';
 import { watchConfigFile } from './watch';
 
-export function buildConfigFile(configFilePath: string, createHash?: (path: string) => string): Promise<Config> {
+export function buildConfigFile(
+	configFilePath: string,
+	createHash?: (path: string) => string,
+	logger?: Pick<typeof console, 'log' | 'warn' | 'error'>
+): Promise<Config> {
 	return new Promise((resolve, reject) => {
 		watchConfigFile(
 			configFilePath,
@@ -14,7 +18,8 @@ export function buildConfigFile(configFilePath: string, createHash?: (path: stri
 				}
 			},
 			false,
-			createHash
+			createHash,
+			logger
 		);
 	});
 }
