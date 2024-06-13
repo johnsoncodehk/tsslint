@@ -17,8 +17,10 @@
 		"typescript": "latest"
 	},
 	"peerDependencies": {
-		"@typescript-eslint/scope-manager": "*",
-		"@typescript-eslint/typescript-estree": "*",
+		"@typescript-eslint/typescript-estree": "^7.13.0",
 		"eslint": "*"
+	},
+	"dependencies": {
+		"@typescript-eslint/scope-manager": "^7.13.0"
 	}
 }

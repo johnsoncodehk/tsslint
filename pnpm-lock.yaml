@@ -47,9 +47,6 @@ importers:
       '@typescript-eslint/eslint-plugin':
         specifier: ^7.13.0
         version: 7.13.0(@typescript-eslint/parser@7.13.0(eslint@9.4.0)(typescript@5.4.5))(eslint@9.4.0)(typescript@5.4.5)
-      '@typescript-eslint/scope-manager':
-        specifier: ^7.13.0
-        version: 7.13.0
       '@typescript-eslint/typescript-estree':
         specifier: ^7.13.0
         version: 7.13.0(typescript@5.4.5)
@@ -100,10 +97,10 @@ importers:
   packages/eslint:
     dependencies:
       '@typescript-eslint/scope-manager':
-        specifier: '*'
+        specifier: ^7.13.0
         version: 7.13.0
       '@typescript-eslint/typescript-estree':
-        specifier: '*'
+        specifier: ^7.13.0
         version: 7.13.0(typescript@5.4.5)
       eslint:
         specifier: '*'

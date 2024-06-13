@@ -4,12 +4,19 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
-// @ts-expect-error
-import SourceCode = require('./node_modules/eslint/lib/source-code/source-code.js');
-import AstConverter = require('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter');
-import CreateParserServices = require('./node_modules/@typescript-eslint/typescript-estree/dist/createParserServices');
-import CreateParseSettings = require('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings');
-import SimpleTraverse = require('./node_modules/@typescript-eslint/typescript-estree/dist/simple-traverse');
+import path = require('path');
+
+const sourceCodePath = path.resolve(path.dirname(require.resolve('eslint/package.json')), 'lib', 'source-code', 'source-code.js');
+const astConverterPath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'ast-converter.js');
+const createParserServicesPath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'createParserServices.js');
+const createParseSettingsPath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'parseSettings', 'createParseSettings.js');
+const simpleTraversePath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'simple-traverse.js');
+
+const SourceCode = require(sourceCodePath);
+const astConverter = require(astConverterPath).astConverter;
+const createParserServices = require(createParserServicesPath).createParserServices;
+const createParseSettings = require(createParseSettingsPath).createParseSettings;
+const simpleTraverse = require(simpleTraversePath).simpleTraverse;
 
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
@@ -21,9 +28,9 @@ export function convertRule(
 			severity === ts.DiagnosticCategory.Error ? reportError
 				: severity === ts.DiagnosticCategory.Warning ? reportWarning
 					: reportSuggestion;
-		const { estree, astMaps } = AstConverter.astConverter(
+		const { estree, astMaps } = astConverter(
 			sourceFile,
-			CreateParseSettings.createParseSettings(sourceFile, {
+			createParseSettings(sourceFile, {
 				comment: true,
 				tokens: true,
 				range: true,
@@ -34,7 +41,7 @@ export function convertRule(
 			true
 		);
 		const scopeManager = ScopeManager.analyze(estree);
-		const parserServices = CreateParserServices.createParserServices(astMaps, languageService.getProgram() ?? null);
+		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
 		const sourceCode = new SourceCode({
 			ast: estree as ESLint.AST.Program,
 			text: sourceFile.text,
@@ -149,7 +156,7 @@ export function convertRule(
 				};
 			}
 		}
-		SimpleTraverse.simpleTraverse(estree, { visitors }, true);
+		simpleTraverse(estree, { visitors }, true);
 
 		function addFix(reporter: TSSLint.Reporter, title: string, fix: ESLint.Rule.ReportFixer) {
 			reporter.withFix(
