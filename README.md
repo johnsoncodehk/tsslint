@@ -68,10 +68,10 @@ As an example, let's create a `no-console` rule under `[project root]/rules/`.
 Here's the code for `[project root]/rules/noConsoleRule.ts`:
 
 ```js
-import type { Rule } from '@tsslint/config';
+import { defineRule } from '@tsslint/config';
 
-export function create(): Rule {
-	return ({ typescript: ts, sourceFile, reportWarning }) => {
+export function create() {
+	return defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
 		ts.forEachChild(sourceFile, function cb(node) {
 			if (
 				ts.isPropertyAccessExpression(node) &&
@@ -98,7 +98,7 @@ export function create(): Rule {
 			}
 			ts.forEachChild(node, cb);
 		});
-	};
+	});
 }
 ```
 
