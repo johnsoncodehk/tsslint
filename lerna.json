@@ -3,7 +3,8 @@
 	"npmClient": "pnpm",
 	"packages": [
 		".",
-		"packages/*"
+		"packages/*",
+		"fixtures/*"
 	],
 	"version": "1.0.5"
 }
