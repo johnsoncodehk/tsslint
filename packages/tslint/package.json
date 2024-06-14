@@ -13,10 +13,9 @@
 	},
 	"devDependencies": {
 		"@tsslint/types": "1.0.4",
-		"tslint": "^6.1.3",
 		"typescript": "latest"
 	},
-	"peerDependencies": {
-		"tslint": "*"
+	"dependencies": {
+		"tslint": "^6.0.0"
 	}
 }
