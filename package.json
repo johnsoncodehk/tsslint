@@ -10,7 +10,8 @@
 		"release:base": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
 		"release:vscode": "cd packages/vscode && npm run release",
 		"lint": "node packages/cli/bin/tsslint.js --projects 'packages/*/tsconfig.json'",
-		"lint:fix": "npm run lint -- --fix"
+		"lint:fix": "npm run lint -- --fix",
+		"start": "node packages/cli/bin/tsslint.js --projects $(find fixtures -name tsconfig.json | grep -v 'config-build-error')"
 	},
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
