@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/typescript-plugin",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -12,9 +12,9 @@
 		"directory": "packages/typescript-plugin"
 	},
 	"dependencies": {
-		"@tsslint/core": "1.0.3"
+		"@tsslint/core": "1.0.4"
 	},
 	"devDependencies": {
-		"@tsslint/config": "1.0.3"
+		"@tsslint/config": "1.0.4"
 	}
 }
