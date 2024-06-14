@@ -17,7 +17,6 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 		getEdits: () => ts.FileTextChanges[];
 	}[]>>();
 	const sourceFiles = new Map<string, ts.SourceFile>();
-	const configSourceFile = ts.createSourceFile(ctx.configFile, ts.sys.readFile(ctx.configFile) ?? '', ts.ScriptTarget.Latest, true);
 	const plugins = (config.plugins ?? []).map(plugin => plugin(ctx));
 
 	let rules = { ...config.rules };
@@ -101,26 +100,9 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						: ErrorStackParser.parse(new Error());
 					if (typeof traceOffset === 'number') {
 						const baseOffset = 2 + traceOffset;
-						if (config.debug) {
-							for (let i = baseOffset; i < stacks.length; i++) {
-								pushRelatedInformation(error, stacks[i]);
-							}
+						if (stacks.length > baseOffset) {
+							pushRelatedInformation(error, stacks[baseOffset]);
 						}
-						else {
-							if (stacks.length > baseOffset) {
-								pushRelatedInformation(error, stacks[baseOffset]);
-							}
-						}
-					}
-					if (withStack) {
-						error.relatedInformation?.push({
-							category: ts.DiagnosticCategory.Message,
-							code: 0,
-							file: configSourceFile,
-							start: 0,
-							length: 0,
-							messageText: 'TSSLint configuration file',
-						});
 					}
 				}
 
@@ -178,7 +160,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						file: stackFile,
 						start: pos,
 						length: 0,
-						messageText: 'Reported at',
+						messageText: '	at ' + stack.functionName,
 					});
 				}
 			}
