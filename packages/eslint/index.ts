@@ -89,10 +89,10 @@ export function convertRule(
 					const message = 'messageId' in suggest
 						? getMessage(suggest.messageId)
 						: 'Fix TSSLint error';
-					addFix(reporter, message, suggest.fix);
+					reporter.withFix(message, convertFix(suggest.fix));
 				}
 				if (descriptor.fix) {
-					addFix(reporter, 'Fix TSSLint error', descriptor.fix);
+					reporter.withFix(message, convertFix(descriptor.fix));
 				}
 			},
 		});
@@ -158,93 +158,90 @@ export function convertRule(
 		}
 		simpleTraverse(estree, { visitors }, true);
 
-		function addFix(reporter: TSSLint.Reporter, title: string, fix: ESLint.Rule.ReportFixer) {
-			reporter.withFix(
-				title,
-				() => {
-					const fixes = fix({
-						insertTextAfter(nodeOrToken, text) {
-							if (!nodeOrToken.loc?.end) {
-								throw new Error('Cannot insert text after a node without a location.');
-							}
-							const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-							return this.insertTextAfterRange([start, start], text);
-						},
-						insertTextAfterRange(range, text) {
-							return {
-								text,
-								range: [range[1], range[1]],
-							};
-						},
-						insertTextBefore(nodeOrToken, text) {
-							if (!nodeOrToken.loc?.start) {
-								throw new Error('Cannot insert text before a node without a location.');
-							}
-							const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
-							return this.insertTextBeforeRange([start, start], text);
-						},
-						insertTextBeforeRange(range, text) {
-							return {
-								text,
-								range: [range[0], range[0]],
-							};
-						},
-						remove(nodeOrToken) {
-							if (!nodeOrToken.loc) {
-								throw new Error('Cannot remove a node without a location.');
-							}
-							const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
-							const end = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-							return this.removeRange([start, end]);
-						},
-						removeRange(range) {
-							return {
-								text: '',
-								range,
-							};
-						},
-						replaceText(nodeOrToken, text) {
-							if (!nodeOrToken.loc) {
-								throw new Error('Cannot replace text of a node without a location.');
-							}
-							const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
-							const end = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-							return this.replaceTextRange([start, end], text);
-						},
-						replaceTextRange(range, text) {
-							return {
-								text,
-								range,
-							};
+		function convertFix(fix: ESLint.Rule.ReportFixer) {
+			return () => {
+				const fixes = fix({
+					insertTextAfter(nodeOrToken, text) {
+						if (!nodeOrToken.loc?.end) {
+							throw new Error('Cannot insert text after a node without a location.');
+						}
+						const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+						return this.insertTextAfterRange([start, start], text);
+					},
+					insertTextAfterRange(range, text) {
+						return {
+							text,
+							range: [range[1], range[1]],
+						};
+					},
+					insertTextBefore(nodeOrToken, text) {
+						if (!nodeOrToken.loc?.start) {
+							throw new Error('Cannot insert text before a node without a location.');
+						}
+						const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+						return this.insertTextBeforeRange([start, start], text);
+					},
+					insertTextBeforeRange(range, text) {
+						return {
+							text,
+							range: [range[0], range[0]],
+						};
+					},
+					remove(nodeOrToken) {
+						if (!nodeOrToken.loc) {
+							throw new Error('Cannot remove a node without a location.');
+						}
+						const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+						const end = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+						return this.removeRange([start, end]);
+					},
+					removeRange(range) {
+						return {
+							text: '',
+							range,
+						};
+					},
+					replaceText(nodeOrToken, text) {
+						if (!nodeOrToken.loc) {
+							throw new Error('Cannot replace text of a node without a location.');
+						}
+						const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+						const end = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+						return this.replaceTextRange([start, end], text);
+					},
+					replaceTextRange(range, text) {
+						return {
+							text,
+							range,
+						};
+					},
+				});
+				const textChanges: ts.TextChange[] = [];
+				if (fixes && 'text' in fixes) {
+					textChanges.push({
+						newText: fixes.text,
+						span: {
+							start: fixes.range[0],
+							length: fixes.range[1] - fixes.range[0],
 						},
 					});
-					const textChanges: ts.TextChange[] = [];
-					if (fixes && 'text' in fixes) {
+				}
+				else if (fixes) {
+					for (const fix of fixes) {
 						textChanges.push({
-							newText: fixes.text,
+							newText: fix.text,
 							span: {
-								start: fixes.range[0],
-								length: fixes.range[1] - fixes.range[0],
+								start: fix.range[0],
+								length: fix.range[1] - fix.range[0],
 							},
 						});
 					}
-					else if (fixes) {
-						for (const fix of fixes) {
-							textChanges.push({
-								newText: fix.text,
-								span: {
-									start: fix.range[0],
-									length: fix.range[1] - fix.range[0],
-								},
-							});
-						}
-					}
-					return [{
-						fileName: sourceFile.fileName,
-						textChanges,
-					}];
 				}
-			);
+				return [{
+					fileName: sourceFile.fileName,
+					textChanges,
+				}];
+			};
 		}
 
 		function getMessage(messageId: string) {
