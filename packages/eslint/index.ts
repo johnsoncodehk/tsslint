@@ -92,7 +92,7 @@ export function convertRule(
 					reporter.withFix(message, convertFix(suggest.fix));
 				}
 				if (descriptor.fix) {
-					reporter.withFix(message, convertFix(descriptor.fix));
+					reporter.withFix('Fix TSSLint error', convertFix(descriptor.fix));
 				}
 			},
 		});
