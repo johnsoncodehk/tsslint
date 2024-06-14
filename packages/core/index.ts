@@ -173,7 +173,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						file: stackFile,
 						start: pos,
 						length: 0,
-						messageText: 'at ' + stack.functionName,
+						messageText: 'at ' + (stack.functionName ?? '<anonymous>'),
 					});
 				}
 			}
