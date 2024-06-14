@@ -103,7 +103,7 @@ importers:
         specifier: ^7.13.0
         version: 7.13.0(typescript@5.4.5)
       eslint:
-        specifier: '*'
+        specifier: ^9.0.0
         version: 9.4.0
     devDependencies:
       '@tsslint/types':

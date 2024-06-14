@@ -5,18 +5,13 @@ import type * as ts from 'typescript';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
 import path = require('path');
+import eslint = require('eslint');
 
-const sourceCodePath = path.resolve(path.dirname(require.resolve('eslint/package.json')), 'lib', 'source-code', 'source-code.js');
-const astConverterPath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'ast-converter.js');
-const createParserServicesPath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'createParserServices.js');
-const createParseSettingsPath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'parseSettings', 'createParseSettings.js');
-const simpleTraversePath = path.resolve(path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json')), 'dist', 'simple-traverse.js');
-
-const SourceCode = require(sourceCodePath);
-const astConverter = require(astConverterPath).astConverter;
-const createParserServices = require(createParserServicesPath).createParserServices;
-const createParseSettings = require(createParseSettingsPath).createParseSettings;
-const simpleTraverse = require(simpleTraversePath).simpleTraverse;
+const estreeModuleDir = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
+const astConverter = require(path.resolve(estreeModuleDir, 'dist', 'ast-converter.js')).astConverter;
+const createParserServices = require(path.resolve(estreeModuleDir, 'dist', 'createParserServices.js')).createParserServices;
+const createParseSettings = require(path.resolve(estreeModuleDir, 'dist', 'parseSettings', 'createParseSettings.js')).createParseSettings;
+const simpleTraverse = require(path.resolve(estreeModuleDir, 'dist', 'simple-traverse.js')).simpleTraverse;
 
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
@@ -42,7 +37,7 @@ export function convertRule(
 		);
 		const scopeManager = ScopeManager.analyze(estree);
 		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
-		const sourceCode = new SourceCode({
+		const sourceCode = new eslint.SourceCode({
 			ast: estree as ESLint.AST.Program,
 			text: sourceFile.text,
 			scopeManager: scopeManager as ESLint.Scope.ScopeManager,

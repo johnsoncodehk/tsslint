@@ -16,11 +16,9 @@
 		"@types/eslint": "^8.56.10",
 		"typescript": "latest"
 	},
-	"peerDependencies": {
-		"@typescript-eslint/typescript-estree": "^7.13.0",
-		"eslint": "*"
-	},
 	"dependencies": {
-		"@typescript-eslint/scope-manager": "^7.13.0"
+		"@typescript-eslint/scope-manager": "^7.13.0",
+		"@typescript-eslint/typescript-estree": "^7.13.0",
+		"eslint": "^9.0.0"
 	}
 }
