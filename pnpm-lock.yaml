@@ -47,12 +47,6 @@ importers:
       '@typescript-eslint/eslint-plugin':
         specifier: ^7.13.0
         version: 7.13.0(@typescript-eslint/parser@7.13.0(eslint@9.4.0)(typescript@5.4.5))(eslint@9.4.0)(typescript@5.4.5)
-      '@typescript-eslint/typescript-estree':
-        specifier: ^7.13.0
-        version: 7.13.0(typescript@5.4.5)
-      eslint:
-        specifier: ^9.4.0
-        version: 9.4.0
 
   packages/cli:
     dependencies:
