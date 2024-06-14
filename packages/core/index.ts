@@ -6,7 +6,20 @@ export type Linter = ReturnType<typeof createLinter>;
 
 export function createLinter(ctx: ProjectContext, config: Config, withStack: boolean) {
 	if (withStack) {
-		require('source-map-support').install();
+		require('source-map-support').install({
+			retrieveFile(path: string) {
+				// monkey-fix, refs: https://github.com/typescript-eslint/typescript-eslint/issues/9352
+				if (path.replace(/\\/g, '/').includes('/@typescript-eslint/eslint-plugin/dist/rules/') && path.endsWith('.js.map')) {
+					return JSON.stringify({
+						version: 3,
+						sources: [],
+						sourcesContent: [],
+						mappings: '',
+						names: [],
+					});
+				}
+			},
+		});
 	}
 	const ts = ctx.typescript;
 	const fileFixes = new Map<string, Map<string, {
@@ -160,7 +173,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						file: stackFile,
 						start: pos,
 						length: 0,
-						messageText: '	at ' + stack.functionName,
+						messageText: 'at ' + stack.functionName,
 					});
 				}
 			}
