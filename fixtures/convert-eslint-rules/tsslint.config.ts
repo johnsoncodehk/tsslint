@@ -8,6 +8,7 @@ export default defineConfig({
 
 		// Supported
 		'prefer-ts-expect-error': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/prefer-ts-expect-error.js')).default.default, [], 0),
+		'return-await': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/return-await.js')).default.default, [], 0),
 		'no-unnecessary-type-assertion': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/no-unnecessary-type-assertion.js')).default.default, [], 0),
 		'prefer-nullish-coalescing': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/prefer-nullish-coalescing.js')).default.default, [{
 			ignorePrimitives: {

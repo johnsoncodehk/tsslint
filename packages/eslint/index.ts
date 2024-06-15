@@ -100,7 +100,12 @@ export function convertRule(
 			};
 			cb: (node: TSESTree.Node) => void;
 		}[]>> = {};
-		const visitOrder: { selector: string; node: TSESTree.Node; }[] = [];
+		interface Order {
+			selector: string;
+			node: TSESTree.Node;
+			children: Order[];
+		}
+		const ordersToVisit: Order[] = [];
 		for (const rawSelector in ruleListener) {
 			const selectors = rawSelector
 				.split(',')
@@ -122,18 +127,32 @@ export function convertRule(
 					cb: ruleListener[rawSelector],
 				});
 				visitors[selector] ??= node => {
-					visitOrder.push({ selector, node });
+					const parents = new Set();
+					let current: TSESTree.Node | undefined = node;
+					let parentOrder: Order | undefined;
+					while (current) {
+						parents.add(current);
+						current = current.parent;
+					}
+					ordersToVisit.forEach(function cb(order) {
+						if (parents.has(order.node)) {
+							parentOrder = order;
+							order.children.forEach(cb);
+						}
+					});
+					if (parentOrder) {
+						parentOrder.children.push({ selector, node, children: [] });
+					}
+					else {
+						ordersToVisit.push({ selector, node, children: [] });
+					}
 				};
 			}
 		}
 		fillParent(estree);
 		simpleTraverse(estree, { visitors }, true);
-		(function consume() {
-			const current = visitOrder.shift();
-			if (!current) {
-				return;
-			}
-			const { selector, node } = current;
+
+		ordersToVisit.forEach(function cb({ selector, node, children }) {
 			for (const { cb, filter } of visitorCbs[selector].enter) {
 				if (filter?.op === '=' && node[filter.key as keyof TSESTree.Node] !== filter.value) {
 					continue;
@@ -147,7 +166,7 @@ export function convertRule(
 					console.error(err);
 				}
 			}
-			consume();
+			children.forEach(cb);
 			for (const { cb, filter } of visitorCbs[selector].exit) {
 				if (filter?.op === '=' && node[filter.key as keyof TSESTree.Node] !== filter.value) {
 					continue;
@@ -161,7 +180,7 @@ export function convertRule(
 					console.error(err);
 				}
 			}
-		})();
+		});
 
 		function convertFix(fix: ESLint.Rule.ReportFixer) {
 			return () => {
