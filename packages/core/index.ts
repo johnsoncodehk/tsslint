@@ -196,10 +196,10 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			let result: ts.CodeFixAction[] = [];
 
-			for (const [_ruleId, fixes] of fixesMap) {
+			for (const [ruleId, fixes] of fixesMap) {
 				for (let i = 0; i < fixes.length; i++) {
 					const fix = fixes[i];
-					if (diagnostics && !diagnostics.includes(fix.diagnostic)) {
+					if (diagnostics?.length && !diagnostics.includes(fix.diagnostic)) {
 						continue;
 					}
 					if (
@@ -209,7 +209,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						(end >= fix.start && end <= fix.end)
 					) {
 						result.push({
-							fixName: `tsslint: ${fix.title}`,
+							fixName: `tsslint:${ruleId}`,
 							description: fix.title,
 							changes: fix.getEdits(),
 							fixId: 'tsslint',

@@ -80,14 +80,15 @@ export function convertRule(
 					}
 				} catch { }
 				const reporter = report(message, start, end, 1);
+				const defaultMessage = 'Fix TSSLint error';
 				for (const suggest of descriptor.suggest ?? []) {
 					const message = 'messageId' in suggest
 						? getMessage(suggest.messageId)
-						: 'Fix TSSLint error';
+						: defaultMessage;
 					reporter.withFix(message, convertFix(suggest.fix));
 				}
 				if (descriptor.fix) {
-					reporter.withFix('Fix TSSLint error', convertFix(descriptor.fix));
+					reporter.withFix(defaultMessage, convertFix(descriptor.fix));
 				}
 			},
 		});
