@@ -21,7 +21,6 @@ vscode.languages.registerCodeActionsProvider(
 	e.semantic,
 	{
 		async provideCodeActions(document, range, context, token) {
-			console.log(document.uri.toString(), range, context);
 			if (!context.only || (context.only.value !== 'source' && context.only.value !== 'source.fixAll' && context.only.value !== 'source.fixAll.tsslint' && !context.only.value.startsWith('source.fixAll.tsslint.'))) {
 				return;
 			}
