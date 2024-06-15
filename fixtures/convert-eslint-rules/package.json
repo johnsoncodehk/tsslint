@@ -1,5 +1,6 @@
 {
 	"private": true,
+	"name": "convert-eslint-rules",
 	"version": "1.0.5",
 	"devDependencies": {
 		"@tsslint/config": "1.0.5",
