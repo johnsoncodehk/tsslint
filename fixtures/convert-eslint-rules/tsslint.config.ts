@@ -26,5 +26,13 @@ export default defineConfig({
 		'no-unnecessary-condition': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/no-unnecessary-condition.js')).default.default, [{
 			allowConstantLoopConditions: true,
 		}], 0),
+
+		// vuejs/core rules
+		// 'prefer-ts-expect-error': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/prefer-ts-expect-error.js')).default.default, [], 1),
+		'consistent-type-imports': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/consistent-type-imports.js')).default.default, [{
+			fixStyle: 'inline-type-imports',
+			disallowTypeAnnotations: false,
+		}], 1),
+		'no-import-type-side-effects': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/no-import-type-side-effects.js')).default.default, [], 1),
 	},
 });

@@ -92,66 +92,76 @@ export function convertRule(
 			},
 		});
 		const visitors: Record<string, (node: TSESTree.Node, parent: TSESTree.Node | undefined) => void> = {};
-		const visitorCbs: Record<string, {
-			isFilter?: {
+		const visitorCbs: Record<string, Record<'enter' | 'exit', {
+			filter?: {
 				key: string;
-				value: string;
-			};
-			isNotFilter?: {
-				key: string;
+				op: '=' | '!=';
 				value: string;
 			};
 			cb: (node: TSESTree.Node) => void;
-		}[]> = {};
+		}[]>> = {};
+		const visitOrder: { selector: string; node: TSESTree.Node; }[] = [];
 		for (const rawSelector in ruleListener) {
 			const selectors = rawSelector
 				.split(',')
-				.map(selector => selector.trim().replace(/:exit$/u, ''));
+				.map(selector => selector.trim());
 			for (let selector of selectors) {
-				const isFilter = selector.match(/\[(?<key>[^=\s]+)\s*=\s*(?<value>[^\]]+)\]/u)?.groups;
-				const isNotFilter = selector.match(/\[(?<key>[^=\s]+)\s*!=\s*(?<value>[^\]]+)\]/u)?.groups;
-				if (isFilter || isNotFilter) {
-					selector = selector.replace(/\[(?:[^=\s]+)\s*(?:=\s*[^\]]+|!=\s*[^\]]+)\]/u, '');
+				let mode: 'enter' | 'exit' = 'enter';
+				if (selector.endsWith(':exit')) {
+					mode = 'exit';
+					selector = selector.slice(0, -5);
 				}
-				visitorCbs[selector] ??= [];
-				visitorCbs[selector].push({
-					isFilter: isFilter ? {
-						key: isFilter['key'],
-						value: JSON.parse(isFilter['value']),
-					} : undefined,
-					isNotFilter: isNotFilter ? {
-						key: isNotFilter['key'],
-						value: JSON.parse(isNotFilter['value']),
-					} : undefined,
+				const filter = selector.match(/\[(?<key>[^!=\s]+)\s*(?<op>=|!=)\s*(?<value>[^\]]+)\]/u)?.groups;
+				if (filter) {
+					selector = selector.split('[')[0];
+				}
+				visitorCbs[selector] ??= { enter: [], exit: [] };
+				visitorCbs[selector][mode].push({
+					filter: filter as any,
 					// @ts-expect-error
 					cb: ruleListener[rawSelector],
 				});
 				visitors[selector] ??= node => {
-					for (const { cb, isFilter, isNotFilter } of visitorCbs[selector]) {
-						if (isFilter && node[isFilter.key as keyof TSESTree.Node] !== isFilter.value) {
-							continue;
-						}
-						if (isNotFilter && node[isNotFilter.key as keyof TSESTree.Node] === isNotFilter.value) {
-							continue;
-						}
-						try {
-							['test', 'argument', 'left', 'right'].forEach(key => {
-								// monkey-fix for @typescript-eslint/strict-boolean-expressions
-								// @ts-expect-error
-								if (key in node && node[key] && !node[key].parent) {
-									// @ts-expect-error
-									node[key].parent = node;
-								}
-							});
-							cb(node);
-						} catch (err) {
-							console.error(err);
-						}
-					}
+					visitOrder.push({ selector, node });
 				};
 			}
 		}
+		fillParent(estree);
 		simpleTraverse(estree, { visitors }, true);
+		(function consume() {
+			const current = visitOrder.shift();
+			if (!current) {
+				return;
+			}
+			const { selector, node } = current;
+			for (const { cb, filter } of visitorCbs[selector].enter) {
+				if (filter?.op === '=' && node[filter.key as keyof TSESTree.Node] !== filter.value) {
+					continue;
+				}
+				if (filter?.op === '!=' && node[filter.key as keyof TSESTree.Node] === filter.value) {
+					continue;
+				}
+				try {
+					cb(node);
+				} catch (err) {
+					console.error(err);
+				}
+			}
+			consume();
+			for (const { cb, filter } of visitorCbs[selector].exit) {
+				if (filter?.op === '=' && node[filter.key as keyof TSESTree.Node] !== filter.value) {
+					continue;
+				}
+				if (filter?.op === '!=' && node[filter.key as keyof TSESTree.Node] === filter.value) {
+					continue;
+				}
+				try {
+					cb(node);
+				} catch (err) {
+					console.error(err);
+				}
+			}
+		})();
 
 		function convertFix(fix: ESLint.Rule.ReportFixer) {
 			return () => {
@@ -243,4 +253,37 @@ export function convertRule(
 			return rule.meta?.messages?.[messageId] ?? '';
 		}
 	};
+}
+
+const filled = new WeakSet();
+
+function fillParent(target: any, currentParent?: any): any {
+	if (filled.has(target)) {
+		return;
+	}
+	filled.add(target);
+	if ('type' in target) {
+		if (!target.parent) {
+			target.parent = currentParent;
+		}
+		currentParent = target;
+	}
+	for (const key of Object.keys(target)) {
+		if (key === 'parent') {
+			continue;
+		}
+		const value = target[key];
+		if (value && typeof value === 'object') {
+			if (Array.isArray(value)) {
+				for (const element of value) {
+					if (element && typeof element === 'object') {
+						fillParent(element, currentParent);
+					}
+				}
+			}
+			else {
+				fillParent(value, currentParent);
+			}
+		}
+	}
 }
