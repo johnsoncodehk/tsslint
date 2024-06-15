@@ -255,13 +255,7 @@ export function convertRule(
 	};
 }
 
-const filled = new WeakSet();
-
 function fillParent(target: any, currentParent?: any): any {
-	if (filled.has(target)) {
-		return;
-	}
-	filled.add(target);
 	if ('type' in target) {
 		if (!target.parent) {
 			target.parent = currentParent;
