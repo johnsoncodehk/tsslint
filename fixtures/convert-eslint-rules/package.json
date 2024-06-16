@@ -1,10 +1,10 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/convert-eslint-rules",
-	"version": "1.0.9",
+	"version": "1.0.10",
 	"devDependencies": {
-		"@tsslint/config": "1.0.9",
-		"@tsslint/eslint": "1.0.9",
+		"@tsslint/config": "1.0.10",
+		"@tsslint/eslint": "1.0.10",
 		"@typescript-eslint/eslint-plugin": "^7.13.0"
 	}
 }
