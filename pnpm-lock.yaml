@@ -48,6 +48,15 @@ importers:
         specifier: ^7.13.0
         version: 7.13.0(@typescript-eslint/parser@7.13.0(eslint@9.4.0)(typescript@5.4.5))(eslint@9.4.0)(typescript@5.4.5)
 
+  fixtures/typescript-plugin:
+    devDependencies:
+      '@tsslint/typescript-plugin':
+        specifier: 1.0.8
+        version: link:../../packages/typescript-plugin
+      typescript:
+        specifier: latest
+        version: 5.4.5
+
   packages/cli:
     dependencies:
       '@clack/prompts':
