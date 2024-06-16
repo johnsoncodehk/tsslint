@@ -1,5 +1,4 @@
 import type * as TSSLint from '@tsslint/types';
-import type { TSESTree } from '@typescript-eslint/typescript-estree';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
@@ -8,11 +7,23 @@ import path = require('path');
 import eslint = require('eslint');
 
 const estreeModuleDir = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
+const eslintModuleDir = path.dirname(require.resolve('eslint/package.json'));
+
+// TS-ESLint internal scripts
 const astConverter = require(path.resolve(estreeModuleDir, 'dist', 'ast-converter.js')).astConverter;
 const createParserServices = require(path.resolve(estreeModuleDir, 'dist', 'createParserServices.js')).createParserServices;
 const createParseSettings = require(path.resolve(estreeModuleDir, 'dist', 'parseSettings', 'createParseSettings.js')).createParseSettings;
-const simpleTraverse = require(path.resolve(estreeModuleDir, 'dist', 'simple-traverse.js')).simpleTraverse;
-const estrees = new WeakMap<ts.SourceFile, { estree: any; sourceCode: any; }>();
+
+// ESLint internal scripts
+const createEmitter = require(path.resolve(eslintModuleDir, 'lib', 'linter', 'safe-emitter.js'));
+const NodeEventGenerator = require(path.resolve(eslintModuleDir, 'lib', 'linter', 'node-event-generator.js'));
+const Traverser = require(path.resolve(eslintModuleDir, 'lib', 'shared', 'traverser.js'));
+
+const estrees = new WeakMap<ts.SourceFile, {
+	estree: any;
+	sourceCode: any;
+	eventQueue: any[];
+}>();
 
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
@@ -28,9 +39,11 @@ export function convertRule(
 			severity === ts.DiagnosticCategory.Error ? reportError
 				: severity === ts.DiagnosticCategory.Warning ? reportWarning
 					: reportSuggestion;
-		const { estree, sourceCode } = getEstree(sourceFile, languageService);
+		const { sourceCode, eventQueue } = getEstree(sourceFile, languageService);
+		const emitter = createEmitter();
+
 		// @ts-expect-error
-		const ruleListener = rule.create({
+		const ruleListeners = rule.create({
 			filename: sourceFile.fileName,
 			sourceCode,
 			options,
@@ -78,99 +91,37 @@ export function convertRule(
 				}
 			},
 		});
-		const visitors: Record<string, (node: TSESTree.Node, parent: TSESTree.Node | undefined) => void> = {};
-		const visitorCbs: Record<string, Record<'enter' | 'exit', {
-			filter?: {
-				key: string;
-				op: '=' | '!=';
-				value: string;
-			};
-			cb: (node: TSESTree.Node) => void;
-		}[]>> = {};
-		interface Order {
-			selector: string;
-			node: TSESTree.Node;
-			children: Order[];
-		}
-		const ordersToVisit: Order[] = [];
-		for (const rawSelector in ruleListener) {
-			const selectors = rawSelector
-				.split(',')
-				.map(selector => selector.trim());
-			for (let selector of selectors) {
-				let mode: 'enter' | 'exit' = 'enter';
-				if (selector.endsWith(':exit')) {
-					mode = 'exit';
-					selector = selector.slice(0, -5);
-				}
-				const filter = selector.match(/\[(?<key>[^!=\s]+)\s*(?<op>=|!=)\s*(?<value>[^\]]+)\]/u)?.groups;
-				if (filter) {
-					selector = selector.split('[')[0];
-				}
-				visitorCbs[selector] ??= { enter: [], exit: [] };
-				visitorCbs[selector][mode].push({
-					filter: filter ? {
-						key: filter.key,
-						op: filter.op as '=' | '!=',
-						value: JSON.parse(filter.value),
-					} : undefined,
-					// @ts-expect-error
-					cb: ruleListener[rawSelector],
-				});
-				visitors[selector] ??= node => {
-					const parents = new Set();
-					let current: TSESTree.Node | undefined = node;
-					let parentOrder: Order | undefined;
-					while (current) {
-						parents.add(current);
-						current = current.parent;
-					}
-					ordersToVisit.forEach(function cb(order) {
-						if (parents.has(order.node)) {
-							parentOrder = order;
-							order.children.forEach(cb);
-						}
-					});
-					if (parentOrder) {
-						parentOrder.children.push({ selector, node, children: [] });
-					}
-					else {
-						ordersToVisit.push({ selector, node, children: [] });
-					}
-				};
-			}
-		}
-		simpleTraverse(estree, { visitors }, true);
 
-		ordersToVisit.forEach(function cb({ selector, node, children }) {
-			for (const { cb, filter } of visitorCbs[selector].enter) {
-				if (filter?.op === '=' && node[filter.key as keyof TSESTree.Node] !== filter.value) {
-					continue;
+		for (const selector in ruleListeners) {
+			emitter.on(selector, ruleListeners[selector]);
+		}
+
+		const eventGenerator = new NodeEventGenerator(emitter, { visitorKeys: sourceCode.visitorKeys, fallback: Traverser.getKeys });
+
+		for (const step of eventQueue) {
+			switch (step.kind) {
+				case 1: {
+					try {
+						if (step.phase === 1) {
+							eventGenerator.enterNode(step.target);
+						} else {
+							eventGenerator.leaveNode(step.target);
+						}
+					} catch (err) {
+						throw err;
+					}
+					break;
 				}
-				if (filter?.op === '!=' && node[filter.key as keyof TSESTree.Node] === filter.value) {
-					continue;
+
+				case 2: {
+					emitter.emit(step.target, ...step.args);
+					break;
 				}
-				try {
-					cb(node);
-				} catch (err) {
-					console.error(err);
-				}
+
+				default:
+					throw new Error(`Invalid traversal step found: "${step.type}".`);
 			}
-			children.forEach(cb);
-			for (const { cb, filter } of visitorCbs[selector].exit) {
-				if (filter?.op === '=' && node[filter.key as keyof TSESTree.Node] !== filter.value) {
-					continue;
-				}
-				if (filter?.op === '!=' && node[filter.key as keyof TSESTree.Node] === filter.value) {
-					continue;
-				}
-				try {
-					cb(node);
-				} catch (err) {
-					console.error(err);
-				}
-			}
-		});
+		}
 
 		function convertFix(fix: ESLint.Rule.ReportFixer) {
 			return () => {
@@ -278,7 +229,6 @@ function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageServic
 			}),
 			true
 		);
-		fillParent(estree);
 		const scopeManager = ScopeManager.analyze(estree);
 		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
 		const sourceCode = new eslint.SourceCode({
@@ -287,7 +237,10 @@ function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageServic
 			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
 			parserServices,
 		});
-		estrees.set(sourceFile, { estree, sourceCode });
+		// @ts-expect-error
+		const eventQueue = sourceCode.traverse(); // parent should fill in this call, but don't consistent-type-imports rule is still broken, and fillParent is still needed
+		fillParent(estree);
+		estrees.set(sourceFile, { estree, sourceCode, eventQueue });
 	}
 	return estrees.get(sourceFile)!;
 }

@@ -3,10 +3,7 @@ import { convertRule } from '@tsslint/eslint';
 
 export default defineConfig({
 	rules: {
-		// Not yet supported
-		// 'no-console': convertRule((await import('./node_modules/eslint/lib/rules/no-console.js')).default),
-
-		// Supported
+		'no-console': convertRule((await import('../../packages/eslint/node_modules/eslint/lib/rules/no-console.js')).default),
 		'prefer-ts-expect-error': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/prefer-ts-expect-error.js')).default.default),
 		'return-await': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/return-await.js')).default.default),
 		'no-unnecessary-type-assertion': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/no-unnecessary-type-assertion.js')).default.default),
