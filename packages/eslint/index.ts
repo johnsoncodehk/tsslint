@@ -12,6 +12,7 @@ const astConverter = require(path.resolve(estreeModuleDir, 'dist', 'ast-converte
 const createParserServices = require(path.resolve(estreeModuleDir, 'dist', 'createParserServices.js')).createParserServices;
 const createParseSettings = require(path.resolve(estreeModuleDir, 'dist', 'parseSettings', 'createParseSettings.js')).createParseSettings;
 const simpleTraverse = require(path.resolve(estreeModuleDir, 'dist', 'simple-traverse.js')).simpleTraverse;
+const estrees = new WeakMap<ts.SourceFile, { estree: any; sourceCode: any; }>();
 
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
@@ -23,26 +24,7 @@ export function convertRule(
 			severity === ts.DiagnosticCategory.Error ? reportError
 				: severity === ts.DiagnosticCategory.Warning ? reportWarning
 					: reportSuggestion;
-		const { estree, astMaps } = astConverter(
-			sourceFile,
-			createParseSettings(sourceFile, {
-				comment: true,
-				tokens: true,
-				range: true,
-				loc: true,
-				preserveNodeMaps: true,
-				filePath: sourceFile.fileName,
-			}),
-			true
-		);
-		const scopeManager = ScopeManager.analyze(estree);
-		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
-		const sourceCode = new eslint.SourceCode({
-			ast: estree as ESLint.AST.Program,
-			text: sourceFile.text,
-			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
-			parserServices,
-		});
+		const { estree, sourceCode } = getEstree(sourceFile, languageService);
 		// @ts-expect-error
 		const ruleListener = rule.create({
 			filename: sourceFile.fileName,
@@ -150,7 +132,6 @@ export function convertRule(
 				};
 			}
 		}
-		fillParent(estree);
 		simpleTraverse(estree, { visitors }, true);
 
 		ordersToVisit.forEach(function cb({ selector, node, children }) {
@@ -273,6 +254,34 @@ export function convertRule(
 			return rule.meta?.messages?.[messageId] ?? '';
 		}
 	};
+}
+
+function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageService) {
+	if (!estrees.has(sourceFile)) {
+		const { estree, astMaps } = astConverter(
+			sourceFile,
+			createParseSettings(sourceFile, {
+				comment: true,
+				tokens: true,
+				range: true,
+				loc: true,
+				preserveNodeMaps: true,
+				filePath: sourceFile.fileName,
+			}),
+			true
+		);
+		fillParent(estree);
+		const scopeManager = ScopeManager.analyze(estree);
+		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
+		const sourceCode = new eslint.SourceCode({
+			ast: estree as ESLint.AST.Program,
+			text: sourceFile.text,
+			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
+			parserServices,
+		});
+		estrees.set(sourceFile, { estree, sourceCode });
+	}
+	return estrees.get(sourceFile)!;
 }
 
 function fillParent(target: any, currentParent?: any): any {
