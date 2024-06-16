@@ -105,7 +105,11 @@ export function convertRule(
 				}
 				visitorCbs[selector] ??= { enter: [], exit: [] };
 				visitorCbs[selector][mode].push({
-					filter: filter as any,
+					filter: filter ? {
+						key: filter.key,
+						op: filter.op as '=' | '!=',
+						value: JSON.parse(filter.value),
+					} : undefined,
 					// @ts-expect-error
 					cb: ruleListener[rawSelector],
 				});
