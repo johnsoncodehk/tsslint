@@ -17,7 +17,11 @@ const estrees = new WeakMap<ts.SourceFile, { estree: any; sourceCode: any; }>();
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
 	options: any[] = [],
-	severity: ts.DiagnosticCategory = 2
+	severity: ts.DiagnosticCategory =
+		rule.meta?.type === 'problem' ? 1 satisfies ts.DiagnosticCategory.Error
+			: rule.meta?.type === 'suggestion' ? 0 satisfies ts.DiagnosticCategory.Warning
+				: rule.meta?.type === 'layout' ? 2 satisfies ts.DiagnosticCategory.Suggestion
+					: 3 satisfies ts.DiagnosticCategory.Message
 ): TSSLint.Rule {
 	return ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
 		const report =
