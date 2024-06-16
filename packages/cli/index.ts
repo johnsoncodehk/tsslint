@@ -150,10 +150,6 @@ import glob = require('glob');
 				}
 			}
 			else {
-				const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
-				if (!sourceFile) {
-					throw new Error(`No source file found for ${fileName}`);
-				}
 				const diagnostics = linter.lint(fileName);
 				for (const diagnostic of diagnostics) {
 					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {

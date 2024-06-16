@@ -56,31 +56,33 @@ function decorateLanguageService(
 		if (!info.languageServiceHost.getScriptFileNames().includes(fileName)) {
 			return result;
 		}
-		const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
-		if (sourceFile) {
-			if (configFileDiagnostics.length) {
-				result = result.concat(configFileDiagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-					...diagnostic,
-					file: sourceFile,
-					start: 0,
-					length: 0,
-				})));
-			}
-			if (config?.debug) {
-				result.push({
-					category: ts.DiagnosticCategory.Suggestion,
-					source: 'tsslint',
-					code: 'debug-info' as any,
-					messageText: JSON.stringify({
-						rules: Object.keys(config?.rules ?? {}),
-						plugins: config.plugins?.length,
-						configFile,
-						tsconfig,
-					}, null, 2),
-					file: sourceFile,
-					start: 0,
-					length: 0,
-				});
+		if (configFileDiagnostics.length || config?.debug) {
+			const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
+			if (sourceFile) {
+				if (configFileDiagnostics.length) {
+					result = result.concat(configFileDiagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+						...diagnostic,
+						file: sourceFile,
+						start: 0,
+						length: 0,
+					})));
+				}
+				if (config?.debug) {
+					result.push({
+						category: ts.DiagnosticCategory.Suggestion,
+						source: 'tsslint',
+						code: 'debug-info' as any,
+						messageText: JSON.stringify({
+							rules: Object.keys(config?.rules ?? {}),
+							plugins: config.plugins?.length,
+							configFile,
+							tsconfig,
+						}, null, 2),
+						file: sourceFile,
+						start: 0,
+						length: 0,
+					});
+				}
 			}
 		}
 		if (linter) {

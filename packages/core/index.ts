@@ -70,14 +70,14 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				try {
 					rule(rulesContext);
 				} catch (err) {
-					console.error(`An unexpected error occurred in rule "${id}" in file ${fileName}.`);
+					console.error(`An unexpected error occurred in rule "${id}" in file ${sourceFile.fileName}.`);
 					console.error(err);
 				}
 			}
 
 			for (const plugin of plugins) {
 				if (plugin.resolveDiagnostics) {
-					result = plugin.resolveDiagnostics(fileName, result);
+					result = plugin.resolveDiagnostics(sourceFile.fileName, result);
 				}
 			}
 
