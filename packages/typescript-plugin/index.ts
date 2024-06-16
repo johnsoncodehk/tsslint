@@ -45,6 +45,8 @@ function decorateLanguageService(
 		getCombinedCodeFix,
 	} = info.languageService;
 
+	const projectFileNameKeys = new Set<string>();
+
 	let configFile: string | undefined;
 	let configFileBuildContext: Awaited<ReturnType<typeof watchConfigFile>> | undefined;
 	let configFileDiagnostics: ts.Diagnostic[] = [];
@@ -53,7 +55,7 @@ function decorateLanguageService(
 
 	info.languageService.getSemanticDiagnostics = fileName => {
 		let result = getSemanticDiagnostics(fileName);
-		if (!info.languageServiceHost.getScriptFileNames().includes(fileName)) {
+		if (!isProjectFileName(fileName)) {
 			return result;
 		}
 		if (configFileDiagnostics.length || config?.debug) {
@@ -111,6 +113,22 @@ function decorateLanguageService(
 	};
 
 	return { update };
+
+	function isProjectFileName(fileName: string) {
+		fileName = fileName.replace(/\\/g, '/');
+		const projectFileNames = info.languageServiceHost.getScriptFileNames();
+		if (projectFileNames.length !== projectFileNameKeys.size) {
+			projectFileNameKeys.clear();
+			for (const fileName of projectFileNames) {
+				projectFileNameKeys.add(getFileKey(fileName));
+			}
+		}
+		return projectFileNameKeys.has(getFileKey(fileName));
+	}
+
+	function getFileKey(fileName: string) {
+		return info.languageServiceHost.useCaseSensitiveFileNames?.() ? fileName : fileName.toLowerCase();
+	}
 
 	async function update(pluginConfig?: { configFile?: string; }) {
 
