@@ -6,7 +6,11 @@ import type * as ts from 'typescript';
 export function convertRule<T extends import('tslint/lib/language/rule/rule').RuleConstructor>(
 	Rule: T,
 	ruleArguments: any[] = [],
-	severity: ts.DiagnosticCategory = 2
+	severity: ts.DiagnosticCategory =
+		Rule.metadata.type === 'functionality' || Rule.metadata.type === 'typescript' ? 1 satisfies ts.DiagnosticCategory.Error
+			: Rule.metadata.type === 'maintainability' || Rule.metadata.type === 'style' ? 0 satisfies ts.DiagnosticCategory.Warning
+				: Rule.metadata.type === 'formatting' ? 2 satisfies ts.DiagnosticCategory.Suggestion
+					: 3 satisfies ts.DiagnosticCategory.Message
 ): TSSLint.Rule {
 	const rule = new Rule({
 		ruleName: '',
