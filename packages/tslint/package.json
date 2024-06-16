@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/tslint",
-	"version": "1.0.8",
+	"version": "1.0.9",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -12,7 +12,7 @@
 		"directory": "packages/tslint"
 	},
 	"devDependencies": {
-		"@tsslint/types": "1.0.8",
+		"@tsslint/types": "1.0.9",
 		"typescript": "latest"
 	},
 	"dependencies": {
