@@ -89,6 +89,9 @@ importers:
       error-stack-parser:
         specifier: ^2.1.4
         version: 2.1.4
+      minimatch:
+        specifier: ^9.0.4
+        version: 9.0.4
       source-map-support:
         specifier: ^0.5.21
         version: 0.5.21

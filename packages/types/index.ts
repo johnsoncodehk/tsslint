@@ -17,6 +17,7 @@ export interface ProjectContext {
 
 export interface Config {
 	debug?: boolean;
+	exclude?: string[];
 	rules?: Rules;
 	plugins?: Plugin[];
 }

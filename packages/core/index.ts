@@ -1,6 +1,9 @@
 import type { Config, ProjectContext, Reporter, RuleContext } from '@tsslint/config';
-import * as ErrorStackParser from 'error-stack-parser';
 import type * as ts from 'typescript';
+
+import ErrorStackParser = require('error-stack-parser');
+import path = require('path');
+import minimatch = require('minimatch');
 
 export type Linter = ReturnType<typeof createLinter>;
 
@@ -31,6 +34,12 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	}[]>>();
 	const sourceFiles = new Map<string, ts.SourceFile>();
 	const plugins = (config.plugins ?? []).map(plugin => plugin(ctx));
+	const excludes: string[] = [];
+
+	for (let exclude of config.exclude ?? []) {
+		const basePath = path.dirname(ctx.configFile);
+		excludes.push(path.resolve(basePath, exclude));
+	}
 
 	let rules = { ...config.rules };
 
@@ -42,6 +51,10 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 	return {
 		lint(fileName: string) {
+			if (excludes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+				return [];
+			}
+
 			const sourceFile = ctx.languageService.getProgram()?.getSourceFile(fileName);
 			if (!sourceFile) {
 				throw new Error(`No source file found for ${fileName}`);

@@ -13,6 +13,7 @@
 	},
 	"dependencies": {
 		"error-stack-parser": "^2.1.4",
+		"minimatch": "^9.0.4",
 		"source-map-support": "^0.5.21"
 	},
 	"devDependencies": {
