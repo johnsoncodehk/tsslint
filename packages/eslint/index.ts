@@ -46,6 +46,7 @@ export function convertRule(
 		// @ts-expect-error
 		const ruleListeners = rule.create({
 			...context,
+			settings: {},
 			filename: sourceFile.fileName,
 			physicalFilename: sourceFile.fileName,
 			sourceCode,
