@@ -27,7 +27,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Rules>();
 	const fileFixes = new Map<string, Map<string, {
-		diagnostic: ts.Diagnostic;
+		diagnostic: ts.DiagnosticWithLocation;
 		title: string;
 		start: number;
 		end: number;
@@ -64,7 +64,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 			const rules = getFileRules(sourceFile.fileName);
 			const fixes = getFileFixes(sourceFile.fileName);
 
-			let result: ts.DiagnosticWithLocation[] = [];
+			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let currentRuleId: string;
 
 			fixes.clear();
@@ -84,11 +84,23 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			for (const plugin of plugins) {
 				if (plugin.resolveDiagnostics) {
-					result = plugin.resolveDiagnostics(sourceFile.fileName, result);
+					diagnostics = plugin.resolveDiagnostics(sourceFile.fileName, diagnostics);
 				}
 			}
 
-			return result;
+			const diagnosticSet = new Set(diagnostics);
+
+			for (const [ruleId, fix] of [...fixes]) {
+				const finalFixes = fix.filter(fix => diagnosticSet.has(fix.diagnostic));
+				if (finalFixes.length) {
+					fixes.set(ruleId, finalFixes);
+				}
+				else {
+					fixes.delete(ruleId);
+				}
+			}
+
+			return diagnostics;
 
 			function reportError(message: string, start: number, end: number, traceOffset: false | number = 0) {
 				return report(ts.DiagnosticCategory.Error, message, start, end, traceOffset);
@@ -126,7 +138,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 					}
 				}
 
-				result.push(error);
+				diagnostics.push(error);
 
 				return {
 					withDeprecated() {
