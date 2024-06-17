@@ -1,4 +1,4 @@
-import type { Config, ProjectContext, Reporter, RuleContext } from '@tsslint/config';
+import type { Config, ProjectContext, Reporter, RuleContext, Rules } from '@tsslint/config';
 import type * as ts from 'typescript';
 
 import ErrorStackParser = require('error-stack-parser');
@@ -25,6 +25,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 		});
 	}
 	const ts = ctx.typescript;
+	const fileRules = new Map<string, Rules>();
 	const fileFixes = new Map<string, Map<string, {
 		diagnostic: ts.Diagnostic;
 		title: string;
@@ -39,14 +40,6 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	for (let exclude of config.exclude ?? []) {
 		const basePath = path.dirname(ctx.configFile);
 		excludes.push(path.resolve(basePath, exclude));
-	}
-
-	let rules = { ...config.rules };
-
-	for (const plugin of plugins) {
-		if (plugin.resolveRules) {
-			rules = plugin.resolveRules(rules);
-		}
 	}
 
 	return {
@@ -68,6 +61,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				reportSuggestion,
 			};
 			const token = ctx.languageServiceHost.getCancellationToken?.();
+			const rules = getFileRules(sourceFile.fileName);
 			const fixes = getFileFixes(sourceFile.fileName);
 
 			let result: ts.DiagnosticWithLocation[] = [];
@@ -241,6 +235,20 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 			return result;
 		},
 	};
+
+	function getFileRules(fileName: string) {
+		let rules = fileRules.get(fileName);
+		if (!rules) {
+			rules = { ...config.rules };
+			for (const plugin of plugins) {
+				if (plugin.resolveRules) {
+					rules = plugin.resolveRules(fileName, rules);
+				}
+			}
+			fileRules.set(fileName, rules);
+		}
+		return rules;
+	}
 
 	function getFileFixes(fileName: string) {
 		if (!fileFixes.has(fileName)) {

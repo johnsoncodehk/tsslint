@@ -27,7 +27,7 @@ export interface Plugin {
 }
 
 export interface PluginInstance {
-	resolveRules?(rules: Rules): Rules;
+	resolveRules?(fileName: string, rules: Rules): Rules;
 	resolveDiagnostics?(fileName: string, results: DiagnosticWithLocation[]): DiagnosticWithLocation[];
 	resolveCodeFixes?(fileName: string, results: CodeFixAction[]): CodeFixAction[];
 }

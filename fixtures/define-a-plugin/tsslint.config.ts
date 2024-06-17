@@ -4,7 +4,7 @@ import { create as createNoConsoleRule } from '../noConsoleRule';
 export default defineConfig({
 	plugins: [
 		() => ({
-			resolveRules(rules) {
+			resolveRules(fileName, rules) {
 				rules['no-console'] = createNoConsoleRule();
 				return rules;
 			},
