@@ -32,7 +32,8 @@ export function convertRule(
 		rule.meta?.type === 'problem' ? 1 satisfies ts.DiagnosticCategory.Error
 			: rule.meta?.type === 'suggestion' ? 0 satisfies ts.DiagnosticCategory.Warning
 				: rule.meta?.type === 'layout' ? 2 satisfies ts.DiagnosticCategory.Suggestion
-					: 3 satisfies ts.DiagnosticCategory.Message
+					: 3 satisfies ts.DiagnosticCategory.Message,
+	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
 	return ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
 		const report =
@@ -44,7 +45,9 @@ export function convertRule(
 
 		// @ts-expect-error
 		const ruleListeners = rule.create({
+			...context,
 			filename: sourceFile.fileName,
+			physicalFilename: sourceFile.fileName,
 			sourceCode,
 			options,
 			report(descriptor) {
