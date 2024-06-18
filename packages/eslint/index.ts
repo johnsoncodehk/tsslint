@@ -99,7 +99,7 @@ export function convertRule(
 						message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
 							return suggest.data?.[key.slice(2, -2).trim()] ?? key;
 						});
-						reporter.withFix(
+						reporter.withRefactor(
 							message,
 							() => [{
 								fileName: sourceFile.fileName,
@@ -109,7 +109,7 @@ export function convertRule(
 					}
 					else {
 						const textChanges = getTextChanges(suggest.fix);
-						reporter.withFix(
+						reporter.withRefactor(
 							getTextChangeMessage(textChanges),
 							() => [{
 								fileName: sourceFile.fileName,

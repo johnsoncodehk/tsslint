@@ -43,6 +43,8 @@ function decorateLanguageService(
 		getSemanticDiagnostics,
 		getCodeFixesAtPosition,
 		getCombinedCodeFix,
+		getApplicableRefactors,
+		getEditsForRefactor,
 	} = info.languageService;
 
 	const projectFileNameKeys = new Set<string>();
@@ -110,6 +112,26 @@ function decorateLanguageService(
 			};
 		}
 		return getCombinedCodeFix(scope, fixId, formatOptions, preferences);
+	};
+	info.languageService.getApplicableRefactors = (fileName, positionOrRange, preferences, triggerReason, kind, includeInteractiveActions) => {
+		const start = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.pos;
+		const end = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.end;
+		const refactors = linter?.getRefactors(fileName, start, end) ?? [];
+		return [
+			...getApplicableRefactors(fileName, positionOrRange, preferences, triggerReason, kind, includeInteractiveActions),
+			{
+				actions: refactors,
+				name: 'TSSLint',
+				description: 'TSSLint refactor actions',
+			},
+		];
+	};
+	info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments) => {
+		const tsslintEdits = linter?.getRefactorEdits(fileName, actionName);
+		if (tsslintEdits) {
+			return { edits: tsslintEdits };
+		}
+		return getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments);
 	};
 
 	return { update };
