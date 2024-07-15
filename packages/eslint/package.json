@@ -17,8 +17,8 @@
 		"typescript": "latest"
 	},
 	"dependencies": {
-		"@typescript-eslint/scope-manager": "^7.13.0",
-		"@typescript-eslint/typescript-estree": "^7.13.0",
+		"@typescript-eslint/scope-manager": "^7.16.1",
+		"@typescript-eslint/typescript-estree": "^7.16.1",
 		"eslint": "^9.0.0"
 	}
 }
