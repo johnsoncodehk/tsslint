@@ -16,10 +16,10 @@
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
-		"@tsslint/config": "1.0.13",
+		"@tsslint/config": "1.0.14",
 		"@types/node": "latest",
 		"typescript": "latest"
 	},
-	"version": "1.0.13",
+	"version": "1.0.14",
 	"packageManager": "pnpm@9.3.0"
 }
