@@ -25,6 +25,40 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
+export async function loadPluginRules(
+	rulesConfig: Record<string, any>,
+	ruleOptions?: Record<string, any[]>
+) {
+	const rules: Record<string, TSSLint.Rule> = {};
+	const plugins: Record<string, {
+		rules: Record<string, ESLint.Rule.RuleModule>;
+	}> = {};
+	for (const [rule, severity] of Object.entries(rulesConfig)) {
+		if (severity === 'off') {
+			continue;
+		}
+		if (!rule.includes('/')) {
+			console.warn(`Unhandled rule: ${rule}`);
+			continue;
+		}
+		const [pluginName, ruleName] = rule.split('/');
+		const moduleName = pluginName.startsWith('@') ? `${pluginName}/eslint-plugin` : `eslint-plugin-${pluginName}`;
+		plugins[pluginName] ??= await import(moduleName);
+		let plugin = plugins[pluginName];
+		if ('default' in plugin) {
+			// @ts-expect-error
+			plugin = plugin.default;
+		}
+		const ruleModule = plugin.rules[ruleName];
+		rules[rule] = convertRule(
+			ruleModule,
+			ruleOptions?.[ruleName] ?? [],
+			severity === 'error' ? 1 : 2
+		);
+	}
+	return rules;
+}
+
 export function convertRule(
 	rule: ESLint.Rule.RuleModule,
 	options: any[] = [],
@@ -45,8 +79,8 @@ export function convertRule(
 
 		// @ts-expect-error
 		const ruleListeners = rule.create({
-			...context,
 			settings: {},
+			languageOptions: {},
 			filename: sourceFile.fileName,
 			physicalFilename: sourceFile.fileName,
 			sourceCode,
@@ -119,6 +153,7 @@ export function convertRule(
 					}
 				}
 			},
+			...context,
 		});
 
 		for (const selector in ruleListeners) {

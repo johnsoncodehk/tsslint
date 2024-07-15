@@ -96,8 +96,7 @@ import glob = require('glob');
 				}));
 			} catch (err) {
 				configs.set(configFile, undefined);
-				// @ts-ignore
-				log.error(err);
+				console.error(err);
 			}
 		}
 		const tsslintConfig = configs.get(configFile);
