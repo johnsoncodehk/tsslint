@@ -80,8 +80,16 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				try {
 					rule(rulesContext);
 				} catch (err) {
-					console.error(`An unexpected error occurred in rule "${id}" in file ${sourceFile.fileName}.`);
-					console.error(err);
+					diagnostics.push({
+						category: ts.DiagnosticCategory.Error,
+						code: id as any,
+						messageText: String(err),
+						file: sourceFile,
+						start: 0,
+						length: 0,
+						source: 'tsslint',
+						relatedInformation: [],
+					});
 				}
 			}
 
