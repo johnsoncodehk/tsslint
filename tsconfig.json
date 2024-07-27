@@ -5,7 +5,7 @@
 	},
 	"include": [ ],
 	"references": [
-		{ "path": "./packages/tsl/tsconfig.json" },
+		{ "path": "./packages/cli/tsconfig.json" },
 		{ "path": "./packages/tslint/tsconfig.json" },
 		{ "path": "./packages/eslint/tsconfig.json" },
 		{ "path": "./packages/typescript-plugin/tsconfig.json" },

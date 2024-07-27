@@ -136,18 +136,6 @@ importers:
         specifier: latest
         version: 5.5.4
 
-  packages/tsl:
-    dependencies:
-      '@tsslint/cli':
-        specifier: 1.0.15
-        version: link:../cli
-      '@tsslint/config':
-        specifier: 1.0.15
-        version: link:../config
-      '@tsslint/core':
-        specifier: 1.0.15
-        version: link:../core
-
   packages/tslint:
     dependencies:
       tslint:
