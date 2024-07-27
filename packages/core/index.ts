@@ -1,4 +1,7 @@
-import type { Config, ProjectContext, Reporter, RuleContext, Rules } from '@tsslint/config';
+export * from './lib/build';
+export * from './lib/watch';
+
+import type { Config, ProjectContext, Reporter, RuleContext, Rules } from '@tsslint/types';
 import type * as ts from 'typescript';
 
 import ErrorStackParser = require('error-stack-parser');

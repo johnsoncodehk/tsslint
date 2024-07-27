@@ -12,7 +12,6 @@
 		"directory": "packages/config"
 	},
 	"dependencies": {
-		"@tsslint/types": "1.0.14",
-		"esbuild": "^0.23.0"
+		"@tsslint/types": "1.0.14"
 	}
 }

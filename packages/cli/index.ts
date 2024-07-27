@@ -1,7 +1,6 @@
 import ts = require('typescript');
 import path = require('path');
 import type config = require('@tsslint/config');
-import build = require('@tsslint/config/lib/build');
 import core = require('@tsslint/core');
 import glob = require('glob');
 
@@ -89,7 +88,7 @@ import glob = require('glob');
 
 		if (!configs.has(configFile)) {
 			try {
-				configs.set(configFile, await build.buildConfigFile(configFile, ts.sys.createHash, {
+				configs.set(configFile, await core.buildConfigFile(configFile, ts.sys.createHash, {
 					log: log.info,
 					warn: log.warn,
 					error: log.error,

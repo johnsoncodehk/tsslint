@@ -89,7 +89,7 @@ vscode.languages.registerCodeActionsProvider(
 );`)
 
 			// sort plugins
-			text = text.replace('"--globalPlugins",i.plugins', '"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="typescript-tsslint-plugin-bundled"?1:0)-(a.name==="typescript-tsslint-plugin-bundled"?1:0))');
+			text = text.replace('"--globalPlugins",i.plugins', '"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="@tsslint/typescript-plugin"?1:0)-(a.name==="@tsslint/typescript-plugin"?1:0))');
 
 			return text;
 		}

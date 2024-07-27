@@ -1,6 +1,5 @@
 import type { Config, ProjectContext } from '@tsslint/config';
-import type { watchConfigFile } from '@tsslint/config/lib/watch';
-import { Linter, createLinter, combineCodeFixes } from '@tsslint/core';
+import { Linter, createLinter, combineCodeFixes, watchConfigFile } from '@tsslint/core';
 import * as path from 'path';
 import type * as ts from 'typescript';
 
@@ -197,23 +196,6 @@ function decorateLanguageService(
 				return;
 			}
 
-			let configImportPath: string | undefined;
-
-			try {
-				configImportPath = require.resolve('@tsslint/config/lib/watch', { paths: [path.dirname(configFile)] });
-			} catch (err) {
-				configFileDiagnostics = [{
-					category: ts.DiagnosticCategory.Error,
-					code: 0,
-					messageText: String(err),
-					file: jsonConfigFile,
-					start: 0,
-					length: 0,
-				}];
-				return;
-			}
-
-			const { watchConfigFile }: typeof import('@tsslint/config/lib/watch') = require(configImportPath);
 			const projectContext: ProjectContext = {
 				configFile,
 				tsconfig,
@@ -222,49 +204,61 @@ function decorateLanguageService(
 				typescript: ts,
 			};
 
-			configFileBuildContext = await watchConfigFile(
-				configFile,
-				(_config, { errors, warnings }) => {
-					config = _config;
-					configFileDiagnostics = [
-						...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
-						...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
-					].map(([error, category]) => {
-						const diag: ts.Diagnostic = {
-							category,
-							source: 'tsslint',
-							code: 0,
-							messageText: 'Failed to build TSSLint config.',
-							file: jsonConfigFile,
-							start: configOptionSpan.start,
-							length: configOptionSpan.length,
-						};
-						if (error.location) {
-							const fileName = path.resolve(error.location.file);
-							const fileText = ts.sys.readFile(error.location.file);
-							const sourceFile = ts.createSourceFile(fileName, fileText ?? '', ts.ScriptTarget.Latest, true);
-							diag.relatedInformation = [{
+			try {
+				configFileBuildContext = await watchConfigFile(
+					configFile,
+					(_config, { errors, warnings }) => {
+						config = _config;
+						configFileDiagnostics = [
+							...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
+							...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
+						].map(([error, category]) => {
+							const diag: ts.Diagnostic = {
 								category,
-								code: error.id as any,
-								messageText: error.text,
-								file: sourceFile,
-								start: sourceFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
-								length: error.location.lineText.length,
-							}];
+								source: 'tsslint',
+								code: 0,
+								messageText: 'Failed to build TSSLint config.',
+								file: jsonConfigFile,
+								start: configOptionSpan.start,
+								length: configOptionSpan.length,
+							};
+							if (error.location) {
+								const fileName = path.resolve(error.location.file);
+								const fileText = ts.sys.readFile(error.location.file);
+								const sourceFile = ts.createSourceFile(fileName, fileText ?? '', ts.ScriptTarget.Latest, true);
+								diag.relatedInformation = [{
+									category,
+									code: error.id as any,
+									messageText: error.text,
+									file: sourceFile,
+									start: sourceFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
+									length: error.location.lineText.length,
+								}];
+							}
+							else {
+								diag.messageText += `\n\n${error.text}`;
+							}
+							return diag;
+						});
+						if (config) {
+							linter = createLinter(projectContext, config, true);
 						}
-						else {
-							diag.messageText += `\n\n${error.text}`;
-						}
-						return diag;
-					});
-					if (config) {
-						linter = createLinter(projectContext, config, true);
-					}
-					info.project.refreshDiagnostics();
-				},
-				true,
-				ts.sys.createHash
-			);
+						info.project.refreshDiagnostics();
+					},
+					true,
+					ts.sys.createHash
+				);
+			} catch (err) {
+				configFileDiagnostics.push({
+					category: ts.DiagnosticCategory.Error,
+					source: 'tsslint',
+					code: 'config-build-error' as any,
+					messageText: String(err),
+					file: jsonConfigFile,
+					start: configOptionSpan.start,
+					length: configOptionSpan.length,
+				});
+			}
 		}
 	}
 }
