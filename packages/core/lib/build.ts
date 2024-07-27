@@ -1,4 +1,4 @@
-import type { Config } from '@tsslint/types';
+import type { Config } from '@tsslint/config';
 import { watchConfigFile } from './watch';
 
 export function buildConfigFile(

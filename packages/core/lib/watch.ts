@@ -1,7 +1,7 @@
 import esbuild = require('esbuild');
 import _path = require('path');
 import fs = require('fs');
-import type { Config } from '@tsslint/types';
+import type { Config } from '@tsslint/config';
 
 export async function watchConfigFile(
 	configFilePath: string,

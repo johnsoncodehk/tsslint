@@ -8,7 +8,7 @@ esbuild.context({
 	},
 	outdir: path.resolve(__dirname, '../node_modules'),
 	bundle: true,
-	external: [],
+	external: ['esbuild'],
 	format: 'cjs',
 	platform: 'node',
 	tsconfig: './tsconfig.json',
