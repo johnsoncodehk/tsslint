@@ -18,6 +18,11 @@
 		"@types/node": "latest",
 		"typescript": "latest"
 	},
+	"pnpm": {
+		"overrides": {
+			"inquirer": "9.2.23"
+		}
+	},
 	"version": "1.0.14",
 	"packageManager": "pnpm@9.3.0"
 }
