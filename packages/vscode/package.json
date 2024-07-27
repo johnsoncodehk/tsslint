@@ -30,22 +30,22 @@
 		],
 		"typescriptServerPlugins": [
 			{
-				"name": "typescript-tsslint-plugin-bundled",
+				"name": "@tsslint/typescript-plugin",
 				"enableForWorkspaceTypeScriptVersions": true
 			}
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run build",
-		"prebuild": "cd ../.. && npm run build",
-		"build": "node scripts/build",
-		"watch": "node scripts/build --watch",
+		"vscode:prepublish": "rm -rf node_modules && npm install",
+		"postpack": "rm -rf node_modules && pnpm install",
+		"postrelease": "rm -rf node_modules && pnpm install",
 		"pack": "vsce package",
 		"release": "vsce publish"
 	},
+	"dependencies": {
+		"@tsslint/typescript-plugin": "1.0.14"
+	},
 	"devDependencies": {
-		"@tsslint/typescript-plugin": "1.0.14",
-		"esbuild": "^0.23.0",
 		"vsce": "latest"
 	}
 }

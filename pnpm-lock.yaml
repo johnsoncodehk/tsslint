@@ -171,13 +171,11 @@ importers:
         version: link:../config
 
   packages/vscode:
-    devDependencies:
+    dependencies:
       '@tsslint/typescript-plugin':
         specifier: 1.0.14
         version: link:../typescript-plugin
-      esbuild:
-        specifier: ^0.23.0
-        version: 0.23.0
+    devDependencies:
       vsce:
         specifier: latest
         version: 2.15.0
