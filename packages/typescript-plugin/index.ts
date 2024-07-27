@@ -217,7 +217,7 @@ function decorateLanguageService(
 								category,
 								source: 'tsslint',
 								code: 0,
-								messageText: 'Failed to build TSSLint config.',
+								messageText: 'Failed to build/load TSSLint config.',
 								file: jsonConfigFile,
 								start: configOptionSpan.start,
 								length: configOptionSpan.length,
