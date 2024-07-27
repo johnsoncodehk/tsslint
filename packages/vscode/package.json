@@ -37,8 +37,8 @@
 	},
 	"scripts": {
 		"vscode:prepublish": "rm -rf node_modules && npm install",
-		"postpack": "rm -rf node_modules && pnpm install",
-		"postrelease": "rm -rf node_modules && pnpm install",
+		"postpack": "rm -rf node_modules && rm package-lock.json && pnpm install",
+		"postrelease": "rm -rf node_modules && rm package-lock.json && pnpm install",
 		"pack": "vsce package",
 		"release": "vsce publish"
 	},
