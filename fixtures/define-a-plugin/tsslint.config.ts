@@ -2,6 +2,7 @@ import { defineConfig, definePlugin } from '@tsslint/config';
 import { create as createNoConsoleRule } from '../noConsoleRule';
 
 export default defineConfig({
+	debug: true,
 	plugins: [
 		() => ({
 			resolveRules(fileName, rules) {
