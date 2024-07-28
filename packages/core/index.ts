@@ -58,7 +58,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 			if (config.debug) {
 				debugInfo = {
 					category: ts.DiagnosticCategory.Message,
-					code: 'debug-info' as any,
+					code: 'debug' as any,
 					messageText: '- Config: ' + ctx.configFile + '\n',
 					file: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
 					start: 0,
