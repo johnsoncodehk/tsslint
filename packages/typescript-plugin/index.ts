@@ -62,14 +62,12 @@ function decorateLanguageService(
 		if (configFileDiagnostics.length) {
 			const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 			if (sourceFile) {
-				if (configFileDiagnostics.length) {
-					result = result.concat(configFileDiagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-						...diagnostic,
-						file: sourceFile,
-						start: 0,
-						length: 0,
-					})));
-				}
+				result = result.concat(configFileDiagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+					...diagnostic,
+					file: sourceFile,
+					start: 0,
+					length: 0,
+				})));
 			}
 		}
 		if (linter) {
