@@ -18,7 +18,7 @@ importers:
         specifier: latest
         version: 3.7.1(typescript@5.5.4)
       '@tsslint/config':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:packages/config
       '@types/node':
         specifier: latest
@@ -30,10 +30,10 @@ importers:
   fixtures/convert-a-tslint-rule:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/config
       '@tsslint/tslint':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/tslint
       tslint:
         specifier: ^6.1.3
@@ -42,10 +42,10 @@ importers:
   fixtures/convert-eslint-config:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/eslint
       eslint-plugin-expect-type:
         specifier: ^0.4.0
@@ -54,10 +54,10 @@ importers:
   fixtures/convert-eslint-rules:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/eslint
       '@typescript-eslint/eslint-plugin':
         specifier: ^7.13.0
@@ -66,7 +66,7 @@ importers:
   fixtures/typescript-plugin:
     devDependencies:
       '@tsslint/typescript-plugin':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../../packages/typescript-plugin
       typescript:
         specifier: latest
@@ -78,10 +78,10 @@ importers:
         specifier: ^0.7.0
         version: 0.7.0
       '@tsslint/config':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../config
       '@tsslint/core':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../core
       glob:
         specifier: ^10.4.1
@@ -93,13 +93,13 @@ importers:
   packages/config:
     dependencies:
       '@tsslint/types':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../types
 
   packages/core:
     dependencies:
       '@tsslint/types':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../types
       error-stack-parser:
         specifier: ^2.1.4
@@ -127,7 +127,7 @@ importers:
         version: 9.8.0
     devDependencies:
       '@tsslint/types':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../types
       '@types/eslint':
         specifier: ^8.56.10
@@ -143,7 +143,7 @@ importers:
         version: 6.1.3(typescript@5.5.4)
     devDependencies:
       '@tsslint/types':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../types
       typescript:
         specifier: latest
@@ -154,17 +154,17 @@ importers:
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../core
     devDependencies:
       '@tsslint/config':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../config
 
   packages/vscode:
     dependencies:
       '@tsslint/typescript-plugin':
-        specifier: 1.0.15
+        specifier: 1.0.16
         version: link:../typescript-plugin
     devDependencies:
       vsce:
