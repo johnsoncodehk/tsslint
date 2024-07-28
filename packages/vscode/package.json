@@ -25,7 +25,7 @@
 		"languages": [
 			{
 				"id": "plaintext",
-				"configuration": "./xxx.json"
+				"configuration": "./stub-language-configuration.json"
 			}
 		],
 		"typescriptServerPlugins": [
