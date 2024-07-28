@@ -18,8 +18,7 @@ export async function watchConfigFile(
 		let config: Config | undefined;
 		if (!result.errors.length) {
 			try {
-				config = (await import(outFile)).default;
-				delete require.cache[outFile];
+				config = (await import(outFile + '?time=' + Date.now())).default;
 			} catch (e) {
 				result.errors.push({ text: String(e) } as any);
 			}
