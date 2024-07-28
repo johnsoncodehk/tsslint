@@ -39,17 +39,66 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	const fileRefactors: typeof fileFixes = new Map();
 	const sourceFiles = new Map<string, ts.SourceFile>();
 	const plugins = (config.plugins ?? []).map(plugin => plugin(ctx));
-	const excludes: string[] = [];
+	const includes: [string, string][] = [];
+	const excludes: [string, string][] = [];
 
-	for (let exclude of config.exclude ?? []) {
+	for (const include of config.include ?? []) {
 		const basePath = path.dirname(ctx.configFile);
-		excludes.push(path.resolve(basePath, exclude));
+		includes.push([include, path.resolve(basePath, include)]);
+	}
+	for (const exclude of config.exclude ?? []) {
+		const basePath = path.dirname(ctx.configFile);
+		excludes.push([exclude, path.resolve(basePath, exclude)]);
 	}
 
 	return {
 		lint(fileName: string) {
-			if (excludes.some(pattern => minimatch.minimatch(fileName, pattern))) {
-				return [];
+			let diagnostics: ts.DiagnosticWithLocation[] = [];
+			let debugInfo: ts.DiagnosticWithLocation | undefined;
+			if (config.debug) {
+				debugInfo = {
+					category: ts.DiagnosticCategory.Message,
+					code: 'debug-info' as any,
+					messageText: '- Config: ' + ctx.configFile + '\n',
+					file: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
+					start: 0,
+					length: 0,
+					source: 'tsslint',
+					relatedInformation: [],
+				};
+				diagnostics.push(debugInfo);
+			}
+
+			for (const [exclude, pattern] of excludes) {
+				if (minimatch.minimatch(fileName, pattern)) {
+					if (debugInfo) {
+						debugInfo.messageText += '- Included: ❌ (via ' + JSON.stringify({ exclude: [exclude] }) + ')\n';
+					}
+					return diagnostics;
+				}
+			}
+			if (includes.length) {
+				let included = false;
+				for (const [include, pattern] of includes) {
+					if (minimatch.minimatch(fileName, pattern)) {
+						included = true;
+						if (debugInfo) {
+							debugInfo.messageText += '- Included: ✅ (via ' + JSON.stringify({ include: [include] }) + ')\n';
+						}
+						break;
+					}
+				}
+				if (!included) {
+					if (debugInfo) {
+						debugInfo.messageText += '- Included: ❌ (not included in any include patterns)\n';
+					}
+					return diagnostics;
+				}
+			}
+			else {
+				if (debugInfo) {
+					debugInfo.messageText += '- Included: ✅ (no include patterns)\n';
+				}
 			}
 
 			const sourceFile = ctx.languageService.getProgram()?.getSourceFile(fileName);
@@ -69,30 +118,54 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 			const fixes = getFileFixes(sourceFile.fileName);
 			const refactors = getFileRefactors(sourceFile.fileName);
 
-			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let currentRuleId: string;
+			let currentIssues = 0;
+			let currentFixes = 0;
+			let currentRefactors = 0;
 
 			fixes.clear();
 			refactors.clear();
+
+			if (debugInfo) {
+				debugInfo.messageText += '- Rules:\n';
+			}
 
 			for (const [id, rule] of Object.entries(rules)) {
 				if (token?.isCancellationRequested()) {
 					break;
 				}
 				currentRuleId = id;
+				currentIssues = 0;
+				currentFixes = 0;
+				currentRefactors = 0;
+				const start = Date.now();
 				try {
 					rule(rulesContext);
+					if (debugInfo) {
+						const time = Date.now() - start;
+						debugInfo.messageText += `  - ${id}`;
+						const details: string[] = [];
+						if (currentIssues) {
+							details.push(`${currentIssues} issues`);
+						}
+						if (currentFixes) {
+							details.push(`${currentFixes} fixes`);
+						}
+						if (currentRefactors) {
+							details.push(`${currentRefactors} refactors`);
+						}
+						if (time) {
+							details.push(`${time}ms`);
+						}
+						if (details.length) {
+							debugInfo.messageText += ` (${details.join(', ')})`;
+						}
+						debugInfo.messageText += '\n';
+					}
 				} catch (err) {
-					diagnostics.push({
-						category: ts.DiagnosticCategory.Error,
-						code: id as any,
-						messageText: String(err),
-						file: sourceFile,
-						start: 0,
-						length: 0,
-						source: 'tsslint',
-						relatedInformation: [],
-					});
+					if (debugInfo) {
+						debugInfo.messageText += `  - ${id} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
+					}
 				}
 			}
 
@@ -162,6 +235,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				}
 
 				diagnostics.push(error);
+				currentIssues++;
 
 				return {
 					withDeprecated() {
@@ -173,6 +247,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						return this;
 					},
 					withFix(title, getEdits) {
+						currentFixes++;
 						if (!fixes.has(currentRuleId)) {
 							fixes.set(currentRuleId, []);
 						}
@@ -186,6 +261,7 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 						return this;
 					},
 					withRefactor(title, getEdits) {
+						currentRefactors++;
 						if (!refactors.has(currentRuleId)) {
 							refactors.set(currentRuleId, []);
 						}
