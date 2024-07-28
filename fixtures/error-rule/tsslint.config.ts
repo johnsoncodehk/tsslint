@@ -3,8 +3,9 @@ import { defineConfig } from '@tsslint/config';
 export default defineConfig({
 	debug: true,
 	exclude: ['exclude.ts'],
-	include: ['fixture.ts'],
 	rules: {
-		'no-console': (await import('../noConsoleRule.ts')).create(),
+		'no-console': () => {
+			throw new Error('no-console rule is not allowed');
+		},
 	},
 });

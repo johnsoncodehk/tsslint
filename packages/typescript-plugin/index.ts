@@ -59,7 +59,7 @@ function decorateLanguageService(
 		if (!isProjectFileName(fileName)) {
 			return result;
 		}
-		if (configFileDiagnostics.length || config?.debug) {
+		if (configFileDiagnostics.length) {
 			const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
 			if (sourceFile) {
 				if (configFileDiagnostics.length) {
@@ -69,22 +69,6 @@ function decorateLanguageService(
 						start: 0,
 						length: 0,
 					})));
-				}
-				if (config?.debug) {
-					result.push({
-						category: ts.DiagnosticCategory.Suggestion,
-						source: 'tsslint',
-						code: 'debug-info' as any,
-						messageText: JSON.stringify({
-							rules: Object.keys(config?.rules ?? {}),
-							plugins: config.plugins?.length,
-							configFile,
-							tsconfig,
-						}, null, 2),
-						file: sourceFile,
-						start: 0,
-						length: 0,
-					});
 				}
 			}
 		}
