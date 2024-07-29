@@ -5,7 +5,7 @@ export function buildConfigFile(
 	configFilePath: string,
 	createHash?: (path: string) => string,
 	logger?: Pick<typeof console, 'log' | 'warn' | 'error'>
-): Promise<Config> {
+): Promise<Config | Config[]> {
 	return new Promise((resolve, reject) => {
 		watchConfigFile(
 			configFilePath,

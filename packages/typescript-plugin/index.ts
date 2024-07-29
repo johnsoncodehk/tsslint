@@ -51,7 +51,7 @@ function decorateLanguageService(
 	let configFile: string | undefined;
 	let configFileBuildContext: Awaited<ReturnType<typeof watchConfigFile>> | undefined;
 	let configFileDiagnostics: ts.Diagnostic[] = [];
-	let config: Config | undefined;
+	let config: Config | Config[] | undefined;
 	let linter: Linter | undefined;
 
 	info.languageService.getSemanticDiagnostics = fileName => {
@@ -199,21 +199,23 @@ function decorateLanguageService(
 								category,
 								source: 'tsslint',
 								code: 0,
-								messageText: 'Failed to build/load TSSLint config.',
+								messageText: `Failed to build/load TSSLint config. (${error.text})`,
 								file: jsonConfigFile,
 								start: configOptionSpan.start,
 								length: configOptionSpan.length,
 							};
 							if (error.location) {
-								const fileName = path.resolve(error.location.file);
+								const fileName = path.resolve(error.location.file).replace('http-url:', '');
 								const fileText = ts.sys.readFile(error.location.file);
-								const sourceFile = ts.createSourceFile(fileName, fileText ?? '', ts.ScriptTarget.Latest, true);
+								const sourceFile = fileText !== undefined
+									? ts.createSourceFile(fileName, fileText, ts.ScriptTarget.Latest, true)
+									: undefined;
 								diag.relatedInformation = [{
 									category,
 									code: error.id as any,
 									messageText: error.text,
 									file: sourceFile,
-									start: sourceFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
+									start: sourceFile?.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
 									length: error.location.lineText.length,
 								}];
 							}

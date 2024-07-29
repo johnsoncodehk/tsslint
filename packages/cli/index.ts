@@ -14,7 +14,7 @@ import glob = require('glob');
 	const { log, text } = await import('@clack/prompts');
 	const snapshots = new Map<string, ts.IScriptSnapshot>();
 	const versions = new Map<string, number>();
-	const configs = new Map<string, config.Config | undefined>();
+	const configs = new Map<string, config.Config | config.Config[] | undefined>();
 	const languageServiceHost: ts.LanguageServiceHost = {
 		...ts.sys,
 		useCaseSensitiveFileNames() {

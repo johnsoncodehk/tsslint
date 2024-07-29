@@ -5,7 +5,7 @@ import type { Config } from '@tsslint/config';
 
 export async function watchConfigFile(
 	configFilePath: string,
-	onBuild: (config: Config | undefined, result: esbuild.BuildResult) => void,
+	onBuild: (config: Config | Config[] | undefined, result: esbuild.BuildResult) => void,
 	watch = true,
 	createHash: (path: string) => string = btoa,
 	logger: Pick<typeof console, 'log' | 'warn' | 'error'> = console

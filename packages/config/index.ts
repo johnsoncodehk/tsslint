@@ -10,6 +10,6 @@ export function definePlugin(plugin: Plugin) {
 	return plugin;
 }
 
-export function defineConfig(config: Config) {
+export function defineConfig(config: Config | Config[]) {
 	return config;
 }
