@@ -10,7 +10,7 @@ import minimatch = require('minimatch');
 
 export type Linter = ReturnType<typeof createLinter>;
 
-export function createLinter(ctx: ProjectContext, config: Config, withStack: boolean) {
+export function createLinter(ctx: ProjectContext, config: Config | Config[], withStack: boolean) {
 	if (withStack) {
 		require('source-map-support').install({
 			retrieveFile(path: string) {
@@ -38,26 +38,27 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	}[]>>();
 	const fileRefactors: typeof fileFixes = new Map();
 	const sourceFiles = new Map<string, ts.SourceFile>();
-	const plugins = (config.plugins ?? []).map(plugin => plugin(ctx));
-	const includes: [string, string][] = [];
-	const excludes: [string, string][] = [];
-
-	for (const include of config.include ?? []) {
-		const basePath = path.dirname(ctx.configFile);
-		includes.push([include, path.resolve(basePath, include)]);
-	}
-	for (const exclude of config.exclude ?? []) {
-		const basePath = path.dirname(ctx.configFile);
-		excludes.push([exclude, path.resolve(basePath, exclude)]);
-	}
+	const basePath = path.dirname(ctx.configFile);
+	const configs = (Array.isArray(config) ? config : [config])
+		.map(config => ({
+			config,
+			includes: (config.include ?? []).map(include => {
+				return path.resolve(basePath, include);
+			}),
+			excludes: (config.exclude ?? []).map(exclude => {
+				return path.resolve(basePath, exclude);
+			}),
+		}));
+	const plugins = configs.map(({ config }) => config.plugins ?? []).flat().map(plugin => plugin(ctx));
+	const debug = configs.some(({ config }) => config.debug);
 
 	return {
 		lint(fileName: string) {
 			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
-			if (config.debug) {
+			if (debug) {
 				debugInfo = {
-					category: ts.DiagnosticCategory.Message,
+					category: ts.DiagnosticCategory.Suggestion,
 					code: 'debug' as any,
 					messageText: '- Config: ' + ctx.configFile + '\n',
 					file: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
@@ -69,36 +70,12 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				diagnostics.push(debugInfo);
 			}
 
-			for (const [exclude, pattern] of excludes) {
-				if (minimatch.minimatch(fileName, pattern)) {
-					if (debugInfo) {
-						debugInfo.messageText += '- Included: ❌ (via ' + JSON.stringify({ exclude: [exclude] }) + ')\n';
-					}
-					return diagnostics;
-				}
-			}
-			if (includes.length) {
-				let included = false;
-				for (const [include, pattern] of includes) {
-					if (minimatch.minimatch(fileName, pattern)) {
-						included = true;
-						if (debugInfo) {
-							debugInfo.messageText += '- Included: ✅ (via ' + JSON.stringify({ include: [include] }) + ')\n';
-						}
-						break;
-					}
-				}
-				if (!included) {
-					if (debugInfo) {
-						debugInfo.messageText += '- Included: ❌ (not included in any include patterns)\n';
-					}
-					return diagnostics;
-				}
-			}
-			else {
+			const rules = getFileRules(fileName);
+			if (!rules || !Object.keys(rules).length) {
 				if (debugInfo) {
-					debugInfo.messageText += '- Included: ✅ (no include patterns)\n';
+					debugInfo.messageText += '- Rules: ❌ (no rules)\n';
 				}
+				return diagnostics;
 			}
 
 			const sourceFile = ctx.languageService.getProgram()?.getSourceFile(fileName);
@@ -114,7 +91,6 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 				reportSuggestion,
 			};
 			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const rules = getFileRules(sourceFile.fileName);
 			const fixes = getFileFixes(sourceFile.fileName);
 			const refactors = getFileRefactors(sourceFile.fileName);
 
@@ -279,7 +255,9 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 
 			function pushRelatedInformation(error: ts.DiagnosticWithLocation, stack: ErrorStackParser.StackFrame) {
 				if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
-					let fileName = stack.fileName.replace(/\\/g, '/');
+					let fileName = stack.fileName
+						.replace(/\\/g, '/')
+						.split('?time=')[0];
 					if (fileName.startsWith('file://')) {
 						fileName = fileName.substring('file://'.length);
 					}
@@ -399,7 +377,19 @@ export function createLinter(ctx: ProjectContext, config: Config, withStack: boo
 	function getFileRules(fileName: string) {
 		let rules = fileRules.get(fileName);
 		if (!rules) {
-			rules = { ...config.rules };
+			rules = {};
+			for (const { config, includes, excludes } of configs) {
+				if (!config.rules) {
+					continue;
+				}
+				if (excludes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+					continue;
+				}
+				if (includes.length && !includes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+					continue;
+				}
+				rules = { ...rules, ...config.rules };
+			}
 			for (const plugin of plugins) {
 				if (plugin.resolveRules) {
 					rules = plugin.resolveRules(fileName, rules);
