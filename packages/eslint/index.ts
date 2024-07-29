@@ -33,7 +33,16 @@ export async function loadPluginRules(
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
 	}> = {};
-	for (const [rule, severity] of Object.entries(rulesConfig)) {
+	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
+		let severity: string;
+		let options: any[];
+		if (typeof severityOrOptions === 'string') {
+			severity = severityOrOptions;
+			options = [];
+		}
+		else {
+			[severity, ...options] = severityOrOptions;
+		}
 		if (severity === 'off') {
 			continue;
 		}
@@ -52,7 +61,7 @@ export async function loadPluginRules(
 		const ruleModule = plugin.rules[ruleName];
 		rules[rule] = convertRule(
 			ruleModule,
-			ruleOptions?.[ruleName] ?? [],
+			ruleOptions?.[ruleName] ?? options,
 			severity === 'error' ? 1 : 2
 		);
 	}
