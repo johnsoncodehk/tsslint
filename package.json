@@ -1,5 +1,7 @@
 {
 	"private": true,
+	"version": "1.0.17",
+	"packageManager": "pnpm@9.3.0",
 	"scripts": {
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
@@ -17,12 +19,5 @@
 		"@tsslint/config": "1.0.17",
 		"@types/node": "latest",
 		"typescript": "latest"
-	},
-	"pnpm": {
-		"overrides": {
-			"inquirer": "9.2.23"
-		}
-	},
-	"version": "1.0.17",
-	"packageManager": "pnpm@9.3.0"
+	}
 }
