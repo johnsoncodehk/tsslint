@@ -18,7 +18,7 @@ export async function watchConfigFile(
 		let config: Config | undefined;
 		if (!result.errors.length) {
 			try {
-				config = (await import(outFile + '?time=' + Date.now())).default;
+				config = (await import('file://' + outFile + '?time=' + Date.now())).default;
 			} catch (e) {
 				result.errors.push({ text: String(e) } as any);
 			}
@@ -52,7 +52,7 @@ export async function watchConfigFile(
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
 							if (maybeJsPath !== path && !maybeJsPath.endsWith('.ts')) {
 								return {
-									path: 'file://' + maybeJsPath,
+									path: maybeJsPath,
 									external: true,
 								};
 							}
