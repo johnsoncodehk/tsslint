@@ -38,13 +38,13 @@
 	"scripts": {
 		"vscode:prepublish": "rm -rf node_modules && npm install --no-package-lock --omit=optional --ignore-scripts",
 		"cleanup": "rm -rf node_modules && pnpm install",
-		"pack": "vsce package && cleanup",
-		"release": "vsce publish && cleanup"
+		"pack": "vsce package && npm run cleanup",
+		"release": "vsce publish && npm run cleanup"
 	},
 	"dependencies": {
 		"@tsslint/typescript-plugin": "1.0.18"
 	},
 	"devDependencies": {
-		"vsce": "latest"
+		"@vscode/vsce": "latest"
 	}
 }
