@@ -5,5 +5,4 @@ node_modules
 *.vsix
 packages/*/index.js
 packages/*/lib/**/*.js
-packages/vscode/package-lock.json
 .tsslint/

@@ -2,6 +2,12 @@ module.exports.activate = () => { };
 module.exports.deactivate = () => { };
 
 try {
+	const installScript = require.resolve('esbuild/install.js');
+	require(installScript);
+	require('fs').unlinkSync(installScript)
+} catch { }
+
+try {
 	const tsExtension = require('vscode').extensions.getExtension('vscode.typescript-language-features');
 	const extensionJsPath = require.resolve('./dist/extension.js', { paths: [tsExtension.extensionPath] });
 	const readFileSync = require('fs').readFileSync;
