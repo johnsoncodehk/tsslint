@@ -50,9 +50,9 @@ export async function watchConfigFile(
 					if (!path.endsWith('.ts')) {
 						try {
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
-							if (!maybeJsPath.endsWith('.ts')) {
+							if (maybeJsPath !== path && !maybeJsPath.endsWith('.ts')) {
 								return {
-									path: maybeJsPath,
+									path: 'file://' + maybeJsPath,
 									external: true,
 								};
 							}
