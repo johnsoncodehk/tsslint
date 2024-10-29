@@ -2,6 +2,7 @@ import esbuild = require('esbuild');
 import _path = require('path');
 import fs = require('fs');
 import type { Config } from '@tsslint/config';
+import { pathToFileURL } from 'url';
 
 export async function watchConfigFile(
 	configFilePath: string,
@@ -18,7 +19,7 @@ export async function watchConfigFile(
 		let config: Config | undefined;
 		if (!result.errors.length) {
 			try {
-				config = (await import('file://' + outFile + '?time=' + Date.now())).default;
+				config = (await import(pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
 			} catch (e) {
 				result.errors.push({ text: String(e) } as any);
 			}
@@ -52,7 +53,7 @@ export async function watchConfigFile(
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
 							if (maybeJsPath !== path && !maybeJsPath.endsWith('.ts')) {
 								return {
-									path: 'file://' + maybeJsPath,
+									path: pathToFileURL(maybeJsPath).toString(),
 									external: true,
 								};
 							}
