@@ -180,10 +180,10 @@ function decorateLanguageService(
 
 			const projectContext: ProjectContext = {
 				configFile,
-				tsconfig,
 				languageServiceHost: info.languageServiceHost,
 				languageService: info.languageService,
 				typescript: ts,
+				tsconfig: ts.server.toNormalizedPath(tsconfig),
 			};
 
 			try {

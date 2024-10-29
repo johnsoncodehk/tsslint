@@ -115,7 +115,7 @@ import glob = require('glob');
 			languageService,
 			languageServiceHost,
 			typescript: ts,
-			tsconfig,
+			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		}, tsslintConfig, false);
 
 		let hasFix = false;
