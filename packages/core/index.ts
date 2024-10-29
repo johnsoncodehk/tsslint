@@ -43,10 +43,10 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		.map(config => ({
 			config,
 			includes: (config.include ?? []).map(include => {
-				return path.resolve(basePath, include);
+				return ts.server.toNormalizedPath(path.resolve(basePath, include));
 			}),
 			excludes: (config.exclude ?? []).map(exclude => {
-				return path.resolve(basePath, exclude);
+				return ts.server.toNormalizedPath(path.resolve(basePath, exclude));
 			}),
 		}));
 	const plugins = configs.map(({ config }) => config.plugins ?? []).flat().map(plugin => plugin(ctx));
