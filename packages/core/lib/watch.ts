@@ -47,7 +47,7 @@ export async function watchConfigFile(
 					cachePathToOriginalPath.set(cachePath, path);
 					return { path: cachePath, namespace: 'http-url' };
 				});
-				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
+				build.onResolve({ filter: /.*/, namespace: 'file' }, ({ path, resolveDir }) => {
 					if (!path.endsWith('.ts')) {
 						try {
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
