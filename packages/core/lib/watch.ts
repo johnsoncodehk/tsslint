@@ -16,6 +16,8 @@ export async function watchConfigFile(
 	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
 	const outFile = _path.join(outDir, outFileName);
 	const resultHandler = async (result: esbuild.BuildResult) => {
+		const t1 = Date.now() - start;
+		start = Date.now();
 		let config: Config | undefined;
 		if (!result.errors.length) {
 			try {
@@ -24,7 +26,8 @@ export async function watchConfigFile(
 				result.errors.push({ text: String(e) } as any);
 			}
 		}
-		logger.log(`Built ${_path.relative(process.cwd(), configFilePath)} in ${Date.now() - start}ms`);
+		const t2 = Date.now() - start;
+		logger.log(`Built ${_path.relative(process.cwd(), configFilePath)} in ${t1}ms, loaded ${config ? 'successfully' : 'with errors'} in ${t2}ms`);
 		onBuild(config, result);
 	};
 	const cacheDir = _path.resolve(outDir, 'http_resources');
