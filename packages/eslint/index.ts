@@ -3,21 +3,17 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
-import path = require('path');
 import eslint = require('eslint');
 
-const estreeModuleDir = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
-const eslintModuleDir = path.dirname(require.resolve('eslint/package.json'));
-
 // TS-ESLint internal scripts
-const astConverter = require(path.resolve(estreeModuleDir, 'dist', 'ast-converter.js')).astConverter;
-const createParserServices = require(path.resolve(estreeModuleDir, 'dist', 'createParserServices.js')).createParserServices;
-const createParseSettings = require(path.resolve(estreeModuleDir, 'dist', 'parseSettings', 'createParseSettings.js')).createParseSettings;
+const astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
+const createParserServices = require('../../@typescript-eslint/typescript-estree/dist/createParserServices.js').createParserServices;
+const createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
 
 // ESLint internal scripts
-const createEmitter = require(path.resolve(eslintModuleDir, 'lib', 'linter', 'safe-emitter.js'));
-const NodeEventGenerator = require(path.resolve(eslintModuleDir, 'lib', 'linter', 'node-event-generator.js'));
-const Traverser = require(path.resolve(eslintModuleDir, 'lib', 'shared', 'traverser.js'));
+const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
+const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
+const Traverser = require('../../eslint/lib/shared/traverser.js');
 
 const estrees = new WeakMap<ts.SourceFile, {
 	estree: any;
