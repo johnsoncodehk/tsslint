@@ -106,44 +106,51 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				debugInfo.messageText += '- Rules:\n';
 			}
 
-			for (const [id, rule] of Object.entries(rules)) {
-				if (token?.isCancellationRequested()) {
-					break;
-				}
-				currentRuleId = id;
-				currentIssues = 0;
-				currentFixes = 0;
-				currentRefactors = 0;
-				const start = Date.now();
-				try {
-					rule(rulesContext);
-					if (debugInfo) {
-						const time = Date.now() - start;
-						debugInfo.messageText += `  - ${id}`;
-						const details: string[] = [];
-						if (currentIssues) {
-							details.push(`${currentIssues} issues`);
-						}
-						if (currentFixes) {
-							details.push(`${currentFixes} fixes`);
-						}
-						if (currentRefactors) {
-							details.push(`${currentRefactors} refactors`);
-						}
-						if (time) {
-							details.push(`${time}ms`);
-						}
-						if (details.length) {
-							debugInfo.messageText += ` (${details.join(', ')})`;
-						}
-						debugInfo.messageText += '\n';
+			const processRules = (rules: Rules, paths: string[] = []) => {
+				for (const [path, rule] of Object.entries(rules)) {
+					if (token?.isCancellationRequested()) {
+						break;
 					}
-				} catch (err) {
-					if (debugInfo) {
-						debugInfo.messageText += `  - ${id} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
+					if (typeof rule === 'object') {
+						processRules(rule, [...paths, path]);
+						continue;
+					}
+					currentRuleId = [...paths, path].join('/');
+					currentIssues = 0;
+					currentFixes = 0;
+					currentRefactors = 0;
+					const start = Date.now();
+					try {
+						rule(rulesContext);
+						if (debugInfo) {
+							const time = Date.now() - start;
+							debugInfo.messageText += `  - ${currentRuleId}`;
+							const details: string[] = [];
+							if (currentIssues) {
+								details.push(`${currentIssues} issues`);
+							}
+							if (currentFixes) {
+								details.push(`${currentFixes} fixes`);
+							}
+							if (currentRefactors) {
+								details.push(`${currentRefactors} refactors`);
+							}
+							if (time) {
+								details.push(`${time}ms`);
+							}
+							if (details.length) {
+								debugInfo.messageText += ` (${details.join(', ')})`;
+							}
+							debugInfo.messageText += '\n';
+						}
+					} catch (err) {
+						if (debugInfo) {
+							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
+						}
 					}
 				}
-			}
+			};
+			processRules(rules);
 
 			for (const plugin of plugins) {
 				if (plugin.resolveDiagnostics) {
