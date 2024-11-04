@@ -59,10 +59,16 @@ export async function loadPluginRules(
 			plugin = plugin.default;
 		}
 		const ruleModule = plugin.rules[ruleName];
+		if (!ruleModule) {
+			console.warn(`Unhandled rule: ${rule}`);
+			continue;
+		}
 		rules[rule] = convertRule(
 			ruleModule,
 			ruleOptions?.[ruleName] ?? options,
-			severity === 'error' ? 1 : 2
+			severity === 'error'
+				? 1 satisfies ts.DiagnosticCategory.Error
+				: 0 satisfies ts.DiagnosticCategory.Warning
 		);
 	}
 	return rules;
