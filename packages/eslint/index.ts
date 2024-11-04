@@ -3,14 +3,14 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
-import eslint = require('eslint');
 
 // TS-ESLint internal scripts
-const astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
-const createParserServices = require('../../@typescript-eslint/typescript-estree/dist/createParserServices.js').createParserServices;
-const createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
+const astConverter: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
+const createParserServices: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/createParserServices.js').createParserServices = require('../../@typescript-eslint/typescript-estree/dist/createParserServices.js').createParserServices;
+const createParseSettings: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
 
 // ESLint internal scripts
+const SourceCode: typeof import('eslint').SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
 const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
 const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
 const Traverser = require('../../eslint/lib/shared/traverser.js');
@@ -377,7 +377,7 @@ function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageServic
 		);
 		const scopeManager = ScopeManager.analyze(estree);
 		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
-		const sourceCode = new eslint.SourceCode({
+		const sourceCode = new SourceCode({
 			ast: estree as ESLint.AST.Program,
 			text: sourceFile.text,
 			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
