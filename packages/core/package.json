@@ -14,7 +14,7 @@
 	"dependencies": {
 		"@tsslint/types": "1.1.2",
 		"error-stack-parser": "^2.1.4",
-		"esbuild": "^0.23.0",
+		"esbuild": ">=0.17.0",
 		"minimatch": "^10.0.1",
 		"source-map-support": "^0.5.21"
 	}
