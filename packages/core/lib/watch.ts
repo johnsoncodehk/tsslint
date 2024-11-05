@@ -45,12 +45,26 @@ export async function watchConfigFile(
 				build.onStart(() => {
 					start = Date.now();
 				});
-				build.onResolve({ filter: /^https?:\/\// }, ({ path }) => {
-					const cachePath = _path.join(cacheDir, createHash(path));
-					cachePathToOriginalPath.set(cachePath, path);
-					return { path: cachePath, namespace: 'http-url' };
+				build.onResolve({ filter: /^https?:\/\// }, async ({ path: url }) => {
+					const cachePath = _path.join(cacheDir, createHash(_path.posix.dirname(url)), _path.posix.basename(url));
+					cachePathToOriginalPath.set(cachePath, url);
+					if (!fs.existsSync(cachePath)) {
+						console.time('Download ' + url);
+						const response = await fetch(url);
+						if (!response.ok) {
+							throw new Error(`Failed to load ${url}`);
+						}
+						console.timeEnd('Download ' + url);
+						const text = await response.text();
+						fs.mkdirSync(_path.dirname(cachePath), { recursive: true });
+						fs.writeFileSync(cachePath, text, 'utf8');
+					}
+					return {
+						path: cachePath,
+						external: true,
+					};
 				});
-				build.onResolve({ filter: /.*/, namespace: 'file' }, ({ path, resolveDir }) => {
+				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
 					if (!path.endsWith('.ts')) {
 						try {
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
@@ -63,26 +77,6 @@ export async function watchConfigFile(
 						} catch { }
 					}
 					return {};
-				});
-				build.onLoad({ filter: /.*/, namespace: 'http-url' }, async ({ path: cachePath }) => {
-					const path = cachePathToOriginalPath.get(cachePath)!;
-					if (fs.existsSync(cachePath)) {
-						return {
-							contents: fs.readFileSync(cachePath, 'utf8'),
-							loader: 'ts',
-						};
-					}
-					const response = await fetch(path);
-					if (!response.ok) {
-						throw new Error(`Failed to load ${path}`);
-					}
-					const text = await response.text();
-					fs.mkdirSync(cacheDir, { recursive: true });
-					fs.writeFileSync(cachePath, text, 'utf8');
-					return {
-						contents: text,
-						loader: path.substring(path.lastIndexOf('.') + 1) as 'ts' | 'js',
-					};
 				});
 				if (watch) {
 					build.onEnd(resultHandler);
