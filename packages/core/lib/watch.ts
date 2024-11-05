@@ -65,10 +65,10 @@ export async function watchConfigFile(
 					};
 				});
 				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
-					if (!path.endsWith('.ts')) {
+					if (!isTsFile(path)) {
 						try {
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
-							if (maybeJsPath !== path && !maybeJsPath.endsWith('.ts')) {
+							if (!isTsFile(maybeJsPath) && fs.existsSync(maybeJsPath)) {
 								return {
 									path: url.pathToFileURL(maybeJsPath).toString(),
 									external: true,
@@ -93,4 +93,8 @@ export async function watchConfigFile(
 		resultHandler(result);
 	}
 	return ctx;
+}
+
+function isTsFile(path: string) {
+	return path.endsWith('.ts') || path.endsWith('.tsx') || path.endsWith('.cts') || path.endsWith('.mts');
 }
