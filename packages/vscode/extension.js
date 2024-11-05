@@ -22,7 +22,7 @@ try {
 
 			// support "Fix all"
 			text = text.replace(`const i=new y(t,n,r);`, s => s + `
-const vscode = s;
+const vscode = require('vscode');
 vscode.languages.registerCodeActionsProvider(
 	e.semantic,
 	{
