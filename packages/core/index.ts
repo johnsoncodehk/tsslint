@@ -144,6 +144,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 							debugInfo.messageText += '\n';
 						}
 					} catch (err) {
+						console.error(err);
 						if (debugInfo) {
 							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
 						}
