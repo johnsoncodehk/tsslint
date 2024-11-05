@@ -1,8 +1,1 @@
-import { defineConfig } from '@tsslint/config';
-import { getDefaultRules as getDefaultVolarRules } from 'https://raw.githubusercontent.com/volarjs/volar.js/master/tsslint.config.ts';
-
-export default defineConfig({
-	rules: {
-		...getDefaultVolarRules(),
-	},
-});
+export { default } from 'https://raw.githubusercontent.com/johnsoncodehk/tsslint-config/refs/heads/master/v1.1.cjs';
