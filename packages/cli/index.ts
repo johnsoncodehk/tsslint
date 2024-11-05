@@ -150,6 +150,9 @@ import glob = require('glob');
 			else {
 				const diagnostics = linter.lint(fileName);
 				for (const diagnostic of diagnostics) {
+					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
+						continue;
+					}
 					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
 						getCurrentDirectory: ts.sys.getCurrentDirectory,
 						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
