@@ -58,7 +58,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
 			if (debug) {
 				debugInfo = {
-					category: ts.DiagnosticCategory.Suggestion,
+					category: ts.DiagnosticCategory.Message,
 					code: 'debug' as any,
 					messageText: '- Config: ' + ctx.configFile + '\n',
 					file: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
