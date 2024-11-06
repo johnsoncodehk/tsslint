@@ -21,7 +21,7 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-export async function loadPluginRules(
+export function loadPluginRules(
 	rulesConfig: Record<string, any>,
 	ruleOptions?: Record<string, any[]>
 ) {
@@ -48,7 +48,7 @@ export async function loadPluginRules(
 		}
 		const [pluginName, ruleName] = rule.split('/');
 		const moduleName = pluginName.startsWith('@') ? `${pluginName}/eslint-plugin` : `eslint-plugin-${pluginName}`;
-		plugins[pluginName] ??= await import(moduleName);
+		plugins[pluginName] ??= require(moduleName);
 		let plugin = plugins[pluginName];
 		if ('default' in plugin) {
 			// @ts-expect-error
