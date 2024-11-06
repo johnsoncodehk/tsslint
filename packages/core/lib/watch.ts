@@ -30,8 +30,6 @@ export async function watchConfigFile(
 		logger.log(`Built ${_path.relative(process.cwd(), configFilePath)} in ${t1}ms, loaded ${config ? 'successfully' : 'with errors'} in ${t2}ms`);
 		onBuild(config, result);
 	};
-	const cacheDir = _path.resolve(outDir, 'http_resources');
-	const cachePathToOriginalPath = new Map<string, string>();
 	const ctx = await esbuild.context({
 		entryPoints: [configFilePath],
 		bundle: true,
@@ -46,8 +44,7 @@ export async function watchConfigFile(
 					start = Date.now();
 				});
 				build.onResolve({ filter: /^https?:\/\// }, async ({ path: url }) => {
-					const cachePath = _path.join(cacheDir, createHash(_path.posix.dirname(url)), _path.posix.basename(url));
-					cachePathToOriginalPath.set(cachePath, url);
+					const cachePath = _path.join(outDir, url.split('://')[0], ...url.split('://')[1].split('/'));
 					if (!fs.existsSync(cachePath)) {
 						console.time('Download ' + url);
 						const response = await fetch(url);
