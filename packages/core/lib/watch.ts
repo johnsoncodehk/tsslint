@@ -1,7 +1,7 @@
 import esbuild = require('esbuild');
 import _path = require('path');
 import fs = require('fs');
-import url = require('url');
+import _url = require('url');
 import type { Config } from '@tsslint/config';
 
 export async function watchConfigFile(
@@ -21,7 +21,7 @@ export async function watchConfigFile(
 		let config: Config | undefined;
 		if (!result.errors.length) {
 			try {
-				config = (await import(url.pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
+				config = (await import(_url.pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
 			} catch (e) {
 				result.errors.push({ text: String(e) } as any);
 			}
@@ -57,7 +57,7 @@ export async function watchConfigFile(
 						fs.writeFileSync(cachePath, text, 'utf8');
 					}
 					return {
-						path: cachePath,
+						path: _url.pathToFileURL(cachePath).toString(),
 						external: true,
 					};
 				});
@@ -67,7 +67,7 @@ export async function watchConfigFile(
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
 							if (!isTsFile(maybeJsPath) && fs.existsSync(maybeJsPath)) {
 								return {
-									path: url.pathToFileURL(maybeJsPath).toString(),
+									path: _url.pathToFileURL(maybeJsPath).toString(),
 									external: true,
 								};
 							}
