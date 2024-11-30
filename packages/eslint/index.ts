@@ -3,6 +3,7 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
+import eslint = require('eslint');
 
 // TS-ESLint internal scripts
 const astConverter: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
@@ -10,7 +11,7 @@ const createParserServices: typeof import('./node_modules/@typescript-eslint/typ
 const createParseSettings: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
 
 // ESLint internal scripts
-const SourceCode: typeof import('eslint').SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
+const SourceCode = eslint.SourceCode; // Can't use require('../../eslint/lib/languages/js/source-code/source-code.js'), see #25
 const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
 const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
 const Traverser = require('../../eslint/lib/shared/traverser.js');
