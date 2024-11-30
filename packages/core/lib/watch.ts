@@ -3,6 +3,7 @@ import _path = require('path');
 import fs = require('fs');
 import _url = require('url');
 import type { Config } from '@tsslint/config';
+import ErrorStackParser = require('error-stack-parser');
 
 export async function watchConfigFile(
 	configFilePath: string,
@@ -19,11 +20,52 @@ export async function watchConfigFile(
 		const t1 = Date.now() - start;
 		start = Date.now();
 		let config: Config | undefined;
+		for (const error of [
+			...result.errors,
+			...result.warnings,
+		]) {
+			if (error.id) {
+				error.id = 'esbuild:' + error.id;
+			}
+			else {
+				error.id = 'config-build-error';
+			}
+		}
 		if (!result.errors.length) {
 			try {
 				config = (await import(_url.pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
-			} catch (e) {
-				result.errors.push({ text: String(e) } as any);
+			} catch (e: any) {
+				if (e.stack) {
+					const stack = ErrorStackParser.parse(e)[0];
+					if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
+						let fileName = stack.fileName
+							.replace(/\\/g, '/')
+							.split('?time=')[0];
+						if (fileName.startsWith('file://')) {
+							fileName = fileName.substring('file://'.length);
+						}
+						result.errors.push({
+							id: 'config-import-error',
+							text: String(e),
+							location: {
+								file: fileName,
+								line: stack.lineNumber,
+								column: stack.columnNumber - 1,
+								lineText: '',
+							},
+						} as any);
+					} else {
+						result.errors.push({
+							id: 'config-import-error',
+							text: String(e),
+						} as any);
+					}
+				} else {
+					result.errors.push({
+						id: 'config-import-error',
+						text: String(e),
+					} as any);
+				}
 			}
 		}
 		const t2 = Date.now() - start;

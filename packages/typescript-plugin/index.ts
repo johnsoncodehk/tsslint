@@ -195,11 +195,18 @@ function decorateLanguageService(
 							...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
 							...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
 						].map(([error, category]) => {
+							let messageText: string;
+							if (error.id === 'config-import-error') {
+								messageText = `Error importing config file.`;
+							}
+							else {
+								messageText = `Error building config file.`;
+							}
 							const diag: ts.Diagnostic = {
 								category,
 								source: 'tsslint',
-								code: 0,
-								messageText: `Failed to build/load TSSLint config. (${error.text})`,
+								code: (error.id as any) ?? 0,
+								messageText,
 								file: jsonConfigFile,
 								start: configOptionSpan.start,
 								length: configOptionSpan.length,
