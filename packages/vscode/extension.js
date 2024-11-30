@@ -1,14 +1,31 @@
+const fs = require('fs');
+const path = require('path');
+const vscode = require('vscode');
+
 module.exports.activate = () => { };
 module.exports.deactivate = () => { };
 
 try {
 	const installScript = require.resolve('esbuild/install.js');
+	const binPath = path.resolve(require.resolve('esbuild/package.json'), '..', 'bin', 'esbuild');
+	const oldSize = fs.statSync(binPath).size;
 	require(installScript);
-	require('fs').unlinkSync(installScript)
-} catch { }
+	const newSize = fs.statSync(binPath).size;
+	if (newSize === oldSize) {
+		vscode.window.showWarningMessage('Failed to install ESBuild. Please check your network connection and try again.', 'Retry').then(action => {
+			if (action) {
+				vscode.commands.executeCommand('workbench.action.restartExtensionHost');
+			}
+		});
+	} else {
+		require('fs').unlinkSync(installScript)
+	}
+} catch {
+	// ESBuild is already installed
+}
 
 try {
-	const tsExtension = require('vscode').extensions.getExtension('vscode.typescript-language-features');
+	const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
 	const extensionJsPath = require.resolve('./dist/extension.js', { paths: [tsExtension.extensionPath] });
 	const readFileSync = require('fs').readFileSync;
 
