@@ -1,7 +1,7 @@
 import esbuild = require('esbuild');
 import _path = require('path');
 import fs = require('fs');
-import _url = require('url');
+import url = require('url');
 import type { Config } from '@tsslint/config';
 import ErrorStackParser = require('error-stack-parser');
 
@@ -33,7 +33,7 @@ export async function watchConfigFile(
 		}
 		if (!result.errors.length) {
 			try {
-				config = (await import(_url.pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
+				config = (await import(url.pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
 			} catch (e: any) {
 				if (e.stack) {
 					const stack = ErrorStackParser.parse(e)[0];
@@ -99,8 +99,8 @@ export async function watchConfigFile(
 						fs.writeFileSync(cachePath, text, 'utf8');
 					}
 					return {
-						path: _url.pathToFileURL(cachePath).toString(),
-						external: true,
+						path: cachePath,
+						external: !isTsFile(cachePath),
 					};
 				});
 				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
@@ -109,7 +109,7 @@ export async function watchConfigFile(
 							const maybeJsPath = require.resolve(path, { paths: [resolveDir] });
 							if (!isTsFile(maybeJsPath) && fs.existsSync(maybeJsPath)) {
 								return {
-									path: _url.pathToFileURL(maybeJsPath).toString(),
+									path: url.pathToFileURL(maybeJsPath).toString(),
 									external: true,
 								};
 							}
