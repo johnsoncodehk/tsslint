@@ -195,18 +195,11 @@ function decorateLanguageService(
 							...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
 							...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
 						].map(([error, category]) => {
-							let messageText: string;
-							if (error.id === 'config-import-error') {
-								messageText = `Error importing config file.`;
-							}
-							else {
-								messageText = `Error building config file.`;
-							}
 							const diag: ts.Diagnostic = {
 								category,
 								source: 'tsslint',
 								code: (error.id as any) ?? 0,
-								messageText,
+								messageText: error.text,
 								file: jsonConfigFile,
 								start: configOptionSpan.start,
 								length: configOptionSpan.length,
@@ -214,20 +207,23 @@ function decorateLanguageService(
 							if (error.location) {
 								const fileName = path.resolve(error.location.file).replace('http-url:', '');
 								const fileText = ts.sys.readFile(error.location.file);
-								const sourceFile = fileText !== undefined
-									? ts.createSourceFile(fileName, fileText, ts.ScriptTarget.Latest, true)
-									: undefined;
-								diag.relatedInformation = [{
-									category,
-									code: error.id as any,
-									messageText: error.text,
-									file: sourceFile,
-									start: sourceFile?.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
-									length: error.location.lineText.length,
-								}];
-							}
-							else {
-								diag.messageText += `\n\n${error.text}`;
+								if (fileText !== undefined) {
+									if (error.id === 'config-import-error') {
+										diag.messageText = `Error importing config file.`;
+									}
+									else {
+										diag.messageText = `Error building config file.`;
+									}
+									const sourceFile = ts.createSourceFile(fileName, fileText, ts.ScriptTarget.Latest, true);
+									diag.relatedInformation = [{
+										category,
+										code: error.id as any,
+										messageText: error.text,
+										file: sourceFile,
+										start: sourceFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
+										length: error.location.lineText.length,
+									}];
+								}
 							}
 							return diag;
 						});
