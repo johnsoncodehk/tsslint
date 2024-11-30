@@ -22,11 +22,21 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
+/**
+ * @deprecated Use `convertConfig` instead.
+ */
 export function loadPluginRules(
 	rulesConfig: Record<string, any>,
 	ruleOptions?: Record<string, any[]>
 ) {
-	const rules: Record<string, TSSLint.Rule> = {};
+	return convertConfig(rulesConfig, ruleOptions);
+}
+
+export function convertConfig(
+	rulesConfig: Record<string, any>,
+	ruleOptions?: Record<string, any[]>
+) {
+	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
 	}> = {};
