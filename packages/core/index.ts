@@ -44,7 +44,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		}[];
 	}>>();
 	const fileRefactors: typeof fileFixes = new Map();
-	const sourceFiles = new Map<string, ts.SourceFile>();
+	const sourceFiles = new Map<string, [boolean, ts.SourceFile]>();
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
@@ -278,18 +278,24 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 						fileName = fileName.split('http-url:')[1];
 					}
 					if (!sourceFiles.has(fileName)) {
-						const text = ctx.languageServiceHost.readFile(fileName) ?? '';
+						const text = ctx.languageServiceHost.readFile(fileName);
 						sourceFiles.set(
 							fileName,
-							ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
+							[
+								text !== undefined,
+								ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
+							]
 						);
 					}
-					const stackFile = sourceFiles.get(fileName);
+					const [exist, stackFile] = sourceFiles.get(fileName)!;
 					let pos = 0;
-					try {
-						pos = stackFile?.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
-					} catch { }
-					error.relatedInformation?.push({
+					if (exist) {
+						try {
+							pos = stackFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
+						} catch { }
+					}
+					error.relatedInformation ??= [];
+					error.relatedInformation.push({
 						category: ts.DiagnosticCategory.Message,
 						code: 0,
 						file: stackFile,
