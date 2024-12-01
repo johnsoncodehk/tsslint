@@ -14,8 +14,15 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	if (withStack) {
 		require('source-map-support').install({
 			retrieveFile(path: string) {
+				if (!path.endsWith('.js.map')) {
+					return;
+				}
+				path = path.replace(/\\/g, '/');
 				// monkey-fix, refs: https://github.com/typescript-eslint/typescript-eslint/issues/9352
-				if (path.replace(/\\/g, '/').includes('/@typescript-eslint/eslint-plugin/dist/rules/') && path.endsWith('.js.map')) {
+				if (
+					path.includes('/@typescript-eslint/eslint-plugin/dist/rules/')
+					|| path.includes('/eslint-plugin-expect-type/lib/rules/')
+				) {
 					return JSON.stringify({
 						version: 3,
 						sources: [],
