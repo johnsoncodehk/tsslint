@@ -29,10 +29,13 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	}
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Rules>();
-	const fileFixes = new Map<string, Map<string, [diagnostic: ts.DiagnosticWithLocation, {
-		title: string;
-		getEdits: () => ts.FileTextChanges[];
-	}[]]>>();
+	const fileFixes = new Map<string, Map<string, {
+		diagnostic: ts.DiagnosticWithLocation;
+		actions: {
+			title: string;
+			getEdits: () => ts.FileTextChanges[];
+		}[];
+	}>>();
 	const fileRefactors: typeof fileFixes = new Map();
 	const sourceFiles = new Map<string, ts.SourceFile>();
 	const basePath = path.dirname(ctx.configFile);
@@ -158,17 +161,17 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 			const diagnosticSet = new Set(diagnostics);
 
-			for (const [ruleId, [diagnostic, fix]] of [...fixes]) {
-				if (fix.length && diagnosticSet.has(diagnostic)) {
-					fixes.set(ruleId, [diagnostic, fix]);
+			for (const [ruleId, { diagnostic, actions }] of [...fixes]) {
+				if (actions.length && diagnosticSet.has(diagnostic)) {
+					fixes.set(ruleId, { diagnostic, actions });
 				}
 				else {
 					fixes.delete(ruleId);
 				}
 			}
-			for (const [ruleId, [diagnostic, refactor]] of [...refactors]) {
-				if (refactor.length && diagnosticSet.has(diagnostic)) {
-					fixes.set(ruleId, [diagnostic, refactor]);
+			for (const [ruleId, { diagnostic, actions }] of [...refactors]) {
+				if (actions.length && diagnosticSet.has(diagnostic)) {
+					fixes.set(ruleId, { diagnostic, actions });
 				}
 				else {
 					refactors.delete(ruleId);
@@ -228,9 +231,12 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					withFix(title, getEdits) {
 						currentFixes++;
 						if (!fixes.has(currentRuleId)) {
-							fixes.set(currentRuleId, [error, []]);
+							fixes.set(currentRuleId, {
+								diagnostic: error,
+								actions: [],
+							});
 						}
-						fixes.get(currentRuleId)![1].push(({
+						fixes.get(currentRuleId)!.actions.push(({
 							title,
 							getEdits,
 						}));
@@ -239,9 +245,12 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					withRefactor(title, getEdits) {
 						currentRefactors++;
 						if (!refactors.has(currentRuleId)) {
-							refactors.set(currentRuleId, [error, []]);
+							refactors.set(currentRuleId, {
+								diagnostic: error,
+								actions: [],
+							});
 						}
-						refactors.get(currentRuleId)![1].push(({
+						refactors.get(currentRuleId)!.actions.push(({
 							title,
 							getEdits,
 						}));
@@ -288,8 +297,8 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 			const fixesMap = getFileFixes(fileName);
 
-			for (const [_ruleId, fixes] of fixesMap) {
-				if (fixes.length) {
+			for (const [_ruleId, { actions }] of fixesMap) {
+				if (actions.length) {
 					return true;
 				}
 			}
@@ -301,7 +310,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			const fixesMap = getFileFixes(fileName);
 			const result: ts.CodeFixAction[] = [];
 
-			for (const [ruleId, [diagnostic, fixes]] of fixesMap) {
+			for (const [ruleId, { diagnostic, actions }] of fixesMap) {
 				if (diagnostics?.length && !diagnostics.includes(diagnostic)) {
 					continue;
 				}
@@ -313,23 +322,22 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					(start >= diagStart && start <= diagEnd) ||
 					(end >= diagStart && end <= diagEnd)
 				) {
-					let actions: ts.CodeFixAction[] = [];
-					for (let i = 0; i < fixes.length; i++) {
-						const fix = fixes[i];
-						actions.push({
+					let codeFixes: ts.CodeFixAction[] = [];
+					for (const action of actions) {
+						codeFixes.push({
 							fixName: `tsslint:${ruleId}`,
-							description: fix.title,
-							changes: fix.getEdits(),
+							description: action.title,
+							changes: action.getEdits(),
 							fixId: 'tsslint',
 							fixAllDescription: 'Fix all TSSLint errors'
 						});
 					}
 					for (const plugin of plugins) {
 						if (plugin.resolveCodeFixes) {
-							actions = plugin.resolveCodeFixes(fileName, diagnostic, result);
+							codeFixes = plugin.resolveCodeFixes(fileName, diagnostic, result);
 						}
 					}
-					result.push(...actions);
+					result.push(...codeFixes);
 				}
 			}
 
@@ -341,7 +349,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 			let result: ts.RefactorActionInfo[] = [];
 
-			for (const [ruleId, [diagnostic, refactors]] of refactorsMap) {
+			for (const [ruleId, { diagnostic, actions }] of refactorsMap) {
 				const diagStart = diagnostic.start;
 				const diagEnd = diagStart + diagnostic.length;
 				if (
@@ -350,11 +358,11 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					(start >= diagStart && start <= diagEnd) ||
 					(end >= diagStart && end <= diagEnd)
 				) {
-					for (let i = 0; i < refactors.length; i++) {
-						const refactor = refactors[i];
+					for (let i = 0; i < actions.length; i++) {
+						const action = actions[i];
 						result.push({
 							name: `tsslint:${ruleId}:${i}`,
-							description: refactor.title + ' (' + ruleId + ')',
+							description: action.title + ' (' + ruleId + ')',
 							kind: 'quickfix',
 						});
 					}
@@ -367,7 +375,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			if (name.startsWith('tsslint:')) {
 				const [ruleId, index] = name.slice('tsslint:'.length).split(':');
 				const refactorsMap = getFileRefactors(fileName);
-				const refactor = refactorsMap.get(ruleId)?.[1][Number(index)];
+				const refactor = refactorsMap.get(ruleId)?.actions[Number(index)];
 				if (refactor) {
 					return refactor.getEdits();
 				}
