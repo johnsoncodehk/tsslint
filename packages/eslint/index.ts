@@ -82,16 +82,16 @@ export function convertConfig(
 }
 
 export function convertRule(
-	rule: ESLint.Rule.RuleModule,
+	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
 	severity: ts.DiagnosticCategory =
-		rule.meta?.type === 'problem' ? 1 satisfies ts.DiagnosticCategory.Error
-			: rule.meta?.type === 'suggestion' ? 0 satisfies ts.DiagnosticCategory.Warning
-				: rule.meta?.type === 'layout' ? 2 satisfies ts.DiagnosticCategory.Suggestion
+		eslintRule.meta?.type === 'problem' ? 1 satisfies ts.DiagnosticCategory.Error
+			: eslintRule.meta?.type === 'suggestion' ? 0 satisfies ts.DiagnosticCategory.Warning
+				: eslintRule.meta?.type === 'layout' ? 2 satisfies ts.DiagnosticCategory.Suggestion
 					: 3 satisfies ts.DiagnosticCategory.Message,
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
-	return ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
+	const tsslintRule: TSSLint.Rule = ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
 		const report =
 			severity === ts.DiagnosticCategory.Error ? reportError
 				: severity === ts.DiagnosticCategory.Warning ? reportWarning
@@ -100,7 +100,7 @@ export function convertRule(
 		const emitter = createEmitter();
 
 		// @ts-expect-error
-		const ruleListeners = rule.create({
+		const ruleListeners = eslintRule.create({
 			settings: {},
 			languageOptions: {},
 			filename: sourceFile.fileName,
@@ -367,9 +367,11 @@ export function convertRule(
 		}
 
 		function getMessage(messageId: string) {
-			return rule.meta?.messages?.[messageId] ?? '';
+			return eslintRule.meta?.messages?.[messageId] ?? '';
 		}
 	};
+	(tsslintRule as any).meta = eslintRule.meta;
+	return tsslintRule;
 }
 
 function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageService) {
