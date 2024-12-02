@@ -3,7 +3,6 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
-import eslint = require('eslint');
 
 // TS-ESLint internal scripts
 const astConverter: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
@@ -11,7 +10,7 @@ const createParserServices: typeof import('./node_modules/@typescript-eslint/typ
 const createParseSettings: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
 
 // ESLint internal scripts
-const SourceCode = eslint.SourceCode; // Can't use require('../../eslint/lib/languages/js/source-code/source-code.js'), see #25
+const SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
 const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
 const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
 const Traverser = require('../../eslint/lib/shared/traverser.js');
@@ -396,7 +395,6 @@ function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageServic
 			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
 			parserServices,
 		});
-		// @ts-expect-error
 		const eventQueue = sourceCode.traverse(); // parent should fill in this call, but don't consistent-type-imports rule is still broken, and fillParent is still needed
 		fillParent(estree);
 		estrees.set(sourceFile, { estree, sourceCode, eventQueue });
