@@ -81,7 +81,7 @@ export function convertConfig(rulesConfig: Record<string, Severity | [Severity, 
 			}
 			ruleModule = plugin.rules[ruleName];
 			if (!ruleModule) {
-				throw new Error(`Rule "${rule}" does not exist in plugin "${pluginName}".`);
+				throw new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`);
 			}
 		}
 		else {
