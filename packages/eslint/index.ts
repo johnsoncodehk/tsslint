@@ -25,22 +25,32 @@ const estrees = new WeakMap<ts.SourceFile, {
  * @deprecated Use `convertConfig` instead.
  */
 export function loadPluginRules(
-	rulesConfig: Record<string, any>,
+	rulesConfig: Record<string, Severity | [Severity, ...any[]]>,
 	ruleOptions?: Record<string, any[]>
 ) {
-	return convertConfig(rulesConfig, ruleOptions);
+	if (ruleOptions) {
+		for (const rule in ruleOptions) {
+			const config = rulesConfig[rule];
+			if (typeof config === 'string') {
+				rulesConfig[rule] = [config, ...ruleOptions[rule]];
+			}
+			else if (Array.isArray(config)) {
+				rulesConfig[rule] = [config[0], ...ruleOptions[rule]];
+			}
+		}
+	}
+	return convertConfig(rulesConfig);
 }
 
-export function convertConfig(
-	rulesConfig: Record<string, any>,
-	ruleOptions?: Record<string, any[]>
-) {
+export type Severity = 'error' | 'warn' | 'suggestion' | 'off';
+
+export function convertConfig(rulesConfig: Record<string, Severity | [Severity, ...any[]]>) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
 	}> = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let severity: string;
+		let severity: Severity;
 		let options: any[];
 		if (typeof severityOrOptions === 'string') {
 			severity = severityOrOptions;
@@ -71,10 +81,14 @@ export function convertConfig(
 		}
 		rules[rule] = convertRule(
 			ruleModule,
-			ruleOptions?.[ruleName] ?? options,
+			options,
 			severity === 'error'
 				? 1 satisfies ts.DiagnosticCategory.Error
-				: 0 satisfies ts.DiagnosticCategory.Warning
+				: severity === 'warn'
+					? 0 satisfies ts.DiagnosticCategory.Warning
+					: severity === 'suggestion'
+						? 2 satisfies ts.DiagnosticCategory.Suggestion
+						: 3 satisfies ts.DiagnosticCategory.Message
 		);
 	}
 	return rules;
