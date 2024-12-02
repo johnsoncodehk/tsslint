@@ -62,22 +62,30 @@ export function convertConfig(rulesConfig: Record<string, Severity | [Severity, 
 		if (severity === 'off') {
 			continue;
 		}
-		if (!rule.includes('/')) {
-			console.warn(`Unhandled rule: ${rule}`);
-			continue;
+		let ruleModule: ESLint.Rule.RuleModule;
+		if (rule.includes('/')) {
+			let pluginName: string;
+			let ruleName: string;
+			[pluginName, ruleName] = rule.split('/');
+			if (pluginName.startsWith('@')) {
+				pluginName = `${pluginName}/eslint-plugin`;
+			}
+			else {
+				pluginName = `eslint-plugin-${pluginName}`;
+			}
+			plugins[pluginName] ??= require(pluginName);
+			let plugin = plugins[pluginName];
+			if ('default' in plugin) {
+				// @ts-expect-error
+				plugin = plugin.default;
+			}
+			ruleModule = plugin.rules[ruleName];
+			if (!ruleModule) {
+				throw new Error(`Rule "${rule}" does not exist in plugin "${pluginName}".`);
+			}
 		}
-		const [pluginName, ruleName] = rule.split('/');
-		const moduleName = pluginName.startsWith('@') ? `${pluginName}/eslint-plugin` : `eslint-plugin-${pluginName}`;
-		plugins[pluginName] ??= require(moduleName);
-		let plugin = plugins[pluginName];
-		if ('default' in plugin) {
-			// @ts-expect-error
-			plugin = plugin.default;
-		}
-		const ruleModule = plugin.rules[ruleName];
-		if (!ruleModule) {
-			console.warn(`Unhandled rule: ${rule}`);
-			continue;
+		else {
+			ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
 		}
 		rules[rule] = convertRule(
 			ruleModule,
