@@ -1,6 +1,6 @@
 {
 	"private": true,
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"packageManager": "pnpm@9.3.0",
 	"scripts": {
 		"build": "tsc -b",
@@ -16,7 +16,7 @@
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
-		"@tsslint/config": "1.2.0",
+		"@tsslint/config": "1.2.1",
 		"@types/node": "latest",
 		"typescript": "latest"
 	}
