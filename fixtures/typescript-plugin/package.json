@@ -1,9 +1,9 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/typescript-plugin",
-	"version": "1.2.1",
+	"version": "1.2.2",
 	"devDependencies": {
-		"@tsslint/typescript-plugin": "1.2.1",
+		"@tsslint/typescript-plugin": "1.2.2",
 		"typescript": "latest"
 	}
 }
