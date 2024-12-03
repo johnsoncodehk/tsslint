@@ -5,11 +5,7 @@ import type * as ts from 'typescript';
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
 
-import ScopeManager = require('@typescript-eslint/scope-manager');
-
-// TS-ESLint internal scripts
-const astConverter: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
-const createParseSettings: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
+import Parser = require('@typescript-eslint/parser');
 
 // ESLint internal scripts
 const SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
@@ -421,67 +417,30 @@ function getEstree(
 				return Reflect.get(program, p, receiver);
 			},
 		});
-		const { estree, astMaps } = astConverter(
-			sourceFile,
-			createParseSettings(sourceFile, {
-				comment: true,
-				tokens: true,
-				range: true,
-				loc: true,
-				preserveNodeMaps: true,
-				filePath: sourceFile.fileName,
-			}),
-			true
-		);
-		const scopeManager = ScopeManager.analyze(estree);
+		const { ast, scopeManager, visitorKeys, services } = Parser.parseForESLint(sourceFile, {
+			tokens: true,
+			comment: true,
+			loc: true,
+			range: true,
+			preserveNodeMaps: true,
+			filePath: sourceFile.fileName,
+			emitDecoratorMetadata: getCompilationSettings().emitDecoratorMetadata ?? false,
+			experimentalDecorators: getCompilationSettings().experimentalDecorators ?? false,
+		});
 		const sourceCode = new SourceCode({
-			ast: estree as ESLint.AST.Program,
 			text: sourceFile.text,
-			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
+			ast,
+			scopeManager,
+			visitorKeys,
 			parserServices: {
+				...services,
 				program: programProxy,
-				// not set in the config is the same as off
-				get emitDecoratorMetadata(): boolean {
-					return getCompilationSettings().emitDecoratorMetadata ?? false;
-				},
-				get experimentalDecorators(): boolean {
-					return getCompilationSettings().experimentalDecorators ?? false;
-				},
-				...astMaps,
-				getSymbolAtLocation: (node: any) => programProxy.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-				getTypeAtLocation: (node: any) => programProxy.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+				getSymbolAtLocation: (node: any) => programProxy.getTypeChecker().getSymbolAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+				getTypeAtLocation: (node: any) => programProxy.getTypeChecker().getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
 			},
 		});
-		const eventQueue = sourceCode.traverse(); // parent should fill in this call, but don't consistent-type-imports rule is still broken, and fillParent is still needed
-		fillParent(estree);
-		estrees.set(sourceFile, { estree, sourceCode, eventQueue });
+		const eventQueue = sourceCode.traverse();
+		estrees.set(sourceFile, { estree: ast, sourceCode, eventQueue });
 	}
 	return estrees.get(sourceFile)!;
-}
-
-function fillParent(target: any, currentParent?: any): any {
-	if ('type' in target) {
-		if (!target.parent) {
-			target.parent = currentParent;
-		}
-		currentParent = target;
-	}
-	for (const key of Object.keys(target)) {
-		if (key === 'parent') {
-			continue;
-		}
-		const value = target[key];
-		if (value && typeof value === 'object') {
-			if (Array.isArray(value)) {
-				for (const element of value) {
-					if (element && typeof element === 'object') {
-						fillParent(element, currentParent);
-					}
-				}
-			}
-			else {
-				fillParent(value, currentParent);
-			}
-		}
-	}
 }
