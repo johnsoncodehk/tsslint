@@ -2,6 +2,8 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
+export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
+
 import ScopeManager = require('@typescript-eslint/scope-manager');
 
 // TS-ESLint internal scripts
