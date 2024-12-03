@@ -3,6 +3,7 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
+export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
 
 import ScopeManager = require('@typescript-eslint/scope-manager');
 
