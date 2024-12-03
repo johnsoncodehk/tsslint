@@ -35,17 +35,15 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		});
 	}
 
-	let typeAware = false;
+	let languageServiceUsage = 0;
 
 	const ts = ctx.typescript;
 	const languageService = new Proxy(ctx.languageService, {
 		get(target, key, receiver) {
-			if (!typeAware) {
-				typeAware = true;
-				if (debug) {
-					console.log('Type-aware mode enabled');
-				}
+			if (!languageServiceUsage && debug) {
+				console.log('Type-aware mode enabled');
 			}
+			languageServiceUsage++;
 			return Reflect.get(target, key, receiver);
 		},
 	});
@@ -83,21 +81,31 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	const debug = (Array.isArray(config) ? config : [config]).some(config => config.debug);
 
 	return {
-		lint(fileName: string): ts.DiagnosticWithLocation[] {
+		lint(
+			fileName: string,
+			cache?: [
+				mtime: number,
+				ruleIds: string[],
+				result: ts.DiagnosticWithLocation[],
+				resolvedResult: ts.DiagnosticWithLocation[]
+			]
+		): ts.DiagnosticWithLocation[] {
 			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
+			let currentLanguageServiceUsage = 0;
 			let currentRuleId: string;
 			let currentIssues = 0;
 			let currentFixes = 0;
 			let currentRefactors = 0;
-			let sourceFile = getSourceFile(fileName);
+			let sourceFile: ts.SourceFile | undefined;
+			let hasUncacheableRules = false;
 
 			if (debug) {
 				debugInfo = {
 					category: ts.DiagnosticCategory.Message,
 					code: 'debug' as any,
 					messageText: '- Config: ' + ctx.configFile + '\n',
-					file: sourceFile,
+					file: getSourceFile(fileName),
 					start: 0,
 					length: 0,
 					source: 'tsslint',
@@ -111,14 +119,15 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				if (debugInfo) {
 					debugInfo.messageText += '- Rules: ❌ (no rules)\n';
 				}
-				return diagnostics;
 			}
 
-			const prevTypeAwareValue = typeAware;
+			const prevLanguageServiceUsage = languageServiceUsage;
 			const rulesContext: RuleContext = {
 				...ctx,
 				languageService,
-				sourceFile,
+				get sourceFile() {
+					return sourceFile ??= getSourceFile(fileName);
+				},
 				reportError,
 				reportWarning,
 				reportSuggestion,
@@ -126,6 +135,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const fixes = getFileFixes(fileName);
 			const refactors = getFileRefactors(fileName);
+			const cachedRuleIds = new Set(cache?.[1]);
 
 			fixes.clear();
 			refactors.length = 0;
@@ -143,10 +153,19 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 						processRules(rule, [...paths, path]);
 						continue;
 					}
+
+					currentLanguageServiceUsage = languageServiceUsage;
 					currentRuleId = [...paths, path].join('/');
 					currentIssues = 0;
 					currentFixes = 0;
 					currentRefactors = 0;
+
+					if (cachedRuleIds.has(currentRuleId)) {
+						continue;
+					}
+
+					hasUncacheableRules = true;
+
 					const start = Date.now();
 					try {
 						rule(rulesContext);
@@ -177,22 +196,62 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
 						}
 					}
+
+					if (cache && currentLanguageServiceUsage === languageServiceUsage) {
+						cachedRuleIds.add(currentRuleId);
+					}
 				}
 			};
 			processRules(rules);
 
-			if (prevTypeAwareValue !== typeAware) {
-				return this.lint(fileName);
+			if (!!prevLanguageServiceUsage !== !!languageServiceUsage) {
+				return this.lint(fileName, cache);
 			}
 
 			const configs = getFileConfigs(fileName);
 
-			for (const { plugins } of configs) {
-				for (const { resolveDiagnostics } of plugins) {
-					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(sourceFile, diagnostics);
+			if (cache) {
+				cache[1] = [...cachedRuleIds];
+			}
+
+			if (hasUncacheableRules) {
+				for (const { plugins } of configs) {
+					for (const { resolveDiagnostics } of plugins) {
+						if (resolveDiagnostics) {
+							diagnostics = resolveDiagnostics(rulesContext.sourceFile, [
+								...(cache?.[2] ?? []).map(data => ({
+									...data,
+									file: rulesContext.sourceFile,
+									relatedInformation: data.relatedInformation?.map(info => ({
+										...info,
+										file: info.file ? getSourceFile(info.file.fileName) : undefined,
+									})),
+								})),
+								...diagnostics,
+							]);
+						}
 					}
 				}
+				if (cache) {
+					cache[3] = diagnostics.map(data => ({
+						...data,
+						file: undefined as any,
+						relatedInformation: data.relatedInformation?.map(info => ({
+							...info,
+							file: info.file ? { fileName: info.file.fileName } as any : undefined,
+						})),
+					}));
+				}
+			}
+			else {
+				diagnostics = (cache?.[3] ?? []).map(data => ({
+					...data,
+					file: rulesContext.sourceFile,
+					relatedInformation: data.relatedInformation?.map(info => ({
+						...info,
+						file: info.file ? getSourceFile(info.file.fileName) : undefined,
+					})),
+				}));
 			}
 
 			const diagnosticSet = new Set(diagnostics);
@@ -223,12 +282,23 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					category,
 					code: currentRuleId as any,
 					messageText: message,
-					file: sourceFile,
+					file: rulesContext.sourceFile,
 					start,
 					length: end - start,
 					source: 'tsslint',
 					relatedInformation: [],
 				};
+
+				if (cache && currentLanguageServiceUsage === languageServiceUsage) {
+					cache[2].push({
+						...error,
+						file: undefined as any,
+						relatedInformation: error.relatedInformation?.map(info => ({
+							...info,
+							file: info.file ? { fileName: info.file.fileName } as any : undefined,
+						})),
+					});
+				}
 
 				if (withStack) {
 					const stacks = traceOffset === false
@@ -403,7 +473,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	};
 
 	function getSourceFile(fileName: string): ts.SourceFile {
-		if (typeAware) {
+		if (languageServiceUsage) {
 			return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
 		}
 		else {
