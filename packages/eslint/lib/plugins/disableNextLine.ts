@@ -6,9 +6,10 @@ interface CommentState {
 	end: number;
 }
 
-const reg = new RegExp(/\/\/\s*eslint-disable-next-line\b[ \t]*(\S*)\b/g);
-
-export function create(reportsUnusedComments = true): Plugin {
+export function create(
+	reportsUnusedComments = true,
+	reg = new RegExp(/\/\/\s*eslint-disable-next-line\b[ \t]*(?<ruleId>\S*)\b/g)
+): Plugin {
 	return ({ languageService }) => ({
 		resolveDiagnostics(fileName, results) {
 			if (
@@ -21,14 +22,13 @@ export function create(reportsUnusedComments = true): Plugin {
 			const disabledLines = new Map<number, CommentState>();
 			const disabledLinesByRules = new Map<string, Map<number, CommentState>>();
 			for (const comment of sourceFile.text.matchAll(reg)) {
-				const line =
-					sourceFile.getLineAndCharacterOfPosition(comment.index).line + 1;
-				const rule = comment[1];
-				if (rule) {
-					if (!disabledLinesByRules.has(rule)) {
-						disabledLinesByRules.set(rule, new Map());
+				const line = sourceFile.getLineAndCharacterOfPosition(comment.index).line + 1;
+				const ruleId = comment.groups?.ruleId;
+				if (ruleId) {
+					if (!disabledLinesByRules.has(ruleId)) {
+						disabledLinesByRules.set(ruleId, new Map());
 					}
-					disabledLinesByRules.get(rule)!.set(line, {
+					disabledLinesByRules.get(ruleId)!.set(line, {
 						start: comment.index,
 						end: comment.index + comment[0].length,
 					});
