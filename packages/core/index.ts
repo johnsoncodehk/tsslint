@@ -225,6 +225,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					}
 				}
 
+				fixes.set(error, []);
 				diagnostics.push(error);
 				currentIssues++;
 
@@ -239,9 +240,6 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					},
 					withFix(title, getEdits) {
 						currentFixes++;
-						if (!fixes.has(error)) {
-							fixes.set(error, []);
-						}
 						fixes.get(error)!.push(({ title, getEdits }));
 						return this;
 					},
