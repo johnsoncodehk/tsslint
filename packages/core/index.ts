@@ -36,6 +36,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	}
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Rules>();
+	const fileConfigs = new Map<string, typeof configs>();
 	const fileFixes = new Map<
 		string /* fileName */,
 		Map<ts.DiagnosticWithLocation, {
@@ -55,16 +56,16 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
-			config,
+			rules: config.rules ?? {},
 			includes: (config.include ?? []).map(include => {
 				return ts.server.toNormalizedPath(path.resolve(basePath, include));
 			}),
 			excludes: (config.exclude ?? []).map(exclude => {
 				return ts.server.toNormalizedPath(path.resolve(basePath, exclude));
 			}),
+			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
-	const plugins = configs.map(({ config }) => config.plugins ?? []).flat().map(plugin => plugin(ctx));
-	const debug = configs.some(({ config }) => config.debug);
+	const debug = (Array.isArray(config) ? config : [config]).some(config => config.debug);
 
 	return {
 		lint(fileName: string) {
@@ -167,9 +168,13 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			};
 			processRules(rules);
 
-			for (const plugin of plugins) {
-				if (plugin.resolveDiagnostics) {
-					diagnostics = plugin.resolveDiagnostics(sourceFile.fileName, diagnostics);
+			const configs = getFileConfigs(fileName);
+
+			for (const { plugins } of configs) {
+				for (const { resolveDiagnostics } of plugins) {
+					if (resolveDiagnostics) {
+						diagnostics = resolveDiagnostics(sourceFile.fileName, diagnostics);
+					}
 				}
 			}
 
@@ -306,6 +311,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		},
 		getCodeFixes(fileName: string, start: number, end: number, diagnostics?: ts.Diagnostic[]) {
 
+			const configs = getFileConfigs(fileName);
 			const fixesMap = getFileFixes(fileName);
 			const result: ts.CodeFixAction[] = [];
 
@@ -331,9 +337,11 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 							fixAllDescription: 'Fix all TSSLint errors'
 						});
 					}
-					for (const plugin of plugins) {
-						if (plugin.resolveCodeFixes) {
-							codeFixes = plugin.resolveCodeFixes(fileName, diagnostic, codeFixes);
+					for (const { plugins } of configs) {
+						for (const { resolveCodeFixes } of plugins) {
+							if (resolveCodeFixes) {
+								codeFixes = resolveCodeFixes(fileName, diagnostic, codeFixes);
+							}
 						}
 					}
 					result.push(...codeFixes);
@@ -380,29 +388,43 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	};
 
 	function getFileRules(fileName: string) {
-		let rules = fileRules.get(fileName);
-		if (!rules) {
-			rules = {};
-			for (const { config, includes, excludes } of configs) {
-				if (!config.rules) {
-					continue;
+		let result = fileRules.get(fileName);
+		if (!result) {
+			result = {};
+			const configs = getFileConfigs(fileName);
+			for (const { rules } of configs) {
+				result = {
+					...result,
+					...rules,
+				};
+			}
+			for (const { plugins } of configs) {
+				for (const { resolveRules } of plugins) {
+					if (resolveRules) {
+						result = resolveRules(fileName, result);
+					}
 				}
+			}
+			fileRules.set(fileName, result);
+		}
+		return result;
+	}
+
+	function getFileConfigs(fileName: string) {
+		let result = fileConfigs.get(fileName);
+		if (!result) {
+			result = configs.filter(({ includes, excludes }) => {
 				if (excludes.some(pattern => minimatch.minimatch(fileName, pattern))) {
-					continue;
+					return false;
 				}
 				if (includes.length && !includes.some(pattern => minimatch.minimatch(fileName, pattern))) {
-					continue;
+					return false;
 				}
-				rules = { ...rules, ...config.rules };
-			}
-			for (const plugin of plugins) {
-				if (plugin.resolveRules) {
-					rules = plugin.resolveRules(fileName, rules);
-				}
-			}
-			fileRules.set(fileName, rules);
+				return true;
+			});
+			fileConfigs.set(fileName, result);
 		}
-		return rules;
+		return result;
 	}
 
 	function getFileFixes(fileName: string) {
