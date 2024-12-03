@@ -10,15 +10,14 @@ export function create(
 	reportsUnusedComments = true,
 	reg = new RegExp(/\/\/\s*eslint-disable-next-line\b[ \t]*(?<ruleId>\S*)\b/g)
 ): Plugin {
-	return ({ languageService }) => ({
-		resolveDiagnostics(fileName, results) {
+	return () => ({
+		resolveDiagnostics(sourceFile, results) {
 			if (
 				!reportsUnusedComments &&
 				!results.some(error => error.source === 'tsslint')
 			) {
 				return results;
 			}
-			const sourceFile = languageService.getProgram()!.getSourceFile(fileName)!;
 			const disabledLines = new Map<number, CommentState>();
 			const disabledLinesByRules = new Map<string, Map<number, CommentState>>();
 			for (const comment of sourceFile.text.matchAll(reg)) {

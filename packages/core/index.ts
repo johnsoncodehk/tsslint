@@ -34,7 +34,21 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			},
 		});
 	}
+
+	let typeAware = false;
+
 	const ts = ctx.typescript;
+	const languageService = new Proxy(ctx.languageService, {
+		get(target, key, receiver) {
+			if (!typeAware) {
+				typeAware = true;
+				if (debug) {
+					console.log('Type-aware mode enabled');
+				}
+			}
+			return Reflect.get(target, key, receiver);
+		},
+	});
 	const fileRules = new Map<string, Rules>();
 	const fileConfigs = new Map<string, typeof configs>();
 	const fileFixes = new Map<
@@ -53,6 +67,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		}[]
 	>();
 	const sourceFiles = new Map<string, [boolean, ts.SourceFile]>();
+	const snapshot2SourceFile = new WeakMap<ts.IScriptSnapshot, ts.SourceFile>();
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
@@ -68,15 +83,21 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	const debug = (Array.isArray(config) ? config : [config]).some(config => config.debug);
 
 	return {
-		lint(fileName: string) {
+		lint(fileName: string): ts.DiagnosticWithLocation[] {
 			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
+			let currentRuleId: string;
+			let currentIssues = 0;
+			let currentFixes = 0;
+			let currentRefactors = 0;
+			let sourceFile = getSourceFile(fileName);
+
 			if (debug) {
 				debugInfo = {
 					category: ts.DiagnosticCategory.Message,
 					code: 'debug' as any,
 					messageText: '- Config: ' + ctx.configFile + '\n',
-					file: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
+					file: sourceFile,
 					start: 0,
 					length: 0,
 					source: 'tsslint',
@@ -93,26 +114,18 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				return diagnostics;
 			}
 
-			const sourceFile = ctx.languageService.getProgram()?.getSourceFile(fileName);
-			if (!sourceFile) {
-				throw new Error(`No source file found for ${fileName}`);
-			}
-
+			const prevTypeAwareValue = typeAware;
 			const rulesContext: RuleContext = {
 				...ctx,
+				languageService,
 				sourceFile,
 				reportError,
 				reportWarning,
 				reportSuggestion,
 			};
 			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const fixes = getFileFixes(sourceFile.fileName);
-			const refactors = getFileRefactors(sourceFile.fileName);
-
-			let currentRuleId: string;
-			let currentIssues = 0;
-			let currentFixes = 0;
-			let currentRefactors = 0;
+			const fixes = getFileFixes(fileName);
+			const refactors = getFileRefactors(fileName);
 
 			fixes.clear();
 			refactors.length = 0;
@@ -168,12 +181,16 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			};
 			processRules(rules);
 
+			if (prevTypeAwareValue !== typeAware) {
+				return this.lint(fileName);
+			}
+
 			const configs = getFileConfigs(fileName);
 
 			for (const { plugins } of configs) {
 				for (const { resolveDiagnostics } of plugins) {
 					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(sourceFile.fileName, diagnostics);
+						diagnostics = resolveDiagnostics(sourceFile, diagnostics);
 					}
 				}
 			}
@@ -206,7 +223,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					category,
 					code: currentRuleId as any,
 					messageText: message,
-					file: sourceFile!,
+					file: sourceFile,
 					start,
 					length: end - start,
 					source: 'tsslint',
@@ -338,7 +355,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					for (const { plugins } of configs) {
 						for (const { resolveCodeFixes } of plugins) {
 							if (resolveCodeFixes) {
-								codeFixes = resolveCodeFixes(fileName, diagnostic, codeFixes);
+								codeFixes = resolveCodeFixes(getSourceFile(fileName), diagnostic, codeFixes);
 							}
 						}
 					}
@@ -384,6 +401,24 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			}
 		},
 	};
+
+	function getSourceFile(fileName: string): ts.SourceFile {
+		if (typeAware) {
+			return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+		}
+		else {
+			const snapshot = ctx.languageServiceHost.getScriptSnapshot(fileName);
+			if (snapshot) {
+				if (!snapshot2SourceFile.has(snapshot)) {
+					const sourceFile = ts.createSourceFile(fileName, snapshot.getText(0, snapshot.getLength()), ts.ScriptTarget.ESNext, true);
+					snapshot2SourceFile.set(snapshot, sourceFile);
+					return sourceFile;
+				}
+				return snapshot2SourceFile.get(snapshot)!;
+			}
+		}
+		throw new Error('No source file');
+	}
 
 	function getFileRules(fileName: string) {
 		let result = fileRules.get(fileName);

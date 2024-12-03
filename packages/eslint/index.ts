@@ -9,7 +9,6 @@ import ScopeManager = require('@typescript-eslint/scope-manager');
 
 // TS-ESLint internal scripts
 const astConverter: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter = require('../../@typescript-eslint/typescript-estree/dist/ast-converter.js').astConverter;
-const createParserServices: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/createParserServices.js').createParserServices = require('../../@typescript-eslint/typescript-estree/dist/createParserServices.js').createParserServices;
 const createParseSettings: typeof import('./node_modules/@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings = require('../../@typescript-eslint/typescript-estree/dist/parseSettings/createParseSettings.js').createParseSettings;
 
 // ESLint internal scripts
@@ -115,12 +114,16 @@ export function convertRule(
 					: 3 satisfies ts.DiagnosticCategory.Message,
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
-	const tsslintRule: TSSLint.Rule = ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
+	const tsslintRule: TSSLint.Rule = ({ typescript: ts, sourceFile, languageService, languageServiceHost, reportError, reportWarning, reportSuggestion }) => {
 		const report =
 			severity === ts.DiagnosticCategory.Error ? reportError
 				: severity === ts.DiagnosticCategory.Warning ? reportWarning
 					: reportSuggestion;
-		const { sourceCode, eventQueue } = getEstree(sourceFile, languageService);
+		const { sourceCode, eventQueue } = getEstree(
+			sourceFile,
+			languageService,
+			() => languageServiceHost.getCompilationSettings()
+		);
 		const emitter = createEmitter();
 
 		// @ts-expect-error
@@ -398,8 +401,20 @@ export function convertRule(
 	return tsslintRule;
 }
 
-function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageService) {
+function getEstree(
+	sourceFile: ts.SourceFile,
+	languageService: ts.LanguageService,
+	getCompilationSettings: () => ts.CompilerOptions
+) {
 	if (!estrees.has(sourceFile)) {
+		let program: ts.Program | undefined;
+
+		const programProxy = new Proxy({} as ts.Program, {
+			get(_target, p, receiver) {
+				program ??= languageService.getProgram()!;
+				return Reflect.get(program, p, receiver);
+			},
+		});
 		const { estree, astMaps } = astConverter(
 			sourceFile,
 			createParseSettings(sourceFile, {
@@ -413,12 +428,23 @@ function getEstree(sourceFile: ts.SourceFile, languageService: ts.LanguageServic
 			true
 		);
 		const scopeManager = ScopeManager.analyze(estree);
-		const parserServices = createParserServices(astMaps, languageService.getProgram() ?? null);
 		const sourceCode = new SourceCode({
 			ast: estree as ESLint.AST.Program,
 			text: sourceFile.text,
 			scopeManager: scopeManager as ESLint.Scope.ScopeManager,
-			parserServices,
+			parserServices: {
+				program: programProxy,
+				// not set in the config is the same as off
+				get emitDecoratorMetadata(): boolean {
+					return getCompilationSettings().emitDecoratorMetadata ?? false;
+				},
+				get experimentalDecorators(): boolean {
+					return getCompilationSettings().experimentalDecorators ?? false;
+				},
+				...astMaps,
+				getSymbolAtLocation: (node: any) => programProxy.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+				getTypeAtLocation: (node: any) => programProxy.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+			},
 		});
 		const eventQueue = sourceCode.traverse(); // parent should fill in this call, but don't consistent-type-imports rule is still broken, and fillParent is still needed
 		fillParent(estree);
