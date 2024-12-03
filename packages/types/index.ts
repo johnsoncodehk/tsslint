@@ -30,8 +30,8 @@ export interface Plugin {
 
 export interface PluginInstance {
 	resolveRules?(fileName: string, rules: Rules): Rules;
-	resolveDiagnostics?(fileName: string, diagnostics: DiagnosticWithLocation[]): DiagnosticWithLocation[];
-	resolveCodeFixes?(fileName: string, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
+	resolveDiagnostics?(sourceFile: SourceFile, diagnostics: DiagnosticWithLocation[]): DiagnosticWithLocation[];
+	resolveCodeFixes?(sourceFile: SourceFile, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
 }
 
 export interface Rules {
