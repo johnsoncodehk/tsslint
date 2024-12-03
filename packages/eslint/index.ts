@@ -126,6 +126,12 @@ export function convertRule(
 		);
 		const emitter = createEmitter();
 
+		if (eslintRule.meta?.defaultOptions) {
+			for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
+				options[i] ??= eslintRule.meta.defaultOptions[i];
+			}
+		}
+
 		// @ts-expect-error
 		const ruleListeners = eslintRule.create({
 			settings: {},
