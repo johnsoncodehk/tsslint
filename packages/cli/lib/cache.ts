@@ -1,15 +1,8 @@
 import core = require('@tsslint/core');
 import path = require('path');
 import fs = require('fs');
-import type * as ts from 'typescript';
 
-export type CacheData = Record<string /* fileName */, [
-	fileMtime: number,
-	ruleIds: string[],
-	result: ts.DiagnosticWithLocation[],
-	resolvedResult: ts.DiagnosticWithLocation[],
-	minimatchResult: Record<string, boolean>,
-]>;
+export type CacheData = Record<string /* fileName */, core.FileLintCache>;
 
 export function loadCache(
 	configFilePath: string,

@@ -8,6 +8,14 @@ import ErrorStackParser = require('error-stack-parser');
 import path = require('path');
 import minimatch = require('minimatch');
 
+export type FileLintCache = [
+	mtime: number,
+	ruleIds: string[],
+	result: ts.DiagnosticWithLocation[],
+	resolvedResult: ts.DiagnosticWithLocation[],
+	minimatchResult: Record<string, boolean>,
+];
+
 export type Linter = ReturnType<typeof createLinter>;
 
 export function createLinter(ctx: ProjectContext, config: Config | Config[], withStack: boolean) {
@@ -69,28 +77,16 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
+			include: config.include ?? [],
+			exclude: config.exclude ?? [],
 			rules: config.rules ?? {},
-			includes: (config.include ?? []).map(include => {
-				return ts.server.toNormalizedPath(path.resolve(basePath, include));
-			}),
-			excludes: (config.exclude ?? []).map(exclude => {
-				return ts.server.toNormalizedPath(path.resolve(basePath, exclude));
-			}),
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
+	const normalizedPath = new Map<string, string>();
 	const debug = (Array.isArray(config) ? config : [config]).some(config => config.debug);
 
 	return {
-		lint(
-			fileName: string,
-			cache?: [
-				mtime: number,
-				ruleIds: string[],
-				result: ts.DiagnosticWithLocation[],
-				resolvedResult: ts.DiagnosticWithLocation[],
-				minimatchResult: Record<string, boolean>,
-			]
-		): ts.DiagnosticWithLocation[] {
+		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
 			let currentLanguageServiceUsage = 0;
@@ -400,13 +396,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			cache?: [
-				mtime: number,
-				ruleIds: string[],
-				result: ts.DiagnosticWithLocation[],
-				resolvedResult: ts.DiagnosticWithLocation[],
-				minimatchResult: Record<string, boolean>,
-			]
+			cache?: FileLintCache
 		) {
 
 			const configs = getFileConfigs(fileName, cache);
@@ -503,16 +493,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		throw new Error('No source file');
 	}
 
-	function getFileRules(
-		fileName: string,
-		cache: undefined | [
-			mtime: number,
-			ruleIds: string[],
-			result: ts.DiagnosticWithLocation[],
-			resolvedResult: ts.DiagnosticWithLocation[],
-			minimatchResult: Record<string, boolean>,
-		]
-	) {
+	function getFileRules(fileName: string, cache: undefined | FileLintCache) {
 		let result = fileRules.get(fileName);
 		if (!result) {
 			result = {};
@@ -535,23 +516,14 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		return result;
 	}
 
-	function getFileConfigs(
-		fileName: string,
-		cache: undefined | [
-			mtime: number,
-			ruleIds: string[],
-			result: ts.DiagnosticWithLocation[],
-			resolvedResult: ts.DiagnosticWithLocation[],
-			minimatchResult: Record<string, boolean>,
-		]
-	) {
+	function getFileConfigs(fileName: string, cache: undefined | FileLintCache) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
-			result = configs.filter(({ includes, excludes }) => {
-				if (excludes.some(_minimatch)) {
+			result = configs.filter(({ include, exclude }) => {
+				if (exclude.some(_minimatch)) {
 					return false;
 				}
-				if (includes.length && !includes.some(_minimatch)) {
+				if (include.length && !include.some(_minimatch)) {
 					return false;
 				}
 				return true;
@@ -563,9 +535,17 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					if (pattern in cache[4]) {
 						return cache[4][pattern];
 					}
-					return cache[4][pattern] = minimatch.minimatch(fileName, pattern);
 				}
-				return minimatch.minimatch(fileName, pattern);
+				let normalized = normalizedPath.get(pattern);
+				if (!normalized) {
+					normalized = ts.server.toNormalizedPath(path.resolve(basePath, pattern));
+					normalizedPath.set(pattern, normalized);
+				}
+				const res = minimatch.minimatch(fileName, normalized);
+				if (cache) {
+					cache[4][pattern] = res;
+				}
+				return res;
 			}
 		}
 		return result;
