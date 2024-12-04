@@ -2,7 +2,9 @@ import ts = require('typescript');
 import path = require('path');
 import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
+import cache = require('./lib/cache');
 import glob = require('glob');
+import fs = require('fs');
 
 (async () => {
 
@@ -79,12 +81,15 @@ import glob = require('glob');
 		const tsconfig = await getTsconfigPath(tsconfigOption);
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
-		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} files)`);
-
 		if (!configFile) {
+			log.step(`Project: ${path.relative(process.cwd(), tsconfig)}`);
 			log.error('No tsslint.config.ts file found!');
 			return;
 		}
+
+		parsed = parseCommonLine(tsconfig);
+
+		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parsed.fileNames.length} files)`);
 
 		if (!configs.has(configFile)) {
 			try {
@@ -103,24 +108,47 @@ import glob = require('glob');
 			return;
 		}
 
-		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames) {
 			throw new Error('No input files found in tsconfig!');
 		}
 		projectVersion++;
 		typeRootsVersion++;
 
-		const linter = core.createLinter({
+		const lintCache = process.argv.includes('--force')
+			? {}
+			: cache.loadCache(configFile, ts.sys.createHash);
+		const projectContext: config.ProjectContext = {
 			configFile,
 			languageService,
 			languageServiceHost,
 			typescript: ts,
 			tsconfig: ts.server.toNormalizedPath(tsconfig),
-		}, tsslintConfig, false);
+		};
+		const linter = core.createLinter(projectContext, tsslintConfig, 'cli');
 
 		let hasFix = false;
+		let cached = 0;
 
 		for (const fileName of parsed.fileNames) {
+
+			const fileMtime = fs.statSync(fileName).mtimeMs;
+			let fileCache = lintCache[fileName];
+			if (fileCache) {
+				if (fileCache[0] !== fileMtime) {
+					fileCache[0] = fileMtime;
+					fileCache[1] = {};
+					fileCache[2].length = 0;
+					fileCache[3].length = 0;
+					fileCache[4] = {};
+				}
+				else {
+					cached++;
+				}
+			}
+			else {
+				lintCache[fileName] = fileCache = [fileMtime, {}, [], [], {}];
+			}
+
 			if (process.argv.includes('--fix')) {
 
 				let retry = 3;
@@ -130,8 +158,14 @@ import glob = require('glob');
 				while (shouldRetry && retry) {
 					shouldRetry = false;
 					retry--;
-					const diagnostics = linter.lint(fileName);
-					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics);
+					if (Object.values(fileCache[1]).some(fixes => fixes > 0)) {
+						// Reset the cache if there are any fixes applied.
+						fileCache[1] = {};
+						fileCache[2].length = 0;
+						fileCache[3].length = 0;
+					}
+					const diagnostics = linter.lint(fileName, fileCache);
+					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache);
 					const textChanges = core.combineCodeFixes(fileName, fixes);
 					if (textChanges.length) {
 						const oldSnapshot = snapshots.get(fileName)!;
@@ -145,10 +179,11 @@ import glob = require('glob');
 
 				if (newSnapshot) {
 					ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+					fileCache[0] = fs.statSync(fileName).mtimeMs;
 				}
 			}
 			else {
-				const diagnostics = linter.lint(fileName);
+				const diagnostics = linter.lint(fileName, fileCache);
 				for (const diagnostic of diagnostics) {
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
 						continue;
@@ -174,6 +209,12 @@ import glob = require('glob');
 					hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
 				}
 			}
+		}
+
+		cache.saveCache(configFile, lintCache, ts.sys.createHash);
+
+		if (cached) {
+			log.info(`Linted ${parsed.fileNames.length - cached} files. (Cached ${cached} files result, use --force to re-lint all files.)`);
 		}
 
 		if (hasFix) {

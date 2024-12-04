@@ -13,7 +13,7 @@ export async function watchConfigFile(
 	logger: Pick<typeof console, 'log' | 'warn' | 'error'> = console
 ) {
 	let start: number;
-	const outDir = _path.resolve(configFilePath, '..', 'node_modules', '.tsslint');
+	const outDir = getDotTsslintPath(configFilePath);
 	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
 	const outFile = _path.join(outDir, outFileName);
 	const resultHandler = async (result: esbuild.BuildResult) => {
@@ -136,4 +136,8 @@ export async function watchConfigFile(
 
 function isTsFile(path: string) {
 	return path.endsWith('.ts') || path.endsWith('.tsx') || path.endsWith('.cts') || path.endsWith('.mts');
+}
+
+export function getDotTsslintPath(configFilePath: string): string {
+	return _path.resolve(configFilePath, '..', 'node_modules', '.tsslint');
 }

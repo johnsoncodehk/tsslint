@@ -8,10 +8,18 @@ import ErrorStackParser = require('error-stack-parser');
 import path = require('path');
 import minimatch = require('minimatch');
 
+export type FileLintCache = [
+	mtime: number,
+	ruleFixes: Record<string, number>,
+	result: ts.DiagnosticWithLocation[],
+	resolvedResult: ts.DiagnosticWithLocation[],
+	minimatchResult: Record<string, boolean>,
+];
+
 export type Linter = ReturnType<typeof createLinter>;
 
-export function createLinter(ctx: ProjectContext, config: Config | Config[], withStack: boolean) {
-	if (withStack) {
+export function createLinter(ctx: ProjectContext, config: Config | Config[], mode: 'cli' | 'typescript-plugin') {
+	if (mode === 'typescript-plugin') {
 		require('source-map-support').install({
 			retrieveFile(path: string) {
 				if (!path.endsWith('.js.map')) {
@@ -35,17 +43,15 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		});
 	}
 
-	let typeAware = false;
+	let languageServiceUsage = mode === 'typescript-plugin' ? 1 : 0;
 
 	const ts = ctx.typescript;
 	const languageService = new Proxy(ctx.languageService, {
 		get(target, key, receiver) {
-			if (!typeAware) {
-				typeAware = true;
-				if (debug) {
-					console.log('Type-aware mode enabled');
-				}
+			if (!languageServiceUsage && debug) {
+				console.log('Type-aware mode enabled');
 			}
+			languageServiceUsage++;
 			return Reflect.get(target, key, receiver);
 		},
 	});
@@ -71,54 +77,55 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
+			include: config.include ?? [],
+			exclude: config.exclude ?? [],
 			rules: config.rules ?? {},
-			includes: (config.include ?? []).map(include => {
-				return ts.server.toNormalizedPath(path.resolve(basePath, include));
-			}),
-			excludes: (config.exclude ?? []).map(exclude => {
-				return ts.server.toNormalizedPath(path.resolve(basePath, exclude));
-			}),
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
+	const normalizedPath = new Map<string, string>();
 	const debug = (Array.isArray(config) ? config : [config]).some(config => config.debug);
 
 	return {
-		lint(fileName: string): ts.DiagnosticWithLocation[] {
-			let diagnostics: ts.DiagnosticWithLocation[] = [];
+		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
+			let cacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
+			let uncacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
 			let currentRuleId: string;
 			let currentIssues = 0;
 			let currentFixes = 0;
 			let currentRefactors = 0;
-			let sourceFile = getSourceFile(fileName);
+			let currentRuleLanguageServiceUsage = 0;
+			let sourceFile: ts.SourceFile | undefined;
+			let hasUncacheResult = false;
 
 			if (debug) {
 				debugInfo = {
 					category: ts.DiagnosticCategory.Message,
 					code: 'debug' as any,
 					messageText: '- Config: ' + ctx.configFile + '\n',
-					file: sourceFile,
+					file: getSourceFile(fileName),
 					start: 0,
 					length: 0,
 					source: 'tsslint',
 					relatedInformation: [],
 				};
-				diagnostics.push(debugInfo);
+				uncacheableDiagnostics.push(debugInfo);
 			}
 
-			const rules = getFileRules(fileName);
+			const rules = getFileRules(fileName, cache);
 			if (!rules || !Object.keys(rules).length) {
 				if (debugInfo) {
 					debugInfo.messageText += '- Rules: ❌ (no rules)\n';
 				}
-				return diagnostics;
 			}
 
-			const prevTypeAwareValue = typeAware;
+			const prevLanguageServiceUsage = languageServiceUsage;
 			const rulesContext: RuleContext = {
 				...ctx,
 				languageService,
-				sourceFile,
+				get sourceFile() {
+					return sourceFile ??= getSourceFile(fileName);
+				},
 				reportError,
 				reportWarning,
 				reportSuggestion,
@@ -126,6 +133,13 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const fixes = getFileFixes(fileName);
 			const refactors = getFileRefactors(fileName);
+			const cachedRules = new Map<string, number>();
+
+			if (cache) {
+				for (const ruleId in cache[1]) {
+					cachedRules.set(ruleId, cache[1][ruleId]);
+				}
+			}
 
 			fixes.clear();
 			refactors.length = 0;
@@ -134,19 +148,99 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				debugInfo.messageText += '- Rules:\n';
 			}
 
-			const processRules = (rules: Rules, paths: string[] = []) => {
+			runRules(rules);
+
+			if (!!prevLanguageServiceUsage !== !!languageServiceUsage) {
+				return this.lint(fileName, cache);
+			}
+
+			const configs = getFileConfigs(fileName, cache);
+
+			if (cache) {
+				for (const [ruleId, fixes] of cachedRules) {
+					cache[1][ruleId] = fixes;
+				}
+			}
+
+			let diagnostics: ts.DiagnosticWithLocation[];
+
+			if (hasUncacheResult) {
+				diagnostics = [
+					...(cacheableDiagnostics.length
+						? cacheableDiagnostics
+						: (cache?.[2] ?? []).map(data => ({
+							...data,
+							file: rulesContext.sourceFile,
+							relatedInformation: data.relatedInformation?.map(info => ({
+								...info,
+								file: info.file ? getSourceFile(info.file.fileName) : undefined,
+							})),
+						}))
+					),
+					...uncacheableDiagnostics,
+				];
+				for (const { plugins } of configs) {
+					for (const { resolveDiagnostics } of plugins) {
+						if (resolveDiagnostics) {
+							diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
+						}
+					}
+				}
+				if (cache) {
+					cache[3] = diagnostics.map(data => ({
+						...data,
+						file: undefined as any,
+						relatedInformation: data.relatedInformation?.map(info => ({
+							...info,
+							file: info.file ? { fileName: info.file.fileName } as any : undefined,
+						})),
+					}));
+				}
+			}
+			else {
+				diagnostics = (cache?.[3] ?? []).map(data => ({
+					...data,
+					file: rulesContext.sourceFile,
+					relatedInformation: data.relatedInformation?.map(info => ({
+						...info,
+						file: info.file ? getSourceFile(info.file.fileName) : undefined,
+					})),
+				}));
+			}
+
+			const diagnosticSet = new Set(diagnostics);
+
+			for (const diagnostic of [...fixes.keys()]) {
+				if (!diagnosticSet.has(diagnostic)) {
+					fixes.delete(diagnostic);
+				}
+			}
+			fileRefactors.set(fileName, refactors.filter(refactor => diagnosticSet.has(refactor.diagnostic)));
+
+			return diagnostics;
+
+			function runRules(rules: Rules, paths: string[] = []) {
 				for (const [path, rule] of Object.entries(rules)) {
 					if (token?.isCancellationRequested()) {
 						break;
 					}
 					if (typeof rule === 'object') {
-						processRules(rule, [...paths, path]);
+						runRules(rule, [...paths, path]);
 						continue;
 					}
+
+					currentRuleLanguageServiceUsage = languageServiceUsage;
 					currentRuleId = [...paths, path].join('/');
 					currentIssues = 0;
 					currentFixes = 0;
 					currentRefactors = 0;
+
+					if (cachedRules.has(currentRuleId)) {
+						continue;
+					}
+
+					hasUncacheResult = true;
+
 					const start = Date.now();
 					try {
 						rule(rulesContext);
@@ -177,34 +271,12 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
 						}
 					}
-				}
-			};
-			processRules(rules);
 
-			if (prevTypeAwareValue !== typeAware) {
-				return this.lint(fileName);
-			}
-
-			const configs = getFileConfigs(fileName);
-
-			for (const { plugins } of configs) {
-				for (const { resolveDiagnostics } of plugins) {
-					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(sourceFile, diagnostics);
+					if (cache && currentRuleLanguageServiceUsage === languageServiceUsage) {
+						cachedRules.set(currentRuleId, currentFixes);
 					}
 				}
-			}
-
-			const diagnosticSet = new Set(diagnostics);
-
-			for (const diagnostic of [...fixes.keys()]) {
-				if (!diagnosticSet.has(diagnostic)) {
-					fixes.delete(diagnostic);
-				}
-			}
-			fileRefactors.set(fileName, refactors.filter(refactor => diagnosticSet.has(refactor.diagnostic)));
-
-			return diagnostics;
+			};
 
 			function reportError(message: string, start: number, end: number, traceOffset: false | number = 0) {
 				return report(ts.DiagnosticCategory.Error, message, start, end, traceOffset);
@@ -223,14 +295,26 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					category,
 					code: currentRuleId as any,
 					messageText: message,
-					file: sourceFile,
+					file: rulesContext.sourceFile,
 					start,
 					length: end - start,
 					source: 'tsslint',
 					relatedInformation: [],
 				};
+				const cacheable = currentRuleLanguageServiceUsage === languageServiceUsage;
 
-				if (withStack) {
+				if (cache && cacheable) {
+					cache[2].push({
+						...error,
+						file: undefined as any,
+						relatedInformation: error.relatedInformation?.map(info => ({
+							...info,
+							file: info.file ? { fileName: info.file.fileName } as any : undefined,
+						})),
+					});
+				}
+
+				if (mode === 'typescript-plugin') {
 					const stacks = traceOffset === false
 						? []
 						: ErrorStackParser.parse(new Error());
@@ -243,7 +327,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				}
 
 				fixes.set(error, []);
-				diagnostics.push(error);
+				(cacheable ? cacheableDiagnostics : uncacheableDiagnostics).push(error);
 				currentIssues++;
 
 				return {
@@ -324,9 +408,15 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 			return false;
 		},
-		getCodeFixes(fileName: string, start: number, end: number, diagnostics?: ts.Diagnostic[]) {
+		getCodeFixes(
+			fileName: string,
+			start: number,
+			end: number,
+			diagnostics?: ts.Diagnostic[],
+			cache?: FileLintCache
+		) {
 
-			const configs = getFileConfigs(fileName);
+			const configs = getFileConfigs(fileName, cache);
 			const fixesMap = getFileFixes(fileName);
 			const result: ts.CodeFixAction[] = [];
 
@@ -403,7 +493,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 	};
 
 	function getSourceFile(fileName: string): ts.SourceFile {
-		if (typeAware) {
+		if (languageServiceUsage) {
 			return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
 		}
 		else {
@@ -420,11 +510,11 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		throw new Error('No source file');
 	}
 
-	function getFileRules(fileName: string) {
+	function getFileRules(fileName: string, cache: undefined | FileLintCache) {
 		let result = fileRules.get(fileName);
 		if (!result) {
 			result = {};
-			const configs = getFileConfigs(fileName);
+			const configs = getFileConfigs(fileName, cache);
 			for (const { rules } of configs) {
 				result = {
 					...result,
@@ -443,19 +533,37 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		return result;
 	}
 
-	function getFileConfigs(fileName: string) {
+	function getFileConfigs(fileName: string, cache: undefined | FileLintCache) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
-			result = configs.filter(({ includes, excludes }) => {
-				if (excludes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+			result = configs.filter(({ include, exclude }) => {
+				if (exclude.some(_minimatch)) {
 					return false;
 				}
-				if (includes.length && !includes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+				if (include.length && !include.some(_minimatch)) {
 					return false;
 				}
 				return true;
 			});
 			fileConfigs.set(fileName, result);
+
+			function _minimatch(pattern: string) {
+				if (cache) {
+					if (pattern in cache[4]) {
+						return cache[4][pattern];
+					}
+				}
+				let normalized = normalizedPath.get(pattern);
+				if (!normalized) {
+					normalized = ts.server.toNormalizedPath(path.resolve(basePath, pattern));
+					normalizedPath.set(pattern, normalized);
+				}
+				const res = minimatch.minimatch(fileName, normalized);
+				if (cache) {
+					cache[4][pattern] = res;
+				}
+				return res;
+			}
 		}
 		return result;
 	}

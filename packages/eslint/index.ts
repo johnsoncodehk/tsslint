@@ -5,14 +5,6 @@ import type * as ts from 'typescript';
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
 
-import Parser = require('@typescript-eslint/parser');
-
-// ESLint internal scripts
-const SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
-const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
-const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
-const Traverser = require('../../eslint/lib/shared/traverser.js');
-
 const estrees = new WeakMap<ts.SourceFile, {
 	estree: any;
 	sourceCode: any;
@@ -60,42 +52,48 @@ export function convertConfig(rulesConfig: Record<string, Severity | [Severity, 
 		if (severity === 'off') {
 			continue;
 		}
-		let ruleModule: ESLint.Rule.RuleModule;
-		if (rule.includes('/')) {
-			let pluginName: string;
-			let ruleName: string;
-			[pluginName, ruleName] = rule.split('/');
-			if (pluginName.startsWith('@')) {
-				pluginName = `${pluginName}/eslint-plugin`;
+		let _rule: TSSLint.Rule | undefined;
+		rules[rule] = (...args) => {
+			if (!_rule) {
+				let ruleModule: ESLint.Rule.RuleModule;
+				if (rule.includes('/')) {
+					let pluginName: string;
+					let ruleName: string;
+					[pluginName, ruleName] = rule.split('/');
+					if (pluginName.startsWith('@')) {
+						pluginName = `${pluginName}/eslint-plugin`;
+					}
+					else {
+						pluginName = `eslint-plugin-${pluginName}`;
+					}
+					plugins[pluginName] ??= require(pluginName);
+					let plugin = plugins[pluginName];
+					if ('default' in plugin) {
+						// @ts-expect-error
+						plugin = plugin.default;
+					}
+					ruleModule = plugin.rules[ruleName];
+					if (!ruleModule) {
+						throw new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`);
+					}
+				}
+				else {
+					ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
+				}
+				_rule = rules[rule] = convertRule(
+					ruleModule,
+					options,
+					severity === 'error'
+						? 1 satisfies ts.DiagnosticCategory.Error
+						: severity === 'warn'
+							? 0 satisfies ts.DiagnosticCategory.Warning
+							: severity === 'suggestion'
+								? 2 satisfies ts.DiagnosticCategory.Suggestion
+								: 3 satisfies ts.DiagnosticCategory.Message
+				);
 			}
-			else {
-				pluginName = `eslint-plugin-${pluginName}`;
-			}
-			plugins[pluginName] ??= require(pluginName);
-			let plugin = plugins[pluginName];
-			if ('default' in plugin) {
-				// @ts-expect-error
-				plugin = plugin.default;
-			}
-			ruleModule = plugin.rules[ruleName];
-			if (!ruleModule) {
-				throw new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`);
-			}
-		}
-		else {
-			ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
-		}
-		rules[rule] = convertRule(
-			ruleModule,
-			options,
-			severity === 'error'
-				? 1 satisfies ts.DiagnosticCategory.Error
-				: severity === 'warn'
-					? 0 satisfies ts.DiagnosticCategory.Warning
-					: severity === 'suggestion'
-						? 2 satisfies ts.DiagnosticCategory.Suggestion
-						: 3 satisfies ts.DiagnosticCategory.Message
-		);
+			return _rule(...args);
+		};
 	}
 	return rules;
 }
@@ -110,6 +108,11 @@ export function convertRule(
 					: 3 satisfies ts.DiagnosticCategory.Message,
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
+	// ESLint internal scripts
+	const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
+	const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
+	const Traverser = require('../../eslint/lib/shared/traverser.js');
+
 	const tsslintRule: TSSLint.Rule = ({ typescript: ts, sourceFile, languageService, languageServiceHost, reportError, reportWarning, reportSuggestion }) => {
 		const report =
 			severity === ts.DiagnosticCategory.Error ? reportError
@@ -411,6 +414,8 @@ function getEstree(
 	if (!estrees.has(sourceFile)) {
 		let program: ts.Program | undefined;
 
+		const Parser = require('@typescript-eslint/parser');
+		const SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
 				program ??= languageService.getProgram()!;
