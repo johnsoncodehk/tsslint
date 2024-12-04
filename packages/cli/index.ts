@@ -159,6 +159,7 @@ import fs = require('fs');
 					shouldRetry = false;
 					retry--;
 					if (Object.values(fileCache[1]).some(fixes => fixes > 0)) {
+						// Reset the cache if there are any fixes applied.
 						fileCache[1] = {};
 						fileCache[2].length = 0;
 						fileCache[3].length = 0;
@@ -178,6 +179,7 @@ import fs = require('fs');
 
 				if (newSnapshot) {
 					ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+					fileCache[0] = fs.statSync(fileName).mtimeMs;
 				}
 			}
 			else {
