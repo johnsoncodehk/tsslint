@@ -124,7 +124,7 @@ import fs = require('fs');
 			typescript: ts,
 			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		};
-		const linter = core.createLinter(projectContext, tsslintConfig, false);
+		const linter = core.createLinter(projectContext, tsslintConfig, 'cli');
 
 		let hasFix = false;
 		let cached = 0;
@@ -136,7 +136,7 @@ import fs = require('fs');
 			if (fileCache) {
 				if (fileCache[0] !== fileMtime) {
 					fileCache[0] = fileMtime;
-					fileCache[1].length = 0;
+					fileCache[1] = {};
 					fileCache[2].length = 0;
 					fileCache[3].length = 0;
 					fileCache[4] = {};
@@ -146,7 +146,7 @@ import fs = require('fs');
 				}
 			}
 			else {
-				lintCache[fileName] = fileCache = [fileMtime, [], [], [], {}];
+				lintCache[fileName] = fileCache = [fileMtime, {}, [], [], {}];
 			}
 
 			if (process.argv.includes('--fix')) {
@@ -158,6 +158,11 @@ import fs = require('fs');
 				while (shouldRetry && retry) {
 					shouldRetry = false;
 					retry--;
+					if (Object.values(fileCache[1]).some(fixes => fixes > 0)) {
+						fileCache[1] = {};
+						fileCache[2].length = 0;
+						fileCache[3].length = 0;
+					}
 					const diagnostics = linter.lint(fileName, fileCache);
 					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache);
 					const textChanges = core.combineCodeFixes(fileName, fixes);
@@ -207,7 +212,7 @@ import fs = require('fs');
 		cache.saveCache(configFile, lintCache, ts.sys.createHash);
 
 		if (cached) {
-			log.info(`Linted ${parsed.fileNames.length - cached} files. (Cached ${cached} files, use --force to re-lint all files.)`);
+			log.info(`Linted ${parsed.fileNames.length - cached} files. (Cached ${cached} files result, use --force to re-lint all files.)`);
 		}
 
 		if (hasFix) {

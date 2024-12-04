@@ -228,7 +228,7 @@ function decorateLanguageService(
 							return diag;
 						});
 						if (config) {
-							linter = createLinter(projectContext, config, true);
+							linter = createLinter(projectContext, config, 'typescript-plugin');
 						}
 						info.project.refreshDiagnostics();
 					},

@@ -10,7 +10,7 @@ import minimatch = require('minimatch');
 
 export type FileLintCache = [
 	mtime: number,
-	ruleIds: string[],
+	ruleFixes: Record<string, number>,
 	result: ts.DiagnosticWithLocation[],
 	resolvedResult: ts.DiagnosticWithLocation[],
 	minimatchResult: Record<string, boolean>,
@@ -18,8 +18,8 @@ export type FileLintCache = [
 
 export type Linter = ReturnType<typeof createLinter>;
 
-export function createLinter(ctx: ProjectContext, config: Config | Config[], withStack: boolean) {
-	if (withStack) {
+export function createLinter(ctx: ProjectContext, config: Config | Config[], mode: 'cli' | 'typescript-plugin') {
+	if (mode === 'typescript-plugin') {
 		require('source-map-support').install({
 			retrieveFile(path: string) {
 				if (!path.endsWith('.js.map')) {
@@ -43,7 +43,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		});
 	}
 
-	let languageServiceUsage = 0;
+	let languageServiceUsage = mode === 'typescript-plugin' ? 1 : 0;
 
 	const ts = ctx.typescript;
 	const languageService = new Proxy(ctx.languageService, {
@@ -87,15 +87,16 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
-			let diagnostics: ts.DiagnosticWithLocation[] = [];
+			let cacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
+			let uncacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
-			let currentLanguageServiceUsage = 0;
+			let currentRuleLanguageServiceUsage = 0;
 			let currentRuleId: string;
 			let currentIssues = 0;
 			let currentFixes = 0;
 			let currentRefactors = 0;
 			let sourceFile: ts.SourceFile | undefined;
-			let hasUncacheableRules = false;
+			let hasUncacheResult = false;
 
 			if (debug) {
 				debugInfo = {
@@ -108,7 +109,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					source: 'tsslint',
 					relatedInformation: [],
 				};
-				diagnostics.push(debugInfo);
+				uncacheableDiagnostics.push(debugInfo);
 			}
 
 			const rules = getFileRules(fileName, cache);
@@ -132,7 +133,13 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const fixes = getFileFixes(fileName);
 			const refactors = getFileRefactors(fileName);
-			const cachedRuleIds = new Set(cache?.[1]);
+			const cachedRules = new Map<string, number>();
+
+			if (cache) {
+				for (const ruleId in cache[1]) {
+					cachedRules.set(ruleId, cache[1][ruleId]);
+				}
+			}
 
 			fixes.clear();
 			refactors.length = 0;
@@ -141,65 +148,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				debugInfo.messageText += '- Rules:\n';
 			}
 
-			const processRules = (rules: Rules, paths: string[] = []) => {
-				for (const [path, rule] of Object.entries(rules)) {
-					if (token?.isCancellationRequested()) {
-						break;
-					}
-					if (typeof rule === 'object') {
-						processRules(rule, [...paths, path]);
-						continue;
-					}
-
-					currentLanguageServiceUsage = languageServiceUsage;
-					currentRuleId = [...paths, path].join('/');
-					currentIssues = 0;
-					currentFixes = 0;
-					currentRefactors = 0;
-
-					if (cachedRuleIds.has(currentRuleId)) {
-						continue;
-					}
-
-					hasUncacheableRules = true;
-
-					const start = Date.now();
-					try {
-						rule(rulesContext);
-						if (debugInfo) {
-							const time = Date.now() - start;
-							debugInfo.messageText += `  - ${currentRuleId}`;
-							const details: string[] = [];
-							if (currentIssues) {
-								details.push(`${currentIssues} issues`);
-							}
-							if (currentFixes) {
-								details.push(`${currentFixes} fixes`);
-							}
-							if (currentRefactors) {
-								details.push(`${currentRefactors} refactors`);
-							}
-							if (time) {
-								details.push(`${time}ms`);
-							}
-							if (details.length) {
-								debugInfo.messageText += ` (${details.join(', ')})`;
-							}
-							debugInfo.messageText += '\n';
-						}
-					} catch (err) {
-						console.error(err);
-						if (debugInfo) {
-							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
-						}
-					}
-
-					if (cache && currentLanguageServiceUsage === languageServiceUsage) {
-						cachedRuleIds.add(currentRuleId);
-					}
-				}
-			};
-			processRules(rules);
+			runRules(rules);
 
 			if (!!prevLanguageServiceUsage !== !!languageServiceUsage) {
 				return this.lint(fileName, cache);
@@ -208,24 +157,32 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 			const configs = getFileConfigs(fileName, cache);
 
 			if (cache) {
-				cache[1] = [...cachedRuleIds];
+				for (const [ruleId, fixes] of cachedRules) {
+					cache[1][ruleId] = fixes;
+				}
 			}
 
-			if (hasUncacheableRules) {
+			let diagnostics: ts.DiagnosticWithLocation[];
+
+			if (hasUncacheResult) {
+				diagnostics = [
+					...(cacheableDiagnostics.length
+						? cacheableDiagnostics
+						: (cache?.[2] ?? []).map(data => ({
+							...data,
+							file: rulesContext.sourceFile,
+							relatedInformation: data.relatedInformation?.map(info => ({
+								...info,
+								file: info.file ? getSourceFile(info.file.fileName) : undefined,
+							})),
+						}))
+					),
+					...uncacheableDiagnostics,
+				];
 				for (const { plugins } of configs) {
 					for (const { resolveDiagnostics } of plugins) {
 						if (resolveDiagnostics) {
-							diagnostics = resolveDiagnostics(rulesContext.sourceFile, [
-								...(cache?.[2] ?? []).map(data => ({
-									...data,
-									file: rulesContext.sourceFile,
-									relatedInformation: data.relatedInformation?.map(info => ({
-										...info,
-										file: info.file ? getSourceFile(info.file.fileName) : undefined,
-									})),
-								})),
-								...diagnostics,
-							]);
+							diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
 						}
 					}
 				}
@@ -262,6 +219,65 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 			return diagnostics;
 
+			function runRules(rules: Rules, paths: string[] = []) {
+				for (const [path, rule] of Object.entries(rules)) {
+					if (token?.isCancellationRequested()) {
+						break;
+					}
+					if (typeof rule === 'object') {
+						runRules(rule, [...paths, path]);
+						continue;
+					}
+
+					currentRuleLanguageServiceUsage = languageServiceUsage;
+					currentRuleId = [...paths, path].join('/');
+					currentIssues = 0;
+					currentFixes = 0;
+					currentRefactors = 0;
+
+					if (cachedRules.has(currentRuleId)) {
+						continue;
+					}
+
+					hasUncacheResult = true;
+
+					const start = Date.now();
+					try {
+						rule(rulesContext);
+						if (debugInfo) {
+							const time = Date.now() - start;
+							debugInfo.messageText += `  - ${currentRuleId}`;
+							const details: string[] = [];
+							if (currentIssues) {
+								details.push(`${currentIssues} issues`);
+							}
+							if (currentFixes) {
+								details.push(`${currentFixes} fixes`);
+							}
+							if (currentRefactors) {
+								details.push(`${currentRefactors} refactors`);
+							}
+							if (time) {
+								details.push(`${time}ms`);
+							}
+							if (details.length) {
+								debugInfo.messageText += ` (${details.join(', ')})`;
+							}
+							debugInfo.messageText += '\n';
+						}
+					} catch (err) {
+						console.error(err);
+						if (debugInfo) {
+							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
+						}
+					}
+
+					if (cache && currentRuleLanguageServiceUsage === languageServiceUsage) {
+						cachedRules.set(currentRuleId, currentFixes);
+					}
+				}
+			};
+
 			function reportError(message: string, start: number, end: number, traceOffset: false | number = 0) {
 				return report(ts.DiagnosticCategory.Error, message, start, end, traceOffset);
 			}
@@ -285,8 +301,9 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					source: 'tsslint',
 					relatedInformation: [],
 				};
+				const cacheable = currentRuleLanguageServiceUsage === languageServiceUsage;
 
-				if (cache && currentLanguageServiceUsage === languageServiceUsage) {
+				if (cache && cacheable) {
 					cache[2].push({
 						...error,
 						file: undefined as any,
@@ -297,7 +314,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 					});
 				}
 
-				if (withStack) {
+				if (mode === 'typescript-plugin') {
 					const stacks = traceOffset === false
 						? []
 						: ErrorStackParser.parse(new Error());
@@ -310,7 +327,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				}
 
 				fixes.set(error, []);
-				diagnostics.push(error);
+				(cacheable ? cacheableDiagnostics : uncacheableDiagnostics).push(error);
 				currentIssues++;
 
 				return {
