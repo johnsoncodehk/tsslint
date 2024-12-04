@@ -87,7 +87,8 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				mtime: number,
 				ruleIds: string[],
 				result: ts.DiagnosticWithLocation[],
-				resolvedResult: ts.DiagnosticWithLocation[]
+				resolvedResult: ts.DiagnosticWithLocation[],
+				minimatchResult: Record<string, boolean>,
 			]
 		): ts.DiagnosticWithLocation[] {
 			let diagnostics: ts.DiagnosticWithLocation[] = [];
@@ -114,7 +115,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				diagnostics.push(debugInfo);
 			}
 
-			const rules = getFileRules(fileName);
+			const rules = getFileRules(fileName, cache);
 			if (!rules || !Object.keys(rules).length) {
 				if (debugInfo) {
 					debugInfo.messageText += '- Rules: ❌ (no rules)\n';
@@ -208,7 +209,7 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 				return this.lint(fileName, cache);
 			}
 
-			const configs = getFileConfigs(fileName);
+			const configs = getFileConfigs(fileName, cache);
 
 			if (cache) {
 				cache[1] = [...cachedRuleIds];
@@ -394,9 +395,21 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 
 			return false;
 		},
-		getCodeFixes(fileName: string, start: number, end: number, diagnostics?: ts.Diagnostic[]) {
+		getCodeFixes(
+			fileName: string,
+			start: number,
+			end: number,
+			diagnostics?: ts.Diagnostic[],
+			cache?: [
+				mtime: number,
+				ruleIds: string[],
+				result: ts.DiagnosticWithLocation[],
+				resolvedResult: ts.DiagnosticWithLocation[],
+				minimatchResult: Record<string, boolean>,
+			]
+		) {
 
-			const configs = getFileConfigs(fileName);
+			const configs = getFileConfigs(fileName, cache);
 			const fixesMap = getFileFixes(fileName);
 			const result: ts.CodeFixAction[] = [];
 
@@ -490,11 +503,20 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		throw new Error('No source file');
 	}
 
-	function getFileRules(fileName: string) {
+	function getFileRules(
+		fileName: string,
+		cache: undefined | [
+			mtime: number,
+			ruleIds: string[],
+			result: ts.DiagnosticWithLocation[],
+			resolvedResult: ts.DiagnosticWithLocation[],
+			minimatchResult: Record<string, boolean>,
+		]
+	) {
 		let result = fileRules.get(fileName);
 		if (!result) {
 			result = {};
-			const configs = getFileConfigs(fileName);
+			const configs = getFileConfigs(fileName, cache);
 			for (const { rules } of configs) {
 				result = {
 					...result,
@@ -513,19 +535,38 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], wit
 		return result;
 	}
 
-	function getFileConfigs(fileName: string) {
+	function getFileConfigs(
+		fileName: string,
+		cache: undefined | [
+			mtime: number,
+			ruleIds: string[],
+			result: ts.DiagnosticWithLocation[],
+			resolvedResult: ts.DiagnosticWithLocation[],
+			minimatchResult: Record<string, boolean>,
+		]
+	) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ includes, excludes }) => {
-				if (excludes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+				if (excludes.some(_minimatch)) {
 					return false;
 				}
-				if (includes.length && !includes.some(pattern => minimatch.minimatch(fileName, pattern))) {
+				if (includes.length && !includes.some(_minimatch)) {
 					return false;
 				}
 				return true;
 			});
 			fileConfigs.set(fileName, result);
+
+			function _minimatch(pattern: string) {
+				if (cache) {
+					if (pattern in cache[4]) {
+						return cache[4][pattern];
+					}
+					return cache[4][pattern] = minimatch.minimatch(fileName, pattern);
+				}
+				return minimatch.minimatch(fileName, pattern);
+			}
 		}
 		return result;
 	}

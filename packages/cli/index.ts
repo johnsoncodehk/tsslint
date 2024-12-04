@@ -81,12 +81,15 @@ import fs = require('fs');
 		const tsconfig = await getTsconfigPath(tsconfigOption);
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
-		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parseCommonLine(tsconfig).fileNames.length} files)`);
-
 		if (!configFile) {
+			log.step(`Project: ${path.relative(process.cwd(), tsconfig)}`);
 			log.error('No tsslint.config.ts file found!');
 			return;
 		}
+
+		parsed = parseCommonLine(tsconfig);
+
+		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parsed.fileNames.length} files)`);
 
 		if (!configs.has(configFile)) {
 			try {
@@ -105,7 +108,6 @@ import fs = require('fs');
 			return;
 		}
 
-		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames) {
 			throw new Error('No input files found in tsconfig!');
 		}
@@ -137,14 +139,14 @@ import fs = require('fs');
 					fileCache[1].length = 0;
 					fileCache[2].length = 0;
 					fileCache[3].length = 0;
+					fileCache[4] = {};
 				}
 				else {
 					cached++;
 				}
 			}
 			else {
-				fileCache = [fileMtime, [], [], []];
-				lintCache[fileName] = fileCache;
+				lintCache[fileName] = fileCache = [fileMtime, [], [], [], {}];
 			}
 
 			if (process.argv.includes('--fix')) {
@@ -157,7 +159,7 @@ import fs = require('fs');
 					shouldRetry = false;
 					retry--;
 					const diagnostics = linter.lint(fileName, fileCache);
-					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics);
+					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache);
 					const textChanges = core.combineCodeFixes(fileName, fixes);
 					if (textChanges.length) {
 						const oldSnapshot = snapshots.get(fileName)!;

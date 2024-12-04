@@ -7,7 +7,8 @@ export type CacheData = Record<string /* fileName */, [
 	fileMtime: number,
 	ruleIds: string[],
 	result: ts.DiagnosticWithLocation[],
-	resolvedResult: ts.DiagnosticWithLocation[]
+	resolvedResult: ts.DiagnosticWithLocation[],
+	minimatchResult: Record<string, boolean>,
 ]>;
 
 export function loadCache(
