@@ -90,11 +90,11 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], mod
 			let cacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
 			let uncacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
 			let debugInfo: ts.DiagnosticWithLocation | undefined;
-			let currentRuleLanguageServiceUsage = 0;
 			let currentRuleId: string;
 			let currentIssues = 0;
 			let currentFixes = 0;
 			let currentRefactors = 0;
+			let currentRuleLanguageServiceUsage = 0;
 			let sourceFile: ts.SourceFile | undefined;
 			let hasUncacheResult = false;
 
