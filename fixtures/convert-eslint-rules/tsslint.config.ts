@@ -2,7 +2,6 @@ import { defineConfig } from '@tsslint/config';
 import { convertRule } from '@tsslint/eslint';
 
 export default defineConfig({
-	debug: true,
 	rules: {
 		'no-console': convertRule((await import('../../packages/eslint/node_modules/eslint/lib/rules/no-console.js')).default),
 		'prefer-ts-expect-error': convertRule((await import('./node_modules/@typescript-eslint/eslint-plugin/dist/rules/prefer-ts-expect-error.js')).default.default),
