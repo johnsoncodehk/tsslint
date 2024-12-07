@@ -18,7 +18,13 @@ export type FileLintCache = [
 
 export type Linter = ReturnType<typeof createLinter>;
 
-export function createLinter(ctx: ProjectContext, config: Config | Config[], mode: 'cli' | 'typescript-plugin') {
+export function createLinter(
+	ctx: ProjectContext,
+	config: Config | Config[],
+	mode: 'cli' | 'typescript-plugin',
+	// @ts-expect-error
+	logger?: typeof import('@clack/prompts')
+) {
 	if (mode === 'typescript-plugin') {
 		require('source-map-support').install({
 			retrieveFile(path: string) {
@@ -48,9 +54,6 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], mod
 	const ts = ctx.typescript;
 	const languageService = new Proxy(ctx.languageService, {
 		get(target, key, receiver) {
-			if (!languageServiceUsage && debug) {
-				console.log('Type-aware mode enabled');
-			}
 			languageServiceUsage++;
 			return Reflect.get(target, key, receiver);
 		},
@@ -270,6 +273,10 @@ export function createLinter(ctx: ProjectContext, config: Config | Config[], mod
 						if (debugInfo) {
 							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
 						}
+					}
+
+					if (debug && !!currentRuleLanguageServiceUsage !== !!languageServiceUsage) {
+						logger?.log.message(`Type-aware mode enabled by ${currentRuleId} rule.`);
 					}
 
 					if (cache && currentRuleLanguageServiceUsage === languageServiceUsage) {

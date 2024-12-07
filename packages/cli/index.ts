@@ -6,16 +6,21 @@ import cache = require('./lib/cache');
 import glob = require('glob');
 import fs = require('fs');
 
+const gray = '\x1b[90m';
+const purple = '\x1b[35m';
+const green = '\x1b[32m';
+const red = '\x1b[31m';
+const yellow = '\x1b[33m';
+const reset = '\x1b[0m';
+
 (async () => {
 
 	let hasError = false;
-	let hasFix = false;
-	let cached = 0;
 	let projectVersion = 0;
 	let typeRootsVersion = 0;
 	let parsed: ts.ParsedCommandLine;
 
-	const { log, text } = await import('@clack/prompts');
+	const clack = await import('@clack/prompts');
 	const snapshots = new Map<string, ts.IScriptSnapshot>();
 	const versions = new Map<string, number>();
 	const configs = new Map<string, config.Config | config.Config[] | undefined>();
@@ -76,38 +81,29 @@ import fs = require('fs');
 		await projectWorker();
 	}
 
-	if (cached) {
-		log.info(`Cache was used in ${cached} files. Use --force to ignore cache.`);
-	}
-
-	if (hasFix) {
-		log.info(`Use --fix to apply fixes.`);
-	}
-
 	process.exit(hasError ? 1 : 0);
 
 	async function projectWorker(tsconfigOption?: string) {
 
 		const tsconfig = await getTsconfigPath(tsconfigOption);
-		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
-		if (!configFile) {
-			log.step(`Project: ${path.relative(process.cwd(), tsconfig)}`);
-			log.error('No tsslint.config.ts file found!');
+		clack.intro(`${purple}[project]${reset} ${path.relative(process.cwd(), tsconfig)}`);
+
+		parsed = parseCommonLine(tsconfig);
+		if (!parsed.fileNames.length) {
+			clack.outro(`${yellow}No input files found.${reset}`);
 			return;
 		}
 
-		parsed = parseCommonLine(tsconfig);
-
-		log.step(`Project: ${path.relative(process.cwd(), tsconfig)} (${parsed.fileNames.length} files)`);
+		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
+		if (!configFile) {
+			clack.outro(`${yellow}No tsslint.config.ts found!${reset}`);
+			return;
+		}
 
 		if (!configs.has(configFile)) {
 			try {
-				configs.set(configFile, await core.buildConfigFile(configFile, ts.sys.createHash, {
-					log: log.info,
-					warn: log.warn,
-					error: log.error,
-				}));
+				configs.set(configFile, await core.buildConfigFile(configFile, ts.sys.createHash, clack));
 			} catch (err) {
 				configs.set(configFile, undefined);
 				console.error(err);
@@ -134,9 +130,22 @@ import fs = require('fs');
 			typescript: ts,
 			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		};
-		const linter = core.createLinter(projectContext, tsslintConfig, 'cli');
+		const linter = core.createLinter(projectContext, tsslintConfig, 'cli', clack);
+		const lintSpinner = clack.spinner();
 
-		for (const fileName of parsed.fileNames) {
+		let hasFix = false;
+		let passed = 0;
+		let errors = 0;
+		let warnings = 0;
+		let cached = 0;
+
+		lintSpinner.start();
+
+		for (let i = 0; i < parsed.fileNames.length; i++) {
+
+			const fileName = parsed.fileNames[i];
+
+			lintSpinner.message(`${gray}[${i + 1}/${parsed.fileNames.length}] ${path.relative(process.cwd(), fileName)}${reset}`);
 
 			const fileMtime = fs.statSync(fileName).mtimeMs;
 			let fileCache = lintCache[fileName];
@@ -202,21 +211,46 @@ import fs = require('fs');
 					});
 					output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
 					if (diagnostic.category === ts.DiagnosticCategory.Error) {
-						log.error(output);
+						errors++;
+						clack.log.error(output);
 					}
 					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
-						log.warn(output);
+						warnings++;
+						clack.log.warn(output);
 					}
 					else {
-						log.info(output);
+						clack.log.info(output);
 					}
 				}
 				if (diagnostics.length) {
 					hasFix ||= linter.hasCodeFixes(fileName);
 					hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
+				} else {
+					passed++;
 				}
 			}
 		}
+
+		if (cached) {
+			lintSpinner.stop(`${gray}Checked ${parsed.fileNames.length} files with cache.${reset} ${gray}(Use --force to ignore cache.)${reset}`);
+		} else {
+			lintSpinner.stop(`${gray}Checked ${parsed.fileNames.length} files.${reset}`);
+		}
+		if (hasFix) {
+			clack.log.message(`${gray}Use --fix to apply fixes.${reset}`);
+		}
+
+		const data = [
+			[passed, 'passed', green],
+			[errors, 'errors', red],
+			[warnings, 'warnings', yellow],
+		];
+
+		const summary = data
+			.filter(([count]) => count)
+			.map(([count, label, color]) => `${color}${count} ${label}${reset}`)
+			.join(` ${gray}|${reset} `);
+		clack.outro(summary);
 
 		cache.saveCache(configFile, lintCache, ts.sys.createHash);
 	}
@@ -228,7 +262,7 @@ import fs = require('fs');
 			if (!shortTsconfig?.startsWith('.')) {
 				shortTsconfig = `./${shortTsconfig}`;
 			}
-			tsconfig = await text({
+			tsconfig = await clack.text({
 				message: 'Select the tsconfig project. (Use --project or --projects to skip this prompt.)',
 				placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(tsconfig!).fileNames.length} files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
 				defaultValue: shortTsconfig,

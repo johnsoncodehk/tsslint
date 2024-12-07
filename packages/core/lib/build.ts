@@ -4,7 +4,8 @@ import { watchConfigFile } from './watch';
 export function buildConfigFile(
 	configFilePath: string,
 	createHash?: (path: string) => string,
-	logger?: Pick<typeof console, 'log' | 'warn' | 'error'>
+	// @ts-expect-error
+	logger?: typeof import('@clack/prompts')
 ): Promise<Config | Config[]> {
 	return new Promise((resolve, reject) => {
 		watchConfigFile(

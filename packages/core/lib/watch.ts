@@ -10,15 +10,14 @@ export async function watchConfigFile(
 	onBuild: (config: Config | Config[] | undefined, result: esbuild.BuildResult) => void,
 	watch = true,
 	createHash: (path: string) => string = btoa,
-	logger: Pick<typeof console, 'log' | 'warn' | 'error'> = console
+	// @ts-expect-error
+	logger?: typeof import('@clack/prompts')
 ) {
-	let start: number;
 	const outDir = getDotTsslintPath(configFilePath);
 	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
 	const outFile = _path.join(outDir, outFileName);
+	const configFileDisplayPath = _path.relative(process.cwd(), configFilePath);
 	const resultHandler = async (result: esbuild.BuildResult) => {
-		const t1 = Date.now() - start;
-		start = Date.now();
 		let config: Config | undefined;
 		for (const error of [
 			...result.errors,
@@ -31,10 +30,16 @@ export async function watchConfigFile(
 				error.id = 'config-build-error';
 			}
 		}
+		const buildResultText = 'Built ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms';
+		configBuildingSpinner?.message(buildResultText);
 		if (!result.errors.length) {
+			const loadStart = Date.now();
+			configBuildingSpinner?.message(buildResultText + ', importing...');
 			try {
 				config = (await import(url.pathToFileURL(outFile).toString() + '?time=' + Date.now())).default;
+				configBuildingSpinner?.stop(buildResultText + ', imported in ' + (Date.now() - loadStart) + 'ms.');
 			} catch (e: any) {
+				configBuildingSpinner?.stop(buildResultText + ', failed to import.');
 				if (e.stack) {
 					const stack = ErrorStackParser.parse(e)[0];
 					if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
@@ -68,10 +73,14 @@ export async function watchConfigFile(
 				}
 			}
 		}
-		const t2 = Date.now() - start;
-		logger.log(`Built ${_path.relative(process.cwd(), configFilePath)} in ${t1}ms, loaded ${config ? 'successfully' : 'with errors'} in ${t2}ms`);
 		onBuild(config, result);
 	};
+
+	let buildStart: number;
+
+	const configBuildingSpinner = logger?.spinner();
+	configBuildingSpinner?.start('Building ' + configFileDisplayPath);
+
 	const ctx = await esbuild.context({
 		entryPoints: [configFilePath],
 		bundle: true,
@@ -83,17 +92,17 @@ export async function watchConfigFile(
 			name: 'tsslint',
 			setup(build) {
 				build.onStart(() => {
-					start = Date.now();
+					buildStart = Date.now();
 				});
 				build.onResolve({ filter: /^https?:\/\// }, async ({ path: importUrl }) => {
 					const cachePath = _path.join(outDir, importUrl.split('://')[0], ...importUrl.split('://')[1].split('/'));
 					if (!fs.existsSync(cachePath)) {
-						console.time('Download ' + importUrl);
+						configBuildingSpinner?.message('Downloading ' + importUrl);
 						const response = await fetch(importUrl);
+						configBuildingSpinner?.message('Building ' + configFileDisplayPath);
 						if (!response.ok) {
 							throw new Error(`Failed to load ${importUrl}`);
 						}
-						console.timeEnd('Download ' + importUrl);
 						const text = await response.text();
 						fs.mkdirSync(_path.dirname(cachePath), { recursive: true });
 						fs.writeFileSync(cachePath, text, 'utf8');
