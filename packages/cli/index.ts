@@ -9,6 +9,8 @@ import fs = require('fs');
 (async () => {
 
 	let hasError = false;
+	let hasFix = false;
+	let cached = 0;
 	let projectVersion = 0;
 	let typeRootsVersion = 0;
 	let parsed: ts.ParsedCommandLine;
@@ -74,6 +76,14 @@ import fs = require('fs');
 		await projectWorker();
 	}
 
+	if (cached) {
+		log.info(`Cache was used in ${cached} files. Use --force to ignore cache.`);
+	}
+
+	if (hasFix) {
+		log.info(`Use --fix to apply fixes.`);
+	}
+
 	process.exit(hasError ? 1 : 0);
 
 	async function projectWorker(tsconfigOption?: string) {
@@ -125,9 +135,6 @@ import fs = require('fs');
 			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		};
 		const linter = core.createLinter(projectContext, tsslintConfig, 'cli');
-
-		let hasFix = false;
-		let cached = 0;
 
 		for (const fileName of parsed.fileNames) {
 
@@ -212,14 +219,6 @@ import fs = require('fs');
 		}
 
 		cache.saveCache(configFile, lintCache, ts.sys.createHash);
-
-		if (cached) {
-			log.info(`Linted ${parsed.fileNames.length - cached} files. (Cached ${cached} files result, use --force to re-lint all files.)`);
-		}
-
-		if (hasFix) {
-			log.info(`Use --fix to apply fixes.`);
-		}
 	}
 
 	async function getTsconfigPath(tsconfig?: string) {
