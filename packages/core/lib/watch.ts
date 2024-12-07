@@ -85,23 +85,30 @@ export async function watchConfigFile(
 				build.onStart(() => {
 					start = Date.now();
 				});
-				build.onResolve({ filter: /^https?:\/\// }, async ({ path: url }) => {
-					const cachePath = _path.join(outDir, url.split('://')[0], ...url.split('://')[1].split('/'));
+				build.onResolve({ filter: /^https?:\/\// }, async ({ path: importUrl }) => {
+					const cachePath = _path.join(outDir, importUrl.split('://')[0], ...importUrl.split('://')[1].split('/'));
 					if (!fs.existsSync(cachePath)) {
-						console.time('Download ' + url);
-						const response = await fetch(url);
+						console.time('Download ' + importUrl);
+						const response = await fetch(importUrl);
 						if (!response.ok) {
-							throw new Error(`Failed to load ${url}`);
+							throw new Error(`Failed to load ${importUrl}`);
 						}
-						console.timeEnd('Download ' + url);
+						console.timeEnd('Download ' + importUrl);
 						const text = await response.text();
 						fs.mkdirSync(_path.dirname(cachePath), { recursive: true });
 						fs.writeFileSync(cachePath, text, 'utf8');
 					}
-					return {
-						path: cachePath,
-						external: !isTsFile(cachePath),
-					};
+					if (isTsFile(cachePath)) {
+						return {
+							path: cachePath,
+							external: false,
+						};
+					} else {
+						return {
+							path: url.pathToFileURL(cachePath).toString(),
+							external: true,
+						};
+					}
 				});
 				build.onResolve({ filter: /.*/ }, ({ path, resolveDir }) => {
 					if (!isTsFile(path)) {
