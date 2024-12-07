@@ -17,5 +17,8 @@
 		"esbuild": ">=0.17.0",
 		"minimatch": "^10.0.1",
 		"source-map-support": "^0.5.21"
+	},
+	"scripts": {
+		"postinstall": "node scripts/cleanCache.js"
 	}
 }
