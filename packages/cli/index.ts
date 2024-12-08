@@ -94,14 +94,16 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		}
 	}
 	else {
-		await projectWorker();
+		const tsconfig = await askTSConfig();
+
+		await projectWorker(tsconfig);
 	}
 
 	process.exit(hasError ? 1 : 0);
 
-	async function projectWorker(tsconfigOption?: string) {
+	async function projectWorker(tsconfigOption: string) {
 
-		const tsconfig = await getTSConfigPath(tsconfigOption);
+		const tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
 
 		clack.intro(`${purple('[project]')} ${path.relative(process.cwd(), tsconfig)}`);
 
@@ -307,29 +309,27 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		cache.saveCache(configFile, lintCache, ts.sys.createHash);
 	}
 
-	async function getTSConfigPath(tsconfig?: string) {
-		if (!tsconfig) {
-			tsconfig = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
-			let shortTsconfig = tsconfig ? path.relative(process.cwd(), tsconfig) : undefined;
-			if (!shortTsconfig?.startsWith('.')) {
-				shortTsconfig = `./${shortTsconfig}`;
-			}
-			tsconfig = await clack.text({
-				message: 'Select the tsconfig project. (Use --project or --projects to skip this prompt.)',
-				placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(tsconfig!).fileNames.length} files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
-				defaultValue: shortTsconfig,
-				validate(value) {
-					value ||= shortTsconfig;
-					try {
-						require.resolve(value, { paths: [process.cwd()] });
-					} catch {
-						return `File not found!`;
-					}
-				},
-			}) as string;
+	async function askTSConfig() {
+		const presetConfig = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
+
+		let shortTsconfig = presetConfig ? path.relative(process.cwd(), presetConfig) : undefined;
+		if (!shortTsconfig?.startsWith('.')) {
+			shortTsconfig = `./${shortTsconfig}`;
 		}
-		tsconfig = require.resolve(tsconfig, { paths: [process.cwd()] });
-		return tsconfig;
+
+		return await clack.text({
+			message: 'Select the project. (Use --project or --projects to skip this prompt.)',
+			placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(presetConfig!).fileNames.length} files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
+			defaultValue: shortTsconfig,
+			validate(value) {
+				value ||= shortTsconfig;
+				try {
+					require.resolve(value, { paths: [process.cwd()] });
+				} catch {
+					return 'No such file.';
+				}
+			},
+		}) as string;
 	}
 
 	function parseCommonLine(tsconfig: string) {
