@@ -114,9 +114,6 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			return;
 		}
 
-		if (!parsed.fileNames) {
-			throw new Error('No input files found in tsconfig!');
-		}
 		projectVersion++;
 		typeRootsVersion++;
 
@@ -131,8 +128,8 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		};
 		const linter = core.createLinter(projectContext, tsslintConfig, 'cli', clack);
-		const lintSpinner = clack.spinner();
 
+		let lintSpinner: ReturnType<typeof clack['spinner']> | undefined = clack.spinner();
 		let hasFix = false;
 		let passed = 0;
 		let errors = 0;
@@ -221,28 +218,48 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
 						continue;
 					}
+
 					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
 						getCurrentDirectory: ts.sys.getCurrentDirectory,
 						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
 						getNewLine: () => ts.sys.newLine,
 					});
 					output = output.replace(`TS${diagnostic.code}`, String(diagnostic.code));
-					if (diagnostic.category === ts.DiagnosticCategory.Error) {
-						errors++;
-						lintSpinner.stop(output, 1);
-					}
-					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
-						warnings++;
-						lintSpinner.stop(output, 2);
-					}
-					else {
-						lintSpinner.stop(output);
+
+					if (lintSpinner) {
+						if (diagnostic.category === ts.DiagnosticCategory.Error) {
+							errors++;
+							lintSpinner.stop(output, 1);
+						}
+						else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+							warnings++;
+							lintSpinner.stop(output, 2);
+						}
+						else {
+							lintSpinner.stop(output);
+						}
+						lintSpinner = undefined;
+					} else {
+						if (diagnostic.category === ts.DiagnosticCategory.Error) {
+							errors++;
+							clack.log.error(output);
+						}
+						else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+							warnings++;
+							clack.log.warning(output);
+						}
+						else {
+							clack.log.info(output);
+						}
 					}
 				}
-
-				lintSpinner.start();
 			} else {
 				passed++;
+			}
+
+			if (!lintSpinner) {
+				lintSpinner = clack.spinner();
+				lintSpinner.start();
 			}
 		}
 
@@ -265,6 +282,8 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 		if (hasFix) {
 			summary += darkGray(` (Use --fix to apply automatic fixes.)`);
+		} else if (errors || warnings) {
+			summary += darkGray(` (No fixes available.)`);
 		}
 
 		clack.outro(summary);
