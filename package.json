@@ -5,7 +5,7 @@
 	"scripts": {
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
-		"prerelease": "npm run build",
+		"prerelease:base": "npm run build",
 		"release": "npm run release:base && npm run release:vscode",
 		"release:base": "lerna publish --exact --force-publish --yes --sync-workspace-lock",
 		"release:vscode": "cd packages/vscode && npm run release",
