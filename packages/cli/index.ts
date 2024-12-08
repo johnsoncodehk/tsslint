@@ -216,31 +216,33 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			if (diagnostics.length) {
 				hasFix ||= linter.hasCodeFixes(fileName);
 				hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
+
+				for (const diagnostic of diagnostics) {
+					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
+						continue;
+					}
+					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
+						getCurrentDirectory: ts.sys.getCurrentDirectory,
+						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
+						getNewLine: () => ts.sys.newLine,
+					});
+					output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
+					if (diagnostic.category === ts.DiagnosticCategory.Error) {
+						errors++;
+						lintSpinner.stop(output, 1);
+					}
+					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+						warnings++;
+						lintSpinner.stop(output, 2);
+					}
+					else {
+						lintSpinner.stop(output);
+					}
+				}
+
+				lintSpinner.start();
 			} else {
 				passed++;
-			}
-
-			for (const diagnostic of diagnostics) {
-				if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
-					continue;
-				}
-				let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
-					getCurrentDirectory: ts.sys.getCurrentDirectory,
-					getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
-					getNewLine: () => ts.sys.newLine,
-				});
-				output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
-				if (diagnostic.category === ts.DiagnosticCategory.Error) {
-					errors++;
-					clack.log.error(output);
-				}
-				else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
-					warnings++;
-					clack.log.warn(output);
-				}
-				else {
-					clack.log.info(output);
-				}
 			}
 		}
 
