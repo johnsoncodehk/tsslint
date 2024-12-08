@@ -1,10 +1,10 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/convert-a-tslint-rule",
-	"version": "1.3.3",
+	"version": "1.3.4",
 	"devDependencies": {
-		"@tsslint/config": "1.3.3",
-		"@tsslint/tslint": "1.3.3",
+		"@tsslint/config": "1.3.4",
+		"@tsslint/tslint": "1.3.4",
 		"tslint": "^6.1.3"
 	}
 }
