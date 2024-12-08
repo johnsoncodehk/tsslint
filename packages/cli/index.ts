@@ -57,18 +57,34 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 	const languageService = ts.createLanguageService(languageServiceHost);
 
 	if (process.argv.includes('--project')) {
+
 		const projectIndex = process.argv.indexOf('--project');
-		const tsconfig = process.argv[projectIndex + 1];
-		await projectWorker(tsconfig);
+
+		let tsconfig = process.argv[projectIndex + 1];
+
+		if (tsconfig.startsWith('-') || !tsconfig) {
+			clack.log.error(lightRed(`Missing argument for --project.`));
+		}
+		else {
+			if (!tsconfig.startsWith('.')) {
+				tsconfig = `./${tsconfig}`;
+			}
+			await projectWorker(tsconfig);
+		}
 	}
 	else if (process.argv.includes('--projects')) {
+
 		const projectsIndex = process.argv.indexOf('--projects');
+
 		for (let i = projectsIndex + 1; i < process.argv.length; i++) {
+
 			if (process.argv[i].startsWith('-')) {
 				break;
 			}
+
 			const searchGlob = process.argv[i];
 			const tsconfigs = glob.sync(searchGlob);
+
 			for (let tsconfig of tsconfigs) {
 				if (!tsconfig.startsWith('.')) {
 					tsconfig = `./${tsconfig}`;
