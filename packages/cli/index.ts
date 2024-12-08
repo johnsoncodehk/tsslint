@@ -226,7 +226,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
 						getNewLine: () => ts.sys.newLine,
 					});
-					output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
+					output = output.replace(`TS${diagnostic.code}`, String(diagnostic.code));
 					if (diagnostic.category === ts.DiagnosticCategory.Error) {
 						errors++;
 						lintSpinner.stop(output, 1);
