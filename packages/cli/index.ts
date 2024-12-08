@@ -138,6 +138,7 @@ const reset = '\x1b[0m';
 		let errors = 0;
 		let warnings = 0;
 		let cached = 0;
+		let t = Date.now();
 
 		lintSpinner.start();
 
@@ -145,7 +146,11 @@ const reset = '\x1b[0m';
 
 			const fileName = parsed.fileNames[i];
 
-			lintSpinner.message(`${gray}[${i + 1}/${parsed.fileNames.length}] ${path.relative(process.cwd(), fileName)}${reset}`);
+			if (Date.now() - t > 100) {
+				t = Date.now();
+				lintSpinner.message(`${gray}[${i + 1}/${parsed.fileNames.length}] ${path.relative(process.cwd(), fileName)}${reset}`);
+				await new Promise(resolve => setTimeout(resolve, 0));
+			}
 
 			const fileMtime = fs.statSync(fileName).mtimeMs;
 			let fileCache = lintCache[fileName];
