@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/eslint",
-	"version": "1.3.5",
+	"version": "1.3.6",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -12,7 +12,7 @@
 		"directory": "packages/eslint"
 	},
 	"devDependencies": {
-		"@tsslint/types": "1.3.5",
+		"@tsslint/types": "1.3.6",
 		"@types/eslint": "^8.56.10",
 		"typescript": "latest"
 	},
