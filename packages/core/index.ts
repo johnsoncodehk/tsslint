@@ -497,6 +497,8 @@ export function createLinter(
 				}
 			}
 		},
+		getRules: getFileRules,
+		getConfigs: getFileConfigs,
 	};
 
 	function getSourceFile(fileName: string): ts.SourceFile {

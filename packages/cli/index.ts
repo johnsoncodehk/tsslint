@@ -149,6 +149,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 		let lintSpinner: ReturnType<typeof clack['spinner']> | undefined = clack.spinner();
 		let hasFix = false;
+		let excluded = 0;
 		let passed = 0;
 		let errors = 0;
 		let warnings = 0;
@@ -271,6 +272,8 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 						}
 					}
 				}
+			} else if (!Object.keys(linter.getRules(fileName, fileCache)).length) {
+				excluded++;
 			} else {
 				passed++;
 			}
@@ -282,15 +285,16 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		}
 
 		if (cached) {
-			lintSpinner.stop(darkGray(`Checked ${parsed.fileNames.length} files with cache. (Use --force to ignore cache.)`));
+			lintSpinner.stop(darkGray(`Processed ${parsed.fileNames.length} files with cache. (Use --force to ignore cache.)`));
 		} else {
-			lintSpinner.stop(darkGray(`Checked ${parsed.fileNames.length} files.`));
+			lintSpinner.stop(darkGray(`Processed ${parsed.fileNames.length} files.`));
 		}
 
 		const data = [
 			[passed, 'passed', lightGreen] as const,
 			[errors, 'errors', lightRed] as const,
 			[warnings, 'warnings', lightYellow] as const,
+			[excluded, 'excluded', darkGray] as const,
 		];
 
 		let summary = data
