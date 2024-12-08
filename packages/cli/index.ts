@@ -6,12 +6,12 @@ import cache = require('./lib/cache');
 import glob = require('glob');
 import fs = require('fs');
 
-const gray = '\x1b[90m';
-const purple = '\x1b[35m';
-const green = '\x1b[32m';
-const red = '\x1b[31m';
-const yellow = '\x1b[33m';
-const reset = '\x1b[0m';
+const _reset = '\x1b[0m';
+const purple = (s: string) => '\x1b[35m' + s + _reset;
+const darkGray = (s: string) => '\x1b[90m' + s + _reset;
+const lightRed = (s: string) => '\x1b[91m' + s + _reset;
+const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
+const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 (async () => {
 
@@ -85,19 +85,19 @@ const reset = '\x1b[0m';
 
 	async function projectWorker(tsconfigOption?: string) {
 
-		const tsconfig = await getTsconfigPath(tsconfigOption);
+		const tsconfig = await getTSConfigPath(tsconfigOption);
 
-		clack.intro(`${purple}[project]${reset} ${path.relative(process.cwd(), tsconfig)}`);
+		clack.intro(`${purple('[project]')} ${path.relative(process.cwd(), tsconfig)}`);
 
 		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames.length) {
-			clack.outro(`${yellow}No input files found.${reset}`);
+			clack.outro(lightYellow('No included files.'));
 			return;
 		}
 
 		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 		if (!configFile) {
-			clack.outro(`${yellow}No tsslint.config.ts found!${reset}`);
+			clack.outro(lightYellow('No tsslint.config.ts found.'));
 			return;
 		}
 
@@ -148,7 +148,7 @@ const reset = '\x1b[0m';
 
 			if (Date.now() - t > 100) {
 				t = Date.now();
-				lintSpinner.message(`${gray}[${i + 1}/${parsed.fileNames.length}] ${path.relative(process.cwd(), fileName)}${reset}`);
+				lintSpinner.message(darkGray(`[${i + 1}/${parsed.fileNames.length}] ${path.relative(process.cwd(), fileName)}`));
 				await new Promise(resolve => setTimeout(resolve, 0));
 			}
 
@@ -170,6 +170,8 @@ const reset = '\x1b[0m';
 				lintCache[fileName] = fileCache = [fileMtime, {}, [], [], {}];
 			}
 
+			let diagnostics!: ts.DiagnosticWithLocation[];
+
 			if (process.argv.includes('--fix')) {
 
 				let retry = 3;
@@ -185,7 +187,7 @@ const reset = '\x1b[0m';
 						fileCache[2].length = 0;
 						fileCache[3].length = 0;
 					}
-					const diagnostics = linter.lint(fileName, fileCache);
+					diagnostics = linter.lint(fileName, fileCache);
 					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache);
 					const textChanges = core.combineCodeFixes(fileName, fixes);
 					if (textChanges.length) {
@@ -202,65 +204,73 @@ const reset = '\x1b[0m';
 					ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
 					fileCache[0] = fs.statSync(fileName).mtimeMs;
 				}
+
+				if (shouldRetry) {
+					diagnostics = linter.lint(fileName, fileCache);
+				}
 			}
 			else {
-				const diagnostics = linter.lint(fileName, fileCache);
-				for (const diagnostic of diagnostics) {
-					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
-						continue;
-					}
-					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
-						getCurrentDirectory: ts.sys.getCurrentDirectory,
-						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
-						getNewLine: () => ts.sys.newLine,
-					});
-					output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
-					if (diagnostic.category === ts.DiagnosticCategory.Error) {
-						errors++;
-						clack.log.error(output);
-					}
-					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
-						warnings++;
-						clack.log.warn(output);
-					}
-					else {
-						clack.log.info(output);
-					}
+				diagnostics = linter.lint(fileName, fileCache);
+			}
+
+			if (diagnostics.length) {
+				hasFix ||= linter.hasCodeFixes(fileName);
+				hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
+			} else {
+				passed++;
+			}
+
+			for (const diagnostic of diagnostics) {
+				if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
+					continue;
 				}
-				if (diagnostics.length) {
-					hasFix ||= linter.hasCodeFixes(fileName);
-					hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
-				} else {
-					passed++;
+				let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
+					getCurrentDirectory: ts.sys.getCurrentDirectory,
+					getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
+					getNewLine: () => ts.sys.newLine,
+				});
+				output = output.replace(`TS${diagnostic.code}`, `TSSLint(${diagnostic.code})`);
+				if (diagnostic.category === ts.DiagnosticCategory.Error) {
+					errors++;
+					clack.log.error(output);
+				}
+				else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+					warnings++;
+					clack.log.warn(output);
+				}
+				else {
+					clack.log.info(output);
 				}
 			}
 		}
 
 		if (cached) {
-			lintSpinner.stop(`${gray}Checked ${parsed.fileNames.length} files with cache.${reset} ${gray}(Use --force to ignore cache.)${reset}`);
+			lintSpinner.stop(darkGray(`Checked ${parsed.fileNames.length} files with cache. (Use --force to ignore cache.)`));
 		} else {
-			lintSpinner.stop(`${gray}Checked ${parsed.fileNames.length} files.${reset}`);
-		}
-		if (hasFix) {
-			clack.log.message(`${gray}Use --fix to apply fixes.${reset}`);
+			lintSpinner.stop(darkGray(`Checked ${parsed.fileNames.length} files.`));
 		}
 
 		const data = [
-			[passed, 'passed', green],
-			[errors, 'errors', red],
-			[warnings, 'warnings', yellow],
+			[passed, 'passed', lightGreen] as const,
+			[errors, 'errors', lightRed] as const,
+			[warnings, 'warnings', lightYellow] as const,
 		];
 
-		const summary = data
+		let summary = data
 			.filter(([count]) => count)
-			.map(([count, label, color]) => `${color}${count} ${label}${reset}`)
-			.join(` ${gray}|${reset} `);
+			.map(([count, label, color]) => color(`${count} ${label}`))
+			.join(darkGray(' | '));
+
+		if (hasFix) {
+			summary += darkGray(` (Use --fix to apply automatic fixes.)`);
+		}
+
 		clack.outro(summary);
 
 		cache.saveCache(configFile, lintCache, ts.sys.createHash);
 	}
 
-	async function getTsconfigPath(tsconfig?: string) {
+	async function getTSConfigPath(tsconfig?: string) {
 		if (!tsconfig) {
 			tsconfig = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 			let shortTsconfig = tsconfig ? path.relative(process.cwd(), tsconfig) : undefined;
