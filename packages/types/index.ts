@@ -17,7 +17,6 @@ export interface ProjectContext {
 }
 
 export interface Config {
-	debug?: boolean;
 	include?: string[];
 	exclude?: string[];
 	rules?: Rules;
@@ -47,9 +46,9 @@ export interface RuleContext {
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	sourceFile: SourceFile;
-	reportError(message: string, start: number, end: number, traceOffset?: number | false): Reporter;
-	reportWarning(message: string, start: number, end: number, traceOffset?: number | false): Reporter;
-	reportSuggestion(message: string, start: number, end: number, traceOffset?: number | false): Reporter;
+	reportError(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	reportWarning(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	reportSuggestion(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
 }
 
 export interface Reporter {

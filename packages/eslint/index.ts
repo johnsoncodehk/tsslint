@@ -170,7 +170,7 @@ export function convertRule(
 						}
 					}
 				} catch { }
-				const reporter = report(message, start, end, 1);
+				const reporter = report(message, start, end, 3);
 				if (descriptor.fix) {
 					const textChanges = getTextChanges(descriptor.fix);
 					reporter.withFix(

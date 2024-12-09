@@ -4,6 +4,7 @@ import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import cache = require('./lib/cache');
 import glob = require('glob');
+import url = require('url');
 import fs = require('fs');
 
 const _reset = '\x1b[0m';
@@ -120,15 +121,26 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		}
 
 		if (!configs.has(configFile)) {
-			try {
-				configs.set(configFile, await core.buildConfigFile(configFile, ts.sys.createHash, clack));
-			} catch (err) {
-				configs.set(configFile, undefined);
-				console.error(err);
+			configs.set(configFile, undefined);
+
+			const builtConfig = await core.buildConfig(configFile, ts.sys.createHash, clack);
+
+			if (builtConfig) {
+				try {
+					configs.set(configFile, (await import(url.pathToFileURL(builtConfig).toString())).default);
+				} catch (err) {
+					if (err instanceof Error) {
+						clack.log.error(err.stack ?? err.message);
+					} else {
+						clack.log.error(String(err));
+					}
+				}
 			}
 		}
+
 		const tsslintConfig = configs.get(configFile);
 		if (!tsslintConfig) {
+			clack.outro(lightYellow('Failed to load tsslint.config.ts.'));
 			return;
 		}
 

@@ -12,7 +12,8 @@
 		"directory": "packages/typescript-plugin"
 	},
 	"dependencies": {
-		"@tsslint/core": "1.3.6"
+		"@tsslint/core": "1.3.6",
+		"source-map-support": "^0.5.21"
 	},
 	"devDependencies": {
 		"@tsslint/config": "1.3.6"

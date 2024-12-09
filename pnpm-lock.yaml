@@ -107,9 +107,6 @@ importers:
       minimatch:
         specifier: ^10.0.1
         version: 10.0.1
-      source-map-support:
-        specifier: ^0.5.21
-        version: 0.5.21
     devDependencies:
       '@clack/prompts':
         specifier: ^0.8.2
@@ -154,6 +151,9 @@ importers:
       '@tsslint/core':
         specifier: 1.3.6
         version: link:../core
+      source-map-support:
+        specifier: ^0.5.21
+        version: 0.5.21
     devDependencies:
       '@tsslint/config':
         specifier: 1.3.6

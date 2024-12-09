@@ -25,30 +25,6 @@ export function createLinter(
 	// @ts-expect-error
 	logger?: typeof import('@clack/prompts')
 ) {
-	if (mode === 'typescript-plugin') {
-		require('source-map-support').install({
-			retrieveFile(path: string) {
-				if (!path.endsWith('.js.map')) {
-					return;
-				}
-				path = path.replace(/\\/g, '/');
-				// monkey-fix, refs: https://github.com/typescript-eslint/typescript-eslint/issues/9352
-				if (
-					path.includes('/@typescript-eslint/eslint-plugin/dist/rules/')
-					|| path.includes('/eslint-plugin-expect-type/lib/rules/')
-				) {
-					return JSON.stringify({
-						version: 3,
-						sources: [],
-						sourcesContent: [],
-						mappings: '',
-						names: [],
-					});
-				}
-			},
-		});
-	}
-
 	let languageServiceUsage = mode === 'typescript-plugin' ? 1 : 0;
 
 	const ts = ctx.typescript;
@@ -75,7 +51,7 @@ export function createLinter(
 			getEdits: () => ts.FileTextChanges[];
 		}[]
 	>();
-	const sourceFiles = new Map<string, [boolean, ts.SourceFile]>();
+	const sourceFiles = new Map<string, [exist: boolean, mtime: number, ts.SourceFile]>();
 	const snapshot2SourceFile = new WeakMap<ts.IScriptSnapshot, ts.SourceFile>();
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
@@ -86,13 +62,11 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
-	const debug = (Array.isArray(config) ? config : [config]).some(config => config.debug);
 
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let cacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
 			let uncacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
-			let debugInfo: ts.DiagnosticWithLocation | undefined;
 			let currentRuleId: string;
 			let currentIssues = 0;
 			let currentFixes = 0;
@@ -101,27 +75,7 @@ export function createLinter(
 			let sourceFile: ts.SourceFile | undefined;
 			let hasUncacheResult = false;
 
-			if (debug) {
-				debugInfo = {
-					category: ts.DiagnosticCategory.Message,
-					code: 'debug' as any,
-					messageText: '- Config: ' + ctx.configFile + '\n',
-					file: getSourceFile(fileName),
-					start: 0,
-					length: 0,
-					source: 'tsslint',
-					relatedInformation: [],
-				};
-				uncacheableDiagnostics.push(debugInfo);
-			}
-
 			const rules = getFileRules(fileName, cache);
-			if (!rules || !Object.keys(rules).length) {
-				if (debugInfo) {
-					debugInfo.messageText += '- Rules: ❌ (no rules)\n';
-				}
-			}
-
 			const prevLanguageServiceUsage = languageServiceUsage;
 			const rulesContext: RuleContext = {
 				...ctx,
@@ -146,10 +100,6 @@ export function createLinter(
 
 			fixes.clear();
 			refactors.length = 0;
-
-			if (debugInfo) {
-				debugInfo.messageText += '- Rules:\n';
-			}
 
 			runRules(rules);
 
@@ -244,40 +194,19 @@ export function createLinter(
 
 					hasUncacheResult = true;
 
-					const start = Date.now();
 					try {
 						rule(rulesContext);
-						if (debugInfo) {
-							const time = Date.now() - start;
-							debugInfo.messageText += `  - ${currentRuleId}`;
-							const details: string[] = [];
-							if (currentIssues) {
-								details.push(`${currentIssues} issues`);
-							}
-							if (currentFixes) {
-								details.push(`${currentFixes} fixes`);
-							}
-							if (currentRefactors) {
-								details.push(`${currentRefactors} refactors`);
-							}
-							if (time) {
-								details.push(`${time}ms`);
-							}
-							if (details.length) {
-								debugInfo.messageText += ` (${details.join(', ')})`;
-							}
-							debugInfo.messageText += '\n';
-						}
 					} catch (err) {
-						console.error(err);
-						if (debugInfo) {
-							debugInfo.messageText += `  - ${currentRuleId} (❌ ${err && typeof err === 'object' && 'stack' in err ? err.stack : String(err)}})\n`;
+						if (err instanceof Error) {
+							report(ts.DiagnosticCategory.Error, err.message, 0, 0, 0, err);
+						} else {
+							report(ts.DiagnosticCategory.Error, String(err), 0, 0, false);
 						}
 					}
 
-					if (debug && !!currentRuleLanguageServiceUsage !== !!languageServiceUsage) {
-						logger?.log.message(`Type-aware mode enabled by ${currentRuleId} rule.`);
-					}
+					// if (!!currentRuleLanguageServiceUsage !== !!languageServiceUsage) {
+					// 	logger?.log.message(`Type-aware mode enabled by ${currentRuleId} rule.`);
+					// }
 
 					if (cache && currentRuleLanguageServiceUsage === languageServiceUsage) {
 						cachedRules.set(currentRuleId, currentFixes);
@@ -285,19 +214,19 @@ export function createLinter(
 				}
 			};
 
-			function reportError(message: string, start: number, end: number, traceOffset: false | number = 0) {
-				return report(ts.DiagnosticCategory.Error, message, start, end, traceOffset);
+			function reportError(message: string, start: number, end: number, stackOffset?: false | number) {
+				return report(ts.DiagnosticCategory.Error, message, start, end, stackOffset);
 			}
 
-			function reportWarning(message: string, start: number, end: number, traceOffset: false | number = 0) {
-				return report(ts.DiagnosticCategory.Warning, message, start, end, traceOffset);
+			function reportWarning(message: string, start: number, end: number, stackOffset?: false | number) {
+				return report(ts.DiagnosticCategory.Warning, message, start, end, stackOffset);
 			}
 
-			function reportSuggestion(message: string, start: number, end: number, traceOffset: false | number = 0) {
-				return report(ts.DiagnosticCategory.Suggestion, message, start, end, traceOffset);
+			function reportSuggestion(message: string, start: number, end: number, stackOffset?: false | number) {
+				return report(ts.DiagnosticCategory.Suggestion, message, start, end, stackOffset);
 			}
 
-			function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, traceOffset: false | number): Reporter {
+			function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, stackOffset: false | number = 2, err?: Error): Reporter {
 				const error: ts.DiagnosticWithLocation = {
 					category,
 					code: currentRuleId as any,
@@ -321,15 +250,11 @@ export function createLinter(
 					});
 				}
 
-				if (mode === 'typescript-plugin') {
-					const stacks = traceOffset === false
-						? []
-						: ErrorStackParser.parse(new Error());
-					if (typeof traceOffset === 'number') {
-						const baseOffset = 2 + traceOffset;
-						if (stacks.length > baseOffset) {
-							pushRelatedInformation(error, stacks[baseOffset]);
-						}
+				if (mode === 'typescript-plugin' && typeof stackOffset === 'number') {
+					err ??= new Error();
+					const stacks = ErrorStackParser.parse(err);
+					if (stacks.length > stackOffset) {
+						pushRelatedInformation(error, stacks[stackOffset]);
 					}
 				}
 
@@ -365,37 +290,38 @@ export function createLinter(
 
 			function pushRelatedInformation(error: ts.DiagnosticWithLocation, stack: ErrorStackParser.StackFrame) {
 				if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
-					let fileName = stack.fileName
-						.replace(/\\/g, '/')
-						.split('?time=')[0];
+					let fileName = stack.fileName.replace(/\\/g, '/');
 					if (fileName.startsWith('file://')) {
 						fileName = fileName.substring('file://'.length);
 					}
 					if (fileName.includes('http-url:')) {
 						fileName = fileName.split('http-url:')[1];
 					}
-					if (!sourceFiles.has(fileName)) {
+					const mtime = ts.sys.getModifiedTime?.(fileName)?.getTime() ?? 0;
+					const lastMtime = sourceFiles.get(fileName)?.[1];
+					if (mtime !== lastMtime) {
 						const text = ctx.languageServiceHost.readFile(fileName);
 						sourceFiles.set(
 							fileName,
 							[
 								text !== undefined,
+								mtime,
 								ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
 							]
 						);
 					}
-					const [exist, stackFile] = sourceFiles.get(fileName)!;
+					const [exist, _mtime, relatedFile] = sourceFiles.get(fileName)!;
 					let pos = 0;
 					if (exist) {
 						try {
-							pos = stackFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
+							pos = relatedFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
 						} catch { }
 					}
 					error.relatedInformation ??= [];
 					error.relatedInformation.push({
 						category: ts.DiagnosticCategory.Message,
 						code: 0,
-						file: stackFile,
+						file: relatedFile,
 						start: pos,
 						length: 0,
 						messageText: 'at ' + (stack.functionName ?? '<anonymous>'),
