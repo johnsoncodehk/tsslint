@@ -238,19 +238,31 @@ function initSourceMapSupport() {
 	});
 	require('source-map-support').install({
 		retrieveFile(pathOrUrl: string) {
-			pathOrUrl = pathOrUrl.replace(/\\/g, '/');
-			// monkey-fix, refs: https://github.com/typescript-eslint/typescript-eslint/issues/9352
-			if (
-				pathOrUrl.includes('/@typescript-eslint/eslint-plugin/dist/rules/')
-				|| pathOrUrl.includes('/eslint-plugin-expect-type/lib/rules/')
-			) {
-				return JSON.stringify({
-					version: 3,
-					sources: [],
-					sourcesContent: [],
-					mappings: '',
-					names: [],
-				});
+			if (pathOrUrl.endsWith('.map')) {
+				try {
+					if (pathOrUrl.includes('://')) {
+						pathOrUrl = url.fileURLToPath(pathOrUrl);
+					}
+					const contents = fs.readFileSync(pathOrUrl, 'utf8');
+					const map = JSON.parse(contents);
+					for (let source of map.sources) {
+						if (!source.startsWith('./') && !source.startsWith('../')) {
+							source = './' + source;
+						}
+						source = path.resolve(path.dirname(pathOrUrl), source);
+						if (!fs.existsSync(source)) {
+							// Fixes https://github.com/typescript-eslint/typescript-eslint/issues/9352
+							return JSON.stringify({
+								version: 3,
+								sources: [],
+								sourcesContent: [],
+								mappings: '',
+								names: [],
+							});
+						}
+					}
+					return contents;
+				} catch { }
 			}
 		},
 	});
