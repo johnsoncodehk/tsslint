@@ -21,7 +21,7 @@ export function buildConfig(
 					if (builtConfig) {
 						spinner?.stop('Built ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms');
 					} else {
-						spinner?.stop('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms');
+						spinner?.stop('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
 					}
 					resolve(builtConfig);
 				},
@@ -30,7 +30,7 @@ export function buildConfig(
 				spinner
 			);
 		} catch (e) {
-			spinner?.stop('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms');
+			spinner?.stop('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
 			resolve(undefined);
 		}
 	});
