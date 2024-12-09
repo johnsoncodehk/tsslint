@@ -90,7 +90,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 				if (!tsconfig.startsWith('.')) {
 					tsconfig = `./${tsconfig}`;
 				}
-				await projectWorker(tsconfig);
+				await projectWorker(tsconfig, searchGlob);
 			}
 		}
 	}
@@ -102,11 +102,39 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 	process.exit(hasError ? 1 : 0);
 
-	async function projectWorker(tsconfigOption: string) {
+	async function projectWorker(tsconfigOption: string, rawOption?: string) {
 
 		const tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
 
-		clack.intro(`${purple('[project]')} ${path.relative(process.cwd(), tsconfig)}`);
+		if (rawOption) {
+			if (rawOption.startsWith('./')) {
+				rawOption = rawOption.slice(2);
+			}
+			tsconfigOption = path.relative(process.cwd(), tsconfig);
+			let left = '';
+			let right = '';
+			while (rawOption.length && tsconfigOption.length) {
+				if (rawOption[0] === tsconfigOption[0]) {
+					left += rawOption[0];
+					rawOption = rawOption.slice(1);
+					tsconfigOption = tsconfigOption.slice(1);
+				} else {
+					break;
+				}
+			}
+			while (rawOption.length && tsconfigOption.length) {
+				if (rawOption[rawOption.length - 1] === tsconfigOption[tsconfigOption.length - 1]) {
+					right = rawOption[rawOption.length - 1] + right;
+					rawOption = rawOption.slice(0, -1);
+					tsconfigOption = tsconfigOption.slice(0, -1);
+				} else {
+					break;
+				}
+			}
+			clack.intro(`${purple('[project]')} ${darkGray(left)}${tsconfigOption}${darkGray(right)}`);
+		} else {
+			clack.intro(`${purple('[project]')} ${path.relative(process.cwd(), tsconfig)}`);
+		}
 
 		parsed = parseCommonLine(tsconfig);
 		if (!parsed.fileNames.length) {
