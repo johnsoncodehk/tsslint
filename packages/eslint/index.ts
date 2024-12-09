@@ -78,7 +78,11 @@ export function convertConfig(rulesConfig: Record<string, Severity | [Severity, 
 					}
 				}
 				else {
-					ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
+					try {
+						ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
+					} catch {
+						ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
+					}
 				}
 				_rule = rules[rule] = convertRule(
 					ruleModule,
@@ -109,9 +113,18 @@ export function convertRule(
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
 	// ESLint internal scripts
-	const createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
-	const NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
-	const Traverser = require('../../eslint/lib/shared/traverser.js');
+	let createEmitter;
+	let NodeEventGenerator;
+	let Traverser;
+	try {
+		createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
+		NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
+		Traverser = require('../../eslint/lib/shared/traverser.js');
+	} catch {
+		createEmitter = require(require.resolve('./node_modules/eslint/lib/linter/safe-emitter.js'));
+		NodeEventGenerator = require(require.resolve('./node_modules/eslint/lib/linter/node-event-generator.js'));
+		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
+	}
 
 	const tsslintRule: TSSLint.Rule = ({ typescript: ts, sourceFile, languageService, languageServiceHost, reportError, reportWarning, reportSuggestion }) => {
 		const report =
@@ -413,9 +426,15 @@ function getEstree(
 ) {
 	if (!estrees.has(sourceFile)) {
 		let program: ts.Program | undefined;
+		let SourceCode;
 
 		const Parser = require('@typescript-eslint/parser');
-		const SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
+		try {
+			SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
+		} catch {
+			SourceCode = require(require.resolve('./node_modules/eslint/lib/languages/js/source-code/source-code.js'));
+		}
+
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
 				program ??= languageService.getProgram()!;
