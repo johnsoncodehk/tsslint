@@ -33,7 +33,7 @@ export function convertRule<T extends import('tslint/lib/language/rule/rule').Ru
 				failure.getFailure(),
 				failure.getStartPosition().getPosition(),
 				failure.getEndPosition().getPosition(),
-				4
+				6
 			);
 			if (failure.hasFix()) {
 				const fix = failure.getFix();
