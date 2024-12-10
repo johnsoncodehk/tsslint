@@ -5,13 +5,13 @@ export function buildConfig(
 	configFilePath: string,
 	createHash?: (path: string) => string,
 	// @ts-expect-error
-	logger?: typeof import('@clack/prompts')
+	spinner?: ReturnType<typeof import('@clack/prompts').spinner>,
+	stopSnipper?: (message: string, code?: number) => void
 ): Promise<string | undefined> {
 	const buildStart = Date.now();
 	const configFileDisplayPath = _path.relative(process.cwd(), configFilePath);
-	const spinner = logger?.spinner();
 
-	spinner?.start('Building ' + configFileDisplayPath);
+	spinner?.message('Building ' + configFileDisplayPath);
 
 	return new Promise(async resolve => {
 		try {
@@ -19,18 +19,19 @@ export function buildConfig(
 				configFilePath,
 				builtConfig => {
 					if (builtConfig) {
-						spinner?.stop('Built ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms');
+						stopSnipper?.('Built ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms');
 					} else {
-						spinner?.stop('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
+						stopSnipper?.('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
 					}
 					resolve(builtConfig);
 				},
 				false,
 				createHash,
-				spinner
+				spinner,
+				stopSnipper
 			);
 		} catch (e) {
-			spinner?.stop('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
+			stopSnipper?.('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
 			resolve(undefined);
 		}
 	});

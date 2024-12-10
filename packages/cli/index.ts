@@ -5,6 +5,7 @@ import cache = require('./lib/cache.js');
 import worker = require('./lib/worker.js');
 import glob = require('glob');
 import fs = require('fs');
+import os = require('os');
 
 const _reset = '\x1b[0m';
 const purple = (s: string) => '\x1b[35m' + s + _reset;
@@ -13,141 +14,202 @@ const lightRed = (s: string) => '\x1b[91m' + s + _reset;
 const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
 const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
+let threads = 1;
+
+if (process.argv.includes('--threads')) {
+	const threadsIndex = process.argv.indexOf('--threads');
+	const threadsArg = process.argv[threadsIndex + 1];
+	if (!threadsArg || threadsArg.startsWith('-')) {
+		console.error(lightRed(`Missing argument for --threads.`));
+		process.exit(1);
+	}
+	threads = Math.min(os.availableParallelism(), Number(threadsArg));
+}
+
 (async () => {
-	let hasError = false;
+	class Project {
+		tsconfig: string;
+		workers: ReturnType<typeof worker.create>[] = [];
+		fileNames: string[] = [];
+		options: ts.CompilerOptions = {};
+		configFile: string | undefined;
+		currentFileIndex = 0;
+		builtConfig: string | undefined;
+		cache: cache.CacheData = {};
 
-	const builtConfigs = new Map<string, string | undefined>();
-	const clack = await import('@clack/prompts');
-	const linterWorker = worker.create();
-
-	if (process.argv.includes('--project')) {
-
-		const projectIndex = process.argv.indexOf('--project');
-
-		let tsconfig = process.argv[projectIndex + 1];
-
-		if (tsconfig.startsWith('-') || !tsconfig) {
-			clack.log.error(lightRed(`Missing argument for --project.`));
-		}
-		else {
-			if (!tsconfig.startsWith('.')) {
-				tsconfig = `./${tsconfig}`;
+		constructor(tsconfigOption: string) {
+			try {
+				this.tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
+			} catch {
+				console.error(lightRed(`No such file: ${tsconfigOption}`));
+				process.exit(1);
 			}
-			await projectWorker(tsconfig);
+			this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
+
+			if (!this.configFile) {
+				log(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
+				return;
+			}
+
+			const commonLine = parseCommonLine(this.tsconfig);
+			this.fileNames = commonLine.fileNames;
+			this.options = commonLine.options;
+
+			if (!this.fileNames.length) {
+				log(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
+				return;
+			}
+
+			log(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
+
+			if (!process.argv.includes('--force')) {
+				this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
+			}
 		}
 	}
+
+	const builtConfigs = new Map<string, Promise<string | undefined>>();
+	const clack = await import('@clack/prompts');
+	const processFiles = new Set<string>();
+
+	let projects: Project[] = [];
+	let spinner = clack.spinner();
+	let hasFix = false;
+	let allFilesNum = 0;
+	let processed = 0;
+	let excluded = 0;
+	let passed = 0;
+	let errors = 0;
+	let warnings = 0;
+	let cached = 0;
+
+	spinner.start();
+
+	if (process.argv.includes('--project')) {
+		const projectIndex = process.argv.indexOf('--project');
+		let tsconfig = process.argv[projectIndex + 1];
+		if (!tsconfig || tsconfig.startsWith('-')) {
+			console.error(lightRed(`Missing argument for --project.`));
+			process.exit(1);
+		}
+		if (!tsconfig.startsWith('.')) {
+			tsconfig = `./${tsconfig}`;
+		}
+		projects.push(new Project(tsconfig));
+	}
 	else if (process.argv.includes('--projects')) {
-
 		const projectsIndex = process.argv.indexOf('--projects');
-
+		let foundArg = false;
 		for (let i = projectsIndex + 1; i < process.argv.length; i++) {
-
 			if (process.argv[i].startsWith('-')) {
 				break;
 			}
-
+			foundArg = true;
 			const searchGlob = process.argv[i];
 			const tsconfigs = glob.sync(searchGlob);
-
 			for (let tsconfig of tsconfigs) {
 				if (!tsconfig.startsWith('.')) {
 					tsconfig = `./${tsconfig}`;
 				}
-				await projectWorker(tsconfig, searchGlob);
+				projects.push(new Project(tsconfig));
 			}
+		}
+		if (!foundArg) {
+			console.error(lightRed(`Missing argument for --projects.`));
+			process.exit(1);
 		}
 	}
 	else {
 		const tsconfig = await askTSConfig();
-
-		await projectWorker(tsconfig);
+		projects.push(new Project(tsconfig));
 	}
 
-	process.exit(hasError ? 1 : 0);
+	projects = projects.filter(project => !!project.configFile);
+	projects = projects.filter(project => !!project.fileNames.length);
+	for (const project of projects) {
+		project.builtConfig = await getBuiltConfig(project.configFile!);
+	}
+	projects = projects.filter(project => !!project.builtConfig);
+	for (const project of projects) {
+		allFilesNum += project.fileNames.length;
+	}
 
-	async function projectWorker(tsconfigOption: string, rawOption?: string) {
+	if (allFilesNum === 0) {
+		spinner.stop(lightYellow('No input files.'));
+		process.exit(1);
+	}
 
-		const tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
+	await Promise.all(new Array(threads).fill(0).map(() => {
+		return startWorker();
+	}));
 
-		if (rawOption && rawOption !== (tsconfigOption = path.relative(process.cwd(), tsconfig))) {
-			if (rawOption.startsWith('./')) {
-				rawOption = rawOption.slice(2);
-			}
-			let left = '';
-			let right = '';
-			while (rawOption.length && tsconfigOption.length) {
-				if (rawOption[0] === tsconfigOption[0]) {
-					left += rawOption[0];
-					rawOption = rawOption.slice(1);
-					tsconfigOption = tsconfigOption.slice(1);
-				} else {
-					break;
-				}
-			}
-			while (rawOption.length && tsconfigOption.length) {
-				if (rawOption[rawOption.length - 1] === tsconfigOption[tsconfigOption.length - 1]) {
-					right = rawOption[rawOption.length - 1] + right;
-					rawOption = rawOption.slice(0, -1);
-					tsconfigOption = tsconfigOption.slice(0, -1);
-				} else {
-					break;
-				}
-			}
-			clack.intro(`${purple('[project]')} ${darkGray(left)}${tsconfigOption}${darkGray(right)}`);
-		} else {
-			clack.intro(`${purple('[project]')} ${path.relative(process.cwd(), tsconfig)}`);
+	spinner.stop(
+		darkGray(
+			cached
+				? `Processed ${processed} files with cache. (Use --force to ignore cache.)`
+				: `Processed ${processed} files.`
+		)
+	);
+
+	const data = [
+		[passed, 'passed', lightGreen] as const,
+		[errors, 'errors', lightRed] as const,
+		[warnings, 'warnings', lightYellow] as const,
+		[excluded, 'excluded', darkGray] as const,
+	];
+
+	let summary = data
+		.filter(([count]) => count)
+		.map(([count, label, color]) => color(`${count} ${label}`))
+		.join(darkGray(' | '));
+
+	if (hasFix) {
+		summary += darkGray(` (Use --fix to apply automatic fixes.)`);
+	} else if (errors || warnings) {
+		summary += darkGray(` (No fixes available.)`);
+	}
+
+	clack.outro(summary);
+	process.exit(errors ? 1 : 0);
+
+	async function startWorker(linterWorker = worker.create()) {
+		const unfinishedProjects = projects.filter(project => project.currentFileIndex < project.fileNames.length);
+		if (!unfinishedProjects.length) {
+			return;
 		}
+		// Select a project that has not has a worker yet
+		let project = unfinishedProjects.find(project => !project.workers.length);
+		if (!project) {
+			// Choose a project with the most files left per worker
+			project = unfinishedProjects.sort((a, b) => {
+				const aFilesPerWorker = (a.fileNames.length - a.currentFileIndex) / a.workers.length;
+				const bFilesPerWorker = (b.fileNames.length - b.currentFileIndex) / b.workers.length;
+				return bFilesPerWorker - aFilesPerWorker;
+			})[0];
+		}
+		project.workers.push(linterWorker);
 
-		const { fileNames, options } = parseCommonLine(tsconfig);
-		if (!fileNames.length) {
-			clack.outro(lightYellow('No included files.'));
+		const setupSuccess = await linterWorker.setup(
+			project.tsconfig,
+			project.configFile!,
+			project.builtConfig!,
+			project.fileNames,
+			project.options
+		);
+		if (!setupSuccess) {
+			projects = projects.filter(p => p !== project);
+			startWorker(linterWorker);
 			return;
 		}
 
-		const configFile = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
-		if (!configFile) {
-			clack.outro(lightYellow('No tsslint.config.ts found.'));
-			return;
-		}
-
-		if (!builtConfigs.has(configFile)) {
-			builtConfigs.set(configFile, await core.buildConfig(configFile, ts.sys.createHash, clack));
-		}
-
-		const builtConfig = builtConfigs.get(configFile);
-		if (!builtConfig) {
-			clack.outro(lightYellow('Failed to build config.'));
-			return;
-		}
-
-		const lintCache = process.argv.includes('--force')
-			? {}
-			: cache.loadCache(tsconfig, configFile, ts.sys.createHash);
-
-		const success = await linterWorker.setup(tsconfig, configFile, builtConfig, fileNames, options);
-		if (!success) {
-			clack.outro(lightYellow('Failed to setup worker.'));
-			return;
-		}
-
-		let lintSpinner: ReturnType<typeof clack['spinner']> | undefined = clack.spinner();
-		let hasFix = false;
-		let excluded = 0;
-		let passed = 0;
-		let errors = 0;
-		let warnings = 0;
-		let cached = 0;
-
-		lintSpinner.start();
-
-		for (let i = 0; i < fileNames.length; i++) {
-
-			const fileName = fileNames[i];
-
-			lintSpinner.message(darkGray(`[${i + 1}/${fileNames.length}] ${path.relative(process.cwd(), fileName)}`));
-
+		while (project.currentFileIndex < project.fileNames.length) {
+			const i = project.currentFileIndex++;
+			const fileName = project.fileNames[i];
 			const fileMtime = fs.statSync(fileName).mtimeMs;
-			let fileCache = lintCache[fileName];
+
+			addProcessFile(fileName);
+
+			let fileCache = project.cache[fileName];
 			if (fileCache) {
 				if (fileCache[0] !== fileMtime) {
 					fileCache[0] = fileMtime;
@@ -161,7 +223,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 				}
 			}
 			else {
-				lintCache[fileName] = fileCache = [fileMtime, {}, [], [], {}];
+				project.cache[fileName] = fileCache = [fileMtime, {}, [], [], {}];
 			}
 
 			let diagnostics!: ts.DiagnosticWithLocation[];
@@ -174,7 +236,6 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
-				hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
 
 				for (const diagnostic of diagnostics) {
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
@@ -188,31 +249,16 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 					});
 					output = output.replace(`TS${diagnostic.code}`, String(diagnostic.code));
 
-					if (lintSpinner) {
-						if (diagnostic.category === ts.DiagnosticCategory.Error) {
-							errors++;
-							lintSpinner.stop(output, 1);
-						}
-						else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
-							warnings++;
-							lintSpinner.stop(output, 2);
-						}
-						else {
-							lintSpinner.stop(output);
-						}
-						lintSpinner = undefined;
-					} else {
-						if (diagnostic.category === ts.DiagnosticCategory.Error) {
-							errors++;
-							clack.log.error(output);
-						}
-						else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
-							warnings++;
-							clack.log.warning(output);
-						}
-						else {
-							clack.log.info(output);
-						}
+					if (diagnostic.category === ts.DiagnosticCategory.Error) {
+						errors++;
+						log(output, 1);
+					}
+					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+						warnings++;
+						log(output, 2);
+					}
+					else {
+						log(output);
 					}
 				}
 			} else if (!(await linterWorker.hasRules(fileName, fileCache[4]))) {
@@ -220,40 +266,21 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			} else {
 				passed++;
 			}
+			processed++;
 
-			if (!lintSpinner) {
-				lintSpinner = clack.spinner();
-				lintSpinner.start();
-			}
+			removeProcessFile(fileName);
 		}
 
-		if (cached) {
-			lintSpinner.stop(darkGray(`Processed ${fileNames.length} files with cache. (Use --force to ignore cache.)`));
-		} else {
-			lintSpinner.stop(darkGray(`Processed ${fileNames.length} files.`));
+		cache.saveCache(project.tsconfig, project.configFile!, project.cache, ts.sys.createHash);
+
+		await startWorker(linterWorker);
+	}
+
+	async function getBuiltConfig(configFile: string) {
+		if (!builtConfigs.has(configFile)) {
+			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, spinner, (s, code) => log(darkGray(s), code)));
 		}
-
-		const data = [
-			[passed, 'passed', lightGreen] as const,
-			[errors, 'errors', lightRed] as const,
-			[warnings, 'warnings', lightYellow] as const,
-			[excluded, 'excluded', darkGray] as const,
-		];
-
-		let summary = data
-			.filter(([count]) => count)
-			.map(([count, label, color]) => color(`${count} ${label}`))
-			.join(darkGray(' | '));
-
-		if (hasFix) {
-			summary += darkGray(` (Use --fix to apply automatic fixes.)`);
-		} else if (errors || warnings) {
-			summary += darkGray(` (No fixes available.)`);
-		}
-
-		clack.outro(summary);
-
-		cache.saveCache(tsconfig, configFile, lintCache, ts.sys.createHash);
+		return await builtConfigs.get(configFile);
 	}
 
 	async function askTSConfig() {
@@ -282,5 +309,30 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 	function parseCommonLine(tsconfig: string) {
 		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
 		return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig);
+	}
+
+	function addProcessFile(fileName: string) {
+		processFiles.add(fileName);
+		updateSpinner();
+	}
+
+	function removeProcessFile(fileName: string) {
+		processFiles.delete(fileName);
+		updateSpinner();
+	}
+
+	function updateSpinner() {
+		if (processFiles.size === 1) {
+			const fileName = processFiles.values().next().value!;
+			spinner.message(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), fileName)}`);
+		} else {
+			spinner.message(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
+		}
+	}
+
+	function log(msg: string, code?: number) {
+		spinner.stop(msg, code);
+		spinner = clack.spinner();
+		spinner.start();
 	}
 })();

@@ -7,11 +7,14 @@ interface CommentState {
 	end: number;
 }
 
-export function create(cmd: string, reportsUnusedComments: boolean): Plugin {
+export function create(
+	cmd: string,
+	reportsUnusedComments: boolean,
+	reg = new RegExp(`//\\s*${cmd}\\b[ \\t]*(?<ruleId>\\S*)\\b`, 'g'),
+	completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/,
+	completeReg2 = new RegExp(`//\\s*${cmd}\\b[ \\t]*(\\S*)?$`)
+): Plugin {
 	return ({ typescript: ts, languageService }) => {
-		const reg = new RegExp(`//\\s*${cmd}\\b[ \\t]*(?<ruleId>\\S*)\\b`, 'g');
-		const completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/;
-		const completeReg2 = new RegExp(`//\\s*${cmd}\\b[ \\t]*(\\S*)?$`);
 		const reportedRulesOfFile = new Map<string, [string, number][]>();
 		const { getCompletionsAtPosition } = languageService;
 

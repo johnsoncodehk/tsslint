@@ -5,7 +5,7 @@ import { createIgnorePlugin } from '@tsslint/config';
  */
 export function create(
 	reportsUnusedComments = true,
-	cmdOrReg = 'eslint-disable-next-line'
+	reg = new RegExp(/\/\/\s*eslint-disable-next-line\b[ \t]*(?<ruleId>\S*)\b/g)
 ) {
-	return createIgnorePlugin(cmdOrReg, reportsUnusedComments);
+	return createIgnorePlugin('eslint-disable-next-line', reportsUnusedComments, reg);
 }

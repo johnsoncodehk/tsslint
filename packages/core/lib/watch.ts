@@ -9,12 +9,12 @@ export async function watchConfig(
 	watch = true,
 	createHash: (path: string) => string = btoa,
 	// @ts-expect-error
-	spinner?: ReturnType<typeof import('@clack/prompts').spinner>
+	spinner?: ReturnType<typeof import('@clack/prompts').spinner>,
+	stopSnipper?: (message: string, code?: number) => void
 ) {
 	const outDir = getDotTsslintPath(configFilePath);
 	const outFileName = createHash(_path.relative(outDir, configFilePath)) + '.mjs';
 	const outFile = _path.join(outDir, outFileName);
-	const configFileDisplayPath = _path.relative(process.cwd(), configFilePath);
 	const resultHandler = (result: esbuild.BuildResult) => {
 		if (!result.errors.length) {
 			onBuild(outFile, result);
@@ -35,12 +35,13 @@ export async function watchConfig(
 				build.onResolve({ filter: /^https?:\/\// }, async ({ path: importUrl }) => {
 					const cachePath = _path.join(outDir, importUrl.split('://')[0], ...importUrl.split('://')[1].split('/'));
 					if (!fs.existsSync(cachePath)) {
+						const start = Date.now();
 						spinner?.message('Downloading ' + importUrl);
 						const response = await fetch(importUrl);
-						spinner?.message('Building ' + configFileDisplayPath);
 						if (!response.ok) {
 							throw new Error(`Failed to load ${importUrl}`);
 						}
+						stopSnipper?.('Downloaded ' + importUrl + ' in ' + (Date.now() - start) + 'ms');
 						const text = await response.text();
 						fs.mkdirSync(_path.dirname(cachePath), { recursive: true });
 						fs.writeFileSync(cachePath, text, 'utf8');
