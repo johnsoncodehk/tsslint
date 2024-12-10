@@ -11,27 +11,6 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-/**
- * @deprecated Use `convertConfig` instead.
- */
-export function loadPluginRules(
-	rulesConfig: Record<string, Severity | [Severity, ...any[]]>,
-	ruleOptions?: Record<string, any[]>
-) {
-	if (ruleOptions) {
-		for (const rule in ruleOptions) {
-			const config = rulesConfig[rule];
-			if (typeof config === 'string') {
-				rulesConfig[rule] = [config, ...ruleOptions[rule]];
-			}
-			else if (Array.isArray(config)) {
-				rulesConfig[rule] = [config[0], ...ruleOptions[rule]];
-			}
-		}
-	}
-	return convertConfig(rulesConfig);
-}
-
 export type Severity = 'error' | 'warn' | 'suggestion' | 'off';
 
 export function convertConfig(rulesConfig: Record<string, Severity | [Severity, ...any[]]>) {
