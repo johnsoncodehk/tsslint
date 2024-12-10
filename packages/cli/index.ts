@@ -69,11 +69,10 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 		const tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
 
-		if (rawOption && rawOption !== tsconfigOption) {
+		if (rawOption && rawOption !== (tsconfigOption = path.relative(process.cwd(), tsconfig))) {
 			if (rawOption.startsWith('./')) {
 				rawOption = rawOption.slice(2);
 			}
-			tsconfigOption = path.relative(process.cwd(), tsconfig);
 			let left = '';
 			let right = '';
 			while (rawOption.length && tsconfigOption.length) {
@@ -138,7 +137,6 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		let errors = 0;
 		let warnings = 0;
 		let cached = 0;
-		let t = 0;
 
 		lintSpinner.start();
 
@@ -146,11 +144,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 			const fileName = fileNames[i];
 
-			if (Date.now() - t > 100) {
-				t = Date.now();
-				lintSpinner.message(darkGray(`[${i + 1}/${fileNames.length}] ${path.relative(process.cwd(), fileName)}`));
-				await new Promise(resolve => setTimeout(resolve, 0));
-			}
+			lintSpinner.message(darkGray(`[${i + 1}/${fileNames.length}] ${path.relative(process.cwd(), fileName)}`));
 
 			const fileMtime = fs.statSync(fileName).mtimeMs;
 			let fileCache = lintCache[fileName];
