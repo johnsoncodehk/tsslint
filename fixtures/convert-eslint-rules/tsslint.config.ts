@@ -1,9 +1,10 @@
-import { defineConfig } from '@tsslint/config';
-import { convertRule, createDisableNextLinePlugin } from '@tsslint/eslint';
+import { defineConfig, createIgnorePlugin } from '@tsslint/config';
+import { convertRule } from '@tsslint/eslint';
 
 export default defineConfig({
 	plugins: [
-		createDisableNextLinePlugin(),
+		createIgnorePlugin('@tsslint-ignore', false),
+		createIgnorePlugin('@tsslint-expect-error', true),
 	],
 	rules: {
 		'no-console': convertRule((await import('../../packages/eslint/node_modules/eslint/lib/rules/no-console.js')).default),

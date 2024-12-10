@@ -17,6 +17,7 @@
 		"typescript": "latest"
 	},
 	"dependencies": {
+		"@tsslint/config": "1.3.6",
 		"@typescript-eslint/parser": "^8.16.0",
 		"eslint": "^9.0.0"
 	}

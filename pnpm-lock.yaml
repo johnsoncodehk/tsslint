@@ -114,6 +114,9 @@ importers:
 
   packages/eslint:
     dependencies:
+      '@tsslint/config':
+        specifier: 1.3.6
+        version: link:../config
       '@typescript-eslint/parser':
         specifier: ^8.16.0
         version: 8.17.0(eslint@9.16.0)(typescript@5.7.2)
