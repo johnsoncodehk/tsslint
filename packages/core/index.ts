@@ -18,6 +18,8 @@ export type FileLintCache = [
 
 export type Linter = ReturnType<typeof createLinter>;
 
+const typeAwareModeChange = new Error('enable type-aware mode');
+
 export function createLinter(
 	ctx: ProjectContext,
 	config: Config | Config[],
@@ -25,11 +27,15 @@ export function createLinter(
 	// @ts-expect-error
 	logger?: typeof import('@clack/prompts')
 ) {
-	let languageServiceUsage = mode === 'typescript-plugin' ? 1 : 0;
+	let languageServiceUsage = 0;
 
 	const ts = ctx.typescript;
 	const languageService = new Proxy(ctx.languageService, {
 		get(target, key, receiver) {
+			if (!languageServiceUsage) {
+				languageServiceUsage++;
+				throw typeAwareModeChange;
+			}
 			languageServiceUsage++;
 			return Reflect.get(target, key, receiver);
 		},
@@ -74,8 +80,7 @@ export function createLinter(
 			let sourceFile: ts.SourceFile | undefined;
 			let hasUncacheResult = false;
 
-			const rules = getFileRules(fileName, cache);
-			const prevLanguageServiceUsage = languageServiceUsage;
+			const rules = getFileRules(fileName, cache?.[4]);
 			const rulesContext: RuleContext = {
 				...ctx,
 				languageService,
@@ -100,13 +105,11 @@ export function createLinter(
 			fixes.clear();
 			refactors.length = 0;
 
-			runRules(rules);
-
-			if (!!prevLanguageServiceUsage !== !!languageServiceUsage) {
+			if (!runRules(rules)) {
 				return this.lint(fileName, cache);
 			}
 
-			const configs = getFileConfigs(fileName, cache);
+			const configs = getFileConfigs(fileName, cache?.[4]);
 
 			if (cache) {
 				for (const [ruleId, fixes] of cachedRules) {
@@ -177,7 +180,9 @@ export function createLinter(
 						break;
 					}
 					if (typeof rule === 'object') {
-						runRules(rule, [...paths, path]);
+						if (!runRules(rule, [...paths, path])) {
+							return false;
+						}
 						continue;
 					}
 
@@ -196,21 +201,21 @@ export function createLinter(
 					try {
 						rule(rulesContext);
 					} catch (err) {
-						if (err instanceof Error) {
-							report(ts.DiagnosticCategory.Error, err.message, 0, 0, 0, err);
+						if (err === typeAwareModeChange) {
+							// logger?.log.message(`Type-aware mode enabled by ${currentRuleId} rule.`);
+							return false;
+						} else if (err instanceof Error) {
+							report(ts.DiagnosticCategory.Error, err.stack ?? err.message, 0, 0, 0, err);
 						} else {
 							report(ts.DiagnosticCategory.Error, String(err), 0, 0, false);
 						}
 					}
 
-					// if (!!currentRuleLanguageServiceUsage !== !!languageServiceUsage) {
-					// 	logger?.log.message(`Type-aware mode enabled by ${currentRuleId} rule.`);
-					// }
-
 					if (cache && currentRuleLanguageServiceUsage === languageServiceUsage) {
 						cachedRules.set(currentRuleId, currentFixes);
 					}
 				}
+				return true;
 			};
 
 			function reportError(message: string, start: number, end: number, stackOffset?: false | number) {
@@ -304,10 +309,10 @@ export function createLinter(
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			cache?: FileLintCache
+			minimatchCache?: FileLintCache[4]
 		) {
 
-			const configs = getFileConfigs(fileName, cache);
+			const configs = getFileConfigs(fileName, minimatchCache);
 			const fixesMap = getFileFixes(fileName);
 			const result: ts.CodeFixAction[] = [];
 
@@ -403,11 +408,11 @@ export function createLinter(
 		throw new Error('No source file');
 	}
 
-	function getFileRules(fileName: string, cache: undefined | FileLintCache) {
+	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[4]) {
 		let result = fileRules.get(fileName);
 		if (!result) {
 			result = {};
-			const configs = getFileConfigs(fileName, cache);
+			const configs = getFileConfigs(fileName, minimatchCache);
 			for (const { rules } of configs) {
 				result = {
 					...result,
@@ -426,7 +431,7 @@ export function createLinter(
 		return result;
 	}
 
-	function getFileConfigs(fileName: string, cache: undefined | FileLintCache) {
+	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[4]) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
@@ -441,9 +446,9 @@ export function createLinter(
 			fileConfigs.set(fileName, result);
 
 			function _minimatch(pattern: string) {
-				if (cache) {
-					if (pattern in cache[4]) {
-						return cache[4][pattern];
+				if (minimatchCache) {
+					if (pattern in minimatchCache) {
+						return minimatchCache[pattern];
 					}
 				}
 				let normalized = normalizedPath.get(pattern);
@@ -452,8 +457,8 @@ export function createLinter(
 					normalizedPath.set(pattern, normalized);
 				}
 				const res = minimatch.minimatch(fileName, normalized);
-				if (cache) {
-					cache[4][pattern] = res;
+				if (minimatchCache) {
+					minimatchCache[pattern] = res;
 				}
 				return res;
 			}

@@ -1,10 +1,9 @@
 import ts = require('typescript');
 import path = require('path');
-import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
-import cache = require('./lib/cache');
+import cache = require('./lib/cache.js');
+import worker = require('./lib/worker.js');
 import glob = require('glob');
-import url = require('url');
 import fs = require('fs');
 
 const _reset = '\x1b[0m';
@@ -15,47 +14,11 @@ const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
 const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 (async () => {
-
 	let hasError = false;
-	let projectVersion = 0;
-	let typeRootsVersion = 0;
-	let parsed: ts.ParsedCommandLine;
 
+	const builtConfigs = new Map<string, string | undefined>();
 	const clack = await import('@clack/prompts');
-	const snapshots = new Map<string, ts.IScriptSnapshot>();
-	const versions = new Map<string, number>();
-	const configs = new Map<string, config.Config | config.Config[] | undefined>();
-	const languageServiceHost: ts.LanguageServiceHost = {
-		...ts.sys,
-		useCaseSensitiveFileNames() {
-			return ts.sys.useCaseSensitiveFileNames;
-		},
-		getProjectVersion() {
-			return projectVersion.toString();
-		},
-		getTypeRootsVersion() {
-			return typeRootsVersion;
-		},
-		getCompilationSettings() {
-			return parsed.options;
-		},
-		getScriptFileNames() {
-			return parsed.fileNames;
-		},
-		getScriptVersion(fileName) {
-			return versions.get(fileName)?.toString() ?? '0';
-		},
-		getScriptSnapshot(fileName) {
-			if (!snapshots.has(fileName)) {
-				snapshots.set(fileName, ts.ScriptSnapshot.fromString(ts.sys.readFile(fileName)!));
-			}
-			return snapshots.get(fileName);
-		},
-		getDefaultLibFileName(options) {
-			return ts.getDefaultLibFilePath(options);
-		},
-	};
-	const languageService = ts.createLanguageService(languageServiceHost);
+	const linterWorker = worker.create();
 
 	if (process.argv.includes('--project')) {
 
@@ -106,7 +69,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 		const tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
 
-		if (rawOption) {
+		if (rawOption && rawOption !== tsconfigOption) {
 			if (rawOption.startsWith('./')) {
 				rawOption = rawOption.slice(2);
 			}
@@ -136,8 +99,8 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			clack.intro(`${purple('[project]')} ${path.relative(process.cwd(), tsconfig)}`);
 		}
 
-		parsed = parseCommonLine(tsconfig);
-		if (!parsed.fileNames.length) {
+		const { fileNames, options } = parseCommonLine(tsconfig);
+		if (!fileNames.length) {
 			clack.outro(lightYellow('No included files.'));
 			return;
 		}
@@ -148,44 +111,25 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			return;
 		}
 
-		if (!configs.has(configFile)) {
-			configs.set(configFile, undefined);
-
-			const builtConfig = await core.buildConfig(configFile, ts.sys.createHash, clack);
-
-			if (builtConfig) {
-				try {
-					configs.set(configFile, (await import(url.pathToFileURL(builtConfig).toString())).default);
-				} catch (err) {
-					if (err instanceof Error) {
-						clack.log.error(err.stack ?? err.message);
-					} else {
-						clack.log.error(String(err));
-					}
-				}
-			}
+		if (!builtConfigs.has(configFile)) {
+			builtConfigs.set(configFile, await core.buildConfig(configFile, ts.sys.createHash, clack));
 		}
 
-		const tsslintConfig = configs.get(configFile);
-		if (!tsslintConfig) {
-			clack.outro(lightYellow('Failed to load tsslint.config.ts.'));
+		const builtConfig = builtConfigs.get(configFile);
+		if (!builtConfig) {
+			clack.outro(lightYellow('Failed to build config.'));
 			return;
 		}
 
-		projectVersion++;
-		typeRootsVersion++;
-
 		const lintCache = process.argv.includes('--force')
 			? {}
-			: cache.loadCache(configFile, ts.sys.createHash);
-		const projectContext: config.ProjectContext = {
-			configFile,
-			languageService,
-			languageServiceHost,
-			typescript: ts,
-			tsconfig: ts.server.toNormalizedPath(tsconfig),
-		};
-		const linter = core.createLinter(projectContext, tsslintConfig, 'cli', clack);
+			: cache.loadCache(tsconfig, configFile, ts.sys.createHash);
+
+		const success = await linterWorker.setup(tsconfig, configFile, builtConfig, fileNames, options);
+		if (!success) {
+			clack.outro(lightYellow('Failed to setup worker.'));
+			return;
+		}
 
 		let lintSpinner: ReturnType<typeof clack['spinner']> | undefined = clack.spinner();
 		let hasFix = false;
@@ -194,17 +138,17 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		let errors = 0;
 		let warnings = 0;
 		let cached = 0;
-		let t = Date.now();
+		let t = 0;
 
 		lintSpinner.start();
 
-		for (let i = 0; i < parsed.fileNames.length; i++) {
+		for (let i = 0; i < fileNames.length; i++) {
 
-			const fileName = parsed.fileNames[i];
+			const fileName = fileNames[i];
 
 			if (Date.now() - t > 100) {
 				t = Date.now();
-				lintSpinner.message(darkGray(`[${i + 1}/${parsed.fileNames.length}] ${path.relative(process.cwd(), fileName)}`));
+				lintSpinner.message(darkGray(`[${i + 1}/${fileNames.length}] ${path.relative(process.cwd(), fileName)}`));
 				await new Promise(resolve => setTimeout(resolve, 0));
 			}
 
@@ -229,48 +173,13 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 			let diagnostics!: ts.DiagnosticWithLocation[];
 
 			if (process.argv.includes('--fix')) {
-
-				let retry = 3;
-				let shouldRetry = true;
-				let newSnapshot: ts.IScriptSnapshot | undefined;
-
-				while (shouldRetry && retry) {
-					shouldRetry = false;
-					retry--;
-					if (Object.values(fileCache[1]).some(fixes => fixes > 0)) {
-						// Reset the cache if there are any fixes applied.
-						fileCache[1] = {};
-						fileCache[2].length = 0;
-						fileCache[3].length = 0;
-					}
-					diagnostics = linter.lint(fileName, fileCache);
-					const fixes = linter.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache);
-					const textChanges = core.combineCodeFixes(fileName, fixes);
-					if (textChanges.length) {
-						const oldSnapshot = snapshots.get(fileName)!;
-						newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
-						snapshots.set(fileName, newSnapshot);
-						versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
-						projectVersion++;
-						shouldRetry = true;
-					}
-				}
-
-				if (newSnapshot) {
-					ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
-					fileCache[0] = fs.statSync(fileName).mtimeMs;
-				}
-
-				if (shouldRetry) {
-					diagnostics = linter.lint(fileName, fileCache);
-				}
-			}
-			else {
-				diagnostics = linter.lint(fileName, fileCache);
+				diagnostics = await linterWorker.lintAndFix(fileName, fileCache);
+			} else {
+				diagnostics = await linterWorker.lint(fileName, fileCache);
 			}
 
 			if (diagnostics.length) {
-				hasFix ||= linter.hasCodeFixes(fileName);
+				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 				hasError ||= diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
 
 				for (const diagnostic of diagnostics) {
@@ -312,7 +221,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 						}
 					}
 				}
-			} else if (!Object.keys(linter.getRules(fileName, fileCache)).length) {
+			} else if (!(await linterWorker.hasRules(fileName, fileCache[4]))) {
 				excluded++;
 			} else {
 				passed++;
@@ -325,9 +234,9 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 		}
 
 		if (cached) {
-			lintSpinner.stop(darkGray(`Processed ${parsed.fileNames.length} files with cache. (Use --force to ignore cache.)`));
+			lintSpinner.stop(darkGray(`Processed ${fileNames.length} files with cache. (Use --force to ignore cache.)`));
 		} else {
-			lintSpinner.stop(darkGray(`Processed ${parsed.fileNames.length} files.`));
+			lintSpinner.stop(darkGray(`Processed ${fileNames.length} files.`));
 		}
 
 		const data = [
@@ -350,7 +259,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 		clack.outro(summary);
 
-		cache.saveCache(configFile, lintCache, ts.sys.createHash);
+		cache.saveCache(tsconfig, configFile, lintCache, ts.sys.createHash);
 	}
 
 	async function askTSConfig() {
