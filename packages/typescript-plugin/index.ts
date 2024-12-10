@@ -197,13 +197,25 @@ function decorateLanguageService(
 							} catch (err) {
 								config = undefined;
 								linter = undefined;
-								configFileDiagnostics.push({
-									category: ts.DiagnosticCategory.Error,
-									code: 0,
-									messageText: err instanceof Error
-										? err.stack ?? err.message
-										: String(err),
-								});
+								const prevLength = configFileDiagnostics.length;
+								if (err instanceof Error) {
+									const relatedInfo = core.createRelatedInformation(ts, err, 0);
+									if (relatedInfo) {
+										configFileDiagnostics.push({
+											category: ts.DiagnosticCategory.Error,
+											code: 0,
+											messageText: err.message,
+											relatedInformation: [relatedInfo],
+										});
+									}
+								}
+								if (prevLength === configFileDiagnostics.length) {
+									configFileDiagnostics.push({
+										category: ts.DiagnosticCategory.Error,
+										code: 0,
+										messageText: String(err),
+									});
+								}
 							}
 						}
 						info.project.refreshDiagnostics();

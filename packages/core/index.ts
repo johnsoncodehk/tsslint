@@ -51,7 +51,6 @@ export function createLinter(
 			getEdits: () => ts.FileTextChanges[];
 		}[]
 	>();
-	const sourceFiles = new Map<string, [exist: boolean, mtime: number, ts.SourceFile]>();
 	const snapshot2SourceFile = new WeakMap<ts.IScriptSnapshot, ts.SourceFile>();
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
@@ -252,9 +251,9 @@ export function createLinter(
 
 				if (mode === 'typescript-plugin' && typeof stackOffset === 'number') {
 					err ??= new Error();
-					const stacks = ErrorStackParser.parse(err);
-					if (stacks.length > stackOffset) {
-						pushRelatedInformation(error, stacks[stackOffset]);
+					const relatedInfo = createRelatedInformation(ts, err, stackOffset);
+					if (relatedInfo) {
+						error.relatedInformation!.push(relatedInfo);
 					}
 				}
 
@@ -286,47 +285,6 @@ export function createLinter(
 						return this;
 					},
 				};
-			}
-
-			function pushRelatedInformation(error: ts.DiagnosticWithLocation, stack: ErrorStackParser.StackFrame) {
-				if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
-					let fileName = stack.fileName.replace(/\\/g, '/');
-					if (fileName.startsWith('file://')) {
-						fileName = fileName.substring('file://'.length);
-					}
-					if (fileName.includes('http-url:')) {
-						fileName = fileName.split('http-url:')[1];
-					}
-					const mtime = ts.sys.getModifiedTime?.(fileName)?.getTime() ?? 0;
-					const lastMtime = sourceFiles.get(fileName)?.[1];
-					if (mtime !== lastMtime) {
-						const text = ctx.languageServiceHost.readFile(fileName);
-						sourceFiles.set(
-							fileName,
-							[
-								text !== undefined,
-								mtime,
-								ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
-							]
-						);
-					}
-					const [exist, _mtime, relatedFile] = sourceFiles.get(fileName)!;
-					let pos = 0;
-					if (exist) {
-						try {
-							pos = relatedFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
-						} catch { }
-					}
-					error.relatedInformation ??= [];
-					error.relatedInformation.push({
-						category: ts.DiagnosticCategory.Message,
-						code: 0,
-						file: relatedFile,
-						start: pos,
-						length: 0,
-						messageText: 'at ' + (stack.functionName ?? '<anonymous>'),
-					});
-				}
 			}
 		},
 		hasCodeFixes(fileName: string) {
@@ -515,6 +473,53 @@ export function createLinter(
 			fileRefactors.set(fileName, []);
 		}
 		return fileRefactors.get(fileName)!;
+	}
+}
+
+const fsFiles = new Map<string, [exist: boolean, mtime: number, ts.SourceFile]>();
+
+export function createRelatedInformation(ts: typeof import('typescript'), err: Error, stackOffset: number): ts.DiagnosticRelatedInformation | undefined {
+	const stacks = ErrorStackParser.parse(err);
+	if (stacks.length <= stackOffset) {
+		return;
+	}
+	const stack = stacks[stackOffset];
+	if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
+		let fileName = stack.fileName.replace(/\\/g, '/');
+		if (fileName.startsWith('file://')) {
+			fileName = fileName.substring('file://'.length);
+		}
+		if (fileName.includes('http-url:')) {
+			fileName = fileName.split('http-url:')[1];
+		}
+		const mtime = ts.sys.getModifiedTime?.(fileName)?.getTime() ?? 0;
+		const lastMtime = fsFiles.get(fileName)?.[1];
+		if (mtime !== lastMtime) {
+			const text = ts.sys.readFile(fileName);
+			fsFiles.set(
+				fileName,
+				[
+					text !== undefined,
+					mtime,
+					ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
+				]
+			);
+		}
+		const [exist, _mtime, relatedFile] = fsFiles.get(fileName)!;
+		let pos = 0;
+		if (exist) {
+			try {
+				pos = relatedFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
+			} catch { }
+		}
+		return {
+			category: ts.DiagnosticCategory.Message,
+			code: 0,
+			file: relatedFile,
+			start: pos,
+			length: 0,
+			messageText: 'at ' + (stack.functionName ?? '<anonymous>'),
+		};
 	}
 }
 
