@@ -193,6 +193,29 @@ export function create(cmd: string, reportsUnusedComments: boolean): Plugin {
 				}
 				return results;
 			},
+			resolveCodeFixes(sourceFile, diagnostic, codeFixes) {
+				if (diagnostic.source !== 'tsslint' || diagnostic.start === undefined) {
+					return codeFixes;
+				}
+				const line = sourceFile.getLineAndCharacterOfPosition(diagnostic.start).line;
+				codeFixes.push({
+					fixName: cmd,
+					description: `Ignore with ${cmd}`,
+					changes: [
+						{
+							fileName: sourceFile.fileName,
+							textChanges: [{
+								newText: `// ${cmd} ${diagnostic.code}\n`,
+								span: {
+									start: sourceFile.getPositionOfLineAndCharacter(line, 0),
+									length: 0,
+								},
+							}],
+						},
+					],
+				});
+				return codeFixes;
+			},
 		};
 	};
 }

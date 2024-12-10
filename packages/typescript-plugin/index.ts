@@ -79,7 +79,7 @@ function decorateLanguageService(
 	};
 	info.languageService.getCombinedCodeFix = (scope, fixId, formatOptions, preferences) => {
 		if (fixId === 'tsslint' && linter) {
-			const fixes = linter.getCodeFixes(scope.fileName, 0, Number.MAX_VALUE);
+			const fixes = linter.getCodeFixes(scope.fileName, 0, Number.MAX_VALUE).filter(fix => fix.fixId === 'tsslint');
 			const changes = core.combineCodeFixes(scope.fileName, fixes);
 			return {
 				changes: [{
