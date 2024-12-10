@@ -26,7 +26,7 @@ export function create(
 		const completeReg2 = typeof cmdOrReg === 'string'
 			? new RegExp(`//\\s*${cmdOrReg}\\b[ \\t]*(\\S*)?$`)
 			: undefined;
-		const reportedRulesOfFile = new Map<string, Set<string>>();
+		const reportedRulesOfFile = new Map<string, [string, number][]>();
 		const { getCompletionsAtPosition } = languageService;
 
 		languageService.getCompletionsAtPosition = (fileName, position, ...rest) => {
@@ -46,6 +46,7 @@ export function create(
 				: undefined;
 
 			if (matchCmd) {
+				const nextLineRules = reportedRules?.filter(([, reportedLine]) => reportedLine === line + 1) ?? [];
 				const cmd = cmdOrReg as string;
 				const item: ts.CompletionEntry = {
 					name: cmd,
@@ -58,6 +59,13 @@ export function create(
 							length: matchCmd[2].length,
 						}
 						: undefined,
+					labelDetails: {
+						description: nextLineRules.length >= 2
+							? `Disable ${nextLineRules.length} issues in next line`
+							: nextLineRules.length
+								? 'Disable 1 issue in next line'
+								: undefined,
+					}
 				};
 				if (result) {
 					result.entries.push(item);
@@ -69,12 +77,21 @@ export function create(
 						entries: [item],
 					};
 				}
-			} else if (reportedRules?.size) {
+			} else if (reportedRules?.length) {
 				const matchRule = completeReg2
 					? prefix.match(completeReg2)
 					: undefined;
 				if (matchRule) {
-					for (const ruleId of reportedRules) {
+					const visited = new Set<string>();
+					for (const [ruleId] of reportedRules) {
+						if (visited.has(ruleId)) {
+							continue;
+						}
+						visited.add(ruleId);
+
+						const reportedLines = reportedRules
+							.filter(([r]) => r === ruleId)
+							.map(([, l]) => l + 1);
 						const item: ts.CompletionEntry = {
 							name: ruleId,
 							kind: ts.ScriptElementKind.keyword,
@@ -85,6 +102,9 @@ export function create(
 									length: matchRule[1].length,
 								}
 								: undefined,
+							labelDetails: {
+								description: `Reported in line${reportedLines.length >= 2 ? 's' : ''} ${reportedLines.join(', ')}`,
+							},
 						};
 						if (result) {
 							result.entries.push(item);
@@ -134,18 +154,17 @@ export function create(
 
 				let reportedRules = reportedRulesOfFile.get(sourceFile.fileName);
 				if (!reportedRules) {
-					reportedRules = new Set();
+					reportedRules = [];
 					reportedRulesOfFile.set(sourceFile.fileName, reportedRules);
 				}
-				reportedRules.clear();
+				reportedRules.length = 0;
 
 				results = results.filter(error => {
 					if (error.source !== 'tsslint') {
 						return true;
 					}
-					reportedRules.add(error.code as any);
-
 					const line = sourceFile.getLineAndCharacterOfPosition(error.start).line;
+					reportedRules.push([error.code as any, line]);
 					if (disabledLines.has(line)) {
 						disabledLines.get(line)!.used = true;
 						return false;
