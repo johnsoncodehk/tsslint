@@ -45,6 +45,26 @@ const languageServiceHost: ts.LanguageServiceHost = {
 };
 const languageService = ts.createLanguageService(languageServiceHost);
 
+export function createLocal() {
+	return {
+		setup(...args: Parameters<typeof setup>) {
+			return setup(...args);
+		},
+		lint(...args: Parameters<typeof lint>) {
+			return lint(...args)[0];
+		},
+		lintAndFix(...args: Parameters<typeof lintAndFix>) {
+			return lintAndFix(...args)[0];
+		},
+		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
+			return hasCodeFixes(...args);
+		},
+		hasRules(...args: Parameters<typeof hasRules>) {
+			return hasRules(...args)[0];
+		},
+	};
+}
+
 export function create() {
 	const worker = new worker_threads.Worker(__filename);
 	return {

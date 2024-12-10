@@ -74,6 +74,7 @@ if (process.argv.includes('--threads')) {
 
 	let projects: Project[] = [];
 	let spinner = clack.spinner();
+	let lastSpinnerUpdate = Date.now();
 	let hasFix = false;
 	let allFilesNum = 0;
 	let processed = 0;
@@ -139,9 +140,13 @@ if (process.argv.includes('--threads')) {
 		process.exit(1);
 	}
 
-	await Promise.all(new Array(threads).fill(0).map(() => {
-		return startWorker();
-	}));
+	if (threads === 1) {
+		await startWorker(worker.createLocal() as any);
+	} else {
+		await Promise.all(new Array(threads).fill(0).map(() => {
+			return startWorker(worker.create());
+		}));
+	}
 
 	spinner.stop(
 		darkGray(
@@ -172,7 +177,7 @@ if (process.argv.includes('--threads')) {
 	clack.outro(summary);
 	process.exit(errors ? 1 : 0);
 
-	async function startWorker(linterWorker = worker.create()) {
+	async function startWorker(linterWorker: ReturnType<typeof worker.create>) {
 		const unfinishedProjects = projects.filter(project => project.currentFileIndex < project.fileNames.length);
 		if (!unfinishedProjects.length) {
 			return;
@@ -208,6 +213,11 @@ if (process.argv.includes('--threads')) {
 			const fileMtime = fs.statSync(fileName).mtimeMs;
 
 			addProcessFile(fileName);
+
+			if (Date.now() - lastSpinnerUpdate > 100) {
+				lastSpinnerUpdate = Date.now();
+				await new Promise(resolve => setTimeout(resolve, 0));
+			}
 
 			let fileCache = project.cache[fileName];
 			if (fileCache) {
