@@ -12,6 +12,7 @@
 		"directory": "packages/config"
 	},
 	"dependencies": {
-		"@tsslint/types": "1.4.0"
+		"@tsslint/types": "1.4.0",
+		"ts-api-utils": "^2.0.0"
 	}
 }

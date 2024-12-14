@@ -1,4 +1,5 @@
 import type { Plugin } from '@tsslint/types';
+import { forEachComment } from 'ts-api-utils';
 import type * as ts from 'typescript';
 
 interface CommentState {
@@ -10,7 +11,7 @@ interface CommentState {
 export function create(
 	cmd: string,
 	reportsUnusedComments: boolean,
-	reg = new RegExp(`//\\s*${cmd}\\b[ \\t]*(?<ruleId>\\S*)\\b`, 'g'),
+	reg = new RegExp(`//\\s*${cmd}\\b[ \\t]*(?<ruleId>\\S*)\\b`),
 	completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/,
 	completeReg2 = new RegExp(`//\\s*${cmd}\\b[ \\t]*(\\S*)?$`)
 ): Plugin {
@@ -121,24 +122,31 @@ export function create(
 				}
 				const disabledLines = new Map<number, CommentState>();
 				const disabledLinesByRules = new Map<string, Map<number, CommentState>>();
-				for (const comment of sourceFile.text.matchAll(reg)) {
-					const line = sourceFile.getLineAndCharacterOfPosition(comment.index).line + 1;
+
+				forEachComment(sourceFile, (fullText, { pos, end }) => {
+					const commentText = fullText.substring(pos, end);
+					const comment = commentText.match(reg);
+					if (comment?.index === undefined) {
+						return;
+					}
+					const index = comment.index + pos;
+					const line = sourceFile.getLineAndCharacterOfPosition(index).line + 1;
 					const ruleId = comment.groups?.ruleId;
 					if (ruleId) {
 						if (!disabledLinesByRules.has(ruleId)) {
 							disabledLinesByRules.set(ruleId, new Map());
 						}
 						disabledLinesByRules.get(ruleId)!.set(line, {
-							start: comment.index,
-							end: comment.index + comment[0].length,
+							start: index,
+							end: index + comment[0].length,
 						});
 					} else {
 						disabledLines.set(line, {
-							start: comment.index,
-							end: comment.index + comment[0].length,
+							start: index,
+							end: index + comment[0].length,
 						});
 					}
-				}
+				});
 
 				let reportedRules = reportedRulesOfFile.get(sourceFile.fileName);
 				if (!reportedRules) {
