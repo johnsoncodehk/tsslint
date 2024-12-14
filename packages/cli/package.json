@@ -18,9 +18,21 @@
 		"@clack/prompts": "^0.8.2",
 		"@tsslint/config": "1.4.0",
 		"@tsslint/core": "1.4.0",
+		"@volar/language-core": "~2.4.0",
+		"@volar/typescript": "~2.4.0",
 		"glob": "^10.4.1"
 	},
 	"peerDependencies": {
-		"typescript": "*"
+		"@vue/language-core": ">=2",
+		"typescript": "*",
+		"vue-tsc": ">=2"
+	},
+	"peerDependenciesMeta": {
+		"@vue/language-core": {
+			"optional": true
+		},
+		"vue-tsc": {
+			"optional": true
+		}
 	}
 }

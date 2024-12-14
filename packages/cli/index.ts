@@ -6,6 +6,7 @@ import worker = require('./lib/worker.js');
 import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
+import languagePlugins = require('./lib/languagePlugins.js');
 
 const _reset = '\x1b[0m';
 const purple = (s: string) => '\x1b[35m' + s + _reset;
@@ -318,7 +319,9 @@ if (process.argv.includes('--threads')) {
 
 	function parseCommonLine(tsconfig: string) {
 		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-		return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig);
+		const plugins = languagePlugins.load(tsconfig);
+		const extraFileExtensions = plugins.flatMap(plugin => plugin.typescript?.extraFileExtensions ?? []).flat();
+		return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig, undefined, extraFileExtensions);
 	}
 
 	function addProcessFile(fileName: string) {

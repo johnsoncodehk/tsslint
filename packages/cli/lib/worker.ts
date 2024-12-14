@@ -4,6 +4,10 @@ import core = require('@tsslint/core');
 import url = require('url');
 import fs = require('fs');
 import worker_threads = require('worker_threads');
+import languagePlugins = require('./languagePlugins.js');
+
+import { createLanguage, FileMap } from '@volar/language-core';
+import { decorateLanguageServiceHost, resolveFileLanguageId, createProxyLanguageService } from '@volar/typescript';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
@@ -43,7 +47,9 @@ const languageServiceHost: ts.LanguageServiceHost = {
 		return ts.getDefaultLibFilePath(options);
 	},
 };
-const languageService = ts.createLanguageService(languageServiceHost);
+const originalLanguageServiceHost = { ...languageServiceHost };
+
+let languageService = ts.createLanguageService(languageServiceHost);
 
 export function createLocal() {
 	return {
@@ -134,6 +140,32 @@ async function setup(
 			clack.log.error(String(err));
 		}
 		return false;
+	}
+
+	const plugins = languagePlugins.load(tsconfig);
+	if (plugins.length) {
+		const { getScriptSnapshot } = languageServiceHost;
+		const language = createLanguage<string>(
+			[
+				...plugins,
+				{ getLanguageId: fileName => resolveFileLanguageId(fileName) },
+			],
+			new FileMap(ts.sys.useCaseSensitiveFileNames),
+			fileName => {
+				const snapshot = getScriptSnapshot(fileName);
+				if (snapshot) {
+					language.scripts.set(fileName, snapshot);
+				}
+			}
+		);
+
+		Object.assign(languageServiceHost, originalLanguageServiceHost);
+		decorateLanguageServiceHost(ts, language, languageServiceHost);
+
+		const proxy = createProxyLanguageService(languageService);
+		proxy.initialize(language);
+
+		languageService = proxy.proxy;
 	}
 
 	projectVersion++;
