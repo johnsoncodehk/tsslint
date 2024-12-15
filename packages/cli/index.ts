@@ -52,7 +52,18 @@ if (process.argv.includes('--threads')) {
 				return;
 			}
 
-			const commonLine = parseCommonLine(this.tsconfig);
+			let commonLine: ts.ParsedCommandLine;
+			try {
+				commonLine = parseCommonLine(this.tsconfig);
+			} catch (err) {
+				if (err instanceof Error) {
+					log(err.stack ?? err.message, 1);
+				} else {
+					log(String(err), 1);
+				}
+				throw err;
+			}
+
 			this.fileNames = commonLine.fileNames;
 			this.options = commonLine.options;
 
@@ -302,9 +313,14 @@ if (process.argv.includes('--threads')) {
 			shortTsconfig = `./${shortTsconfig}`;
 		}
 
+		let fileNames: string[] = [];
+		try {
+			fileNames = parseCommonLine(presetConfig!).fileNames;
+		} catch { }
+
 		return await clack.text({
 			message: 'Select the project. (Use --project or --projects to skip this prompt.)',
-			placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(presetConfig!).fileNames.length} files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
+			placeholder: shortTsconfig ? `${shortTsconfig} (${fileNames.length} files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
 			defaultValue: shortTsconfig,
 			validate(value) {
 				value ||= shortTsconfig;

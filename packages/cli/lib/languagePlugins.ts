@@ -2,7 +2,12 @@ import { LanguagePlugin } from '@volar/language-core';
 import path = require('path');
 import ts = require('typescript');
 
+const cache = new Map<string, LanguagePlugin<string>[]>();
+
 export function load(tsconfig: string) {
+	if (cache.has(tsconfig)) {
+		return cache.get(tsconfig)!;
+	}
 	const plugins: LanguagePlugin<string>[] = [];
 
 	if (process.argv.includes('--enable-vue-support')) {
@@ -17,17 +22,19 @@ export function load(tsconfig: string) {
 			throw new Error('Please install @vue/language-core or vue-tsc');
 		}
 
-		const commonLine = vue.createParsedCommandLine(ts, ts.sys, tsconfig);
-		const vueLanguagePlugin = vue.createVueLanguagePlugin<string>(
-			ts,
-			commonLine.options,
-			commonLine.vueOptions,
-			fileName => fileName
-		);
-
-		plugins.push(vueLanguagePlugin);
+		if (vue) {
+			const commonLine = vue.createParsedCommandLine(ts, ts.sys, tsconfig);
+			const vueLanguagePlugin = vue.createVueLanguagePlugin<string>(
+				ts,
+				commonLine.options,
+				commonLine.vueOptions,
+				fileName => fileName
+			);
+			plugins.push(vueLanguagePlugin);
+		}
 	}
 
+	cache.set(tsconfig, plugins);
 	return plugins;
 }
 
