@@ -6,6 +6,7 @@ import worker = require('./lib/worker.js');
 import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
+import languagePlugins = require('./lib/languagePlugins.js');
 
 const _reset = '\x1b[0m';
 const purple = (s: string) => '\x1b[35m' + s + _reset;
@@ -26,48 +27,61 @@ if (process.argv.includes('--threads')) {
 	threads = Math.min(os.availableParallelism(), Number(threadsArg));
 }
 
-(async () => {
-	class Project {
-		tsconfig: string;
-		workers: ReturnType<typeof worker.create>[] = [];
-		fileNames: string[] = [];
-		options: ts.CompilerOptions = {};
-		configFile: string | undefined;
-		currentFileIndex = 0;
-		builtConfig: string | undefined;
-		cache: cache.CacheData = {};
+class Project {
+	tsconfig: string;
+	workers: ReturnType<typeof worker.create>[] = [];
+	fileNames: string[] = [];
+	options: ts.CompilerOptions = {};
+	configFile: string | undefined;
+	currentFileIndex = 0;
+	builtConfig: string | undefined;
+	cache: cache.CacheData = {};
 
-		constructor(tsconfigOption: string) {
-			try {
-				this.tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
-			} catch {
-				console.error(lightRed(`No such file: ${tsconfigOption}`));
-				process.exit(1);
-			}
-			this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
-
-			if (!this.configFile) {
-				log(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
-				return;
-			}
-
-			const commonLine = parseCommonLine(this.tsconfig);
-			this.fileNames = commonLine.fileNames;
-			this.options = commonLine.options;
-
-			if (!this.fileNames.length) {
-				log(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
-				return;
-			}
-
-			log(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
-
-			if (!process.argv.includes('--force')) {
-				this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
-			}
+	constructor(
+		tsconfigOption: string,
+		public languages: string[]
+	) {
+		try {
+			this.tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
+		} catch {
+			console.error(lightRed(`No such file: ${tsconfigOption}`));
+			process.exit(1);
 		}
+
 	}
 
+	async init(
+		// @ts-expect-error
+		clack: typeof import('@clack/prompts')
+	) {
+		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
+
+		if (!this.configFile) {
+			clack.log.error(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
+			return this;
+		}
+
+		const commonLine = await parseCommonLine(this.tsconfig, this.languages);
+
+		this.fileNames = commonLine.fileNames;
+		this.options = commonLine.options;
+
+		if (!this.fileNames.length) {
+			clack.log.warn(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
+			return this;
+		}
+
+		clack.log.info(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
+
+		if (!process.argv.includes('--force')) {
+			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
+		}
+
+		return this;
+	}
+}
+
+(async () => {
 	const builtConfigs = new Map<string, Promise<string | undefined>>();
 	const clack = await import('@clack/prompts');
 	const processFiles = new Set<string>();
@@ -84,46 +98,180 @@ if (process.argv.includes('--threads')) {
 	let warnings = 0;
 	let cached = 0;
 
-	spinner.start();
+	const tsconfigAndLanguages = new Map<string, string[]>();
 
-	if (process.argv.includes('--project')) {
-		const projectIndex = process.argv.indexOf('--project');
-		let tsconfig = process.argv[projectIndex + 1];
-		if (!tsconfig || tsconfig.startsWith('-')) {
-			console.error(lightRed(`Missing argument for --project.`));
+	if (
+		!process.argv.includes('--project')
+		&& !process.argv.includes('--projects')
+		&& !process.argv.includes('--vue-project')
+		&& !process.argv.includes('--vue-projects')
+		&& !process.argv.includes('--mdx-project')
+		&& !process.argv.includes('--mdx-projects')
+		&& !process.argv.includes('--astro-project')
+		&& !process.argv.includes('--astro-projects')
+	) {
+		const languages = await clack.multiselect({
+			required: false,
+			message: 'Select frameworks (optional)',
+			options: [{
+				label: 'Vue',
+				value: 'vue',
+			}, {
+				label: 'MDX',
+				value: 'mdx',
+			}, {
+				label: 'Astro',
+				value: 'astro',
+			}],
+		}) as string[];
+
+		if (clack.isCancel(languages)) {
 			process.exit(1);
 		}
-		if (!tsconfig.startsWith('.')) {
-			tsconfig = `./${tsconfig}`;
+
+		const tsconfigOptions = glob.sync('**/{tsconfig.json,jsconfig.json}');
+
+		let options = await Promise.all(
+			tsconfigOptions.map(async tsconfigOption => {
+				const tsconfig = require.resolve(
+					tsconfigOption.startsWith('.') ? tsconfigOption : `./${tsconfigOption}`,
+					{ paths: [process.cwd()] }
+				);
+				try {
+					const commonLine = await parseCommonLine(tsconfig, languages);
+					return {
+						label: path.relative(process.cwd(), tsconfig) + ` (${commonLine.fileNames.length})`,
+						value: tsconfigOption,
+					};
+				} catch {
+					return undefined;
+				}
+			})
+		);
+
+		options = options.filter(option => !!option);
+
+		if (!options.length) {
+			clack.log.error(lightRed('No projects found.'));
+			process.exit(1);
 		}
-		projects.push(new Project(tsconfig));
-	}
-	else if (process.argv.includes('--projects')) {
-		const projectsIndex = process.argv.indexOf('--projects');
-		let foundArg = false;
-		for (let i = projectsIndex + 1; i < process.argv.length; i++) {
-			if (process.argv[i].startsWith('-')) {
-				break;
+
+		const selectedTsconfigs = await clack.multiselect({
+			message: 'Select one or multiple projects',
+			// @ts-expect-error
+			options,
+		});
+
+		if (clack.isCancel(selectedTsconfigs)) {
+			process.exit(1);
+		}
+
+		let command = 'tsslint';
+
+		if (!languages.length) {
+			if (selectedTsconfigs.length === 1) {
+				command += ' --project ' + selectedTsconfigs[0];
+			} else {
+				command += ' --projects ' + selectedTsconfigs.join(' ');
 			}
-			foundArg = true;
-			const searchGlob = process.argv[i];
-			const tsconfigs = glob.sync(searchGlob);
-			for (let tsconfig of tsconfigs) {
+		} else {
+			for (const language of languages) {
+				if (selectedTsconfigs.length === 1) {
+					command += ` --${language}-project ` + selectedTsconfigs[0];
+				} else {
+					command += ` --${language}-projects ` + selectedTsconfigs.join(' ');
+				}
+			}
+		}
+
+		clack.log.info(`Running: ${purple(command)}`);
+
+		for (let tsconfig of selectedTsconfigs) {
+			if (!tsconfig.startsWith('.')) {
+				tsconfig = `./${tsconfig}`;
+			}
+			tsconfigAndLanguages.set(tsconfig, languages);
+		}
+	} else {
+		const options = [
+			{
+				projectFlag: '--project',
+				projectsFlag: '--projects',
+				language: undefined,
+			},
+			{
+				projectFlag: '--vue-project',
+				projectsFlag: '--vue-projects',
+				language: 'vue',
+			},
+			{
+				projectFlag: '--mdx-project',
+				projectsFlag: '--mdx-projects',
+				language: 'mdx',
+			},
+			{
+				projectFlag: '--astro-project',
+				projectsFlag: '--astro-projects',
+				language: 'astro',
+			},
+		];
+		for (const { projectFlag, projectsFlag, language } of options) {
+			if (process.argv.includes(projectFlag)) {
+				const projectIndex = process.argv.indexOf(projectFlag);
+				let tsconfig = process.argv[projectIndex + 1];
+				if (!tsconfig || tsconfig.startsWith('-')) {
+					clack.log.error(lightRed(`Missing argument for ${projectFlag}.`));
+					process.exit(1);
+				}
 				if (!tsconfig.startsWith('.')) {
 					tsconfig = `./${tsconfig}`;
 				}
-				projects.push(new Project(tsconfig));
+				if (!tsconfigAndLanguages.has(tsconfig)) {
+					tsconfigAndLanguages.set(tsconfig, []);
+				}
+				if (language) {
+					tsconfigAndLanguages.get(tsconfig)!.push(language);
+				}
+			}
+			if (process.argv.includes(projectsFlag)) {
+				const projectsIndex = process.argv.indexOf(projectsFlag);
+				let foundArg = false;
+				for (let i = projectsIndex + 1; i < process.argv.length; i++) {
+					if (process.argv[i].startsWith('-')) {
+						break;
+					}
+					foundArg = true;
+					const searchGlob = process.argv[i];
+					const tsconfigs = glob.sync(searchGlob);
+					if (!tsconfigs.length) {
+						clack.log.error(lightRed(`No projects found for ${projectsFlag} ${searchGlob}.`));
+						process.exit(1);
+					}
+					for (let tsconfig of tsconfigs) {
+						if (!tsconfig.startsWith('.')) {
+							tsconfig = `./${tsconfig}`;
+						}
+						if (!tsconfigAndLanguages.has(tsconfig)) {
+							tsconfigAndLanguages.set(tsconfig, []);
+						}
+						if (language) {
+							tsconfigAndLanguages.get(tsconfig)!.push(language);
+						}
+					}
+				}
+				if (!foundArg) {
+					clack.log.error(lightRed(`Missing argument for ${projectsFlag}.`));
+					process.exit(1);
+				}
 			}
 		}
-		if (!foundArg) {
-			console.error(lightRed(`Missing argument for --projects.`));
-			process.exit(1);
-		}
 	}
-	else {
-		const tsconfig = await askTSConfig();
-		projects.push(new Project(tsconfig));
+
+	for (const [tsconfig, languages] of tsconfigAndLanguages) {
+		projects.push(await new Project(tsconfig, languages).init(clack));
 	}
+
+	spinner.start();
 
 	projects = projects.filter(project => !!project.configFile);
 	projects = projects.filter(project => !!project.fileNames.length);
@@ -196,6 +344,7 @@ if (process.argv.includes('--threads')) {
 
 		const setupSuccess = await linterWorker.setup(
 			project.tsconfig,
+			project.languages,
 			project.configFile!,
 			project.builtConfig!,
 			project.fileNames,
@@ -245,7 +394,7 @@ if (process.argv.includes('--threads')) {
 			}
 
 			if (diagnostics.length) {
-				hasFix ||= await linterWorker.hasCodeFixes(fileName);
+				hasFix ||= Object.values(fileCache[1]).some(fixes => fixes > 0) || await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
@@ -293,34 +442,6 @@ if (process.argv.includes('--threads')) {
 		return await builtConfigs.get(configFile);
 	}
 
-	async function askTSConfig() {
-		const presetConfig = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
-
-		let shortTsconfig = presetConfig ? path.relative(process.cwd(), presetConfig) : undefined;
-		if (!shortTsconfig?.startsWith('.')) {
-			shortTsconfig = `./${shortTsconfig}`;
-		}
-
-		return await clack.text({
-			message: 'Select the project. (Use --project or --projects to skip this prompt.)',
-			placeholder: shortTsconfig ? `${shortTsconfig} (${parseCommonLine(presetConfig!).fileNames.length} files)` : 'No tsconfig.json/jsconfig.json found, please enter the path to the tsconfig.json/jsconfig.json file.',
-			defaultValue: shortTsconfig,
-			validate(value) {
-				value ||= shortTsconfig;
-				try {
-					require.resolve(value, { paths: [process.cwd()] });
-				} catch {
-					return 'No such file.';
-				}
-			},
-		}) as string;
-	}
-
-	function parseCommonLine(tsconfig: string) {
-		const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-		return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig);
-	}
-
 	function addProcessFile(fileName: string) {
 		processFiles.add(fileName);
 		updateSpinner();
@@ -346,3 +467,10 @@ if (process.argv.includes('--threads')) {
 		spinner.start();
 	}
 })();
+
+async function parseCommonLine(tsconfig: string, languages: string[]) {
+	const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
+	const plugins = await languagePlugins.load(tsconfig, languages);
+	const extraFileExtensions = plugins.flatMap(plugin => plugin.typescript?.extraFileExtensions ?? []).flat();
+	return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig, undefined, extraFileExtensions);
+}

@@ -4,16 +4,23 @@ import core = require('@tsslint/core');
 import url = require('url');
 import fs = require('fs');
 import worker_threads = require('worker_threads');
+import languagePlugins = require('./languagePlugins.js');
+
+import { createLanguage, FileMap, isCodeActionsEnabled, Language } from '@volar/language-core';
+import { decorateLanguageServiceHost, resolveFileLanguageId, createProxyLanguageService } from '@volar/typescript';
+import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
 let options: ts.CompilerOptions = {};
 let fileNames: string[] = [];
+let language: Language<string> | undefined;
 let linter: core.Linter;
+let linterLanguageService!: ts.LanguageService;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
-const languageServiceHost: ts.LanguageServiceHost = {
+const originalHost: ts.LanguageServiceHost = {
 	...ts.sys,
 	useCaseSensitiveFileNames() {
 		return ts.sys.useCaseSensitiveFileNames;
@@ -43,7 +50,8 @@ const languageServiceHost: ts.LanguageServiceHost = {
 		return ts.getDefaultLibFilePath(options);
 	},
 };
-const languageService = ts.createLanguageService(languageServiceHost);
+const linterHost: ts.LanguageServiceHost = { ...originalHost };
+const originalService = ts.createLanguageService(linterHost);
 
 export function createLocal() {
 	return {
@@ -117,6 +125,7 @@ const handlers = {
 
 async function setup(
 	tsconfig: string,
+	languages: string[],
 	configFile: string,
 	builtConfig: string,
 	_fileNames: string[],
@@ -136,14 +145,48 @@ async function setup(
 		return false;
 	}
 
+	for (let key in linterHost) {
+		if (!(key in originalHost)) {
+			// @ts-ignore
+			delete linterHost[key];
+		} else {
+			// @ts-ignore
+			linterHost[key] = originalHost[key];
+		}
+	}
+	linterLanguageService = originalService;
+	language = undefined;
+
+	const plugins = await languagePlugins.load(tsconfig, languages);
+	if (plugins.length) {
+		const { getScriptSnapshot } = originalHost;
+		language = createLanguage<string>(
+			[
+				...plugins,
+				{ getLanguageId: fileName => resolveFileLanguageId(fileName) },
+			],
+			new FileMap(ts.sys.useCaseSensitiveFileNames),
+			fileName => {
+				const snapshot = getScriptSnapshot(fileName);
+				if (snapshot) {
+					language!.scripts.set(fileName, snapshot);
+				}
+			}
+		);
+		decorateLanguageServiceHost(ts, language, linterHost);
+		const proxy = createProxyLanguageService(linterLanguageService);
+		proxy.initialize(language);
+		linterLanguageService = proxy.proxy;
+	}
+
 	projectVersion++;
 	typeRootsVersion++;
 	fileNames = _fileNames;
 	options = _options;
 	linter = core.createLinter({
 		configFile,
-		languageService,
-		languageServiceHost,
+		languageService: linterLanguageService,
+		languageServiceHost: linterHost,
 		typescript: ts,
 		tsconfig: ts.server.toNormalizedPath(tsconfig),
 	}, config, 'cli', clack);
@@ -152,7 +195,7 @@ async function setup(
 }
 
 function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
-	let retry = 3;
+	let retry = 1;
 	let shouldRetry = true;
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
@@ -165,9 +208,18 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 			fileCache[3].length = 0;
 		}
 		diagnostics = linter.lint(fileName, fileCache);
-		const fixes = linter
+
+		let fixes = linter
 			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[4])
 			.filter(fix => fix.fixId === 'tsslint');
+
+		if (language) {
+			fixes = fixes.map(fix => {
+				fix.changes = transformFileTextChanges(language!, fix.changes, false, isCodeActionsEnabled);
+				return fix;
+			});
+		}
+
 		const textChanges = core.combineCodeFixes(fileName, fixes);
 		if (textChanges.length) {
 			const oldSnapshot = snapshots.get(fileName)!;
@@ -191,43 +243,89 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 		diagnostics = linter.lint(fileName, fileCache);
 	}
 
-	return [
-		diagnostics.map(diagnostic => ({
+	if (language) {
+		diagnostics = diagnostics
+			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
+			.filter(d => !!d);
+
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+			...diagnostic,
+			file: {
+				fileName: diagnostic.file.fileName,
+				text: getFileText(diagnostic.file.fileName),
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
+				...info,
+				file: info.file ? {
+					fileName: info.file.fileName,
+					text: getFileText(info.file.fileName),
+				} as any : undefined,
+			})),
+		}));
+	} else {
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
 				text: diagnostic.file.text,
-			},
-			relatedInformation: diagnostic.relatedInformation?.map(info => ({
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
 				...info,
 				file: info.file ? {
 					fileName: info.file.fileName,
 					text: info.file.text,
-				} : undefined,
+				} as any : undefined,
 			})),
-		})) as ts.DiagnosticWithLocation[],
-		fileCache,
-	] as const;
+		}));
+	}
+
+	return [diagnostics, fileCache] as const;
 }
 
 function lint(fileName: string, fileCache: core.FileLintCache) {
-	return [
-		linter.lint(fileName, fileCache).map(diagnostic => ({
+	let diagnostics = linter.lint(fileName, fileCache);
+
+	if (language) {
+		diagnostics = diagnostics
+			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
+			.filter(d => !!d);
+
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+			...diagnostic,
+			file: {
+				fileName: diagnostic.file.fileName,
+				text: getFileText(diagnostic.file.fileName),
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
+				...info,
+				file: info.file ? {
+					fileName: info.file.fileName,
+					text: getFileText(info.file.fileName),
+				} as any : undefined,
+			})),
+		}));
+	} else {
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
 				text: diagnostic.file.text,
-			},
-			relatedInformation: diagnostic.relatedInformation?.map(info => ({
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
 				...info,
 				file: info.file ? {
 					fileName: info.file.fileName,
 					text: info.file.text,
-				} : undefined,
+				} as any : undefined,
 			})),
-		})) as ts.DiagnosticWithLocation[],
-		fileCache,
-	] as const;
+		}));
+	}
+
+	return [diagnostics, fileCache] as const;
+}
+
+function getFileText(fileName: string) {
+	return originalHost.getScriptSnapshot(fileName)!.getText(0, Number.MAX_VALUE);
 }
 
 function hasCodeFixes(fileName: string) {
