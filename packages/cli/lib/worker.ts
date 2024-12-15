@@ -246,13 +246,13 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
-				text: diagnostic.file.text,
+				text: getFileText(diagnostic.file.fileName),
 			},
 			relatedInformation: diagnostic.relatedInformation?.map(info => ({
 				...info,
 				file: info.file ? {
 					fileName: info.file.fileName,
-					text: info.file.text,
+					text: getFileText(info.file.fileName),
 				} : undefined,
 			})),
 		})) as ts.DiagnosticWithLocation[],
@@ -266,18 +266,22 @@ function lint(fileName: string, fileCache: core.FileLintCache) {
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
-				text: originalHost.getScriptSnapshot(diagnostic.file.fileName)!.getText(0, Number.MAX_VALUE),
+				text: getFileText(diagnostic.file.fileName),
 			},
 			relatedInformation: diagnostic.relatedInformation?.map(info => ({
 				...info,
 				file: info.file ? {
 					fileName: info.file.fileName,
-					text: info.file.text,
+					text: getFileText(info.file.fileName),
 				} : undefined,
 			})),
 		})) as ts.DiagnosticWithLocation[],
 		fileCache,
 	] as const;
+}
+
+function getFileText(fileName: string) {
+	return originalHost.getScriptSnapshot(fileName)!.getText(0, Number.MAX_VALUE);
 }
 
 function hasCodeFixes(fileName: string) {
