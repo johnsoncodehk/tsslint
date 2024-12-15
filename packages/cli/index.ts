@@ -38,8 +38,6 @@ class Project {
 	cache: cache.CacheData = {};
 
 	constructor(
-		// @ts-expect-error
-		clack: typeof import('@clack/prompts'),
 		tsconfigOption: string,
 		public languages: string[]
 	) {
@@ -49,31 +47,28 @@ class Project {
 			console.error(lightRed(`No such file: ${tsconfigOption}`));
 			process.exit(1);
 		}
+
+	}
+
+	async init(
+		// @ts-expect-error
+		clack: typeof import('@clack/prompts')
+	) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
 		if (!this.configFile) {
 			clack.log.error(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
-			return;
+			return this;
 		}
 
-		let commonLine: ts.ParsedCommandLine;
-		try {
-			commonLine = parseCommonLine(this.tsconfig, languages);
-		} catch (err) {
-			if (err instanceof Error) {
-				clack.log.error(err.stack ?? err.message);
-			} else {
-				clack.log.error(String(err));
-			}
-			throw err;
-		}
+		const commonLine = await parseCommonLine(this.tsconfig, this.languages);
 
 		this.fileNames = commonLine.fileNames;
 		this.options = commonLine.options;
 
 		if (!this.fileNames.length) {
 			clack.log.warn(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
-			return;
+			return this;
 		}
 
 		clack.log.info(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
@@ -81,6 +76,8 @@ class Project {
 		if (!process.argv.includes('--force')) {
 			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
 		}
+
+		return this;
 	}
 }
 
@@ -254,7 +251,7 @@ class Project {
 	}
 
 	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(new Project(clack, tsconfig, languages));
+		projects.push(await new Project(tsconfig, languages).init(clack));
 	}
 
 	spinner.start();
@@ -454,9 +451,9 @@ class Project {
 	}
 })();
 
-function parseCommonLine(tsconfig: string, languages: string[]) {
+async function parseCommonLine(tsconfig: string, languages: string[]) {
 	const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-	const plugins = languagePlugins.load(tsconfig, languages);
+	const plugins = await languagePlugins.load(tsconfig, languages);
 	const extraFileExtensions = plugins.flatMap(plugin => plugin.typescript?.extraFileExtensions ?? []).flat();
 	return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig, undefined, extraFileExtensions);
 }

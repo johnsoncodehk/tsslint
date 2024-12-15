@@ -4,7 +4,7 @@ import ts = require('typescript');
 
 const cache = new Map<string, LanguagePlugin<string>[]>();
 
-export function load(tsconfig: string, languages: string[]) {
+export async function load(tsconfig: string, languages: string[]) {
 	if (cache.has(tsconfig)) {
 		return cache.get(tsconfig)!;
 	}
@@ -36,6 +36,24 @@ export function load(tsconfig: string, languages: string[]) {
 			fileName => fileName
 		);
 		plugins.push(vueLanguagePlugin);
+	}
+
+	if (languages.includes('mdx')) {
+		let mdx: any;
+
+		try {
+			mdx = await import(require.resolve('@mdx-js/language-service', { paths: [path.dirname(tsconfig)] }));
+		} catch (err) {
+			const pkg = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'package.json');
+			if (pkg) {
+				throw new Error('Please install @mdx-js/language-service to ' + path.relative(process.cwd(), pkg));
+			} else {
+				throw new Error('Please install @mdx-js/language-service for ' + path.relative(process.cwd(), tsconfig));
+			}
+		}
+
+		const mdxLanguagePlugin = mdx.createMdxLanguagePlugin();
+		plugins.push(mdxLanguagePlugin);
 	}
 
 	cache.set(tsconfig, plugins);

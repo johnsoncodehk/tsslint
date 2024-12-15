@@ -157,7 +157,7 @@ async function setup(
 	linterLanguageService = originalService;
 	language = undefined;
 
-	const plugins = languagePlugins.load(tsconfig, languages);
+	const plugins = await languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
 		const { getScriptSnapshot } = originalHost;
 		language = createLanguage<string>(

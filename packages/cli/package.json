@@ -26,6 +26,7 @@
 		"typescript": "*"
 	},
 	"devDependencies": {
+		"@mdx-js/language-service": "latest",
 		"@vue/language-core": "latest"
 	}
 }
