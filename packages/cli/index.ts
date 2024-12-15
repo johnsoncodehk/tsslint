@@ -430,6 +430,7 @@ class Project {
 						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
 						getNewLine: () => ts.sys.newLine,
 					});
+					output = output.trimEnd();
 					output = output.replace(`TS${diagnostic.code}`, String(diagnostic.code));
 
 					if (diagnostic.category === ts.DiagnosticCategory.Error) {
