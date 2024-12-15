@@ -6,15 +6,16 @@ import fs = require('fs');
 import worker_threads = require('worker_threads');
 import languagePlugins = require('./languagePlugins.js');
 
-import { createLanguage, FileMap } from '@volar/language-core';
+import { createLanguage, FileMap, isCodeActionsEnabled, Language } from '@volar/language-core';
 import { decorateLanguageServiceHost, resolveFileLanguageId, createProxyLanguageService } from '@volar/typescript';
+import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
 let options: ts.CompilerOptions = {};
 let fileNames: string[] = [];
+let language: Language<string> | undefined;
 let linter: core.Linter;
-let currentLintCache: core.FileLintCache | undefined;
 let linterLanguageService!: ts.LanguageService;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
@@ -51,15 +52,6 @@ const originalHost: ts.LanguageServiceHost = {
 };
 const linterHost: ts.LanguageServiceHost = { ...originalHost };
 const originalService = ts.createLanguageService(linterHost);
-
-originalService.getSuggestionDiagnostics = (fileName: string) => {
-	return linter.lint(fileName, currentLintCache);
-};
-
-function lintWorker(fileName: string, cache: core.FileLintCache) {
-	currentLintCache = cache;
-	return linterLanguageService.getSuggestionDiagnostics(fileName);
-}
 
 export function createLocal() {
 	return {
@@ -163,11 +155,12 @@ async function setup(
 		}
 	}
 	linterLanguageService = originalService;
+	language = undefined;
 
 	const plugins = languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
 		const { getScriptSnapshot } = originalHost;
-		const language = createLanguage<string>(
+		language = createLanguage<string>(
 			[
 				...plugins,
 				{ getLanguageId: fileName => resolveFileLanguageId(fileName) },
@@ -176,7 +169,7 @@ async function setup(
 			fileName => {
 				const snapshot = getScriptSnapshot(fileName);
 				if (snapshot) {
-					language.scripts.set(fileName, snapshot);
+					language!.scripts.set(fileName, snapshot);
 				}
 			}
 		);
@@ -202,7 +195,7 @@ async function setup(
 }
 
 function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
-	let retry = 3;
+	let retry = 1;
 	let shouldRetry = true;
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
@@ -214,10 +207,19 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 			fileCache[2].length = 0;
 			fileCache[3].length = 0;
 		}
-		diagnostics = lintWorker(fileName, fileCache);
-		const fixes = linter
+		diagnostics = linter.lint(fileName, fileCache);
+
+		let fixes = linter
 			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[4])
 			.filter(fix => fix.fixId === 'tsslint');
+
+		if (language) {
+			fixes = fixes.map(fix => {
+				fix.changes = transformFileTextChanges(language!, fix.changes, false, isCodeActionsEnabled);
+				return fix;
+			});
+		}
+
 		const textChanges = core.combineCodeFixes(fileName, fixes);
 		if (textChanges.length) {
 			const oldSnapshot = snapshots.get(fileName)!;
@@ -238,46 +240,88 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 	}
 
 	if (shouldRetry) {
-		diagnostics = lintWorker(fileName, fileCache);
+		diagnostics = linter.lint(fileName, fileCache);
 	}
 
-	return [
-		diagnostics.map(diagnostic => ({
+	if (language) {
+		diagnostics = diagnostics
+			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
+			.filter(d => !!d);
+
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
 				text: getFileText(diagnostic.file.fileName),
-			},
-			relatedInformation: diagnostic.relatedInformation?.map(info => ({
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
 				...info,
 				file: info.file ? {
 					fileName: info.file.fileName,
 					text: getFileText(info.file.fileName),
-				} : undefined,
+				} as any : undefined,
 			})),
-		})) as ts.DiagnosticWithLocation[],
-		fileCache,
-	] as const;
+		}));
+	} else {
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+			...diagnostic,
+			file: {
+				fileName: diagnostic.file.fileName,
+				text: diagnostic.file.text,
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
+				...info,
+				file: info.file ? {
+					fileName: info.file.fileName,
+					text: info.file.text,
+				} as any : undefined,
+			})),
+		}));
+	}
+
+	return [diagnostics, fileCache] as const;
 }
 
 function lint(fileName: string, fileCache: core.FileLintCache) {
-	return [
-		lintWorker(fileName, fileCache).map(diagnostic => ({
+	let diagnostics = linter.lint(fileName, fileCache);
+
+	if (language) {
+		diagnostics = diagnostics
+			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
+			.filter(d => !!d);
+
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
 				text: getFileText(diagnostic.file.fileName),
-			},
-			relatedInformation: diagnostic.relatedInformation?.map(info => ({
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
 				...info,
 				file: info.file ? {
 					fileName: info.file.fileName,
 					text: getFileText(info.file.fileName),
-				} : undefined,
+				} as any : undefined,
 			})),
-		})) as ts.DiagnosticWithLocation[],
-		fileCache,
-	] as const;
+		}));
+	} else {
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
+			...diagnostic,
+			file: {
+				fileName: diagnostic.file.fileName,
+				text: diagnostic.file.text,
+			} as any,
+			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
+				...info,
+				file: info.file ? {
+					fileName: info.file.fileName,
+					text: info.file.text,
+				} as any : undefined,
+			})),
+		}));
+	}
+
+	return [diagnostics, fileCache] as const;
 }
 
 function getFileText(fileName: string) {
