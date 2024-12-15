@@ -392,7 +392,10 @@ export function createLinter(
 
 	function getSourceFile(fileName: string): ts.SourceFile {
 		if (languageServiceUsage) {
-			return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+			const sourceFile = ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+			if (sourceFile) {
+				return sourceFile;
+			}
 		}
 		else {
 			const snapshot = ctx.languageServiceHost.getScriptSnapshot(fileName);

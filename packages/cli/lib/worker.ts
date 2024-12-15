@@ -46,6 +46,22 @@ const originalHost: ts.LanguageServiceHost = {
 		}
 		return snapshots.get(fileName);
 	},
+	getScriptKind(fileName) {
+		const languageId = resolveFileLanguageId(fileName);
+		switch (languageId) {
+			case 'javascript':
+				return ts.ScriptKind.JS;
+			case 'javascriptreact':
+				return ts.ScriptKind.JSX;
+			case 'typescript':
+				return ts.ScriptKind.TS;
+			case 'typescriptreact':
+				return ts.ScriptKind.TSX;
+			case 'json':
+				return ts.ScriptKind.JSON;
+		}
+		return ts.ScriptKind.Unknown;
+	},
 	getDefaultLibFileName(options) {
 		return ts.getDefaultLibFilePath(options);
 	},
@@ -182,7 +198,12 @@ async function setup(
 	projectVersion++;
 	typeRootsVersion++;
 	fileNames = _fileNames;
-	options = _options;
+	options = plugins.some(plugin => plugin.typescript?.extraFileExtensions.length)
+		? {
+			..._options,
+			allowNonTsExtensions: true,
+		}
+		: _options;
 	linter = core.createLinter({
 		configFile,
 		languageService: linterLanguageService,
