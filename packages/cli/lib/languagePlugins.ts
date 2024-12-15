@@ -1,35 +1,16 @@
 import { LanguagePlugin } from '@volar/language-core';
 import path = require('path');
 import ts = require('typescript');
-import glob = require('glob');
 
 const cache = new Map<string, LanguagePlugin<string>[]>();
-const vueProjects = new Set<string>();
 
-if (process.argv.includes('--vue-projects')) {
-	const projectsIndex = process.argv.indexOf('--vue-projects');
-	for (let i = projectsIndex + 1; i < process.argv.length; i++) {
-		if (process.argv[i].startsWith('-')) {
-			break;
-		}
-		const searchGlob = process.argv[i];
-		const tsconfigs = glob.sync(searchGlob);
-		for (let tsconfig of tsconfigs) {
-			if (!tsconfig.startsWith('.')) {
-				tsconfig = `./${tsconfig}`;
-			}
-			vueProjects.add(require.resolve(tsconfig, { paths: [process.cwd()] }));
-		}
-	}
-}
-
-export function load(tsconfig: string) {
+export function load(tsconfig: string, languages: string[]) {
 	if (cache.has(tsconfig)) {
 		return cache.get(tsconfig)!;
 	}
 	const plugins: LanguagePlugin<string>[] = [];
 
-	if (vueProjects.has(tsconfig)) {
+	if (languages.includes('vue')) {
 		let vue: typeof import('@vue/language-core');
 		let vueTscPkgPath: string | undefined;
 

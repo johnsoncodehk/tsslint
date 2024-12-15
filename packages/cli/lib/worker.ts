@@ -17,7 +17,7 @@ let linter: core.Linter;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
-const languageServiceHost: ts.LanguageServiceHost = {
+const originalHost: ts.LanguageServiceHost = {
 	...ts.sys,
 	useCaseSensitiveFileNames() {
 		return ts.sys.useCaseSensitiveFileNames;
@@ -47,9 +47,8 @@ const languageServiceHost: ts.LanguageServiceHost = {
 		return ts.getDefaultLibFilePath(options);
 	},
 };
-const originalLanguageServiceHost = { ...languageServiceHost };
-
-let languageService = ts.createLanguageService(languageServiceHost);
+const host: ts.LanguageServiceHost = { ...originalHost };
+const originalService = ts.createLanguageService(host);
 
 export function createLocal() {
 	return {
@@ -123,6 +122,7 @@ const handlers = {
 
 async function setup(
 	tsconfig: string,
+	languages: string[],
 	configFile: string,
 	builtConfig: string,
 	_fileNames: string[],
@@ -142,9 +142,20 @@ async function setup(
 		return false;
 	}
 
-	const plugins = languagePlugins.load(tsconfig);
+	for (let key in host) {
+		if (!(key in originalHost)) {
+			// @ts-ignore
+			delete host[key];
+		} else {
+			// @ts-ignore
+			host[key] = originalHost[key];
+		}
+	}
+	let service = originalService;
+
+	const plugins = languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
-		const { getScriptSnapshot } = languageServiceHost;
+		const { getScriptSnapshot } = originalHost;
 		const language = createLanguage<string>(
 			[
 				...plugins,
@@ -158,14 +169,10 @@ async function setup(
 				}
 			}
 		);
-
-		Object.assign(languageServiceHost, originalLanguageServiceHost);
-		decorateLanguageServiceHost(ts, language, languageServiceHost);
-
-		const proxy = createProxyLanguageService(languageService);
+		decorateLanguageServiceHost(ts, language, host);
+		const proxy = createProxyLanguageService(service);
 		proxy.initialize(language);
-
-		languageService = proxy.proxy;
+		service = proxy.proxy;
 	}
 
 	projectVersion++;
@@ -174,8 +181,8 @@ async function setup(
 	options = _options;
 	linter = core.createLinter({
 		configFile,
-		languageService,
-		languageServiceHost,
+		languageService: service,
+		languageServiceHost: host,
 		typescript: ts,
 		tsconfig: ts.server.toNormalizedPath(tsconfig),
 	}, config, 'cli', clack);
