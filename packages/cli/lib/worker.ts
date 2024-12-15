@@ -14,6 +14,8 @@ let typeRootsVersion = 0;
 let options: ts.CompilerOptions = {};
 let fileNames: string[] = [];
 let linter: core.Linter;
+let currentLintCache: core.FileLintCache | undefined;
+let linterLanguageService!: ts.LanguageService;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -47,8 +49,17 @@ const originalHost: ts.LanguageServiceHost = {
 		return ts.getDefaultLibFilePath(options);
 	},
 };
-const host: ts.LanguageServiceHost = { ...originalHost };
-const originalService = ts.createLanguageService(host);
+const linterHost: ts.LanguageServiceHost = { ...originalHost };
+const originalService = ts.createLanguageService(linterHost);
+
+originalService.getSuggestionDiagnostics = (fileName: string) => {
+	return linter.lint(fileName, currentLintCache);
+};
+
+function lintWorker(fileName: string, cache: core.FileLintCache) {
+	currentLintCache = cache;
+	return linterLanguageService.getSuggestionDiagnostics(fileName);
+}
 
 export function createLocal() {
 	return {
@@ -142,16 +153,16 @@ async function setup(
 		return false;
 	}
 
-	for (let key in host) {
+	for (let key in linterHost) {
 		if (!(key in originalHost)) {
 			// @ts-ignore
-			delete host[key];
+			delete linterHost[key];
 		} else {
 			// @ts-ignore
-			host[key] = originalHost[key];
+			linterHost[key] = originalHost[key];
 		}
 	}
-	let service = originalService;
+	linterLanguageService = originalService;
 
 	const plugins = languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
@@ -169,10 +180,10 @@ async function setup(
 				}
 			}
 		);
-		decorateLanguageServiceHost(ts, language, host);
-		const proxy = createProxyLanguageService(service);
+		decorateLanguageServiceHost(ts, language, linterHost);
+		const proxy = createProxyLanguageService(linterLanguageService);
 		proxy.initialize(language);
-		service = proxy.proxy;
+		linterLanguageService = proxy.proxy;
 	}
 
 	projectVersion++;
@@ -181,8 +192,8 @@ async function setup(
 	options = _options;
 	linter = core.createLinter({
 		configFile,
-		languageService: service,
-		languageServiceHost: host,
+		languageService: linterLanguageService,
+		languageServiceHost: linterHost,
 		typescript: ts,
 		tsconfig: ts.server.toNormalizedPath(tsconfig),
 	}, config, 'cli', clack);
@@ -203,7 +214,7 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 			fileCache[2].length = 0;
 			fileCache[3].length = 0;
 		}
-		diagnostics = linter.lint(fileName, fileCache);
+		diagnostics = lintWorker(fileName, fileCache);
 		const fixes = linter
 			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[4])
 			.filter(fix => fix.fixId === 'tsslint');
@@ -227,7 +238,7 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 	}
 
 	if (shouldRetry) {
-		diagnostics = linter.lint(fileName, fileCache);
+		diagnostics = lintWorker(fileName, fileCache);
 	}
 
 	return [
@@ -251,11 +262,11 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 
 function lint(fileName: string, fileCache: core.FileLintCache) {
 	return [
-		linter.lint(fileName, fileCache).map(diagnostic => ({
+		lintWorker(fileName, fileCache).map(diagnostic => ({
 			...diagnostic,
 			file: {
 				fileName: diagnostic.file.fileName,
-				text: diagnostic.file.text,
+				text: originalHost.getScriptSnapshot(diagnostic.file.fileName)!.getText(0, Number.MAX_VALUE),
 			},
 			relatedInformation: diagnostic.relatedInformation?.map(info => ({
 				...info,
