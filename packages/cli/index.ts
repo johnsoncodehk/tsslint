@@ -380,7 +380,7 @@ class Project {
 			}
 
 			if (diagnostics.length) {
-				hasFix ||= await linterWorker.hasCodeFixes(fileName);
+				hasFix ||= Object.values(fileCache[1]).some(fixes => fixes > 0) || await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
