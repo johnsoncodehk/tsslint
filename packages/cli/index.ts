@@ -15,6 +15,12 @@ const lightRed = (s: string) => '\x1b[91m' + s + _reset;
 const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
 const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
+// https://talyian.github.io/ansicolors/
+const tsColor = (s: string) => '\x1b[34m' + s + _reset;
+const vueColor = (s: string) => '\x1b[32m' + s + _reset;
+const mdxColor = (s: string) => '\x1b[33m' + s + _reset;
+const astroColor = (s: string) => '\x1b[38;5;209m' + s + _reset;
+
 let threads = 1;
 
 if (process.argv.includes('--threads')) {
@@ -56,8 +62,26 @@ class Project {
 	) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
+		const labels: string[] = [];
+
+		if (this.languages.length === 0) {
+			labels.push(tsColor('TS'));
+		} else {
+			if (this.languages.includes('vue')) {
+				labels.push(vueColor('Vue'));
+			}
+			if (this.languages.includes('mdx')) {
+				labels.push(mdxColor('MDX'));
+			}
+			if (this.languages.includes('astro')) {
+				labels.push(astroColor('Astro'));
+			}
+		}
+
+		const label = labels.join(darkGray(' | '));
+
 		if (!this.configFile) {
-			clack.log.error(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
+			clack.log.error(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
 			return this;
 		}
 
@@ -67,11 +91,11 @@ class Project {
 		this.options = commonLine.options;
 
 		if (!this.fileNames.length) {
-			clack.log.warn(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
+			clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
 			return this;
 		}
 
-		clack.log.info(`${purple('[project]')} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
+		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
 
 		if (!process.argv.includes('--force')) {
 			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
