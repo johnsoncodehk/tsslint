@@ -3,6 +3,7 @@
 	"name": "@tsslint-fixtures/meta-frameworks-support",
 	"version": "1.4.0",
 	"devDependencies": {
+		"@astrojs/ts-plugin": "latest",
 		"@mdx-js/language-service": "latest",
 		"@vue/language-core": "latest"
 	}

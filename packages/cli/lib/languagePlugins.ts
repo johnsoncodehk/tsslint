@@ -43,7 +43,7 @@ export async function load(tsconfig: string, languages: string[]) {
 
 		try {
 			mdx = await import(require.resolve('@mdx-js/language-service', { paths: [path.dirname(tsconfig)] }));
-		} catch (err) {
+		} catch {
 			const pkg = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'package.json');
 			if (pkg) {
 				throw new Error('Please install @mdx-js/language-service to ' + path.relative(process.cwd(), pkg));
@@ -54,6 +54,24 @@ export async function load(tsconfig: string, languages: string[]) {
 
 		const mdxLanguagePlugin = mdx.createMdxLanguagePlugin();
 		plugins.push(mdxLanguagePlugin);
+	}
+
+	if (languages.includes('astro')) {
+		let astro: any;
+
+		try {
+			astro = require(require.resolve('@astrojs/ts-plugin/dist/language.js', { paths: [path.dirname(tsconfig)] }));
+		} catch (err) {
+			const pkg = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'package.json');
+			if (pkg) {
+				throw new Error('Please install @astrojs/ts-plugin to ' + path.relative(process.cwd(), pkg));
+			} else {
+				throw new Error('Please install @astrojs/ts-plugin for ' + path.relative(process.cwd(), tsconfig));
+			}
+		}
+
+		const astroLanguagePlugin = astro.getLanguagePlugin();
+		plugins.push(astroLanguagePlugin);
 	}
 
 	cache.set(tsconfig, plugins);
