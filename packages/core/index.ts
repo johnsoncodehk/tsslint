@@ -23,9 +23,7 @@ const typeAwareModeChange = new Error('enable type-aware mode');
 export function createLinter(
 	ctx: ProjectContext,
 	config: Config | Config[],
-	mode: 'cli' | 'typescript-plugin',
-	// @ts-expect-error
-	logger?: typeof import('@clack/prompts')
+	mode: 'cli' | 'typescript-plugin'
 ) {
 	let languageServiceUsage = 0;
 
@@ -392,7 +390,7 @@ export function createLinter(
 
 	function getSourceFile(fileName: string): ts.SourceFile {
 		if (languageServiceUsage) {
-			const sourceFile = ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+			const sourceFile = ctx.languageService.getProgram()!.getSourceFile(fileName);
 			if (sourceFile) {
 				return sourceFile;
 			}

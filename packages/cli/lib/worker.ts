@@ -210,7 +210,7 @@ async function setup(
 		languageServiceHost: linterHost,
 		typescript: ts,
 		tsconfig: ts.server.toNormalizedPath(tsconfig),
-	}, config, 'cli', clack);
+	}, config, 'cli');
 
 	return true;
 }
