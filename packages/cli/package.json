@@ -23,16 +23,9 @@
 		"glob": "^10.4.1"
 	},
 	"peerDependencies": {
-		"@vue/language-core": ">=2",
-		"typescript": "*",
-		"vue-tsc": ">=2"
+		"typescript": "*"
 	},
-	"peerDependenciesMeta": {
-		"@vue/language-core": {
-			"optional": true
-		},
-		"vue-tsc": {
-			"optional": true
-		}
+	"devDependencies": {
+		"@vue/language-core": "latest"
 	}
 }

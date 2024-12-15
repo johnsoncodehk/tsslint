@@ -1,0 +1,8 @@
+{
+	"private": true,
+	"name": "@tsslint-fixtures/meta-frameworks-support",
+	"version": "1.4.0",
+	"devDependencies": {
+		"@vue/language-core": "latest"
+	}
+}

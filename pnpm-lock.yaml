@@ -60,6 +60,12 @@ importers:
         specifier: ^7.13.0
         version: 7.18.0(@typescript-eslint/parser@8.17.0(eslint@9.16.0)(typescript@5.7.2))(eslint@9.16.0)(typescript@5.7.2)
 
+  fixtures/meta-frameworks-support:
+    devDependencies:
+      '@vue/language-core':
+        specifier: latest
+        version: 2.1.10(typescript@5.7.2)
+
   fixtures/typescript-plugin:
     devDependencies:
       '@tsslint/typescript-plugin':
@@ -86,17 +92,15 @@ importers:
       '@volar/typescript':
         specifier: ~2.4.0
         version: 2.4.11
-      '@vue/language-core':
-        specifier: '>=2'
-        version: 2.1.10(typescript@5.7.2)
       glob:
         specifier: ^10.4.1
         version: 10.4.5
       typescript:
         specifier: '*'
         version: 5.7.2
-      vue-tsc:
-        specifier: '>=2'
+    devDependencies:
+      '@vue/language-core':
+        specifier: latest
         version: 2.1.10(typescript@5.7.2)
 
   packages/config:
@@ -2864,12 +2868,6 @@ packages:
 
   vscode-uri@3.0.8:
     resolution: {integrity: sha512-AyFQ0EVmsOZOlAnxoFOGOq1SQDWAB7C6aqMGS23svWAllfOaxbuFvcT8D1i8z3Gyn8fraVeZNNmN6e9bxxXkKw==}
-
-  vue-tsc@2.1.10:
-    resolution: {integrity: sha512-RBNSfaaRHcN5uqVqJSZh++Gy/YUzryuv9u1aFWhsammDJXNtUiJMNoJ747lZcQ68wUQFx6E73y4FY3D8E7FGMA==}
-    hasBin: true
-    peerDependencies:
-      typescript: '>=5.0.0'
 
   walk-up-path@3.0.1:
     resolution: {integrity: sha512-9YlCL/ynK3CTlrSRrDxZvUauLzAswPCrsaCgilqFevUYpeEW0/3ScEjaa3kbW/T0ghhkEr7mv+fpjqn1Y1YuTA==}
@@ -5954,13 +5952,6 @@ snapshots:
   validate-npm-package-name@5.0.1: {}
 
   vscode-uri@3.0.8: {}
-
-  vue-tsc@2.1.10(typescript@5.7.2):
-    dependencies:
-      '@volar/typescript': 2.4.11
-      '@vue/language-core': 2.1.10(typescript@5.7.2)
-      semver: 7.6.3
-      typescript: 5.7.2
 
   walk-up-path@3.0.1: {}
 

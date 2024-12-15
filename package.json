@@ -11,6 +11,7 @@
 		"release:vscode": "cd packages/vscode && npm run release",
 		"lint": "node packages/cli/bin/tsslint.js --projects 'packages/*/tsconfig.json'",
 		"lint:fix": "npm run lint -- --fix",
+		"lint:fixtures": "node packages/cli/bin/tsslint.js --projects 'fixtures/*/tsconfig.json' --enable-vue-support",
 		"start": "node packages/cli/bin/tsslint.js --projects $(find fixtures -name tsconfig.json | grep -v 'config-build-error')"
 	},
 	"devDependencies": {

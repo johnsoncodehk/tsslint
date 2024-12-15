@@ -12,14 +12,20 @@ export function load(tsconfig: string) {
 
 	if (process.argv.includes('--enable-vue-support')) {
 		let vue: typeof import('@vue/language-core');
+		let vueTscPkgPath: string | undefined;
 
-		if (hasPackage('@vue/language-core')) {
+		if (findPackageJson('@vue/language-core')) {
 			vue = require('@vue/language-core');
-		} else if (hasPackage('vue-tsc')) {
-			const vueTscPath = path.dirname(require.resolve('vue-tsc/package.json'));
+		} else if (vueTscPkgPath = findPackageJson('vue-tsc')) {
+			const vueTscPath = path.dirname(vueTscPkgPath);
 			vue = require(require.resolve('@vue/language-core', { paths: [vueTscPath] }));
 		} else {
-			throw new Error('Please install @vue/language-core or vue-tsc');
+			const pkg = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'package.json');
+			if (pkg) {
+				throw new Error('Please install @vue/language-core or vue-tsc to ' + path.relative(process.cwd(), pkg));
+			} else {
+				throw new Error('Please install @vue/language-core or vue-tsc');
+			}
 		}
 
 		const commonLine = vue.createParsedCommandLine(ts, ts.sys, tsconfig);
@@ -34,13 +40,10 @@ export function load(tsconfig: string) {
 
 	cache.set(tsconfig, plugins);
 	return plugins;
-}
 
-function hasPackage(pkgName: string) {
-	try {
-		require.resolve(`${pkgName}/package.json`);
-		return true;
-	} catch {
-		return false;
+	function findPackageJson(pkgName: string) {
+		try {
+			return require.resolve(`${pkgName}/package.json`, { paths: [path.dirname(tsconfig)] });
+		} catch { }
 	}
 }
