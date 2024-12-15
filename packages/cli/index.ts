@@ -110,29 +110,9 @@ class Project {
 		&& !process.argv.includes('--astro-project')
 		&& !process.argv.includes('--astro-projects')
 	) {
-		const tsconfigOptions = glob.sync('**/{tsconfig.json,jsconfig.json}');
-
-		if (!tsconfigOptions) {
-			clack.log.error(lightRed('No tsconfig.json/jsconfig.json found.'));
-			process.exit(1);
-		}
-
-		const selectedTsconfigs = await clack.multiselect({
-			message: 'Select one or multiple projects',
-			options: tsconfigOptions.map(tsconfig => ({
-				label: tsconfig,
-				value: tsconfig,
-			})),
-			initialValues: [tsconfigOptions[0]],
-		});
-
-		if (clack.isCancel(selectedTsconfigs)) {
-			process.exit(1);
-		}
-
 		const languages = await clack.multiselect({
 			required: false,
-			message: 'Select languages',
+			message: 'Select frameworks (optional)',
 			options: [{
 				label: 'Vue',
 				value: 'vue',
@@ -146,6 +126,43 @@ class Project {
 		}) as string[];
 
 		if (clack.isCancel(languages)) {
+			process.exit(1);
+		}
+
+		const tsconfigOptions = glob.sync('**/{tsconfig.json,jsconfig.json}');
+
+		let options = await Promise.all(
+			tsconfigOptions.map(async tsconfigOption => {
+				const tsconfig = require.resolve(
+					tsconfigOption.startsWith('.') ? tsconfigOption : `./${tsconfigOption}`,
+					{ paths: [process.cwd()] }
+				);
+				try {
+					const commonLine = await parseCommonLine(tsconfig, languages);
+					return {
+						label: path.relative(process.cwd(), tsconfig) + ` (${commonLine.fileNames.length})`,
+						value: tsconfigOption,
+					};
+				} catch {
+					return undefined;
+				}
+			})
+		);
+
+		options = options.filter(option => !!option);
+
+		if (!options.length) {
+			clack.log.error(lightRed('No projects found.'));
+			process.exit(1);
+		}
+
+		const selectedTsconfigs = await clack.multiselect({
+			message: 'Select one or multiple projects',
+			// @ts-expect-error
+			options,
+		});
+
+		if (clack.isCancel(selectedTsconfigs)) {
 			process.exit(1);
 		}
 
