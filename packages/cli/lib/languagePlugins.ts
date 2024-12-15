@@ -22,16 +22,14 @@ export function load(tsconfig: string) {
 			throw new Error('Please install @vue/language-core or vue-tsc');
 		}
 
-		if (vue) {
-			const commonLine = vue.createParsedCommandLine(ts, ts.sys, tsconfig);
-			const vueLanguagePlugin = vue.createVueLanguagePlugin<string>(
-				ts,
-				commonLine.options,
-				commonLine.vueOptions,
-				fileName => fileName
-			);
-			plugins.push(vueLanguagePlugin);
-		}
+		const commonLine = vue.createParsedCommandLine(ts, ts.sys, tsconfig);
+		const vueLanguagePlugin = vue.createVueLanguagePlugin<string>(
+			ts,
+			commonLine.options,
+			commonLine.vueOptions,
+			fileName => fileName
+		);
+		plugins.push(vueLanguagePlugin);
 	}
 
 	cache.set(tsconfig, plugins);
