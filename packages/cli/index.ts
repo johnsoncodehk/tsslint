@@ -398,14 +398,13 @@ class Project {
 					fileCache[0] = fileMtime;
 					fileCache[1] = {};
 					fileCache[2] = {};
-					fileCache[3] = {};
 				}
 				else {
 					cached++;
 				}
 			}
 			else {
-				project.cache[fileName] = fileCache = [fileMtime, {}, {}, {}];
+				project.cache[fileName] = fileCache = [fileMtime, {}, {}];
 			}
 
 			let diagnostics!: ts.DiagnosticWithLocation[];
@@ -422,7 +421,7 @@ class Project {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
-					hasFix ||= !!fileCache[1][diagnostic.code];
+					hasFix ||= !!fileCache[1][diagnostic.code]?.[0];
 
 					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
 						getCurrentDirectory: ts.sys.getCurrentDirectory,
@@ -444,7 +443,7 @@ class Project {
 						log(output);
 					}
 				}
-			} else if (!(await linterWorker.hasRules(fileName, fileCache[3]))) {
+			} else if (!(await linterWorker.hasRules(fileName, fileCache[2]))) {
 				excluded++;
 			} else {
 				passed++;

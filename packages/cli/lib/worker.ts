@@ -222,7 +222,7 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 	let diagnostics!: ts.DiagnosticWithLocation[];
 
 	while (shouldRetry && retry--) {
-		if (Object.values(fileCache[1]).some(fixes => fixes > 0)) {
+		if (Object.values(fileCache[1]).some(([fixes]) => fixes > 0)) {
 			// Reset the cache if there are any fixes applied.
 			fileCache[1] = {};
 			fileCache[2] = {};
@@ -230,7 +230,7 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 		diagnostics = linter.lint(fileName, fileCache);
 
 		let fixes = linter
-			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[3])
+			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[2])
 			.filter(fix => fix.fixId === 'tsslint');
 
 		if (language) {
@@ -351,6 +351,6 @@ function hasCodeFixes(fileName: string) {
 	return linter.hasCodeFixes(fileName);
 }
 
-function hasRules(fileName: string, minimatchCache: core.FileLintCache[3]) {
+function hasRules(fileName: string, minimatchCache: core.FileLintCache[2]) {
 	return [Object.keys(linter.getRules(fileName, minimatchCache)).length > 0, minimatchCache] as const;
 }

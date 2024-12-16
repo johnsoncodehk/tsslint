@@ -10,8 +10,7 @@ import minimatch = require('minimatch');
 
 export type FileLintCache = [
 	mtime: number,
-	ruleFixes: Record<string, number>,
-	result: Record<string, ts.DiagnosticWithLocation[]>,
+	ruleResult: Record<string, [fixesNum: number, diagnostics: ts.DiagnosticWithLocation[]]>,
 	minimatchResult: Record<string, boolean>,
 ];
 
@@ -75,7 +74,7 @@ export function createLinter(
 			let currentRuleLanguageServiceUsage = 0;
 			let sourceFile: ts.SourceFile | undefined;
 
-			const rules = getFileRules(fileName, cache?.[3]);
+			const rules = getFileRules(fileName, cache?.[2]);
 			const rulesContext: RuleContext = {
 				...ctx,
 				languageService,
@@ -89,7 +88,7 @@ export function createLinter(
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const fixes = getFileFixes(fileName);
 			const refactors = getFileRefactors(fileName);
-			const configs = getFileConfigs(fileName, cache?.[3]);
+			const configs = getFileConfigs(fileName, cache?.[2]);
 
 			fixes.clear();
 			refactors.length = 0;
@@ -136,10 +135,10 @@ export function createLinter(
 					currentRefactors = 0;
 
 					if (cache) {
-						const ruleCache = cache[2][currentRuleId];
+						const ruleCache = cache[1][currentRuleId];
 						if (ruleCache) {
 							diagnostics.push(
-								...ruleCache.map(data => ({
+								...ruleCache[1].map(data => ({
 									...data,
 									file: rulesContext.sourceFile,
 									relatedInformation: data.relatedInformation?.map(info => ({
@@ -167,8 +166,8 @@ export function createLinter(
 
 					if (cache) {
 						if (currentRuleLanguageServiceUsage === languageServiceUsage) {
-							cache[1][currentRuleId] = currentFixes;
-							cache[2][currentRuleId] ??= [];
+							cache[1][currentRuleId] ??= [0, []];
+							cache[1][currentRuleId][0] = currentIssues;
 						}
 					}
 				}
@@ -201,8 +200,8 @@ export function createLinter(
 				const cacheable = currentRuleLanguageServiceUsage === languageServiceUsage;
 
 				if (cache && cacheable) {
-					cache[2][currentRuleId] ??= [];
-					cache[2][currentRuleId].push({
+					cache[1][currentRuleId] ??= [0, []];
+					cache[1][currentRuleId][1].push({
 						...error,
 						file: undefined as any,
 						relatedInformation: error.relatedInformation?.map(info => ({
@@ -267,7 +266,7 @@ export function createLinter(
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			minimatchCache?: FileLintCache[3]
+			minimatchCache?: FileLintCache[2]
 		) {
 
 			const configs = getFileConfigs(fileName, minimatchCache);
@@ -369,7 +368,7 @@ export function createLinter(
 		throw new Error('No source file');
 	}
 
-	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[3]) {
+	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
 		let result = fileRules.get(fileName);
 		if (!result) {
 			result = {};
@@ -392,7 +391,7 @@ export function createLinter(
 		return result;
 	}
 
-	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[3]) {
+	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
