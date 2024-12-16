@@ -416,13 +416,13 @@ class Project {
 				diagnostics = await linterWorker.lint(fileName, fileCache);
 			}
 
+			diagnostics = diagnostics.filter(diagnostic => diagnostic.category !== ts.DiagnosticCategory.Suggestion);
+
 			if (diagnostics.length) {
-				hasFix ||= Object.values(fileCache[1]).some(fixes => fixes > 0) || await linterWorker.hasCodeFixes(fileName);
+				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
-					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
-						continue;
-					}
+					hasFix ||= !!fileCache[1][diagnostic.code];
 
 					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
 						getCurrentDirectory: ts.sys.getCurrentDirectory,
