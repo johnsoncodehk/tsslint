@@ -23,7 +23,9 @@ export function createLinter(
 	ctx: ProjectContext,
 	config: Config | Config[],
 	mode: 'cli' | 'typescript-plugin',
-	syntaxOnlyLanguageService?: ts.LanguageService
+	syntaxOnlyLanguageService?: ts.LanguageService & {
+		getNonBoundSourceFile?(fileName: string): ts.SourceFile;
+	}
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
@@ -53,7 +55,7 @@ export function createLinter(
 		}));
 	const normalizedPath = new Map<string, string>();
 	const rule2Mode = new Map<string, /* typeAwareMode */ boolean>();
-	const getNonBoundSourceFile: ((fileName: string) => ts.SourceFile) | undefined = (syntaxOnlyLanguageService as any).getNonBoundSourceFile;
+	const getNonBoundSourceFile = syntaxOnlyLanguageService?.getNonBoundSourceFile;
 
 	let shouldEnableTypeAware = false;
 
