@@ -60,7 +60,6 @@ export function createLinter(
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
-			let currentFixes = 0;
 			let shouldRetry = false;
 
 			const rules = getFileRules(fileName, cache?.[2]);
@@ -95,7 +94,6 @@ export function createLinter(
 				}
 
 				currentRuleId = ruleId;
-				currentFixes = 0;
 
 				const ruleCache = cache?.[1][currentRuleId];
 				if (ruleCache) {
@@ -247,7 +245,6 @@ export function createLinter(
 						return this;
 					},
 					withFix(title, getEdits) {
-						currentFixes++;
 						fixes.push(({ title, getEdits }));
 						return this;
 					},
