@@ -225,13 +225,12 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 		if (Object.values(fileCache[1]).some(fixes => fixes > 0)) {
 			// Reset the cache if there are any fixes applied.
 			fileCache[1] = {};
-			fileCache[2].length = 0;
-			fileCache[3].length = 0;
+			fileCache[2] = {};
 		}
 		diagnostics = linter.lint(fileName, fileCache);
 
 		let fixes = linter
-			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[4])
+			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[3])
 			.filter(fix => fix.fixId === 'tsslint');
 
 		if (language) {
@@ -256,8 +255,7 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 		ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
 		fileCache[0] = fs.statSync(fileName).mtimeMs;
 		fileCache[1] = {};
-		fileCache[2].length = 0;
-		fileCache[3].length = 0;
+		fileCache[2] = {};
 	}
 
 	if (shouldRetry) {
@@ -353,6 +351,6 @@ function hasCodeFixes(fileName: string) {
 	return linter.hasCodeFixes(fileName);
 }
 
-function hasRules(fileName: string, minimatchCache: core.FileLintCache[4]) {
+function hasRules(fileName: string, minimatchCache: core.FileLintCache[3]) {
 	return [Object.keys(linter.getRules(fileName, minimatchCache)).length > 0, minimatchCache] as const;
 }

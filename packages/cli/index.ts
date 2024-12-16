@@ -397,16 +397,15 @@ class Project {
 				if (fileCache[0] !== fileMtime) {
 					fileCache[0] = fileMtime;
 					fileCache[1] = {};
-					fileCache[2].length = 0;
-					fileCache[3].length = 0;
-					fileCache[4] = {};
+					fileCache[2] = {};
+					fileCache[3] = {};
 				}
 				else {
 					cached++;
 				}
 			}
 			else {
-				project.cache[fileName] = fileCache = [fileMtime, {}, [], [], {}];
+				project.cache[fileName] = fileCache = [fileMtime, {}, {}, {}];
 			}
 
 			let diagnostics!: ts.DiagnosticWithLocation[];
@@ -445,7 +444,7 @@ class Project {
 						log(output);
 					}
 				}
-			} else if (!(await linterWorker.hasRules(fileName, fileCache[4]))) {
+			} else if (!(await linterWorker.hasRules(fileName, fileCache[3]))) {
 				excluded++;
 			} else {
 				passed++;

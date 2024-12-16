@@ -11,8 +11,7 @@ import minimatch = require('minimatch');
 export type FileLintCache = [
 	mtime: number,
 	ruleFixes: Record<string, number>,
-	result: ts.DiagnosticWithLocation[],
-	resolvedResult: ts.DiagnosticWithLocation[],
+	result: Record<string, ts.DiagnosticWithLocation[]>,
 	minimatchResult: Record<string, boolean>,
 ];
 
@@ -68,17 +67,15 @@ export function createLinter(
 
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
-			let cacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
-			let uncacheableDiagnostics: ts.DiagnosticWithLocation[] = [];
+			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let currentRuleId: string;
 			let currentIssues = 0;
 			let currentFixes = 0;
 			let currentRefactors = 0;
 			let currentRuleLanguageServiceUsage = 0;
 			let sourceFile: ts.SourceFile | undefined;
-			let hasUncacheResult = false;
 
-			const rules = getFileRules(fileName, cache?.[4]);
+			const rules = getFileRules(fileName, cache?.[3]);
 			const rulesContext: RuleContext = {
 				...ctx,
 				languageService,
@@ -92,13 +89,7 @@ export function createLinter(
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const fixes = getFileFixes(fileName);
 			const refactors = getFileRefactors(fileName);
-			const cachedRules = new Map<string, number>();
-
-			if (cache) {
-				for (const ruleId in cache[1]) {
-					cachedRules.set(ruleId, cache[1][ruleId]);
-				}
-			}
+			const configs = getFileConfigs(fileName, cache?.[3]);
 
 			fixes.clear();
 			refactors.length = 0;
@@ -107,62 +98,16 @@ export function createLinter(
 				return this.lint(fileName, cache);
 			}
 
-			const configs = getFileConfigs(fileName, cache?.[4]);
-
-			if (cache) {
-				for (const [ruleId, fixes] of cachedRules) {
-					cache[1][ruleId] = fixes;
-				}
-			}
-
-			let diagnostics: ts.DiagnosticWithLocation[];
-
-			if (hasUncacheResult) {
-				diagnostics = [
-					...(cacheableDiagnostics.length
-						? cacheableDiagnostics
-						: (cache?.[2] ?? []).map(data => ({
-							...data,
-							file: rulesContext.sourceFile,
-							relatedInformation: data.relatedInformation?.map(info => ({
-								...info,
-								file: info.file ? getSourceFile(info.file.fileName) : undefined,
-							})),
-						}))
-					),
-					...uncacheableDiagnostics,
-				];
-				for (const { plugins } of configs) {
-					for (const { resolveDiagnostics } of plugins) {
-						if (resolveDiagnostics) {
-							diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
-						}
+			for (const { plugins } of configs) {
+				for (const { resolveDiagnostics } of plugins) {
+					if (resolveDiagnostics) {
+						diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
 					}
 				}
-				if (cache) {
-					cache[3] = diagnostics.map(data => ({
-						...data,
-						file: undefined as any,
-						relatedInformation: data.relatedInformation?.map(info => ({
-							...info,
-							file: info.file ? { fileName: info.file.fileName } as any : undefined,
-						})),
-					}));
-				}
-			}
-			else {
-				diagnostics = (cache?.[3] ?? []).map(data => ({
-					...data,
-					file: rulesContext.sourceFile,
-					relatedInformation: data.relatedInformation?.map(info => ({
-						...info,
-						file: info.file ? getSourceFile(info.file.fileName) : undefined,
-					})),
-				}));
 			}
 
+			// Remove fixes and refactors that removed by resolveDiagnostics
 			const diagnosticSet = new Set(diagnostics);
-
 			for (const diagnostic of [...fixes.keys()]) {
 				if (!diagnosticSet.has(diagnostic)) {
 					fixes.delete(diagnostic);
@@ -190,11 +135,22 @@ export function createLinter(
 					currentFixes = 0;
 					currentRefactors = 0;
 
-					if (cachedRules.has(currentRuleId)) {
-						continue;
+					if (cache) {
+						const ruleCache = cache[2][currentRuleId];
+						if (ruleCache) {
+							diagnostics.push(
+								...ruleCache.map(data => ({
+									...data,
+									file: rulesContext.sourceFile,
+									relatedInformation: data.relatedInformation?.map(info => ({
+										...info,
+										file: info.file ? getSourceFile(info.file.fileName) : undefined,
+									})),
+								}))
+							);
+							continue;
+						}
 					}
-
-					hasUncacheResult = true;
 
 					try {
 						rule(rulesContext);
@@ -209,8 +165,11 @@ export function createLinter(
 						}
 					}
 
-					if (cache && currentRuleLanguageServiceUsage === languageServiceUsage) {
-						cachedRules.set(currentRuleId, currentFixes);
+					if (cache) {
+						if (currentRuleLanguageServiceUsage === languageServiceUsage) {
+							cache[1][currentRuleId] = currentFixes;
+							cache[2][currentRuleId] ??= [];
+						}
 					}
 				}
 				return true;
@@ -242,7 +201,8 @@ export function createLinter(
 				const cacheable = currentRuleLanguageServiceUsage === languageServiceUsage;
 
 				if (cache && cacheable) {
-					cache[2].push({
+					cache[2][currentRuleId] ??= [];
+					cache[2][currentRuleId].push({
 						...error,
 						file: undefined as any,
 						relatedInformation: error.relatedInformation?.map(info => ({
@@ -261,7 +221,7 @@ export function createLinter(
 				}
 
 				fixes.set(error, []);
-				(cacheable ? cacheableDiagnostics : uncacheableDiagnostics).push(error);
+				diagnostics.push(error);
 				currentIssues++;
 
 				return {
@@ -307,7 +267,7 @@ export function createLinter(
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			minimatchCache?: FileLintCache[4]
+			minimatchCache?: FileLintCache[3]
 		) {
 
 			const configs = getFileConfigs(fileName, minimatchCache);
@@ -409,7 +369,7 @@ export function createLinter(
 		throw new Error('No source file');
 	}
 
-	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[4]) {
+	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[3]) {
 		let result = fileRules.get(fileName);
 		if (!result) {
 			result = {};
@@ -432,7 +392,7 @@ export function createLinter(
 		return result;
 	}
 
-	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[4]) {
+	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[3]) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
