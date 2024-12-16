@@ -479,9 +479,9 @@ class Project {
 	function updateSpinner() {
 		if (processFiles.size === 1) {
 			const fileName = processFiles.values().next().value!;
-			spinner.message(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), fileName)}`);
+			spinner.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), fileName)}`));
 		} else {
-			spinner.message(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
+			spinner.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`));
 		}
 	}
 
