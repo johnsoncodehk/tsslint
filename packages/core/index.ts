@@ -1,7 +1,7 @@
 export * from './lib/build';
 export * from './lib/watch';
 
-import type { Config, ProjectContext, Reporter, RuleContext, Rules } from '@tsslint/types';
+import type { Config, ProjectContext, Reporter, Rule, RuleContext, Rules } from '@tsslint/types';
 import type * as ts from 'typescript';
 
 import ErrorStackParser = require('error-stack-parser');
@@ -10,50 +10,39 @@ import minimatch = require('minimatch');
 
 export type FileLintCache = [
 	mtime: number,
-	ruleResult: Record<string, [fixesNum: number, diagnostics: ts.DiagnosticWithLocation[]]>,
+	lintResult: Record<
+		/* ruleId */ string,
+		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
+	>,
 	minimatchResult: Record<string, boolean>,
 ];
 
 export type Linter = ReturnType<typeof createLinter>;
 
-const typeAwareModeChange = new Error('enable type-aware mode');
-
 export function createLinter(
 	ctx: ProjectContext,
 	config: Config | Config[],
-	mode: 'cli' | 'typescript-plugin'
+	mode: 'cli' | 'typescript-plugin',
+	syntaxOnlyLanguageService?: ts.LanguageService
 ) {
-	let languageServiceUsage = 0;
-
 	const ts = ctx.typescript;
-	const languageService = new Proxy(ctx.languageService, {
-		get(target, key, receiver) {
-			if (!languageServiceUsage) {
-				languageServiceUsage++;
-				throw typeAwareModeChange;
-			}
-			languageServiceUsage++;
-			return Reflect.get(target, key, receiver);
-		},
-	});
-	const fileRules = new Map<string, Rules>();
+	const fileRules = new Map<string, Record<string, Rule>>();
 	const fileConfigs = new Map<string, typeof configs>();
-	const fileFixes = new Map<
-		string /* fileName */,
-		Map<ts.DiagnosticWithLocation, {
-			title: string;
-			getEdits: () => ts.FileTextChanges[];
-		}[]>
+	const lintResults = new Map<
+		/* fileName */ string,
+		[
+			sourceFile: ts.SourceFile,
+			diagnostic2Fixes: Map<ts.DiagnosticWithLocation, {
+				title: string;
+				getEdits: () => ts.FileTextChanges[];
+			}[]>,
+			{
+				title: string;
+				diagnostic: ts.DiagnosticWithLocation;
+				getEdits: () => ts.FileTextChanges[];
+			}[],
+		]
 	>();
-	const fileRefactors = new Map<
-		string /* fileName */,
-		{
-			title: string;
-			diagnostic: ts.DiagnosticWithLocation;
-			getEdits: () => ts.FileTextChanges[];
-		}[]
-	>();
-	const snapshot2SourceFile = new WeakMap<ts.IScriptSnapshot, ts.SourceFile>();
 	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
@@ -63,116 +52,137 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
+	const rule2Mode = new Map<string, /* typeAwareMode */ boolean>();
+	const getNonBoundSourceFile: ((fileName: string) => ts.SourceFile) | undefined = (syntaxOnlyLanguageService as any).getNonBoundSourceFile;
+
+	let shouldEnableTypeAware = false;
 
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
-			let diagnostics: ts.DiagnosticWithLocation[] = [];
 			let currentRuleId: string;
-			let currentIssues = 0;
 			let currentFixes = 0;
-			let currentRefactors = 0;
-			let currentRuleLanguageServiceUsage = 0;
-			let sourceFile: ts.SourceFile | undefined;
+			let shouldRetry = false;
 
 			const rules = getFileRules(fileName, cache?.[2]);
-			const rulesContext: RuleContext = {
-				...ctx,
-				languageService,
-				get sourceFile() {
-					return sourceFile ??= getSourceFile(fileName);
-				},
-				reportError,
-				reportWarning,
-				reportSuggestion,
-			};
+			const typeAwareMode = !getNonBoundSourceFile
+				|| shouldEnableTypeAware && !Object.keys(rules).some(ruleId => !rule2Mode.has(ruleId));
+			const rulesContext: RuleContext = typeAwareMode
+				? {
+					...ctx,
+					sourceFile: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
+					reportError,
+					reportWarning,
+					reportSuggestion,
+				}
+				: {
+					...ctx,
+					languageService: syntaxOnlyLanguageService!,
+					sourceFile: (syntaxOnlyLanguageService as any).getNonBoundSourceFile(fileName),
+					reportError,
+					reportWarning,
+					reportSuggestion,
+				};
 			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const fixes = getFileFixes(fileName);
-			const refactors = getFileRefactors(fileName);
 			const configs = getFileConfigs(fileName, cache?.[2]);
 
-			fixes.clear();
-			refactors.length = 0;
+			lintResults.set(fileName, [rulesContext.sourceFile, new Map(), []]);
 
-			if (!runRules(rules)) {
+			const lintResult = lintResults.get(fileName)!;
+
+			for (const [ruleId, rule] of Object.entries(rules)) {
+				if (token?.isCancellationRequested()) {
+					break;
+				}
+
+				currentRuleId = ruleId;
+				currentFixes = 0;
+
+				const ruleCache = cache?.[1][currentRuleId];
+				if (ruleCache) {
+					let lintResult = lintResults.get(fileName);
+					if (!lintResult) {
+						lintResults.set(fileName, lintResult = [rulesContext.sourceFile, new Map(), []]);
+					}
+					for (const cacheDiagnostic of ruleCache[1]) {
+						lintResult[1].set({
+							...cacheDiagnostic,
+							file: rulesContext.sourceFile,
+							relatedInformation: cacheDiagnostic.relatedInformation?.map(info => ({
+								...info,
+								file: info.file ? (syntaxOnlyLanguageService as any).getNonBoundSourceFile(info.file.fileName) : undefined,
+							})),
+						}, []);
+					}
+					if (!typeAwareMode) {
+						rule2Mode.set(currentRuleId, false);
+					}
+					continue;
+				}
+
+				try {
+					rule(rulesContext);
+					if (!typeAwareMode) {
+						rule2Mode.set(currentRuleId, false);
+					}
+				} catch (err) {
+					if (!typeAwareMode) {
+						// console.log(`Rule "${currentRuleId}" is type aware.`);
+						rule2Mode.set(currentRuleId, true);
+						shouldRetry = true;
+					} else if (err instanceof Error) {
+						report(ts.DiagnosticCategory.Error, err.stack ?? err.message, 0, 0, 0, err);
+					} else {
+						report(ts.DiagnosticCategory.Error, String(err), 0, 0, false);
+					}
+				}
+
+				if (cache && !rule2Mode.get(currentRuleId)) {
+					cache[1][currentRuleId] ??= [false, []];
+
+					for (const [_, fixes] of lintResult[1]) {
+						if (fixes.length) {
+							cache[1][currentRuleId][0] = true;
+							break;
+						}
+					}
+				}
+			}
+
+			if (shouldRetry) {
+				// Retry
+				shouldEnableTypeAware = true;
 				return this.lint(fileName, cache);
 			}
 
-			for (const { plugins } of configs) {
-				for (const { resolveDiagnostics } of plugins) {
-					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
+			let diagnostics = [...lintResult[1].keys()];
+
+			try {
+				for (const { plugins } of configs) {
+					for (const { resolveDiagnostics } of plugins) {
+						if (resolveDiagnostics) {
+							diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
+						}
 					}
 				}
+			} catch (error) {
+				if (!typeAwareMode) {
+					// Retry
+					shouldEnableTypeAware = true;
+					return this.lint(fileName, cache);
+				}
+				throw error;
 			}
 
 			// Remove fixes and refactors that removed by resolveDiagnostics
 			const diagnosticSet = new Set(diagnostics);
-			for (const diagnostic of [...fixes.keys()]) {
+			for (const diagnostic of [...lintResult[1].keys()]) {
 				if (!diagnosticSet.has(diagnostic)) {
-					fixes.delete(diagnostic);
+					lintResult[1].delete(diagnostic);
 				}
 			}
-			fileRefactors.set(fileName, refactors.filter(refactor => diagnosticSet.has(refactor.diagnostic)));
+			lintResult[2] = lintResult[2].filter(refactor => diagnosticSet.has(refactor.diagnostic));
 
 			return diagnostics;
-
-			function runRules(rules: Rules, paths: string[] = []) {
-				for (const [path, rule] of Object.entries(rules)) {
-					if (token?.isCancellationRequested()) {
-						break;
-					}
-					if (typeof rule === 'object') {
-						if (!runRules(rule, [...paths, path])) {
-							return false;
-						}
-						continue;
-					}
-
-					currentRuleLanguageServiceUsage = languageServiceUsage;
-					currentRuleId = [...paths, path].join('/');
-					currentIssues = 0;
-					currentFixes = 0;
-					currentRefactors = 0;
-
-					if (cache) {
-						const ruleCache = cache[1][currentRuleId];
-						if (ruleCache) {
-							diagnostics.push(
-								...ruleCache[1].map(data => ({
-									...data,
-									file: rulesContext.sourceFile,
-									relatedInformation: data.relatedInformation?.map(info => ({
-										...info,
-										file: info.file ? getSourceFile(info.file.fileName) : undefined,
-									})),
-								}))
-							);
-							continue;
-						}
-					}
-
-					try {
-						rule(rulesContext);
-					} catch (err) {
-						if (err === typeAwareModeChange) {
-							// logger?.log.message(`Type-aware mode enabled by ${currentRuleId} rule.`);
-							return false;
-						} else if (err instanceof Error) {
-							report(ts.DiagnosticCategory.Error, err.stack ?? err.message, 0, 0, 0, err);
-						} else {
-							report(ts.DiagnosticCategory.Error, String(err), 0, 0, false);
-						}
-					}
-
-					if (cache) {
-						if (currentRuleLanguageServiceUsage === languageServiceUsage) {
-							cache[1][currentRuleId] ??= [0, []];
-							cache[1][currentRuleId][0] = currentIssues;
-						}
-					}
-				}
-				return true;
-			};
 
 			function reportError(message: string, start: number, end: number, stackOffset?: false | number) {
 				return report(ts.DiagnosticCategory.Error, message, start, end, stackOffset);
@@ -197,10 +207,9 @@ export function createLinter(
 					source: 'tsslint',
 					relatedInformation: [],
 				};
-				const cacheable = currentRuleLanguageServiceUsage === languageServiceUsage;
 
-				if (cache && cacheable) {
-					cache[1][currentRuleId] ??= [0, []];
+				if (cache && !rule2Mode.get(currentRuleId)) {
+					cache[1][currentRuleId] ??= [false, []];
 					cache[1][currentRuleId][1].push({
 						...error,
 						file: undefined as any,
@@ -219,9 +228,14 @@ export function createLinter(
 					}
 				}
 
-				fixes.set(error, []);
-				diagnostics.push(error);
-				currentIssues++;
+				let lintResult = lintResults.get(fileName);
+				if (!lintResult) {
+					lintResults.set(fileName, lintResult = [rulesContext.sourceFile, new Map(), []]);
+				}
+				const diagnostic2Fixes = lintResult[1];
+				const refactors = lintResult[2];
+				diagnostic2Fixes.set(error, []);
+				const fixes = diagnostic2Fixes.get(error)!;
 
 				return {
 					withDeprecated() {
@@ -234,11 +248,10 @@ export function createLinter(
 					},
 					withFix(title, getEdits) {
 						currentFixes++;
-						fixes.get(error)!.push(({ title, getEdits }));
+						fixes.push(({ title, getEdits }));
 						return this;
 					},
 					withRefactor(title, getEdits) {
-						currentRefactors++;
 						refactors.push(({
 							diagnostic: error,
 							title,
@@ -250,15 +263,15 @@ export function createLinter(
 			}
 		},
 		hasCodeFixes(fileName: string) {
-
-			const fixesMap = getFileFixes(fileName);
-
-			for (const [_diagnostic, actions] of fixesMap) {
-				if (actions.length) {
+			const lintResult = lintResults.get(fileName);
+			if (!lintResult) {
+				return false;
+			}
+			for (const [_, fixes] of lintResult[1]) {
+				if (fixes.length) {
 					return true;
 				}
 			}
-
 			return false;
 		},
 		getCodeFixes(
@@ -268,12 +281,16 @@ export function createLinter(
 			diagnostics?: ts.Diagnostic[],
 			minimatchCache?: FileLintCache[2]
 		) {
+			const lintResult = lintResults.get(fileName);
+			if (!lintResult) {
+				return [];
+			}
 
+			const sourceFile = lintResult[0];
 			const configs = getFileConfigs(fileName, minimatchCache);
-			const fixesMap = getFileFixes(fileName);
 			const result: ts.CodeFixAction[] = [];
 
-			for (const [diagnostic, actions] of fixesMap) {
+			for (const [diagnostic, actions] of lintResult[1]) {
 				if (diagnostics?.length && !diagnostics.includes(diagnostic)) {
 					continue;
 				}
@@ -298,7 +315,7 @@ export function createLinter(
 					for (const { plugins } of configs) {
 						for (const { resolveCodeFixes } of plugins) {
 							if (resolveCodeFixes) {
-								codeFixes = resolveCodeFixes(getSourceFile(fileName), diagnostic, codeFixes);
+								codeFixes = resolveCodeFixes(sourceFile, diagnostic, codeFixes);
 							}
 						}
 					}
@@ -309,12 +326,15 @@ export function createLinter(
 			return result;
 		},
 		getRefactors(fileName: string, start: number, end: number) {
+			const lintResult = lintResults.get(fileName);
+			if (!lintResult) {
+				return [];
+			}
 
-			const refactors = getFileRefactors(fileName);
 			const result: ts.RefactorActionInfo[] = [];
 
-			for (let i = 0; i < refactors.length; i++) {
-				const refactor = refactors[i];
+			for (let i = 0; i < lintResult[2].length; i++) {
+				const refactor = lintResult[2][i];
 				const diagStart = refactor.diagnostic.start;
 				const diagEnd = diagStart + refactor.diagnostic.length;
 				if (
@@ -335,9 +355,12 @@ export function createLinter(
 		},
 		getRefactorEdits(fileName: string, actionName: string) {
 			if (actionName.startsWith('tsslint:')) {
+				const lintResult = lintResults.get(fileName);
+				if (!lintResult) {
+					return [];
+				}
 				const index = actionName.slice('tsslint:'.length);
-				const actions = getFileRefactors(fileName);
-				const refactor = actions[Number(index)];
+				const refactor = lintResult[2][Number(index)];
 				if (refactor) {
 					return refactor.getEdits();
 				}
@@ -347,48 +370,34 @@ export function createLinter(
 		getConfigs: getFileConfigs,
 	};
 
-	function getSourceFile(fileName: string): ts.SourceFile {
-		if (languageServiceUsage) {
-			const sourceFile = ctx.languageService.getProgram()!.getSourceFile(fileName);
-			if (sourceFile) {
-				return sourceFile;
-			}
-		}
-		else {
-			const snapshot = ctx.languageServiceHost.getScriptSnapshot(fileName);
-			if (snapshot) {
-				if (!snapshot2SourceFile.has(snapshot)) {
-					const sourceFile = ts.createSourceFile(fileName, snapshot.getText(0, snapshot.getLength()), ts.ScriptTarget.ESNext, true);
-					snapshot2SourceFile.set(snapshot, sourceFile);
-					return sourceFile;
-				}
-				return snapshot2SourceFile.get(snapshot)!;
-			}
-		}
-		throw new Error('No source file');
-	}
-
 	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
-		let result = fileRules.get(fileName);
-		if (!result) {
-			result = {};
+		let rules = fileRules.get(fileName);
+		if (!rules) {
+			rules = {};
 			const configs = getFileConfigs(fileName, minimatchCache);
-			for (const { rules } of configs) {
-				result = {
-					...result,
-					...rules,
-				};
+			for (const config of configs) {
+				collectRules(rules, config.rules, []);
 			}
 			for (const { plugins } of configs) {
 				for (const { resolveRules } of plugins) {
 					if (resolveRules) {
-						result = resolveRules(fileName, result);
+						rules = resolveRules(fileName, rules);
 					}
 				}
 			}
-			fileRules.set(fileName, result);
+			fileRules.set(fileName, rules);
 		}
-		return result;
+		return rules;
+	}
+
+	function collectRules(record: Record<string, Rule>, rules: Rules, paths: string[]) {
+		for (const [path, rule] of Object.entries(rules)) {
+			if (typeof rule === 'object') {
+				collectRules(record, rule, [...paths, path]);
+				continue;
+			}
+			record[[...paths, path].join('/')] = rule;
+		}
 	}
 
 	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
@@ -424,20 +433,6 @@ export function createLinter(
 			}
 		}
 		return result;
-	}
-
-	function getFileFixes(fileName: string) {
-		if (!fileFixes.has(fileName)) {
-			fileFixes.set(fileName, new Map());
-		}
-		return fileFixes.get(fileName)!;
-	}
-
-	function getFileRefactors(fileName: string) {
-		if (!fileRefactors.has(fileName)) {
-			fileRefactors.set(fileName, []);
-		}
-		return fileRefactors.get(fileName)!;
 	}
 }
 
