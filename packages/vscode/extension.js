@@ -18,7 +18,7 @@ try {
 			}
 		});
 	} else {
-		require('fs').unlinkSync(installScript)
+		fs.unlinkSync(installScript)
 	}
 } catch {
 	// ESBuild is already installed
