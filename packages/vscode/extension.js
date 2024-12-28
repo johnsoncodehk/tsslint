@@ -17,7 +17,15 @@ try {
 			text = text.replace('t.has(e.code+"")', s => `(${s}||e.source==="tsslint")`);
 
 			// support "Fix all"
-			text = text.replace(`const i=new y(t,n,r);`, s => s + `
+			for (const replaceText of [
+				'const i=new y(t,n,r);',
+				// VSCode 1.93.1 (#36)
+				'const i=new v(t,n,r)',
+			]) {
+				if (!text.includes(replaceText)) {
+					continue;
+				}
+				text = text.replace(replaceText, s => s + `
 const vscode = require('vscode');
 vscode.languages.registerCodeActionsProvider(
 	e.semantic,
@@ -88,7 +96,8 @@ vscode.languages.registerCodeActionsProvider(
 	{
 		providedCodeActionKinds: [vscode.CodeActionKind.SourceFixAll.append('tsslint')],
 	}
-);`)
+				);`)
+			}
 
 			// sort plugins
 			text = text.replace('"--globalPlugins",i.plugins', '"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="@tsslint/typescript-plugin"?1:0)-(a.name==="@tsslint/typescript-plugin"?1:0))');
