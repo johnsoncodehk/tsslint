@@ -222,6 +222,7 @@ async function setup(
 function lint(fileName: string, fix: boolean, formatSettings: ts.FormatCodeSettings | undefined, fileCache: core.FileLintCache) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
+	let shouldCheck = true;
 
 	if (fix) {
 		if (Object.values(fileCache[1]).some(([hasFix]) => hasFix)) {
@@ -230,6 +231,7 @@ function lint(fileName: string, fix: boolean, formatSettings: ts.FormatCodeSetti
 			fileCache[2] = {};
 		}
 		diagnostics = linter.lint(fileName, fileCache);
+		shouldCheck = false;
 
 		let fixes = linter
 			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[2])
@@ -277,7 +279,10 @@ function lint(fileName: string, fix: boolean, formatSettings: ts.FormatCodeSetti
 		fileCache[0] = fs.statSync(fileName).mtimeMs;
 		fileCache[1] = {};
 		fileCache[2] = {};
+		shouldCheck = true;
+	}
 
+	if (shouldCheck) {
 		diagnostics = linter.lint(fileName, fileCache);
 	}
 
