@@ -234,7 +234,6 @@ class Project {
 				language: 'astro',
 			},
 		];
-		console.log(process.argv);
 		for (const { projectFlags, language } of options) {
 			const projectFlag = projectFlags.find(flag => process.argv.includes(flag));
 			if (!projectFlag) {
