@@ -125,14 +125,16 @@ class Project {
 	const tsconfigAndLanguages = new Map<string, string[]>();
 
 	if (
-		!process.argv.includes('--project')
-		&& !process.argv.includes('--projects')
-		&& !process.argv.includes('--vue-project')
-		&& !process.argv.includes('--vue-projects')
-		&& !process.argv.includes('--mdx-project')
-		&& !process.argv.includes('--mdx-projects')
-		&& !process.argv.includes('--astro-project')
-		&& !process.argv.includes('--astro-projects')
+		![
+			'--project',
+			'--projects',
+			'--vue-project',
+			'--vue-projects',
+			'--mdx-project',
+			'--mdx-projects',
+			'--astro-project',
+			'--astro-projects',
+		].some(flag => process.argv.includes(flag))
 	) {
 		const languages = await clack.multiselect({
 			required: false,
@@ -193,18 +195,10 @@ class Project {
 		let command = 'tsslint';
 
 		if (!languages.length) {
-			if (selectedTsconfigs.length === 1) {
-				command += ' --project ' + selectedTsconfigs[0];
-			} else {
-				command += ' --projects ' + selectedTsconfigs.join(' ');
-			}
+			command += ' --project ' + selectedTsconfigs.join(' ');
 		} else {
 			for (const language of languages) {
-				if (selectedTsconfigs.length === 1) {
-					command += ` --${language}-project ` + selectedTsconfigs[0];
-				} else {
-					command += ` --${language}-projects ` + selectedTsconfigs.join(' ');
-				}
+				command += ` --${language}-project ` + selectedTsconfigs.join(' ');
 			}
 		}
 
@@ -217,76 +211,67 @@ class Project {
 			tsconfigAndLanguages.set(tsconfig, languages);
 		}
 	} else {
+		const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
+		if (projectsFlag) {
+			clack.log.warn(lightYellow(`Use ${projectsFlag.slice(0, -1)} instead of ${projectsFlag}.`));
+		}
 		const options = [
 			{
-				projectFlag: '--project',
-				projectsFlag: '--projects',
+				projectFlags: ['--project', '--projects'],
 				language: undefined,
 			},
 			{
-				projectFlag: '--vue-project',
-				projectsFlag: '--vue-projects',
+				projectFlags: ['--vue-project', '--vue-projects'],
 				language: 'vue',
 			},
 			{
-				projectFlag: '--mdx-project',
+				projectFlags: ['--mdx-project', '--mdx-projects'],
 				projectsFlag: '--mdx-projects',
 				language: 'mdx',
 			},
 			{
-				projectFlag: '--astro-project',
-				projectsFlag: '--astro-projects',
+				projectFlags: ['--astro-project', '--astro-projects'],
 				language: 'astro',
 			},
 		];
-		for (const { projectFlag, projectsFlag, language } of options) {
-			if (process.argv.includes(projectFlag)) {
-				const projectIndex = process.argv.indexOf(projectFlag);
-				let tsconfig = process.argv[projectIndex + 1];
-				if (!tsconfig || tsconfig.startsWith('-')) {
-					clack.log.error(lightRed(`Missing argument for ${projectFlag}.`));
+		console.log(process.argv);
+		for (const { projectFlags, language } of options) {
+			const projectFlag = projectFlags.find(flag => process.argv.includes(flag));
+			if (!projectFlag) {
+				continue;
+			}
+			let foundArg = false;
+			const projectsIndex = process.argv.indexOf(projectFlag);
+			for (let i = projectsIndex + 1; i < process.argv.length; i++) {
+				if (process.argv[i].startsWith('-')) {
+					break;
+				}
+				foundArg = true;
+				const searchGlob = process.argv[i];
+				const tsconfigs = glob.sync(searchGlob);
+				if (!tsconfigs.length) {
+					clack.log.error(lightRed(`No projects found for ${projectFlag} ${searchGlob}.`));
 					process.exit(1);
 				}
-				if (!tsconfig.startsWith('.')) {
-					tsconfig = `./${tsconfig}`;
-				}
-				if (!tsconfigAndLanguages.has(tsconfig)) {
-					tsconfigAndLanguages.set(tsconfig, []);
-				}
-				if (language) {
-					tsconfigAndLanguages.get(tsconfig)!.push(language);
+				for (let tsconfig of tsconfigs) {
+					if (
+						!path.isAbsolute(tsconfig)
+						&& !tsconfig.startsWith('./')
+						&& !tsconfig.startsWith('../')
+					) {
+						tsconfig = `./${tsconfig}`;
+					}
+					if (!tsconfigAndLanguages.has(tsconfig)) {
+						tsconfigAndLanguages.set(tsconfig, []);
+					}
+					if (language) {
+						tsconfigAndLanguages.get(tsconfig)!.push(language);
+					}
 				}
 			}
-			if (process.argv.includes(projectsFlag)) {
-				const projectsIndex = process.argv.indexOf(projectsFlag);
-				let foundArg = false;
-				for (let i = projectsIndex + 1; i < process.argv.length; i++) {
-					if (process.argv[i].startsWith('-')) {
-						break;
-					}
-					foundArg = true;
-					const searchGlob = process.argv[i];
-					const tsconfigs = glob.sync(searchGlob);
-					if (!tsconfigs.length) {
-						clack.log.error(lightRed(`No projects found for ${projectsFlag} ${searchGlob}.`));
-						process.exit(1);
-					}
-					for (let tsconfig of tsconfigs) {
-						if (!tsconfig.startsWith('.')) {
-							tsconfig = `./${tsconfig}`;
-						}
-						if (!tsconfigAndLanguages.has(tsconfig)) {
-							tsconfigAndLanguages.set(tsconfig, []);
-						}
-						if (language) {
-							tsconfigAndLanguages.get(tsconfig)!.push(language);
-						}
-					}
-				}
-				if (!foundArg) {
-					clack.log.error(lightRed(`Missing argument for ${projectsFlag}.`));
-					process.exit(1);
-				}
+			if (!foundArg) {
+				clack.log.error(lightRed(`Missing argument for ${projectFlag}.`));
+				process.exit(1);
 			}
 		}
 	}
