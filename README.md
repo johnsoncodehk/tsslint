@@ -175,7 +175,7 @@ The `@tsslint/cli` package provides a command-line interface for running the TSS
 Here is a basic example of how to use it:
 
 ```sh
-npx tsslint --project ./path/to/your/tsconfig.json
+npx tsslint --project path/to/your/tsconfig.json
 ```
 
 This command will run the linter on the TypeScript project defined by the provided `tsconfig.json` file. Any linting errors will be output to the console.
@@ -183,15 +183,16 @@ This command will run the linter on the TypeScript project defined by the provid
 If you want to automatically fix any fixable linting errors, you can use the `--fix` option:
 
 ```sh
-npx tsslint --project ./path/to/your/tsconfig.json --fix
+npx tsslint --project path/to/your/tsconfig.json --fix
 ```
 
 This will run the linter and automatically apply any fixes that are available.
 
-You can also lint multiple projects at once by using the --projects option:
+You can also lint multiple projects at once:
 
 ```sh
-npx tsslint --projects './packages/*/tsconfig.json'
+npx tsslint --project packages/*/tsconfig.json
+npx tsslint --project packages/pkg-a/tsconfig.json packages/pkg-b/tsconfig.json
 ```
 
 This command will run the linter on all TypeScript projects located in the subdirectories of the `packages` directory. Each subdirectory should contain a `tsconfig.json` file defining a TypeScript project. Any linting errors will be output to the console.
