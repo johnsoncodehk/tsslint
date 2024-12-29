@@ -407,13 +407,14 @@ class Project {
 				project.cache[fileName] = fileCache = [fileMtime, {}, {}];
 			}
 
-			let diagnostics!: ts.DiagnosticWithLocation[];
-
-			if (process.argv.includes('--fix')) {
-				diagnostics = await linterWorker.lintAndFix(fileName, fileCache);
-			} else {
-				diagnostics = await linterWorker.lint(fileName, fileCache);
-			}
+			let diagnostics = await linterWorker.lint(
+				fileName,
+				process.argv.includes('--fix'),
+				process.argv.includes('--format')
+					? {} // TODO
+					: undefined,
+				fileCache
+			);
 
 			diagnostics = diagnostics.filter(diagnostic => diagnostic.category !== ts.DiagnosticCategory.Suggestion);
 

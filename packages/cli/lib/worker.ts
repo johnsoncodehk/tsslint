@@ -3,6 +3,7 @@ import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import url = require('url');
 import fs = require('fs');
+import path = require('path');
 import worker_threads = require('worker_threads');
 import languagePlugins = require('./languagePlugins.js');
 
@@ -79,9 +80,6 @@ export function createLocal() {
 		lint(...args: Parameters<typeof lint>) {
 			return lint(...args)[0];
 		},
-		lintAndFix(...args: Parameters<typeof lintAndFix>) {
-			return lintAndFix(...args)[0];
-		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return hasCodeFixes(...args);
 		},
@@ -99,11 +97,6 @@ export function create() {
 		},
 		async lint(...args: Parameters<typeof lint>) {
 			const [res, newCache] = await sendRequest(lint, ...args);
-			Object.assign(args[1], newCache); // Sync the cache
-			return res;
-		},
-		async lintAndFix(...args: Parameters<typeof lintAndFix>) {
-			const [res, newCache] = await sendRequest(lintAndFix, ...args);
 			Object.assign(args[1], newCache); // Sync the cache
 			return res;
 		},
@@ -136,7 +129,6 @@ worker_threads.parentPort?.on('message', async json => {
 const handlers = {
 	setup,
 	lint,
-	lintAndFix,
 	hasCodeFixes,
 	hasRules,
 };
@@ -214,12 +206,11 @@ async function setup(
 		: _options;
 	linter = core.createLinter(
 		{
-			configFile,
 			languageService: linterLanguageService,
 			languageServiceHost: linterHost,
 			typescript: ts,
-			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		},
+		path.dirname(configFile),
 		config,
 		'cli',
 		linterSyntaxOnlyLanguageService
@@ -228,13 +219,11 @@ async function setup(
 	return true;
 }
 
-function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
-	let retry = 1;
-	let shouldRetry = true;
+function lint(fileName: string, fix: boolean, formatSettings: ts.FormatCodeSettings | undefined, fileCache: core.FileLintCache) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 
-	while (shouldRetry && retry--) {
+	if (fix) {
 		if (Object.values(fileCache[1]).some(([hasFix]) => hasFix)) {
 			// Reset the cache if there are any fixes applied.
 			fileCache[1] = {};
@@ -260,7 +249,26 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 			snapshots.set(fileName, newSnapshot);
 			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 			projectVersion++;
-			shouldRetry = true;
+		}
+	}
+
+	if (formatSettings) {
+		const sourceFile: ts.SourceFile = (originalSyntaxOnlyService as any).getNonBoundSourceFile(fileName);
+		const linterEdits = linter.format(sourceFile, fileCache[2]);
+		if (linterEdits.length) {
+			const oldSnapshot = snapshots.get(fileName)!;
+			newSnapshot = core.applyTextChanges(oldSnapshot, linterEdits);
+			snapshots.set(fileName, newSnapshot);
+			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
+			projectVersion++;
+		}
+		const serviceEdits = linterLanguageService.getFormattingEditsForDocument(fileName, formatSettings);
+		if (serviceEdits.length) {
+			const oldSnapshot = snapshots.get(fileName)!;
+			newSnapshot = core.applyTextChanges(oldSnapshot, serviceEdits);
+			snapshots.set(fileName, newSnapshot);
+			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
+			projectVersion++;
 		}
 	}
 
@@ -269,53 +277,9 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 		fileCache[0] = fs.statSync(fileName).mtimeMs;
 		fileCache[1] = {};
 		fileCache[2] = {};
-	}
 
-	if (shouldRetry) {
 		diagnostics = linter.lint(fileName, fileCache);
 	}
-
-	if (language) {
-		diagnostics = diagnostics
-			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
-			.filter(d => !!d);
-
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: getFileText(diagnostic.file.fileName),
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file ? {
-					fileName: info.file.fileName,
-					text: getFileText(info.file.fileName),
-				} as any : undefined,
-			})),
-		}));
-	} else {
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: diagnostic.file.text,
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file ? {
-					fileName: info.file.fileName,
-					text: info.file.text,
-				} as any : undefined,
-			})),
-		}));
-	}
-
-	return [diagnostics, fileCache] as const;
-}
-
-function lint(fileName: string, fileCache: core.FileLintCache) {
-	let diagnostics = linter.lint(fileName, fileCache);
 
 	if (language) {
 		diagnostics = diagnostics

@@ -9,11 +9,9 @@ import type {
 } from 'typescript';
 
 export interface ProjectContext {
-	configFile: string;
 	typescript: typeof import('typescript');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
-	tsconfig: string;
 }
 
 export interface Config {
@@ -21,10 +19,23 @@ export interface Config {
 	exclude?: string[];
 	rules?: Rules;
 	plugins?: Plugin[];
+	formatting?: FormattingProcess[];
 }
 
 export interface Plugin {
-	(projectContext: ProjectContext): PluginInstance;
+	(ctx: ProjectContext): PluginInstance;
+}
+
+export interface FormattingProcess {
+	(ctx: FormattingContext): void;
+}
+
+export interface FormattingContext {
+	typescript: typeof import('typescript');
+	sourceFile: SourceFile;
+	insert(pos: number, text: string): void;
+	remove(start: number, end: number): void;
+	replace(start: number, end: number, text: string): void;
 }
 
 export interface PluginInstance {
@@ -38,7 +49,7 @@ export interface Rules {
 }
 
 export interface Rule {
-	(context: RuleContext): void;
+	(ctx: RuleContext): void;
 }
 
 export interface RuleContext {
