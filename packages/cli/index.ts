@@ -34,7 +34,6 @@ if (process.argv.includes('--threads')) {
 }
 
 class Project {
-	tsconfig: string;
 	workers: ReturnType<typeof worker.create>[] = [];
 	fileNames: string[] = [];
 	options: ts.CompilerOptions = {};
@@ -44,17 +43,9 @@ class Project {
 	cache: cache.CacheData = {};
 
 	constructor(
-		tsconfigOption: string,
+		public tsconfig: string,
 		public languages: string[]
-	) {
-		try {
-			this.tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
-		} catch {
-			console.error(lightRed(`No such file: ${tsconfigOption}`));
-			process.exit(1);
-		}
-
-	}
+	) { }
 
 	async init(
 		// @ts-expect-error
@@ -275,8 +266,14 @@ class Project {
 		}
 	}
 
-	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(await new Project(tsconfig, languages).init(clack));
+	for (const [inputTsconfig, languages] of tsconfigAndLanguages) {
+		try {
+			const tsconfig = require.resolve(inputTsconfig, { paths: [process.cwd()] });
+			projects.push(await new Project(tsconfig, languages).init(clack));
+		} catch {
+			console.error(lightRed(`No such file: ${inputTsconfig}`));
+			process.exit(1);
+		}
 	}
 
 	spinner.start();
