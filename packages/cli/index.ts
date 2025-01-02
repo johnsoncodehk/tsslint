@@ -213,7 +213,7 @@ class Project {
 	} else {
 		const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
 		if (projectsFlag) {
-			clack.log.warn(lightYellow(`Use ${projectsFlag.slice(0, -1)} instead of ${projectsFlag}.`));
+			clack.log.warn(lightYellow(`Please use ${projectsFlag.slice(0, -1)} instead of ${projectsFlag} starting from version 1.5.0.`));
 		}
 		const options = [
 			{
