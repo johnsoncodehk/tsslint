@@ -363,13 +363,7 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 			}
 
 			if (script?.generated) {
-				const sourceFile = ts.createSourceFile(
-					fileName,
-					script.snapshot.getText(0, script.snapshot.getLength()),
-					ts.ScriptTarget.Latest,
-					true,
-					ts.ScriptKind.Deferred
-				);
+				let sourceFile: ts.SourceFile | undefined;
 				for (const code of forEachEmbeddedCode(script.generated.root)) {
 					if (
 						(
@@ -390,6 +384,13 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 
 						if (settings.tabSize !== undefined) {
 							const firstMapping = code.mappings[0];
+							sourceFile ??= ts.createSourceFile(
+								fileName,
+								script.snapshot.getText(0, script.snapshot.getLength()),
+								ts.ScriptTarget.Latest,
+								true,
+								ts.ScriptKind.Deferred
+							);
 							const line = sourceFile.getLineAndCharacterOfPosition(firstMapping.sourceOffsets[0]).line;
 							const offset = sourceFile.getPositionOfLineAndCharacter(line, 0);
 							let initialIndentLevel = computeInitialIndent(
