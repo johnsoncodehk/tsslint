@@ -19,6 +19,10 @@ let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
 let linterSyntaxOnlyLanguageService!: ts.LanguageService;
+let fmtSettings: {
+	javascript: ts.FormatCodeSettings;
+	typescript: ts.FormatCodeSettings;
+} | undefined;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -139,7 +143,11 @@ async function setup(
 	configFile: string,
 	builtConfig: string,
 	_fileNames: string[],
-	_options: ts.CompilerOptions
+	_options: ts.CompilerOptions,
+	_fmtSettings: {
+		javascript: ts.FormatCodeSettings;
+		typescript: ts.FormatCodeSettings;
+	} | undefined
 ) {
 	const clack = await import('@clack/prompts');
 
@@ -204,6 +212,7 @@ async function setup(
 			allowNonTsExtensions: true,
 		}
 		: _options;
+	fmtSettings = _fmtSettings;
 	linter = core.createLinter(
 		{
 			languageService: linterLanguageService,
@@ -219,7 +228,7 @@ async function setup(
 	return true;
 }
 
-function lint(fileName: string, fix: boolean, formatSettings: ts.FormatCodeSettings | undefined, fileCache: core.FileLintCache) {
+function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
@@ -252,25 +261,27 @@ function lint(fileName: string, fix: boolean, formatSettings: ts.FormatCodeSetti
 			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 			projectVersion++;
 		}
-	}
 
-	if (formatSettings) {
-		const sourceFile: ts.SourceFile = (originalSyntaxOnlyService as any).getNonBoundSourceFile(fileName);
-		const linterEdits = linter.format(sourceFile, fileCache[2]);
-		if (linterEdits.length) {
-			const oldSnapshot = snapshots.get(fileName)!;
-			newSnapshot = core.applyTextChanges(oldSnapshot, linterEdits);
-			snapshots.set(fileName, newSnapshot);
-			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
-			projectVersion++;
-		}
-		const serviceEdits = linterLanguageService.getFormattingEditsForDocument(fileName, formatSettings);
-		if (serviceEdits.length) {
-			const oldSnapshot = snapshots.get(fileName)!;
-			newSnapshot = core.applyTextChanges(oldSnapshot, serviceEdits);
-			snapshots.set(fileName, newSnapshot);
-			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
-			projectVersion++;
+		if (fmtSettings) {
+			const sourceFile: ts.SourceFile = (originalSyntaxOnlyService as any).getNonBoundSourceFile(fileName);
+			const linterEdits = linter.format(sourceFile, fileCache[2]);
+			if (linterEdits.length) {
+				const oldSnapshot = snapshots.get(fileName)!;
+				newSnapshot = core.applyTextChanges(oldSnapshot, linterEdits);
+				snapshots.set(fileName, newSnapshot);
+				versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
+				projectVersion++;
+			}
+			const scriptKind = linterHost.getScriptKind!(fileName);
+			const settings = scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX ? fmtSettings.javascript : fmtSettings.typescript;
+			const serviceEdits = linterLanguageService.getFormattingEditsForDocument(fileName, settings);
+			if (serviceEdits.length) {
+				const oldSnapshot = snapshots.get(fileName)!;
+				newSnapshot = core.applyTextChanges(oldSnapshot, serviceEdits);
+				snapshots.set(fileName, newSnapshot);
+				versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
+				projectVersion++;
+			}
 		}
 	}
 

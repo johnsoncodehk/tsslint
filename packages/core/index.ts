@@ -61,7 +61,7 @@ export function createLinter(
 			include: config.include ?? [],
 			exclude: config.exclude ?? [],
 			rules: config.rules ?? {},
-			formatting: config.formatting ?? [],
+			formatting: config.formatting,
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
@@ -72,8 +72,8 @@ export function createLinter(
 
 	return {
 		format(sourceFile: ts.SourceFile, minimatchCache?: FileLintCache[2]): ts.TextChange[] {
+			const preprocess = getFileFmtProcesses(sourceFile.fileName, minimatchCache);
 			const changes: ts.TextChange[] = [];
-			const processes = getFileFormattingProcesses(sourceFile.fileName, minimatchCache);
 			const tmpChanges: ts.TextChange[] = [];
 			const fmtCtx: FormattingContext = {
 				typescript: ts,
@@ -88,7 +88,7 @@ export function createLinter(
 					tmpChanges.push({ span: { start, length: end - start }, newText: text });
 				},
 			};
-			for (const process of processes) {
+			for (const process of preprocess) {
 				process(fmtCtx);
 				if (tmpChanges.every(a => {
 					const aStart = a.span.start;
@@ -421,17 +421,18 @@ export function createLinter(
 		getConfigs: getFileConfigs,
 	};
 
-	function getFileFormattingProcesses(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
-		let processes = fileFmtProcesses.get(fileName);
-		if (!processes) {
-			processes = [];
+	function getFileFmtProcesses(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+		if (!fileFmtProcesses.has(fileName)) {
+			const allPreprocess: FormattingProcess[] = [];
 			const configs = getFileConfigs(fileName, minimatchCache);
-			for (const config of configs) {
-				processes.push(...config.formatting);
+			for (const { formatting } of configs) {
+				if (formatting) {
+					allPreprocess.push(...formatting);
+				}
 			}
-			fileFmtProcesses.set(fileName, processes);
+			fileFmtProcesses.set(fileName, allPreprocess);
 		}
-		return processes;
+		return fileFmtProcesses.get(fileName)!;
 	}
 
 	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
