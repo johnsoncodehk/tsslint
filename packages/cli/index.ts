@@ -434,16 +434,14 @@ class Project {
 	}
 
 	function getFormattingSettings() {
-		let formattingSettings: {
-			typescript: ts.FormatCodeSettings;
-			javascript: ts.FormatCodeSettings;
-		} | undefined;
+		let formattingSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined;
 
 		if (process.argv.includes('--vscode-settings')) {
 
 			formattingSettings = {
 				typescript: {},
 				javascript: {},
+				vue: {},
 			};
 
 			for (const section of ['typescript', 'javascript'] as const) {
@@ -485,6 +483,10 @@ class Project {
 			formattingSettings.javascript = {
 				...formattingSettings.javascript,
 				...vscodeSettings.javascript,
+			};
+			formattingSettings.vue = {
+				...formattingSettings.vue,
+				...vscodeSettings.vue,
 			};
 		}
 

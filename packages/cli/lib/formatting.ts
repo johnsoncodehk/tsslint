@@ -7,6 +7,9 @@ export function getVSCodeFormattingSettings(settingsFile: string) {
 	const editorSettings = json5.parse(jsonc);
 	const jsSettings: ts.FormatCodeSettings = {};
 	const tsSettings: ts.FormatCodeSettings = {};
+	const vueSettings: {
+		'script.initialIndent'?: boolean;
+	} = {};
 
 	if ('editor.insertSpaces' in editorSettings) {
 		jsSettings.convertTabsToSpaces = !!editorSettings['editor.insertSpaces'];
@@ -28,9 +31,30 @@ export function getVSCodeFormattingSettings(settingsFile: string) {
 			tsSettings[settingKey] = editorSettings[key];
 		}
 	}
+	if ('vue.format.script.initialIndent' in editorSettings) {
+		vueSettings['script.initialIndent'] = !!editorSettings['vue.format.script.initialIndent'];
+	}
 
 	return {
 		javascript: jsSettings,
 		typescript: tsSettings,
+		vue: vueSettings,
 	};
+}
+
+export function computeInitialIndent(content: string, i: number, baseTabSize?: number) {
+	let nChars = 0;
+	const tabSize = baseTabSize || 4;
+	while (i < content.length) {
+		const ch = content.charAt(i);
+		if (ch === ' ') {
+			nChars++;
+		} else if (ch === '\t') {
+			nChars += tabSize;
+		} else {
+			break;
+		}
+		i++;
+	}
+	return Math.floor(nChars / tabSize);
 }

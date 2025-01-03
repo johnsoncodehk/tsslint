@@ -11,6 +11,7 @@ import { createLanguage, FileMap, forEachEmbeddedCode, isCodeActionsEnabled, isF
 import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
 import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 import { transformTextChange } from '@volar/typescript/lib/node/transform.js';
+import { computeInitialIndent, type getVSCodeFormattingSettings } from './formatting.js';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
@@ -20,10 +21,7 @@ let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
 let linterSyntaxOnlyLanguageService!: ts.LanguageService;
-let fmtSettings: {
-	javascript: ts.FormatCodeSettings;
-	typescript: ts.FormatCodeSettings;
-} | undefined;
+let fmtSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined;
 
 const formatLanguageService = ts.createLanguageService({
 	...ts.sys,
@@ -182,10 +180,7 @@ async function setup(
 	builtConfig: string,
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
-	_fmtSettings: {
-		javascript: ts.FormatCodeSettings;
-		typescript: ts.FormatCodeSettings;
-	} | undefined
+	_fmtSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined
 ) {
 	const clack = await import('@clack/prompts');
 
@@ -368,6 +363,13 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 			}
 
 			if (script?.generated) {
+				const sourceFile = ts.createSourceFile(
+					fileName,
+					script.snapshot.getText(0, script.snapshot.getLength()),
+					ts.ScriptTarget.Latest,
+					true,
+					ts.ScriptKind.Deferred
+				);
 				for (const code of forEachEmbeddedCode(script.generated.root)) {
 					if (
 						(
@@ -382,10 +384,38 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 							: code.languageId === 'javascriptreact' ? ts.ScriptKind.JSX
 								: code.languageId === 'typescript' ? ts.ScriptKind.TS
 									: ts.ScriptKind.TSX;
+						let settings = scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX
+							? fmtSettings.javascript
+							: fmtSettings.typescript;
+
+						if (settings.tabSize !== undefined) {
+							const firstMapping = code.mappings[0];
+							const line = sourceFile.getLineAndCharacterOfPosition(firstMapping.sourceOffsets[0]).line;
+							const offset = sourceFile.getPositionOfLineAndCharacter(line, 0);
+							let initialIndentLevel = computeInitialIndent(
+								script.snapshot.getText(0, script.snapshot.getLength()),
+								offset,
+								settings.tabSize
+							);
+							if (
+								script.languageId === 'vue'
+								&& fmtSettings.vue['script.initialIndent']
+								&& (
+									code.id === 'script_raw'
+									|| code.id === 'scriptsetup_raw'
+								)
+							) {
+								initialIndentLevel++;
+							}
+							settings = {
+								...settings,
+								baseIndentSize: initialIndentLevel * settings.tabSize,
+							};
+						}
 						serviceEdits.push(
 							...formatVirtualScript(
 								scriptKind,
-								fmtSettings[scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX ? 'javascript' : 'typescript'],
+								settings,
 								code.snapshot)
 								.map(edit => {
 									return transformTextChange(
