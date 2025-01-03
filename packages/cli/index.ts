@@ -375,7 +375,6 @@ class Project {
 					fileCache[0] = fileMtime;
 					fileCache[1] = {};
 					fileCache[2] = {};
-					fileCache[3] = false;
 				}
 				else {
 					cached++;

@@ -288,11 +288,16 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 	}
 
 	if (newSnapshot) {
-		ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
-		fileCache[0] = fs.statSync(fileName).mtimeMs;
-		fileCache[1] = {};
-		fileCache[2] = {};
-		shouldCheck = true;
+		const newText = newSnapshot.getText(0, newSnapshot.getLength());
+		const oldText = ts.sys.readFile(fileName);
+		if (newText !== oldText) {
+			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+			fileCache[0] = fs.statSync(fileName).mtimeMs;
+			fileCache[1] = {};
+			fileCache[2] = {};
+			fileCache[3] = false;
+			shouldCheck = true;
+		}
 	}
 
 	if (shouldCheck) {
