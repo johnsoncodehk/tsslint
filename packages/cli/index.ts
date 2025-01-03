@@ -375,13 +375,14 @@ class Project {
 					fileCache[0] = fileMtime;
 					fileCache[1] = {};
 					fileCache[2] = {};
+					fileCache[3] = false;
 				}
 				else {
 					cached++;
 				}
 			}
 			else {
-				project.cache[fileName] = fileCache = [fileMtime, {}, {}];
+				project.cache[fileName] = fileCache = [fileMtime, {}, {}, false];
 			}
 
 			let diagnostics = await linterWorker.lint(

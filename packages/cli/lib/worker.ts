@@ -255,6 +255,7 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 
 		const textChanges = core.combineCodeFixes(fileName, fixes);
 		if (textChanges.length) {
+			fileCache[3] = false;
 			const oldSnapshot = snapshots.get(fileName)!;
 			newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
 			snapshots.set(fileName, newSnapshot);
@@ -262,7 +263,8 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 			projectVersion++;
 		}
 
-		if (fmtSettings) {
+		if (!fileCache[3] && fmtSettings) {
+			fileCache[3] = true;
 			const sourceFile: ts.SourceFile = (originalSyntaxOnlyService as any).getNonBoundSourceFile(fileName);
 			const linterEdits = linter.format(sourceFile, fileCache[2]);
 			if (linterEdits.length) {

@@ -24,6 +24,7 @@ export type FileLintCache = [
 		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
 	>,
 	minimatchResult: Record<string, boolean>,
+	formated: boolean,
 ];
 
 export type Linter = ReturnType<typeof createLinter>;
