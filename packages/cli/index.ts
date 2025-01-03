@@ -7,9 +7,11 @@ import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
 import languagePlugins = require('./lib/languagePlugins.js');
+import { getVSCodeFormattingSettings } from './lib/formatting.js';
 
 const _reset = '\x1b[0m';
 const purple = (s: string) => '\x1b[35m' + s + _reset;
+const cyan = (s: string) => '\x1b[36m' + s + _reset;
 const darkGray = (s: string) => '\x1b[90m' + s + _reset;
 const lightRed = (s: string) => '\x1b[91m' + s + _reset;
 const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
@@ -34,7 +36,6 @@ if (process.argv.includes('--threads')) {
 }
 
 class Project {
-	tsconfig: string;
 	workers: ReturnType<typeof worker.create>[] = [];
 	fileNames: string[] = [];
 	options: ts.CompilerOptions = {};
@@ -44,17 +45,9 @@ class Project {
 	cache: cache.CacheData = {};
 
 	constructor(
-		tsconfigOption: string,
+		public tsconfig: string,
 		public languages: string[]
-	) {
-		try {
-			this.tsconfig = require.resolve(tsconfigOption, { paths: [process.cwd()] });
-		} catch {
-			console.error(lightRed(`No such file: ${tsconfigOption}`));
-			process.exit(1);
-		}
-
-	}
+	) { }
 
 	async init(
 		// @ts-expect-error
@@ -109,6 +102,8 @@ class Project {
 	const builtConfigs = new Map<string, Promise<string | undefined>>();
 	const clack = await import('@clack/prompts');
 	const processFiles = new Set<string>();
+	const tsconfigAndLanguages = new Map<string, string[]>();
+	const formattingSettings = getFormattingSettings();
 
 	let projects: Project[] = [];
 	let spinner = clack.spinner();
@@ -121,8 +116,6 @@ class Project {
 	let errors = 0;
 	let warnings = 0;
 	let cached = 0;
-
-	const tsconfigAndLanguages = new Map<string, string[]>();
 
 	if (
 		![
@@ -213,7 +206,7 @@ class Project {
 	} else {
 		const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
 		if (projectsFlag) {
-			clack.log.warn(lightYellow(`Use ${projectsFlag.slice(0, -1)} instead of ${projectsFlag}.`));
+			clack.log.warn(lightYellow(`Please use ${projectsFlag.slice(0, -1)} instead of ${projectsFlag} starting from version 1.5.0.`));
 		}
 		const options = [
 			{
@@ -253,13 +246,7 @@ class Project {
 					process.exit(1);
 				}
 				for (let tsconfig of tsconfigs) {
-					if (
-						!path.isAbsolute(tsconfig)
-						&& !tsconfig.startsWith('./')
-						&& !tsconfig.startsWith('../')
-					) {
-						tsconfig = `./${tsconfig}`;
-					}
+					tsconfig = resolvePath(tsconfig);
 					if (!tsconfigAndLanguages.has(tsconfig)) {
 						tsconfigAndLanguages.set(tsconfig, []);
 					}
@@ -305,12 +292,17 @@ class Project {
 	}
 
 	spinner.stop(
-		darkGray(
-			cached
-				? `Processed ${processed} files with cache. (Use --force to ignore cache.)`
-				: `Processed ${processed} files.`
-		)
+		cached
+			? darkGray(`Processed ${processed} files with cache. (Use `) + cyan(`--force`) + darkGray(` to ignore cache.)`)
+			: darkGray(`Processed ${processed} files.`)
 	);
+
+	if (process.argv.includes('--fix') && !formattingSettings) {
+		const vscodeSettings = ts.findConfigFile(process.cwd(), ts.sys.fileExists, '.vscode/settings.json');
+		if (vscodeSettings) {
+			clack.log.message(darkGray(`Found available editor settings, you can use `) + cyan(`--vscode-settings ${path.relative(process.cwd(), vscodeSettings)}`) + darkGray(` to enable code format.`));
+		}
+	}
 
 	const data = [
 		[passed, 'passed', lightGreen] as const,
@@ -325,7 +317,7 @@ class Project {
 		.join(darkGray(' | '));
 
 	if (hasFix) {
-		summary += darkGray(` (Use --fix to apply automatic fixes.)`);
+		summary += darkGray(` (Use `) + cyan(`--fix`) + darkGray(` to apply automatic fixes.)`);
 	} else if (errors || warnings) {
 		summary += darkGray(` (No fixes available.)`);
 	}
@@ -356,7 +348,8 @@ class Project {
 			project.configFile!,
 			project.builtConfig!,
 			project.fileNames,
-			project.options
+			project.options,
+			formattingSettings
 		);
 		if (!setupSuccess) {
 			projects = projects.filter(p => p !== project);
@@ -388,16 +381,14 @@ class Project {
 				}
 			}
 			else {
-				project.cache[fileName] = fileCache = [fileMtime, {}, {}];
+				project.cache[fileName] = fileCache = [fileMtime, {}, {}, false];
 			}
 
-			let diagnostics!: ts.DiagnosticWithLocation[];
-
-			if (process.argv.includes('--fix')) {
-				diagnostics = await linterWorker.lintAndFix(fileName, fileCache);
-			} else {
-				diagnostics = await linterWorker.lint(fileName, fileCache);
-			}
+			let diagnostics = await linterWorker.lint(
+				fileName,
+				process.argv.includes('--fix'),
+				fileCache
+			);
 
 			diagnostics = diagnostics.filter(diagnostic => diagnostic.category !== ts.DiagnosticCategory.Suggestion);
 
@@ -442,6 +433,66 @@ class Project {
 		await startWorker(linterWorker);
 	}
 
+	function getFormattingSettings() {
+		let formattingSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined;
+
+		if (process.argv.includes('--vscode-settings')) {
+
+			formattingSettings = {
+				typescript: {},
+				javascript: {},
+				vue: {},
+			};
+
+			for (const section of ['typescript', 'javascript'] as const) {
+				formattingSettings[section] = {
+					...ts.getDefaultFormatCodeSettings('\n'),
+					indentStyle: ts.IndentStyle.Smart,
+					newLineCharacter: '\n',
+					insertSpaceAfterCommaDelimiter: true,
+					insertSpaceAfterConstructor: false,
+					insertSpaceAfterSemicolonInForStatements: true,
+					insertSpaceBeforeAndAfterBinaryOperators: true,
+					insertSpaceAfterKeywordsInControlFlowStatements: true,
+					insertSpaceAfterFunctionKeywordForAnonymousFunctions: true,
+					insertSpaceBeforeFunctionParenthesis: false,
+					insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis: false,
+					insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets: false,
+					insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces: true,
+					insertSpaceAfterOpeningAndBeforeClosingEmptyBraces: true,
+					insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces: false,
+					insertSpaceAfterOpeningAndBeforeClosingJsxExpressionBraces: false,
+					insertSpaceAfterTypeAssertion: false,
+					placeOpenBraceOnNewLineForFunctions: false,
+					placeOpenBraceOnNewLineForControlBlocks: false,
+					semicolons: ts.SemicolonPreference.Ignore,
+				};
+			}
+
+			let vscodeSettingsConfig = process.argv[process.argv.indexOf('--vscode-settings') + 1];
+			if (!vscodeSettingsConfig || vscodeSettingsConfig.startsWith('-')) {
+				clack.log.error(lightRed(`Missing argument for --vscode-settings.`));
+				process.exit(1);
+			}
+			const vscodeSettingsFile = resolvePath(vscodeSettingsConfig);
+			const vscodeSettings = getVSCodeFormattingSettings(vscodeSettingsFile);
+			formattingSettings.typescript = {
+				...formattingSettings.typescript,
+				...vscodeSettings.typescript,
+			};
+			formattingSettings.javascript = {
+				...formattingSettings.javascript,
+				...vscodeSettings.javascript,
+			};
+			formattingSettings.vue = {
+				...formattingSettings.vue,
+				...vscodeSettings.vue,
+			};
+		}
+
+		return formattingSettings;
+	}
+
 	async function getBuiltConfig(configFile: string) {
 		if (!builtConfigs.has(configFile)) {
 			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, spinner, (s, code) => log(darkGray(s), code)));
@@ -472,6 +523,22 @@ class Project {
 		spinner.stop(msg, code);
 		spinner = clack.spinner();
 		spinner.start();
+	}
+
+	function resolvePath(p: string) {
+		if (
+			!path.isAbsolute(p)
+			&& !p.startsWith('./')
+			&& !p.startsWith('../')
+		) {
+			p = `./${p}`;
+		}
+		try {
+			return require.resolve(p, { paths: [process.cwd()] });
+		} catch {
+			clack.log.error(lightRed(`No such file: ${p}`));
+			process.exit(1);
+		}
 	}
 })();
 

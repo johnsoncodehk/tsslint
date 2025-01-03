@@ -3,12 +3,15 @@ import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import url = require('url');
 import fs = require('fs');
+import path = require('path');
 import worker_threads = require('worker_threads');
 import languagePlugins = require('./languagePlugins.js');
 
-import { createLanguage, FileMap, isCodeActionsEnabled, Language } from '@volar/language-core';
-import { decorateLanguageServiceHost, resolveFileLanguageId, createProxyLanguageService } from '@volar/typescript';
+import { createLanguage, FileMap, forEachEmbeddedCode, isCodeActionsEnabled, isFormattingEnabled, Language } from '@volar/language-core';
+import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
 import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
+import { transformTextChange } from '@volar/typescript/lib/node/transform.js';
+import { computeInitialIndent, type getVSCodeFormattingSettings } from './formatting.js';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
@@ -18,6 +21,44 @@ let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
 let linterSyntaxOnlyLanguageService!: ts.LanguageService;
+let fmtSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined;
+
+const formatLanguageService = ts.createLanguageService({
+	...ts.sys,
+	getCompilationSettings() {
+		return options;
+	},
+	getScriptFileNames() {
+		return [];
+	},
+	getScriptVersion() {
+		return '0';
+	},
+	getScriptSnapshot() {
+		return formattingSnapshot;
+	},
+	getScriptKind() {
+		return formattingScriptKind;
+	},
+	useCaseSensitiveFileNames() {
+		return ts.sys.useCaseSensitiveFileNames;
+	},
+	getCurrentDirectory() {
+		return ts.sys.getCurrentDirectory();
+	},
+	getDefaultLibFileName() {
+		return ts.getDefaultLibFilePath(options);
+	},
+}, undefined, true);
+let formattingSnapshot: ts.IScriptSnapshot;
+let formattingScriptKind: ts.ScriptKind;
+let formattingIndex = 0;
+
+function formatVirtualScript(kind: ts.ScriptKind, settings: ts.FormatCodeSettings, snapshot: ts.IScriptSnapshot) {
+	formattingSnapshot = snapshot;
+	formattingScriptKind = kind;
+	return formatLanguageService.getFormattingEditsForDocument(`${formattingIndex++}.txt`, settings);
+}
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -79,9 +120,6 @@ export function createLocal() {
 		lint(...args: Parameters<typeof lint>) {
 			return lint(...args)[0];
 		},
-		lintAndFix(...args: Parameters<typeof lintAndFix>) {
-			return lintAndFix(...args)[0];
-		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return hasCodeFixes(...args);
 		},
@@ -99,11 +137,6 @@ export function create() {
 		},
 		async lint(...args: Parameters<typeof lint>) {
 			const [res, newCache] = await sendRequest(lint, ...args);
-			Object.assign(args[1], newCache); // Sync the cache
-			return res;
-		},
-		async lintAndFix(...args: Parameters<typeof lintAndFix>) {
-			const [res, newCache] = await sendRequest(lintAndFix, ...args);
 			Object.assign(args[1], newCache); // Sync the cache
 			return res;
 		},
@@ -136,7 +169,6 @@ worker_threads.parentPort?.on('message', async json => {
 const handlers = {
 	setup,
 	lint,
-	lintAndFix,
 	hasCodeFixes,
 	hasRules,
 };
@@ -147,7 +179,8 @@ async function setup(
 	configFile: string,
 	builtConfig: string,
 	_fileNames: string[],
-	_options: ts.CompilerOptions
+	_options: ts.CompilerOptions,
+	_fmtSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined
 ) {
 	const clack = await import('@clack/prompts');
 
@@ -212,14 +245,14 @@ async function setup(
 			allowNonTsExtensions: true,
 		}
 		: _options;
+	fmtSettings = _fmtSettings;
 	linter = core.createLinter(
 		{
-			configFile,
 			languageService: linterLanguageService,
 			languageServiceHost: linterHost,
 			typescript: ts,
-			tsconfig: ts.server.toNormalizedPath(tsconfig),
 		},
+		path.dirname(configFile),
 		config,
 		'cli',
 		linterSyntaxOnlyLanguageService
@@ -228,19 +261,19 @@ async function setup(
 	return true;
 }
 
-function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
-	let retry = 1;
-	let shouldRetry = true;
+function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
+	let shouldCheck = true;
 
-	while (shouldRetry && retry--) {
+	if (fix) {
 		if (Object.values(fileCache[1]).some(([hasFix]) => hasFix)) {
 			// Reset the cache if there are any fixes applied.
 			fileCache[1] = {};
 			fileCache[2] = {};
 		}
 		diagnostics = linter.lint(fileName, fileCache);
+		shouldCheck = false;
 
 		let fixes = linter
 			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[2])
@@ -255,67 +288,188 @@ function lintAndFix(fileName: string, fileCache: core.FileLintCache) {
 
 		const textChanges = core.combineCodeFixes(fileName, fixes);
 		if (textChanges.length) {
+			fileCache[3] = false;
 			const oldSnapshot = snapshots.get(fileName)!;
 			newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
 			snapshots.set(fileName, newSnapshot);
 			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 			projectVersion++;
-			shouldRetry = true;
+		}
+
+		if (!fileCache[3] && fmtSettings) {
+			fileCache[3] = true;
+
+			let script = language?.scripts.get(fileName);
+			let linterEdits: ts.TextChange[] = [];
+			let serviceEdits: ts.TextChange[] = [];
+
+			if (script?.generated) {
+				for (const code of forEachEmbeddedCode(script.generated.root)) {
+					if (
+						(
+							code.languageId === 'javascript'
+							|| code.languageId === 'typescript'
+							|| code.languageId === 'javascriptreact'
+							|| code.languageId === 'typescriptreact'
+						)
+						&& code.mappings.some(mapping => isFormattingEnabled(mapping.data))
+					) {
+						const scriptKind = code.languageId === 'javascript' ? ts.ScriptKind.JS
+							: code.languageId === 'javascriptreact' ? ts.ScriptKind.JSX
+								: code.languageId === 'typescript' ? ts.ScriptKind.TS
+									: ts.ScriptKind.TSX;
+						const sourceFile = ts.createSourceFile(
+							fileName,
+							code.snapshot.getText(0, code.snapshot.getLength()),
+							ts.ScriptTarget.Latest,
+							true,
+							scriptKind
+						);
+						linterEdits.push(
+							...linter
+								.format(sourceFile, fileCache[2])
+								.map(edit => {
+									return transformTextChange(
+										script,
+										language!,
+										{
+											code,
+											extension: '',
+											scriptKind: scriptKind,
+											preventLeadingOffset: true,
+										},
+										edit,
+										false,
+										isFormattingEnabled
+									)?.[1];
+								})
+								.filter(edit => !!edit)
+						);
+					}
+				}
+			}
+			else {
+				const sourceFile: ts.SourceFile = (originalSyntaxOnlyService as any).getNonBoundSourceFile(fileName);
+				linterEdits = linter.format(sourceFile, fileCache[2]);
+			}
+
+			if (linterEdits.length) {
+				const oldSnapshot = snapshots.get(fileName)!;
+				newSnapshot = core.applyTextChanges(oldSnapshot, linterEdits);
+				snapshots.set(fileName, newSnapshot);
+				versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
+				projectVersion++;
+				script = language?.scripts.get(fileName);
+			}
+
+			if (script?.generated) {
+				let sourceFile: ts.SourceFile | undefined;
+				for (const code of forEachEmbeddedCode(script.generated.root)) {
+					if (
+						(
+							code.languageId === 'javascript'
+							|| code.languageId === 'typescript'
+							|| code.languageId === 'javascriptreact'
+							|| code.languageId === 'typescriptreact'
+						)
+						&& code.mappings.some(mapping => isFormattingEnabled(mapping.data))
+					) {
+						const scriptKind = code.languageId === 'javascript' ? ts.ScriptKind.JS
+							: code.languageId === 'javascriptreact' ? ts.ScriptKind.JSX
+								: code.languageId === 'typescript' ? ts.ScriptKind.TS
+									: ts.ScriptKind.TSX;
+						let settings = scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX
+							? fmtSettings.javascript
+							: fmtSettings.typescript;
+
+						if (settings.tabSize !== undefined) {
+							const firstMapping = code.mappings[0];
+							sourceFile ??= ts.createSourceFile(
+								fileName,
+								script.snapshot.getText(0, script.snapshot.getLength()),
+								ts.ScriptTarget.Latest,
+								true,
+								ts.ScriptKind.Deferred
+							);
+							const line = sourceFile.getLineAndCharacterOfPosition(firstMapping.sourceOffsets[0]).line;
+							const offset = sourceFile.getPositionOfLineAndCharacter(line, 0);
+							let initialIndentLevel = computeInitialIndent(
+								script.snapshot.getText(0, script.snapshot.getLength()),
+								offset,
+								settings.tabSize
+							);
+							if (
+								script.languageId === 'vue'
+								&& fmtSettings.vue['script.initialIndent']
+								&& (
+									code.id === 'script_raw'
+									|| code.id === 'scriptsetup_raw'
+								)
+							) {
+								initialIndentLevel++;
+							}
+							settings = {
+								...settings,
+								baseIndentSize: initialIndentLevel * settings.tabSize,
+							};
+						}
+						serviceEdits.push(
+							...formatVirtualScript(
+								scriptKind,
+								settings,
+								code.snapshot)
+								.map(edit => {
+									return transformTextChange(
+										script,
+										language!,
+										{
+											code,
+											extension: '',
+											scriptKind: scriptKind,
+											preventLeadingOffset: true,
+										},
+										edit,
+										false,
+										isFormattingEnabled
+									)?.[1];
+								})
+								.filter(edit => !!edit)
+						);
+					}
+				}
+			}
+			else {
+				const scriptKind = linterHost.getScriptKind!(fileName);
+				const settings = scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX ? fmtSettings.javascript : fmtSettings.typescript;
+				serviceEdits = linterLanguageService.getFormattingEditsForDocument(fileName, settings);
+			}
+
+			if (serviceEdits.length) {
+				const oldSnapshot = snapshots.get(fileName)!;
+				newSnapshot = core.applyTextChanges(oldSnapshot, serviceEdits);
+				snapshots.set(fileName, newSnapshot);
+				versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
+				projectVersion++;
+			}
 		}
 	}
 
 	if (newSnapshot) {
-		ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
-		fileCache[0] = fs.statSync(fileName).mtimeMs;
-		fileCache[1] = {};
-		fileCache[2] = {};
+		const newText = newSnapshot.getText(0, newSnapshot.getLength());
+		const oldText = ts.sys.readFile(fileName);
+		if (newText !== oldText) {
+			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+			fileCache[0] = fs.statSync(fileName).mtimeMs;
+			fileCache[1] = {};
+			fileCache[2] = {};
+			fileCache[3] = false;
+			shouldCheck = true;
+		}
 	}
 
-	if (shouldRetry) {
+	if (shouldCheck) {
 		diagnostics = linter.lint(fileName, fileCache);
 	}
-
-	if (language) {
-		diagnostics = diagnostics
-			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
-			.filter(d => !!d);
-
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: getFileText(diagnostic.file.fileName),
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file ? {
-					fileName: info.file.fileName,
-					text: getFileText(info.file.fileName),
-				} as any : undefined,
-			})),
-		}));
-	} else {
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: diagnostic.file.text,
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file ? {
-					fileName: info.file.fileName,
-					text: info.file.text,
-				} as any : undefined,
-			})),
-		}));
-	}
-
-	return [diagnostics, fileCache] as const;
-}
-
-function lint(fileName: string, fileCache: core.FileLintCache) {
-	let diagnostics = linter.lint(fileName, fileCache);
 
 	if (language) {
 		diagnostics = diagnostics

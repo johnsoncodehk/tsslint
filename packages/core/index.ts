@@ -1,7 +1,16 @@
 export * from './lib/build';
 export * from './lib/watch';
 
-import type { Config, ProjectContext, Reporter, Rule, RuleContext, Rules } from '@tsslint/types';
+import type {
+	Config,
+	ProjectContext,
+	Reporter,
+	Rule,
+	RuleContext,
+	Rules,
+	FormattingProcess,
+	FormattingContext,
+} from '@tsslint/types';
 import type * as ts from 'typescript';
 
 import ErrorStackParser = require('error-stack-parser');
@@ -15,12 +24,14 @@ export type FileLintCache = [
 		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
 	>,
 	minimatchResult: Record<string, boolean>,
+	formated: boolean,
 ];
 
 export type Linter = ReturnType<typeof createLinter>;
 
 export function createLinter(
 	ctx: ProjectContext,
+	rootDir: string,
 	config: Config | Config[],
 	mode: 'cli' | 'typescript-plugin',
 	syntaxOnlyLanguageService?: ts.LanguageService & {
@@ -29,6 +40,7 @@ export function createLinter(
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
+	const fileFmtProcesses = new Map<string, FormattingProcess[]>();
 	const fileConfigs = new Map<string, typeof configs>();
 	const lintResults = new Map<
 		/* fileName */ string,
@@ -45,12 +57,12 @@ export function createLinter(
 			}[],
 		]
 	>();
-	const basePath = path.dirname(ctx.configFile);
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
 			include: config.include ?? [],
 			exclude: config.exclude ?? [],
 			rules: config.rules ?? {},
+			formatting: config.formatting,
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
@@ -60,6 +72,47 @@ export function createLinter(
 	let shouldEnableTypeAware = false;
 
 	return {
+		format(sourceFile: ts.SourceFile, minimatchCache?: FileLintCache[2]): ts.TextChange[] {
+			const preprocess = getFileFmtProcesses(sourceFile.fileName, minimatchCache);
+			const changes: ts.TextChange[] = [];
+			const tmpChanges: ts.TextChange[] = [];
+			const fmtCtx: FormattingContext = {
+				typescript: ts,
+				sourceFile,
+				insert(pos, text) {
+					tmpChanges.push({ span: { start: pos, length: 0 }, newText: text });
+				},
+				remove(start, end) {
+					tmpChanges.push({ span: { start, length: end - start }, newText: '' });
+				},
+				replace(start, end, text) {
+					tmpChanges.push({ span: { start, length: end - start }, newText: text });
+				},
+			};
+			for (const process of preprocess) {
+				process(fmtCtx);
+				if (tmpChanges.every(a => {
+					const aStart = a.span.start;
+					const aEnd = aStart + a.span.length;
+					for (const b of changes) {
+						const bStart = b.span.start;
+						const bEnd = bStart + b.span.length;
+						if (
+							(bStart >= aEnd && bStart > aStart)
+							|| (bEnd <= aStart && bEnd < aEnd)
+						) {
+							continue;
+						}
+						return false;
+					}
+					return true;
+				})) {
+					changes.push(...tmpChanges);
+				}
+				tmpChanges.length = 0;
+			}
+			return changes;
+		},
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
 			let shouldRetry = false;
@@ -369,6 +422,20 @@ export function createLinter(
 		getConfigs: getFileConfigs,
 	};
 
+	function getFileFmtProcesses(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+		if (!fileFmtProcesses.has(fileName)) {
+			const allPreprocess: FormattingProcess[] = [];
+			const configs = getFileConfigs(fileName, minimatchCache);
+			for (const { formatting } of configs) {
+				if (formatting) {
+					allPreprocess.push(...formatting);
+				}
+			}
+			fileFmtProcesses.set(fileName, allPreprocess);
+		}
+		return fileFmtProcesses.get(fileName)!;
+	}
+
 	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
 		let rules = fileRules.get(fileName);
 		if (!rules) {
@@ -421,7 +488,7 @@ export function createLinter(
 				}
 				let normalized = normalizedPath.get(pattern);
 				if (!normalized) {
-					normalized = ts.server.toNormalizedPath(path.resolve(basePath, pattern));
+					normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
 					normalizedPath.set(pattern, normalized);
 				}
 				const res = minimatch.minimatch(fileName, normalized);
