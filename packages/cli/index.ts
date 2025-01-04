@@ -279,9 +279,13 @@ class Project {
 		process.exit(1);
 	}
 
-	await Promise.all(new Array(threads).fill(0).map(() => {
-		return startWorker(worker.create());
-	}));
+	if (threads === 1) {
+		await startWorker(worker.createLocal() as any);
+	} else {
+		await Promise.all(new Array(threads).fill(0).map(() => {
+			return startWorker(worker.create());
+		}));
+	}
 
 	spinner.stop(
 		cached
