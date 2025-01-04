@@ -1,7 +1,7 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/meta-frameworks-support",
-	"version": "1.5.1",
+	"version": "1.5.2",
 	"devDependencies": {
 		"@astrojs/ts-plugin": "latest",
 		"@mdx-js/language-service": "latest",
