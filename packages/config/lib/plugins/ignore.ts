@@ -4,17 +4,24 @@ import type * as ts from 'typescript';
 
 interface CommentState {
 	used?: boolean;
-	start: number;
-	end: number;
+	commentRange: [number, number];
+	nextLine: number;
+	lastLine?: number;
 }
 
 export function create(
-	cmd: string,
-	reportsUnusedComments: boolean,
-	reg = new RegExp(`//\\s*${cmd}\\b[ \\t]*(?<ruleId>\\S*)\\b`),
-	completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/,
-	completeReg2 = new RegExp(`//\\s*${cmd}\\b[ \\t]*(\\S*)?$`)
+	cmdOption: string | [string, string],
+	reportsUnusedComments: boolean
 ): Plugin {
+	const mode = typeof cmdOption === 'string' ? 'singleLine' : 'multiLine';
+	const [cmd, endCmd] = Array.isArray(cmdOption) ? cmdOption : [cmdOption, undefined];
+	const cmdText = cmd.replace(/\?/g, '');
+	const withRuleId = '(\\b[ \\t]*|[ \\t]+)(?<ruleId>\\S*\\b)?';
+	const reg = new RegExp(`\\s*${cmd}${withRuleId}`);
+	const endReg = endCmd ? new RegExp(`\\s*${endCmd}${withRuleId}`) : undefined;
+	const completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/;
+	const completeReg2 = new RegExp(`//\\s*${cmd}(\\S*)?$`);
+
 	return ({ typescript: ts, languageService }) => {
 		const reportedRulesOfFile = new Map<string, [string, number][]>();
 		const { getCompletionsAtPosition } = languageService;
@@ -38,8 +45,8 @@ export function create(
 			if (matchCmd) {
 				const nextLineRules = reportedRules?.filter(([, reportedLine]) => reportedLine === line + 1) ?? [];
 				const item: ts.CompletionEntry = {
-					name: cmd,
-					insertText: matchCmd[1].length ? cmd : ` ${cmd}`,
+					name: cmdText,
+					insertText: matchCmd[1].length ? cmdText : ` ${cmdText}`,
 					kind: ts.ScriptElementKind.keyword,
 					sortText: 'a',
 					replacementSpan: matchCmd[2]
@@ -120,31 +127,45 @@ export function create(
 				) {
 					return results;
 				}
-				const disabledLines = new Map<number, CommentState>();
-				const disabledLinesByRules = new Map<string, Map<number, CommentState>>();
+				const comments = new Map<string | undefined, CommentState[]>();
+				const logs: string[] = [];
 
 				forEachComment(sourceFile, (fullText, { pos, end }) => {
+					pos += 2; // Trim the // or /* characters
 					const commentText = fullText.substring(pos, end);
-					const comment = commentText.match(reg);
-					if (comment?.index === undefined) {
-						return;
-					}
-					const index = comment.index + pos;
-					const line = sourceFile.getLineAndCharacterOfPosition(index).line + 1;
-					const ruleId = comment.groups?.ruleId;
-					if (ruleId) {
-						if (!disabledLinesByRules.has(ruleId)) {
-							disabledLinesByRules.set(ruleId, new Map());
+					logs.push(commentText);
+					const startComment = commentText.match(reg);
+
+					if (startComment?.index !== undefined) {
+						const index = startComment.index + pos;
+						const nextLine = sourceFile.getLineAndCharacterOfPosition(index).line + 1;
+						const ruleId = startComment.groups?.ruleId;
+
+						if (!comments.has(ruleId)) {
+							comments.set(ruleId, []);
 						}
-						disabledLinesByRules.get(ruleId)!.set(line, {
-							start: index,
-							end: index + comment[0].length,
+						const disabledLines = comments.get(ruleId)!;
+						disabledLines.push({
+							commentRange: [
+								index - 2,
+								index + startComment[0].length,
+							],
+							nextLine,
 						});
-					} else {
-						disabledLines.set(line, {
-							start: index,
-							end: index + comment[0].length,
-						});
+					}
+					else if (endReg) {
+						const endComment = commentText.match(endReg);
+
+						if (endComment?.index !== undefined) {
+							const index = endComment.index + pos;
+							const prevLine = sourceFile.getLineAndCharacterOfPosition(index).line - 1;
+							const ruleId = endComment.groups?.ruleId;
+
+							const disabledLines = comments.get(ruleId);
+							if (disabledLines) {
+								disabledLines[disabledLines.length - 1].lastLine = prevLine;
+							}
+						}
 					}
 				});
 
@@ -160,41 +181,47 @@ export function create(
 						return true;
 					}
 					const line = sourceFile.getLineAndCharacterOfPosition(error.start).line;
+
 					reportedRules.push([error.code as any, line]);
-					if (disabledLines.has(line)) {
-						disabledLines.get(line)!.used = true;
-						return false;
-					}
-					const disabledLinesByRule = disabledLinesByRules.get(error.code as any);
-					if (disabledLinesByRule?.has(line)) {
-						disabledLinesByRule.get(line)!.used = true;
-						return false;
+
+					for (const code of [undefined, error.code]) {
+						const states = comments.get(code as any);
+						if (states) {
+							if (mode === 'singleLine') {
+								if (states.some(({ nextLine }) => nextLine === line)) {
+									for (const state of states) {
+										if (state.nextLine === line) {
+											state.used = true;
+											break;
+										}
+									}
+									return false;
+								}
+							} else {
+								if (states.some(({ nextLine, lastLine }) => line >= nextLine && line <= (lastLine ?? Number.MAX_VALUE))) {
+									for (const state of states) {
+										if (line >= state.nextLine && line <= (state.lastLine ?? Number.MAX_VALUE)) {
+											state.used = true;
+											break;
+										}
+									}
+									return false;
+								}
+							}
+						}
 					}
 					return true;
 				});
 				if (reportsUnusedComments) {
-					for (const state of disabledLines.values()) {
-						if (!state.used) {
-							results.push({
-								file: sourceFile,
-								start: state.start,
-								length: state.end - state.start,
-								code: 'tsslint:unused-ignore-comment' as any,
-								messageText: `Unused ${cmd} comment.`,
-								source: 'tsslint',
-								category: 1,
-							});
-						}
-					}
-					for (const disabledLinesByRule of disabledLinesByRules.values()) {
-						for (const state of disabledLinesByRule.values()) {
+					for (const comment of comments.values()) {
+						for (const state of comment.values()) {
 							if (!state.used) {
 								results.push({
 									file: sourceFile,
-									start: state.start,
-									length: state.end - state.start,
+									start: state.commentRange[0],
+									length: state.commentRange[1] - state.commentRange[0],
 									code: 'tsslint:unused-ignore-comment' as any,
-									messageText: `Unused ${cmd} comment.`,
+									messageText: `Unused comment.`,
 									source: 'tsslint',
 									category: 1,
 								});
@@ -211,14 +238,14 @@ export function create(
 				const line = sourceFile.getLineAndCharacterOfPosition(diagnostic.start).line;
 				codeFixes.push({
 					fixName: cmd,
-					description: `Ignore with ${cmd}`,
+					description: `Ignore with ${cmdText}`,
 					changes: [
 						{
 							fileName: sourceFile.fileName,
 							textChanges: [{
-								newText: new RegExp(`${cmd}\\b${diagnostic.code}`).test(`${cmd}${diagnostic.code}`)
-									? `// ${cmd}${diagnostic.code}\n`
-									: `// ${cmd} ${diagnostic.code}\n`,
+								newText: reg.test(`${cmdText}${diagnostic.code}`)
+									? `// ${cmdText}${diagnostic.code}\n`
+									: `// ${cmdText} ${diagnostic.code}\n`,
 								span: {
 									start: sourceFile.getPositionOfLineAndCharacter(line, 0),
 									length: 0,
