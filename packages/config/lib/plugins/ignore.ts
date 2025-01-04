@@ -216,7 +216,9 @@ export function create(
 						{
 							fileName: sourceFile.fileName,
 							textChanges: [{
-								newText: `// ${cmd} ${diagnostic.code}\n`,
+								newText: new RegExp(`${cmd}\\b${diagnostic.code}`).test(`${cmd}${diagnostic.code}`)
+									? `// ${cmd}${diagnostic.code}\n`
+									: `// ${cmd} ${diagnostic.code}\n`,
 								span: {
 									start: sourceFile.getPositionOfLineAndCharacter(line, 0),
 									length: 0,
