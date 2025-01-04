@@ -204,10 +204,6 @@ class Project {
 			tsconfigAndLanguages.set(tsconfig, languages);
 		}
 	} else {
-		const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
-		if (projectsFlag) {
-			clack.log.warn(lightYellow(`Please use ${projectsFlag.slice(0, -1)} instead of ${projectsFlag} starting from version 1.5.0.`));
-		}
 		const options = [
 			{
 				projectFlags: ['--project', '--projects'],
@@ -302,6 +298,17 @@ class Project {
 		if (vscodeSettings) {
 			clack.log.message(darkGray(`Found available editor settings, you can use `) + cyan(`--vscode-settings ${path.relative(process.cwd(), vscodeSettings)}`) + darkGray(` to enable code format.`));
 		}
+	}
+
+	const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
+	if (projectsFlag) {
+		clack.log.warn(
+			darkGray(`Please use `)
+			+ cyan(`${projectsFlag.slice(0, -1)}`)
+			+ darkGray(` instead of `)
+			+ cyan(`${projectsFlag}`)
+			+ darkGray(` starting from version 1.5.0.`)
+		);
 	}
 
 	const data = [
