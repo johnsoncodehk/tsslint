@@ -1,6 +1,6 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as TSLint from 'tslint';
-import { WalkContext } from 'tslint/lib/language/walker';
+import { WalkContext } from 'tslint/lib/language/walker/walkContext.js';
 import type * as ts from 'typescript';
 
 type TSLintRule = import('tslint/lib/language/rule/rule').RuleConstructor;
@@ -15,11 +15,11 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 					: 3 satisfies ts.DiagnosticCategory.Message
 ): TSSLint.Rule {
 	const rule = new (Rule as TSLintRule)({
-		ruleName: '',
+		ruleName: Rule.metadata?.ruleName ?? 'unknown',
 		ruleArguments,
 		ruleSeverity: severity === 1 ? 'error' : severity === 2 ? 'warning' : 'off',
 		disabledIntervals: [],
-	});
+	}) as TSLint.IRule | TSLint.ITypedRule;
 	return ({ typescript: ts, sourceFile, languageService, reportError, reportWarning, reportSuggestion }) => {
 		let lastFailure: TSLint.RuleFailure | undefined;
 		const report =
@@ -81,9 +81,10 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 			walkFn(ctx, programOrChecker);
 			return ctx.failures;
 		};
-		Rule.metadata?.requiresTypeInfo
-			// @ts-expect-error
-			? rule.applyWithProgram(sourceFile, languageService.getProgram()) as TSLint.RuleFailure[]
-			: rule.apply(sourceFile);
+		if ('applyWithProgram' in rule) {
+			rule.applyWithProgram(sourceFile, languageService.getProgram()!);
+		} else {
+			rule.apply(sourceFile);
+		}
 	};
 }
