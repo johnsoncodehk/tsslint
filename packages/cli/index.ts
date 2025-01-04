@@ -367,7 +367,10 @@ class Project {
 		while (project.currentFileIndex < project.fileNames.length) {
 			const i = project.currentFileIndex++;
 			const fileName = project.fileNames[i];
-			const fileMtime = fs.statSync(fileName).mtimeMs;
+			const fileStat = fs.statSync(fileName, { throwIfNoEntry: false });
+			if (!fileStat) {
+				continue;
+			}
 
 			addProcessFile(fileName);
 
@@ -378,8 +381,8 @@ class Project {
 
 			let fileCache = project.cache[fileName];
 			if (fileCache) {
-				if (fileCache[0] !== fileMtime) {
-					fileCache[0] = fileMtime;
+				if (fileCache[0] !== fileStat.mtimeMs) {
+					fileCache[0] = fileStat.mtimeMs;
 					fileCache[1] = {};
 					fileCache[2] = {};
 				}
@@ -388,7 +391,7 @@ class Project {
 				}
 			}
 			else {
-				project.cache[fileName] = fileCache = [fileMtime, {}, {}, false];
+				project.cache[fileName] = fileCache = [fileStat.mtimeMs, {}, {}, false];
 			}
 
 			let diagnostics = await linterWorker.lint(
