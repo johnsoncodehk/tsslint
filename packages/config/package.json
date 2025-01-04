@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/config",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -12,7 +12,7 @@
 		"directory": "packages/config"
 	},
 	"dependencies": {
-		"@tsslint/types": "1.5.0",
+		"@tsslint/types": "1.5.1",
 		"ts-api-utils": "^2.0.0"
 	}
 }
