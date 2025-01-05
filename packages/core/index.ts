@@ -59,8 +59,8 @@ export function createLinter(
 	>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
-			include: config.include ?? [],
-			exclude: config.exclude ?? [],
+			include: config.include,
+			exclude: config.exclude,
 			rules: config.rules ?? {},
 			formatting: config.formatting,
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
@@ -470,10 +470,10 @@ export function createLinter(
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
-				if (exclude.some(_minimatch)) {
+				if (exclude?.some(_minimatch)) {
 					return false;
 				}
-				if (include.length && !include.some(_minimatch)) {
+				if (include && !include.some(_minimatch)) {
 					return false;
 				}
 				return true;
