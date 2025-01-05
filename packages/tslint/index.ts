@@ -81,6 +81,14 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 			walkFn(ctx, programOrChecker);
 			return ctx.failures;
 		};
+		const applyWithWalker = rule.applyWithWalker.bind(rule);
+		rule.applyWithWalker = function (walker) {
+			const failures = applyWithWalker(walker);
+			for (const failure of failures) {
+				onAddFailure(failure);
+			}
+			return failures;
+		}
 		if ('applyWithProgram' in rule) {
 			rule.applyWithProgram(sourceFile, languageService.getProgram()!);
 		} else {
