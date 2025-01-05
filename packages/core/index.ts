@@ -491,7 +491,7 @@ export function createLinter(
 					normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
 					normalizedPath.set(pattern, normalized);
 				}
-				const res = minimatch.minimatch(fileName, normalized);
+				const res = minimatch.minimatch(fileName, normalized, { dot: true });
 				if (minimatchCache) {
 					minimatchCache[pattern] = res;
 				}
