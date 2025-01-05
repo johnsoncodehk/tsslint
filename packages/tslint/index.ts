@@ -42,7 +42,11 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				for (const replace of replaces) {
 					if (replace) {
 						reporter.withFix(
-							'Replace with ' + replace.text,
+							replace.length === 0
+								? 'Insert ' + replace.text
+								: replace.text.length === 0
+									? 'Delete ' + replace.start + ' to ' + replace.end
+									: 'Replace with ' + replace.text,
 							() => [{
 								fileName: sourceFile.fileName,
 								textChanges: [{
