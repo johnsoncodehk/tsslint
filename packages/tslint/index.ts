@@ -88,7 +88,7 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				onAddFailure(failure);
 			}
 			return failures;
-		}
+		};
 		if ('applyWithProgram' in rule) {
 			rule.applyWithProgram(sourceFile, languageService.getProgram()!);
 		} else {
