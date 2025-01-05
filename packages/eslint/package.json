@@ -11,6 +11,9 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/eslint"
 	},
+	"scripts": {
+		"postinstall": "node scripts/generateDts.js"
+	},
 	"devDependencies": {
 		"@tsslint/types": "1.5.5",
 		"@types/eslint": "^8.56.10",

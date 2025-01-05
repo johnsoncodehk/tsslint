@@ -1,6 +1,7 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
+import type { ESLintRulesConfig } from './lib/types.js';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
@@ -11,15 +12,13 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-export type Severity = 'error' | 'warn' | 'suggestion' | 'off';
-
-export function convertConfig(rulesConfig: Record<string, Severity | [Severity, ...any[]]>) {
+export function convertConfig(rulesConfig: ESLintRulesConfig) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
 	}> = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let severity: Severity;
+		let severity: 'error' | 'warn' | 'suggestion' | 'off';
 		let options: any[];
 		if (typeof severityOrOptions === 'string') {
 			severity = severityOrOptions;
