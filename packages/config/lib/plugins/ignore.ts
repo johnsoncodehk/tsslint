@@ -201,25 +201,20 @@ export function create(
 
 					for (const code of [undefined, error.code]) {
 						const states = comments.get(code as any);
-						if (states) {
-							if (mode === 'singleLine') {
-								if (states.some(comment => comment.startLine === line)) {
-									for (const state of states) {
-										if (state.startLine === line) {
-											state.used = true;
-											break;
-										}
-									}
+						if (!states) {
+							continue;
+						}
+						if (mode === 'singleLine') {
+							for (const state of states) {
+								if (state.startLine === line) {
+									state.used = true;
 									return false;
 								}
-							} else {
-								if (states.some((comment => line >= comment.startLine && line <= (comment.endLine ?? Number.MAX_VALUE)))) {
-									for (const state of states) {
-										if (line >= state.startLine && line <= (state.endLine ?? Number.MAX_VALUE)) {
-											state.used = true;
-											break;
-										}
-									}
+							}
+						} else {
+							for (const state of states) {
+								if (line >= state.startLine && line <= (state.endLine ?? Number.MAX_VALUE)) {
+									state.used = true;
 									return false;
 								}
 							}
