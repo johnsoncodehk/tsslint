@@ -17,9 +17,10 @@ export function create(
 	const [cmd, endCmd] = Array.isArray(cmdOption) ? cmdOption : [cmdOption, undefined];
 	const cmdText = cmd.replace(/\?/g, '');
 	const withRuleId = '[ \\t]*(?<ruleId>\\w\\S*)?';
+	const header = '^\\s*';
 	const ending = '([ \\t]+[^\\r\\n]*)?$';
-	const reg = new RegExp(`\\s*${cmd}${withRuleId}${ending}`);
-	const endReg = endCmd ? new RegExp(`\\s*${endCmd}${withRuleId}${ending}`) : undefined;
+	const reg = new RegExp(`${header}${cmd}${withRuleId}${ending}`);
+	const endReg = endCmd ? new RegExp(`${header}${endCmd}${withRuleId}${ending}`) : undefined;
 	const completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/;
 	const completeReg2 = new RegExp(`//\\s*${cmd}(\\S*)?$`);
 
