@@ -7,6 +7,7 @@ import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
 import languagePlugins = require('./lib/languagePlugins.js');
+import { setTimeout } from 'node:timers/promises';
 import { getVSCodeFormattingSettings } from './lib/formatting.js';
 
 const _reset = '\x1b[0m';
@@ -376,7 +377,7 @@ class Project {
 
 			if (Date.now() - lastSpinnerUpdate > 100) {
 				lastSpinnerUpdate = Date.now();
-				await new Promise(resolve => setTimeout(resolve, 0));
+				await setTimeout(0);
 			}
 
 			let fileCache = project.cache[fileName];
