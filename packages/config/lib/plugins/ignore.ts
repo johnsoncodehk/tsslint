@@ -5,8 +5,8 @@ import type * as ts from 'typescript';
 interface CommentState {
 	used?: boolean;
 	commentRange: [number, number];
-	nextLine: number;
-	lastLine?: number;
+	startLine: number;
+	endLine?: number;
 }
 
 export function create(
@@ -140,19 +140,32 @@ export function create(
 
 					if (startComment?.index !== undefined) {
 						const index = startComment.index + pos;
-						const nextLine = sourceFile.getLineAndCharacterOfPosition(index).line + 1;
 						const ruleId = startComment.groups?.ruleId;
 
 						if (!comments.has(ruleId)) {
 							comments.set(ruleId, []);
 						}
 						const disabledLines = comments.get(ruleId)!;
+						const line = sourceFile.getLineAndCharacterOfPosition(index).line;
+
+						let startLine = line;
+
+						if (mode === 'singleLine') {
+							const startWithComment = sourceFile.text.slice(
+								sourceFile.getPositionOfLineAndCharacter(line, 0),
+								index - 2
+							).trim() === '';
+							if (startWithComment) {
+								startLine = line + 1; // If the comment is at the start of the line, the error is in the next line
+							}
+						}
+
 						disabledLines.push({
 							commentRange: [
 								index - 2,
 								index + startComment[0].length,
 							],
-							nextLine,
+							startLine,
 						});
 					}
 					else if (endReg) {
@@ -160,12 +173,12 @@ export function create(
 
 						if (endComment?.index !== undefined) {
 							const index = endComment.index + pos;
-							const prevLine = sourceFile.getLineAndCharacterOfPosition(index).line - 1;
+							const prevLine = sourceFile.getLineAndCharacterOfPosition(index).line;
 							const ruleId = endComment.groups?.ruleId;
 
 							const disabledLines = comments.get(ruleId);
 							if (disabledLines) {
-								disabledLines[disabledLines.length - 1].lastLine = prevLine;
+								disabledLines[disabledLines.length - 1].endLine = prevLine;
 							}
 						}
 					}
@@ -190,9 +203,9 @@ export function create(
 						const states = comments.get(code as any);
 						if (states) {
 							if (mode === 'singleLine') {
-								if (states.some(({ nextLine }) => nextLine === line)) {
+								if (states.some(comment => comment.startLine === line)) {
 									for (const state of states) {
-										if (state.nextLine === line) {
+										if (state.startLine === line) {
 											state.used = true;
 											break;
 										}
@@ -200,9 +213,9 @@ export function create(
 									return false;
 								}
 							} else {
-								if (states.some(({ nextLine, lastLine }) => line >= nextLine && line <= (lastLine ?? Number.MAX_VALUE))) {
+								if (states.some((comment => line >= comment.startLine && line <= (comment.endLine ?? Number.MAX_VALUE)))) {
 									for (const state of states) {
-										if (line >= state.nextLine && line <= (state.lastLine ?? Number.MAX_VALUE)) {
+										if (line >= state.startLine && line <= (state.endLine ?? Number.MAX_VALUE)) {
 											state.used = true;
 											break;
 										}
