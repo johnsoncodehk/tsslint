@@ -1,6 +1,5 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as TSLint from 'tslint';
-import { WalkContext } from 'tslint/lib/language/walker/walkContext.js';
 import type * as ts from 'typescript';
 
 type TSLintRule = import('tslint/lib/language/rule/rule').RuleConstructor;
@@ -35,7 +34,7 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				failure.getFailure(),
 				failure.getStartPosition().getPosition(),
 				failure.getEndPosition().getPosition(),
-				6
+				false
 			);
 			if (failure.hasFix()) {
 				const fix = failure.getFix();
@@ -59,40 +58,11 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				}
 			}
 		};
-		// @ts-ignore
-		rule.applyWithFunction = function (sourceFile, walkFn, options, programOrChecker) {
-			// @ts-ignore
-			const ctx = new WalkContext(sourceFile, rule.ruleName, options);
-			const addFailure = ctx.addFailure.bind(ctx);
-			const addFailureAt = ctx.addFailureAt.bind(ctx);
-			const addFailureAtNode = ctx.addFailureAtNode.bind(ctx);
-			ctx.addFailure = (...args) => {
-				addFailure(...args);
-				onAddFailure(ctx.failures[ctx.failures.length - 1]);
-			};
-			ctx.addFailureAt = (...args) => {
-				addFailureAt(...args);
-				onAddFailure(ctx.failures[ctx.failures.length - 1]);
-			};
-			ctx.addFailureAtNode = (...args) => {
-				addFailureAtNode(...args);
-				onAddFailure(ctx.failures[ctx.failures.length - 1]);
-			};
-			walkFn(ctx, programOrChecker);
-			return ctx.failures;
-		};
-		const applyWithWalker = rule.applyWithWalker.bind(rule);
-		rule.applyWithWalker = function (walker) {
-			const failures = applyWithWalker(walker);
-			for (const failure of failures) {
-				onAddFailure(failure);
-			}
-			return failures;
-		};
-		if ('applyWithProgram' in rule) {
-			rule.applyWithProgram(sourceFile, languageService.getProgram()!);
-		} else {
-			rule.apply(sourceFile);
+		const failures = 'applyWithProgram' in rule
+			? rule.applyWithProgram(sourceFile, languageService.getProgram()!)
+			: rule.apply(sourceFile);
+		for (const failure of failures) {
+			onAddFailure(failure);
 		}
 	};
 }

@@ -13,9 +13,7 @@
 	},
 	"devDependencies": {
 		"@tsslint/types": "1.5.3",
+		"tslint": "^6.0.0",
 		"typescript": "latest"
-	},
-	"dependencies": {
-		"tslint": "^6.0.0"
 	}
 }
