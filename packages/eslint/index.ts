@@ -34,16 +34,12 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 		rules[rule] = (...args) => {
 			if (!_rule) {
 				let ruleModule: ESLint.Rule.RuleModule;
-				if (rule.includes('/')) {
-					let pluginName: string;
-					let ruleName: string;
-					[pluginName, ruleName] = rule.split('/');
-					if (pluginName.startsWith('@')) {
-						pluginName = `${pluginName}/eslint-plugin`;
-					}
-					else {
-						pluginName = `eslint-plugin-${pluginName}`;
-					}
+				const slashIndex = rule.indexOf('/');
+				if (slashIndex !== -1) {
+					const pluginName = rule.startsWith('@')
+						? `${rule.slice(0, slashIndex)}/eslint-plugin`
+						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
+					const ruleName = rule.slice(slashIndex + 1);
 					plugins[pluginName] ??= require(pluginName);
 					let plugin = plugins[pluginName];
 					if ('default' in plugin) {
