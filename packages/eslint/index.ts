@@ -43,6 +43,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 			tsSeverity = 3 satisfies ts.DiagnosticCategory.Message;
 		}
 		if (tsSeverity === undefined) {
+			rules[rule] = () => {
+				// Do nothing
+			};
 			continue;
 		}
 		let _rule: TSSLint.Rule | undefined;
