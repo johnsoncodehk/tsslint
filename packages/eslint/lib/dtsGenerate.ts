@@ -8,7 +8,7 @@ export function generate(nodeModulesDirs: string[]) {
 	let dts = '';
 	let defId = 0;
 
-	line(`type S = 'error' | 'warn' | 'suggestion' | 'off';`);
+	line(`type S = 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;`);
 	line(`type O<T extends any[]> = S | [S, ...options: T];`);
 	line(``);
 	line(`export interface ESLintRulesConfig {`);

@@ -18,16 +18,31 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 		rules: Record<string, ESLint.Rule.RuleModule>;
 	}> = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let severity: 'error' | 'warn' | 'suggestion' | 'off';
+		let rawSeverity: 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
 		let options: any[];
-		if (typeof severityOrOptions === 'string') {
-			severity = severityOrOptions;
-			options = [];
+		if (Array.isArray(severityOrOptions)) {
+			[rawSeverity, ...options] = severityOrOptions;
 		}
 		else {
-			[severity, ...options] = severityOrOptions;
+			rawSeverity = severityOrOptions;
+			options = [];
 		}
-		if (severity === 'off') {
+		let tsSeverity: ts.DiagnosticCategory | undefined;
+		if (rawSeverity === 'off' || rawSeverity === 0) {
+			tsSeverity = undefined;
+		}
+		else if (rawSeverity === 'warn' || rawSeverity === 1) {
+			tsSeverity = 0 satisfies ts.DiagnosticCategory.Warning;
+		}
+		else if (rawSeverity === 'error' || rawSeverity === 2) {
+			tsSeverity = 1 satisfies ts.DiagnosticCategory.Error;
+		}
+		else if (rawSeverity === 'suggestion') {
+			tsSeverity = 2 satisfies ts.DiagnosticCategory.Suggestion;
+		} else {
+			tsSeverity = 3 satisfies ts.DiagnosticCategory.Message;
+		}
+		if (tsSeverity === undefined) {
 			continue;
 		}
 		let _rule: TSSLint.Rule | undefined;
@@ -58,17 +73,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 						ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
 					}
 				}
-				_rule = rules[rule] = convertRule(
-					ruleModule,
-					options,
-					severity === 'error'
-						? 1 satisfies ts.DiagnosticCategory.Error
-						: severity === 'warn'
-							? 0 satisfies ts.DiagnosticCategory.Warning
-							: severity === 'suggestion'
-								? 2 satisfies ts.DiagnosticCategory.Suggestion
-								: 3 satisfies ts.DiagnosticCategory.Message
-				);
+				_rule = rules[rule] = convertRule(ruleModule, options, tsSeverity);
 			}
 			return _rule(...args);
 		};
