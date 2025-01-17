@@ -38,6 +38,57 @@ export async function load(tsconfig: string, languages: string[]) {
 		plugins.push(vueLanguagePlugin);
 	}
 
+	if (languages.includes('vue-vine')) {
+		let vue: typeof import('@vue/language-core');
+		let vueVine: typeof import('@vue-vine/language-service');
+		let pkgPath: string | undefined;
+
+		if (pkgPath = findPackageJson('@vue-vine/language-service')) {
+			const pkgDir = path.dirname(pkgPath);
+			vueVine = require('@vue-vine/language-service');
+			vue = require(require.resolve('@vue/language-core', { paths: [pkgDir] }));
+		} else if (pkgPath = findPackageJson('vue-vine-tsc')) {
+			const pkgDir = path.dirname(pkgPath);
+			vue = require(require.resolve('@vue/language-core', { paths: [pkgDir] }));
+			vueVine = require(require.resolve('@vue/language-core', { paths: [pkgDir] }));
+		} else {
+			const pkg = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'package.json');
+			if (pkg) {
+				throw new Error('Please install @vue-vine/language-service or vue-vine-tsc to ' + path.relative(process.cwd(), pkg));
+			} else {
+				throw new Error('Please install @vue-vine/language-service or vue-vine-tsc for ' + path.relative(process.cwd(), tsconfig));
+			}
+		}
+
+		const commonLine = vue.createParsedCommandLine(ts, ts.sys, tsconfig, true);
+		const globalTypesFilePath = vueVine.setupGlobalTypes(path.dirname(tsconfig), commonLine.vueOptions as any, ts.sys);
+		if (globalTypesFilePath) {
+			commonLine.vueOptions.__setupedGlobalTypes = {
+				absolutePath: globalTypesFilePath,
+			};
+		}
+
+		plugins.push(
+			vue.createVueLanguagePlugin<string>(
+				ts,
+				commonLine.options,
+				commonLine.vueOptions,
+				id => id
+			)
+		);
+
+		plugins.push(
+			vueVine.createVueVineLanguagePlugin(
+				ts,
+				{
+					compilerOptions: commonLine.options,
+					vueCompilerOptions: commonLine.vueOptions as any,
+					target: 'tsc',
+				}
+			)
+		);
+	}
+
 	if (languages.includes('mdx')) {
 		let mdx: any;
 
@@ -78,8 +129,6 @@ export async function load(tsconfig: string, languages: string[]) {
 	return plugins;
 
 	function findPackageJson(pkgName: string) {
-		try {
-			return require.resolve(`${pkgName}/package.json`, { paths: [path.dirname(tsconfig)] });
-		} catch { }
+		return ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, `node_modules/${pkgName}/package.json`);
 	}
 }

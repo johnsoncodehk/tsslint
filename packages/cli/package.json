@@ -27,6 +27,7 @@
 		"typescript": "*"
 	},
 	"devDependencies": {
-		"@vue/language-core": "latest"
+		"@vue/language-core": "latest",
+		"@vue-vine/language-service": "latest"
 	}
 }

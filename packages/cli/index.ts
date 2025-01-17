@@ -21,6 +21,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 // https://talyian.github.io/ansicolors/
 const tsColor = (s: string) => '\x1b[34m' + s + _reset;
 const vueColor = (s: string) => '\x1b[32m' + s + _reset;
+const vueVineColor = (s: string) => '\x1b[38;5;48m' + s + _reset;
 const mdxColor = (s: string) => '\x1b[33m' + s + _reset;
 const astroColor = (s: string) => '\x1b[38;5;209m' + s + _reset;
 
@@ -63,6 +64,9 @@ class Project {
 		} else {
 			if (this.languages.includes('vue')) {
 				labels.push(vueColor('Vue'));
+			}
+			if (this.languages.includes('vue-vine')) {
+				labels.push(vueVineColor('Vue Vine'));
 			}
 			if (this.languages.includes('mdx')) {
 				labels.push(mdxColor('MDX'));
@@ -124,6 +128,8 @@ class Project {
 			'--projects',
 			'--vue-project',
 			'--vue-projects',
+			'--vue-vine-project',
+			'--vue-vine-projects',
 			'--mdx-project',
 			'--mdx-projects',
 			'--astro-project',
@@ -136,6 +142,9 @@ class Project {
 			options: [{
 				label: 'Vue',
 				value: 'vue',
+			}, {
+				label: 'Vue Vine',
+				value: 'vue-vine',
 			}, {
 				label: 'MDX',
 				value: 'mdx',
@@ -196,12 +205,10 @@ class Project {
 			}
 		}
 
-		clack.log.info(`Running: ${purple(command)}`);
+		clack.log.info(`${darkGray('Command:')} ${purple(command)}`);
 
 		for (let tsconfig of selectedTsconfigs) {
-			if (!tsconfig.startsWith('.')) {
-				tsconfig = `./${tsconfig}`;
-			}
+			tsconfig = resolvePath(tsconfig);
 			tsconfigAndLanguages.set(tsconfig, languages);
 		}
 	} else {
@@ -213,6 +220,10 @@ class Project {
 			{
 				projectFlags: ['--vue-project', '--vue-projects'],
 				language: 'vue',
+			},
+			{
+				projectFlags: ['--vue-vine-project', '--vue-vine-projects'],
+				language: 'vue-vine',
 			},
 			{
 				projectFlags: ['--mdx-project', '--mdx-projects'],
