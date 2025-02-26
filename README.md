@@ -196,3 +196,26 @@ npx tsslint --project packages/pkg-a/tsconfig.json packages/pkg-b/tsconfig.json
 ```
 
 This command will run the linter on all TypeScript projects located in the subdirectories of the `packages` directory. Each subdirectory should contain a `tsconfig.json` file defining a TypeScript project. Any linting errors will be output to the console.
+
+### Linting Different Project Types
+
+TSSLint also supports linting different types of projects, such as Vue, Vue Vine, MDX, and Astro. You can specify the project type using the relevant flags:
+
+- **Vue projects**:
+  ```sh
+  npx tsslint --vue-project path/to/vue/tsconfig.json
+  ```
+- **Vue Vine projects**:
+  ```sh
+  npx tsslint --vue-vine-project path/to/vue-vine/tsconfig.json
+  ```
+- **MDX projects**:
+  ```sh
+  npx tsslint --mdx-project path/to/mdx/tsconfig.json
+  ```
+- **Astro projects**:
+  ```sh
+  npx tsslint --astro-project path/to/astro/tsconfig.json
+  ```
+
+This allows flexibility in linting different project structures while maintaining the same CLI workflow.
