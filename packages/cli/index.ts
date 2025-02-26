@@ -158,7 +158,7 @@ class Project {
 			process.exit(1);
 		}
 
-		const tsconfigOptions = glob.sync('**/{tsconfig.json,jsconfig.json}');
+		const tsconfigOptions = glob.sync('**/{tsconfig.json,tsconfig.*.json,jsconfig.json}');
 
 		let options = await Promise.all(
 			tsconfigOptions.map(async tsconfigOption => {
