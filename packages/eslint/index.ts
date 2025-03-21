@@ -1,6 +1,6 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
-import type * as ts from 'typescript';
+import * as ts from 'typescript';
 import type { ESLintRulesConfig } from './lib/types.js';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
@@ -58,7 +58,15 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 						? `${rule.slice(0, slashIndex)}/eslint-plugin`
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 					const ruleName = rule.slice(slashIndex + 1);
-					plugins[pluginName] ??= require(pluginName);
+					try {
+						const path = require.resolve(pluginName, { paths: [ts.sys.getCurrentDirectory()] });
+						plugins[pluginName] ??= require(path);
+					} catch (e) {
+						_rule = () => { };
+						console.log(new Error(`Plugin "${pluginName}" does not exist.`));
+						return;
+					}
+
 					let plugin = plugins[pluginName];
 					if ('default' in plugin) {
 						// @ts-expect-error
@@ -66,7 +74,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 					}
 					ruleModule = plugin.rules[ruleName];
 					if (!ruleModule) {
-						throw new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`);
+						_rule = () => { };
+						console.log(new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
+						return;
 					}
 				}
 				else {
