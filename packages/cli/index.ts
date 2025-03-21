@@ -20,6 +20,7 @@ const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 
 // https://talyian.github.io/ansicolors/
 const tsColor = (s: string) => '\x1b[34m' + s + _reset;
+const tsMacroColor = (s: string) => '\x1b[38;5;135m' + s + _reset;
 const vueColor = (s: string) => '\x1b[32m' + s + _reset;
 const vueVineColor = (s: string) => '\x1b[38;5;48m' + s + _reset;
 const mdxColor = (s: string) => '\x1b[33m' + s + _reset;
@@ -62,6 +63,9 @@ class Project {
 		if (this.languages.length === 0) {
 			labels.push(tsColor('TS'));
 		} else {
+			if (this.languages.includes('ts-macro')) {
+				labels.push(tsMacroColor('TS Macro'));
+			}
 			if (this.languages.includes('vue')) {
 				labels.push(vueColor('Vue'));
 			}
@@ -134,12 +138,20 @@ class Project {
 			'--mdx-projects',
 			'--astro-project',
 			'--astro-projects',
+			'--ts-macro-project',
+			'--ts-macro-projects',
 		].some(flag => process.argv.includes(flag))
 	) {
-		const languages = await clack.multiselect({
-			required: false,
-			message: 'Select frameworks (optional)',
+		const language = await clack.select({
+			message: 'Select framework',
+			initialValue: undefined,
 			options: [{
+				label: 'Vanilla JS/TS',
+				value: undefined,
+			}, {
+				label: 'TS Macro',
+				value: 'ts-macro',
+			}, {
 				label: 'Vue',
 				value: 'vue',
 			}, {
@@ -152,9 +164,9 @@ class Project {
 				label: 'Astro',
 				value: 'astro',
 			}],
-		}) as string[];
+		});
 
-		if (clack.isCancel(languages)) {
+		if (clack.isCancel(language)) {
 			process.exit(1);
 		}
 
@@ -167,7 +179,7 @@ class Project {
 					{ paths: [process.cwd()] }
 				);
 				try {
-					const commonLine = await parseCommonLine(tsconfig, languages);
+					const commonLine = await parseCommonLine(tsconfig, language ? [language] : []);
 					return {
 						label: path.relative(process.cwd(), tsconfig) + ` (${commonLine.fileNames.length})`,
 						value: tsconfigOption,
@@ -180,6 +192,10 @@ class Project {
 
 		options = options.filter(option => !!option);
 
+		if (options.some(option => !option!.label.endsWith('(0)'))) {
+			options = options.filter(option => !option!.label.endsWith('(0)'));
+		}
+
 		if (!options.length) {
 			clack.log.error(lightRed('No projects found.'));
 			process.exit(1);
@@ -187,6 +203,7 @@ class Project {
 
 		const selectedTsconfigs = await clack.multiselect({
 			message: 'Select one or multiple projects',
+			initialValues: [options[0]!.value],
 			// @ts-expect-error
 			options,
 		});
@@ -197,19 +214,17 @@ class Project {
 
 		let command = 'tsslint';
 
-		if (!languages.length) {
+		if (!language) {
 			command += ' --project ' + selectedTsconfigs.join(' ');
 		} else {
-			for (const language of languages) {
-				command += ` --${language}-project ` + selectedTsconfigs.join(' ');
-			}
+			command += ` --${language}-project ` + selectedTsconfigs.join(' ');
 		}
 
 		clack.log.info(`${darkGray('Command:')} ${purple(command)}`);
 
 		for (let tsconfig of selectedTsconfigs) {
 			tsconfig = resolvePath(tsconfig);
-			tsconfigAndLanguages.set(tsconfig, languages);
+			tsconfigAndLanguages.set(tsconfig, language ? [language] : []);
 		}
 	} else {
 		const options = [
@@ -233,6 +248,10 @@ class Project {
 			{
 				projectFlags: ['--astro-project', '--astro-projects'],
 				language: 'astro',
+			},
+			{
+				projectFlags: ['--ts-macro-project', '--ts-macro-projects'],
+				language: 'ts-macro',
 			},
 		];
 		for (const { projectFlags, language } of options) {

@@ -6,6 +6,7 @@
 		"@astrojs/ts-plugin": "latest",
 		"@mdx-js/language-service": "latest",
 		"@vue-vine/language-service": "latest",
+		"@ts-macro/language-plugin": "latest",
 		"@vue/language-core": "latest"
 	}
 }
