@@ -13,7 +13,17 @@ const estrees = new WeakMap<ts.SourceFile, {
 }>();
 const noop = () => { };
 
+/**
+ * @deprecated Use `convertRules` instead.
+ */
 export function convertConfig(
+	rulesConfig: ESLintRulesConfig,
+	loader?: typeof require
+) {
+	return convertRules(rulesConfig, loader);
+}
+
+export function convertRules(
 	rulesConfig: ESLintRulesConfig,
 	loader = require
 ) {
