@@ -63,6 +63,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig, rootPaths: string[
 						plugins[pluginName] ??= require(path);
 					} catch (e) {
 						_rule = () => { };
+						console.log('\n');
 						console.log(new Error(`Plugin "${pluginName}" does not exist.`));
 						return;
 					}
@@ -75,6 +76,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig, rootPaths: string[
 					ruleModule = plugin.rules[ruleName];
 					if (!ruleModule) {
 						_rule = () => { };
+						console.log('\n');
 						console.log(new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
 						return;
 					}
