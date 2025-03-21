@@ -12,7 +12,7 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-export function convertConfig(rulesConfig: ESLintRulesConfig, rootDir = process.cwd()) {
+export function convertConfig(rulesConfig: ESLintRulesConfig, rootPaths: string[] | undefined = [process.cwd()]) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
@@ -59,7 +59,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig, rootDir = process.
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 					const ruleName = rule.slice(slashIndex + 1);
 					try {
-						const path = require.resolve(pluginName, { paths: [rootDir] });
+						const path = require.resolve(pluginName, { paths: rootPaths });
 						plugins[pluginName] ??= require(path);
 					} catch (e) {
 						_rule = () => { };
