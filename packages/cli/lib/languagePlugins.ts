@@ -136,7 +136,7 @@ export async function load(tsconfig: string, languages: string[]) {
 		} else if (tsmcPkgPath = findPackageJson('@ts-macro/tsc')) {
 			const tsmcPath = path.dirname(tsmcPkgPath);
 			tsMacro = require(require.resolve('@ts-macro/language-plugin', { paths: [tsmcPath] }));
-			tsMacroOptions = require(require.resolve('@ts-macro/language-plugin/options', { paths: [tsmcPath] }))
+			tsMacroOptions = require(require.resolve('@ts-macro/language-plugin/options', { paths: [tsmcPath] }));
 		} else {
 			const pkg = ts.findConfigFile(path.dirname(tsconfig), ts.sys.fileExists, 'package.json');
 			if (pkg) {
@@ -145,7 +145,7 @@ export async function load(tsconfig: string, languages: string[]) {
 				throw new Error('Please install @ts-macro/language-plugin or @ts-macro/tsc for ' + path.relative(process.cwd(), tsconfig));
 			}
 		}
-		
+
 		const compilerOptions = ts.readConfigFile(tsconfig, ts.sys.readFile).config.compilerOptions;
 		plugins.push(...tsMacro.getLanguagePlugins(ts, compilerOptions, tsMacroOptions.getOptions(ts)));
 	}
