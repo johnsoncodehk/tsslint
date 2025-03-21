@@ -58,7 +58,14 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 						? `${rule.slice(0, slashIndex)}/eslint-plugin`
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 					const ruleName = rule.slice(slashIndex + 1);
-					plugins[pluginName] ??= require(pluginName);
+					try {
+						plugins[pluginName] ??= require(pluginName);
+					} catch (e) {
+						_rule = () => { };
+						console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
+						return;
+					}
+
 					let plugin = plugins[pluginName];
 					if ('default' in plugin) {
 						// @ts-expect-error
@@ -66,7 +73,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 					}
 					ruleModule = plugin.rules[ruleName];
 					if (!ruleModule) {
-						throw new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`);
+						_rule = () => { };
+						console.log('\n\n', new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
+						return;
 					}
 				}
 				else {
