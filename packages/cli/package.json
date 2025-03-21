@@ -24,7 +24,7 @@
 		"json5": "^2.2.3"
 	},
 	"peerDependencies": {
-		"typescript": "*"
+		"typescript": "latest"
 	},
 	"devDependencies": {
 		"@vue-vine/language-service": "latest",
