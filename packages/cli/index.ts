@@ -134,6 +134,8 @@ class Project {
 			'--mdx-projects',
 			'--astro-project',
 			'--astro-projects',
+			'--ts-macro-project',
+			'--ts-macro-projects',
 		].some(flag => process.argv.includes(flag))
 	) {
 		const languages = await clack.multiselect({
@@ -233,6 +235,10 @@ class Project {
 			{
 				projectFlags: ['--astro-project', '--astro-projects'],
 				language: 'astro',
+			},
+			{
+				projectFlags: ['--ts-macro-project', '--ts-macro-projects'],
+				language: 'ts-macro',
 			},
 		];
 		for (const { projectFlags, language } of options) {

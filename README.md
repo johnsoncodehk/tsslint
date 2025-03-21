@@ -217,5 +217,9 @@ TSSLint also supports linting different types of projects, such as Vue, Vue Vine
   ```sh
   npx tsslint --astro-project path/to/astro/tsconfig.json
   ```
+- **TS Macro projects**:
+  ```sh
+  npx tsslint --ts-macro-project path/to/ts-macro/tsconfig.json
+  ```
 
 This allows flexibility in linting different project structures while maintaining the same CLI workflow.
