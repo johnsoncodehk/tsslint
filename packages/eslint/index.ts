@@ -12,7 +12,10 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-export function convertConfig(rulesConfig: ESLintRulesConfig) {
+export function convertConfig(
+	rulesConfig: ESLintRulesConfig,
+	loader = require
+) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
@@ -58,8 +61,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 						? `${rule.slice(0, slashIndex)}/eslint-plugin`
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 					const ruleName = rule.slice(slashIndex + 1);
+
 					try {
-						plugins[pluginName] ??= require(pluginName);
+						plugins[pluginName] ??= loader(pluginName);
 					} catch (e) {
 						_rule = () => { };
 						console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
@@ -80,9 +84,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 				}
 				else {
 					try {
-						ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
+						ruleModule = loader(`../../eslint/lib/rules/${rule}.js`);
 					} catch {
-						ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
+						ruleModule = loader(`./node_modules/eslint/lib/rules/${rule}.js`);
 					}
 				}
 				_rule = rules[rule] = convertRule(ruleModule, options, tsSeverity);
