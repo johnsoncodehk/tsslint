@@ -11,6 +11,7 @@ const estrees = new WeakMap<ts.SourceFile, {
 	sourceCode: any;
 	eventQueue: any[];
 }>();
+const noop = () => { };
 
 export function convertConfig(
 	rulesConfig: ESLintRulesConfig,
@@ -46,9 +47,7 @@ export function convertConfig(
 			tsSeverity = 3 satisfies ts.DiagnosticCategory.Message;
 		}
 		if (tsSeverity === undefined) {
-			rules[rule] = () => {
-				// Do nothing
-			};
+			rules[rule] = noop;
 			continue;
 		}
 		let _rule: TSSLint.Rule | undefined;
@@ -65,7 +64,7 @@ export function convertConfig(
 					try {
 						plugins[pluginName] ??= loader(pluginName);
 					} catch (e) {
-						_rule = () => { };
+						_rule = noop;
 						console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
 						return;
 					}
@@ -77,7 +76,7 @@ export function convertConfig(
 					}
 					ruleModule = plugin.rules[ruleName];
 					if (!ruleModule) {
-						_rule = () => { };
+						_rule = noop;
 						console.log('\n\n', new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
 						return;
 					}
