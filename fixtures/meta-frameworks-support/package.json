@@ -1,12 +1,12 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/meta-frameworks-support",
-	"version": "1.5.8",
+	"version": "1.5.9",
 	"devDependencies": {
 		"@astrojs/ts-plugin": "latest",
 		"@mdx-js/language-service": "latest",
-		"@vue-vine/language-service": "latest",
 		"@ts-macro/language-plugin": "latest",
+		"@vue-vine/language-service": "latest",
 		"@vue/language-core": "latest"
 	}
 }
