@@ -111,7 +111,7 @@ importers:
         specifier: ^2.2.3
         version: 2.2.3
       typescript:
-        specifier: latest
+        specifier: '*'
         version: 5.8.2
     devDependencies:
       '@vue-vine/language-service':
