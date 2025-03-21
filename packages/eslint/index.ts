@@ -2,7 +2,6 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 import type { ESLintRulesConfig } from './lib/types.js';
-import { createJiti } from 'jiti';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
@@ -13,9 +12,10 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-const jiti = createJiti(process.cwd());
-
-export function convertConfig(rulesConfig: ESLintRulesConfig) {
+export function convertConfig(
+	rulesConfig: ESLintRulesConfig,
+	loader = require
+) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
@@ -62,17 +62,8 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 					let ruleName = rule.slice(slashIndex + 1);
 
-					// support stylistic
-					if (pluginName.startsWith('@stylistic')) {
-						const [, _pluginName, _ruleName] = rule.split('/');
-						if (_ruleName) {
-							pluginName = pluginName + `-${_pluginName}`;
-							ruleName = _ruleName;
-						}
-					}
-
 					try {
-						plugins[pluginName] ??= jiti(pluginName);
+						plugins[pluginName] ??= loader(pluginName);
 					} catch (e) {
 						_rule = () => { };
 						console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
@@ -93,9 +84,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 				}
 				else {
 					try {
-						ruleModule = jiti(`../../eslint/lib/rules/${rule}.js`);
+						ruleModule = loader(`../../eslint/lib/rules/${rule}.js`);
 					} catch {
-						ruleModule = jiti(`./node_modules/eslint/lib/rules/${rule}.js`);
+						ruleModule = loader(`./node_modules/eslint/lib/rules/${rule}.js`);
 					}
 				}
 				_rule = rules[rule] = convertRule(ruleModule, options, tsSeverity);

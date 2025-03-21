@@ -22,7 +22,6 @@
 	"dependencies": {
 		"@tsslint/config": "1.5.9",
 		"@typescript-eslint/parser": "^8.16.0",
-		"eslint": "^9.0.0",
-		"jiti": "^2.4.2"
+		"eslint": "^9.0.0"
 	}
 }
