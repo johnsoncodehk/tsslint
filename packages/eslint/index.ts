@@ -1,6 +1,6 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
-import * as ts from 'typescript';
+import type * as ts from 'typescript';
 import type { ESLintRulesConfig } from './lib/types.js';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
@@ -12,7 +12,7 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 
-export function convertConfig(rulesConfig: ESLintRulesConfig) {
+export function convertConfig(rulesConfig: ESLintRulesConfig, rootDir = process.cwd()) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
@@ -59,7 +59,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 					const ruleName = rule.slice(slashIndex + 1);
 					try {
-						const path = require.resolve(pluginName, { paths: [ts.sys.getCurrentDirectory()] });
+						const path = require.resolve(pluginName, { paths: [rootDir] });
 						plugins[pluginName] ??= require(path);
 					} catch (e) {
 						_rule = () => { };
