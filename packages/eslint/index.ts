@@ -57,10 +57,10 @@ export function convertConfig(
 				let ruleModule: ESLint.Rule.RuleModule;
 				const slashIndex = rule.indexOf('/');
 				if (slashIndex !== -1) {
-					let pluginName = rule.startsWith('@')
+					const pluginName = rule.startsWith('@')
 						? `${rule.slice(0, slashIndex)}/eslint-plugin`
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
-					let ruleName = rule.slice(slashIndex + 1);
+					const ruleName = rule.slice(slashIndex + 1);
 
 					try {
 						plugins[pluginName] ??= loader(pluginName);
