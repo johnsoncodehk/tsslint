@@ -2,6 +2,7 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 import type { ESLintRulesConfig } from './lib/types.js';
+import { createJiti } from 'jiti';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
@@ -11,6 +12,8 @@ const estrees = new WeakMap<ts.SourceFile, {
 	sourceCode: any;
 	eventQueue: any[];
 }>();
+
+const jiti = createJiti(process.cwd());
 
 export function convertConfig(rulesConfig: ESLintRulesConfig) {
 	const rules: TSSLint.Rules = {};
@@ -54,12 +57,22 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 				let ruleModule: ESLint.Rule.RuleModule;
 				const slashIndex = rule.indexOf('/');
 				if (slashIndex !== -1) {
-					const pluginName = rule.startsWith('@')
+					let pluginName = rule.startsWith('@')
 						? `${rule.slice(0, slashIndex)}/eslint-plugin`
 						: `eslint-plugin-${rule.slice(0, slashIndex)}`;
-					const ruleName = rule.slice(slashIndex + 1);
+					let ruleName = rule.slice(slashIndex + 1);
+
+					// support stylistic
+					if (pluginName.startsWith('@stylistic')) {
+						const [, _pluginName, _ruleName] = rule.split('/');
+						if (_ruleName) {
+							pluginName = pluginName + `-${_pluginName}`;
+							ruleName = _ruleName;
+						}
+					}
+
 					try {
-						plugins[pluginName] ??= require(pluginName);
+						plugins[pluginName] ??= jiti(pluginName);
 					} catch (e) {
 						_rule = () => { };
 						console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
@@ -80,9 +93,9 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 				}
 				else {
 					try {
-						ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
+						ruleModule = jiti(`../../eslint/lib/rules/${rule}.js`);
 					} catch {
-						ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
+						ruleModule = jiti(`./node_modules/eslint/lib/rules/${rule}.js`);
 					}
 				}
 				_rule = rules[rule] = convertRule(ruleModule, options, tsSeverity);

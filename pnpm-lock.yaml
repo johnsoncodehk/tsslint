@@ -111,15 +111,15 @@ importers:
         specifier: ^2.2.3
         version: 2.2.3
       typescript:
-        specifier: '*'
-        version: 5.7.3
+        specifier: latest
+        version: 5.8.2
     devDependencies:
       '@vue-vine/language-service':
         specifier: latest
-        version: 0.3.19(typescript@5.7.3)
+        version: 0.3.19(typescript@5.8.2)
       '@vue/language-core':
         specifier: latest
-        version: 2.2.8(typescript@5.7.3)
+        version: 2.2.8(typescript@5.8.2)
 
   packages/config:
     dependencies:
@@ -160,6 +160,9 @@ importers:
       eslint:
         specifier: ^9.0.0
         version: 9.17.0(jiti@2.4.2)
+      jiti:
+        specifier: ^2.4.2
+        version: 2.4.2
     devDependencies:
       '@tsslint/types':
         specifier: 1.5.9
@@ -3171,11 +3174,6 @@ packages:
   typed-rest-client@1.8.11:
     resolution: {integrity: sha512-5UvfMpd1oelmUPRbbaVnq+rHP7ng2cE4qoQkQeAqxRL6PklkxsM0g32/HL0yfvruK6ojQ5x8EE+HF4YV6DtuCA==}
 
-  typescript@5.7.3:
-    resolution: {integrity: sha512-84MVSjMEHP+FQRPy3pX9sTVV/INIex71s9TL2Gm5FG/WG1SqXeKyZ0k7/blY/4FdOzI12CBy1vGc4og/eus0fw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@5.8.2:
     resolution: {integrity: sha512-aJn6wq13/afZp/jT9QZmwEjDqqvSGp1VT5GVg+f/t6/oVyrgXM6BY1h9BRh/O5p3PlUPAe+WuiEZOmb/49RqoQ==}
     engines: {node: '>=14.17'}
@@ -4477,21 +4475,6 @@ snapshots:
       postcss-selector-parser: 6.1.2
       ts-morph: 25.0.0
 
-  '@vue-vine/language-service@0.3.19(typescript@5.7.3)':
-    dependencies:
-      '@volar/language-server': 2.4.11
-      '@volar/typescript': 2.4.11
-      '@vue-vine/compiler': 0.3.19
-      '@vue/language-core': 2.2.8(typescript@5.7.3)
-      '@vue/shared': 3.5.13
-      detect-port: 2.1.0
-      muggle-string: 0.4.1
-      ws: 8.18.1
-    transitivePeerDependencies:
-      - bufferutil
-      - typescript
-      - utf-8-validate
-
   '@vue-vine/language-service@0.3.19(typescript@5.8.2)':
     dependencies:
       '@volar/language-server': 2.4.11
@@ -4529,19 +4512,6 @@ snapshots:
     dependencies:
       de-indent: 1.0.2
       he: 1.2.0
-
-  '@vue/language-core@2.2.8(typescript@5.7.3)':
-    dependencies:
-      '@volar/language-core': 2.4.11
-      '@vue/compiler-dom': 3.5.13
-      '@vue/compiler-vue2': 2.7.16
-      '@vue/shared': 3.5.13
-      alien-signals: 1.0.6
-      minimatch: 9.0.5
-      muggle-string: 0.4.1
-      path-browserify: 1.0.1
-    optionalDependencies:
-      typescript: 5.7.3
 
   '@vue/language-core@2.2.8(typescript@5.8.2)':
     dependencies:
@@ -6996,8 +6966,6 @@ snapshots:
       qs: 6.13.1
       tunnel: 0.0.6
       underscore: 1.13.7
-
-  typescript@5.7.3: {}
 
   typescript@5.8.2: {}
 
