@@ -18,7 +18,7 @@ while (true) {
 
 try {
 	const { generate } = require('../lib/dtsGenerate.js');
-	const dts = generate(nodeModulesDirs);
-
-	fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
+	generate(nodeModulesDirs).then(dts => {
+		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
+	});
 } catch { }

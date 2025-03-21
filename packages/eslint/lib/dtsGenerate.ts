@@ -3,7 +3,16 @@ import * as path from 'path';
 
 const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
 
-export function generate(nodeModulesDirs: string[]) {
+export async function generate(
+	nodeModulesDirs: string[],
+	loader = async (mod: string) => {
+		try {
+			return require(mod);
+		} catch {
+			return await import(mod);
+		}
+	}
+) {
 	let indentLevel = 0;
 	let dts = '';
 	let defId = 0;
@@ -26,7 +35,7 @@ export function generate(nodeModulesDirs: string[]) {
 				for (const subPkg of subPkgs) {
 					if (subPkg === 'eslint-plugin') {
 						const pluginName = `${pkg}/${subPkg}`;
-						let plugin = require(pluginName);
+						let plugin = await loader(pluginName);
 						if ('default' in plugin) {
 							plugin = plugin.default;
 						}
@@ -43,7 +52,7 @@ export function generate(nodeModulesDirs: string[]) {
 				}
 			}
 			else if (pkg.startsWith('eslint-plugin-')) {
-				let plugin = require(pkg);
+				let plugin = await loader(pkg);
 				if ('default' in plugin) {
 					plugin = plugin.default;
 				}
@@ -61,7 +70,7 @@ export function generate(nodeModulesDirs: string[]) {
 				for (const ruleFile of ruleFiles) {
 					if (ruleFile.endsWith('.js')) {
 						const ruleName = ruleFile.replace('.js', '');
-						const rule = require(path.join(rulesDir, ruleFile));
+						const rule = await loader(path.join(rulesDir, ruleFile));
 						addRule(undefined, ruleName, rule);
 					}
 				}
