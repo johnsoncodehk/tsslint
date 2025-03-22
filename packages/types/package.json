@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/types",
-	"version": "1.5.10",
+	"version": "1.5.11",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
