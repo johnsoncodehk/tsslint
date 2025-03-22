@@ -17,8 +17,8 @@ export async function generate(
 	let dts = '';
 	let defId = 0;
 
-	line(`type S = 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;`);
-	line(`type O<T extends any[]> = S | [S, ...options: T];`);
+	line(`export type S = 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;`);
+	line(`export type O<T extends any[]> = S | [S, ...options: T];`);
 	line(``);
 	line(`export interface ESLintRulesConfig {`);
 	indentLevel++;

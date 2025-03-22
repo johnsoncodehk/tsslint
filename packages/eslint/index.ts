@@ -1,7 +1,7 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
-import type { ESLintRulesConfig } from './lib/types.js';
+import type { ESLintRulesConfig, O } from './lib/types.js';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
@@ -12,14 +12,21 @@ const estrees = new WeakMap<ts.SourceFile, {
 	eventQueue: any[];
 }>();
 const noop = () => { };
+const plugins: Record<string, Promise<{
+	rules: Record<string, ESLint.Rule.RuleModule>;
+}>> = {};
+const loader = async (mod: string) => {
+	try {
+		return require(mod);
+	} catch {
+		return await import(mod);
+	}
+};
 
 /**
  * @deprecated Use `convertRules` instead.
  */
-export function convertConfig(
-	rulesConfig: ESLintRulesConfig,
-	loader: (mod: string) => any = require
-) {
+export function convertConfig(rulesConfig: ESLintRulesConfig) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
 		rules: Record<string, ESLint.Rule.RuleModule>;
@@ -65,7 +72,7 @@ export function convertConfig(
 					const ruleName = rule.slice(slashIndex + 1);
 
 					try {
-						plugins[pluginName] ??= loader(pluginName);
+						plugins[pluginName] ??= require(pluginName);
 					} catch (e) {
 						_rule = noop;
 						console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
@@ -99,20 +106,8 @@ export function convertConfig(
 	return rules;
 }
 
-export async function convertRules(
-	rulesConfig: ESLintRulesConfig,
-	loader = async (mod: string) => {
-		try {
-			return require(mod);
-		} catch {
-			return await import(mod);
-		}
-	}
-) {
+export async function convertRules(rulesConfig: ESLintRulesConfig) {
 	const rules: TSSLint.Rules = {};
-	const plugins: Record<string, Promise<{
-		rules: Record<string, ESLint.Rule.RuleModule>;
-	}>> = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
 		let rawSeverity: 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
 		let options: any[];
@@ -142,45 +137,91 @@ export async function convertRules(
 			rules[rule] = noop;
 			continue;
 		}
-		rules[rule] = await loadRuleByKey(rule, options, tsSeverity);
+		const ruleModule = await getRuleByKey(rule);
+		if (!ruleModule) {
+			rules[rule] = noop;
+			continue;
+		}
+		rules[rule] = convertRule(ruleModule, options, tsSeverity);
 	}
 	return rules;
+}
 
-	async function loadRuleByKey(rule: string, options: any[], tsSeverity?: ts.DiagnosticCategory) {
-		let ruleModule: ESLint.Rule.RuleModule;
-		const slashIndex = rule.indexOf('/');
-		if (slashIndex !== -1) {
-			const pluginName = rule.startsWith('@')
-				? `${rule.slice(0, slashIndex)}/eslint-plugin`
-				: `eslint-plugin-${rule.slice(0, slashIndex)}`;
-			const ruleName = rule.slice(slashIndex + 1);
-
-			try {
-				plugins[pluginName] ??= loader(pluginName);
-			} catch (e) {
-				console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
-				return noop;
-			}
-
-			let plugin = await plugins[pluginName];
-			if ('default' in plugin) {
-				// @ts-expect-error
-				plugin = plugin.default;
-			}
-			ruleModule = plugin.rules[ruleName];
-			if (!ruleModule) {
-				console.log('\n\n', new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
-				return noop;
-			}
+export async function convertFormattingRules(config: {
+	[K in keyof ESLintRulesConfig]?: ESLintRulesConfig[K] extends O<infer T> | undefined ? T : never;
+}) {
+	const processes: TSSLint.FormattingProcess[] = [];
+	for (const [rule, options] of Object.entries(config)) {
+		const ruleModule = await getRuleByKey(rule);
+		if (!ruleModule) {
+			continue;
 		}
-		else {
-			try {
-				ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
-			} catch {
-				ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
-			}
+		const tsslingRule = convertRule(ruleModule, options, 2 satisfies ts.DiagnosticCategory.Suggestion);
+		processes.push(ctx => {
+			const reporter: TSSLint.Reporter = {
+				withDeprecated: () => reporter,
+				withUnnecessary: () => reporter,
+				withRefactor: () => reporter,
+				withFix(_title, getChanges) {
+					const changes = getChanges();
+					for (const change of changes) {
+						if (change.fileName !== ctx.sourceFile.fileName) {
+							continue;
+						}
+						for (const textChange of change.textChanges) {
+							ctx.replace(textChange.span.start, textChange.span.start + textChange.span.length, textChange.newText);
+						}
+					}
+					return reporter;
+				},
+			};
+			tsslingRule({
+				...ctx,
+				languageService: {} as any,
+				languageServiceHost: {
+					getCompilationSettings: () => ({}),
+				} as any,
+				reportError: () => reporter,
+				reportWarning: () => reporter,
+				reportSuggestion: () => reporter,
+			});
+		});
+	}
+	return processes;
+}
+
+async function getRuleByKey(rule: string) {
+	const slashIndex = rule.indexOf('/');
+	if (slashIndex !== -1) {
+		const pluginName = rule.startsWith('@')
+			? `${rule.slice(0, slashIndex)}/eslint-plugin`
+			: `eslint-plugin-${rule.slice(0, slashIndex)}`;
+		const ruleName = rule.slice(slashIndex + 1);
+
+		try {
+			plugins[pluginName] ??= loader(pluginName);
+		} catch (e) {
+			console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
+			return;
 		}
-		return convertRule(ruleModule, options, tsSeverity);
+
+		let plugin = await plugins[pluginName];
+		if ('default' in plugin) {
+			// @ts-expect-error
+			plugin = plugin.default;
+		}
+		if (!plugin.rules[ruleName]) {
+			console.log('\n\n', new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
+			return;
+		}
+		return plugin.rules[ruleName];
+	}
+	else {
+		try {
+			return require(`../../eslint/lib/rules/${rule}.js`);
+		} catch {
+			return require(`./node_modules/eslint/lib/rules/${rule}.js`);
+		}
 	}
 }
 
@@ -216,7 +257,7 @@ export function convertRule(
 		const { sourceCode, eventQueue } = getEstree(
 			sourceFile,
 			languageService,
-			() => languageServiceHost.getCompilationSettings()
+			languageServiceHost.getCompilationSettings()
 		);
 		const emitter = createEmitter();
 
@@ -504,7 +545,7 @@ export function convertRule(
 function getEstree(
 	sourceFile: ts.SourceFile,
 	languageService: ts.LanguageService,
-	getCompilationSettings: () => ts.CompilerOptions
+	compilationSettings: ts.CompilerOptions
 ) {
 	if (!estrees.has(sourceFile)) {
 		let program: ts.Program | undefined;
@@ -530,8 +571,8 @@ function getEstree(
 			range: true,
 			preserveNodeMaps: true,
 			filePath: sourceFile.fileName,
-			emitDecoratorMetadata: getCompilationSettings().emitDecoratorMetadata ?? false,
-			experimentalDecorators: getCompilationSettings().experimentalDecorators ?? false,
+			emitDecoratorMetadata: compilationSettings.emitDecoratorMetadata ?? false,
+			experimentalDecorators: compilationSettings.experimentalDecorators ?? false,
 		});
 		const sourceCode = new SourceCode({
 			text: sourceFile.text,
