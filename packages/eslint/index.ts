@@ -202,10 +202,16 @@ function resolveRuleKey(rule: string): [
 ] {
 	const slashIndex = rule.indexOf('/');
 	if (slashIndex !== -1) {
-		const pluginName = rule.startsWith('@')
+		let pluginName = rule.startsWith('@')
 			? `${rule.slice(0, slashIndex)}/eslint-plugin`
 			: `eslint-plugin-${rule.slice(0, slashIndex)}`;
-		const ruleName = rule.slice(slashIndex + 1);
+		let ruleName = rule.slice(slashIndex + 1);
+
+		if (ruleName.indexOf('/') >= 0) {
+			pluginName += `-${ruleName.slice(0, ruleName.indexOf('/'))}`;
+			ruleName = ruleName.slice(ruleName.indexOf('/') + 1);
+		}
+
 		return [pluginName, ruleName];
 	}
 	else {

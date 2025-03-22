@@ -33,7 +33,7 @@ export async function generate(
 			if (pkg.startsWith('@')) {
 				const subPkgs = fs.readdirSync(path.join(nodeModulesDir, pkg));
 				for (const subPkg of subPkgs) {
-					if (subPkg === 'eslint-plugin') {
+					if (subPkg === 'eslint-plugin' || subPkg.startsWith('eslint-plugin-')) {
 						const pluginName = `${pkg}/${subPkg}`;
 						let plugin = await loader(pluginName);
 						if ('default' in plugin) {
@@ -42,12 +42,13 @@ export async function generate(
 						if (plugin.rules) {
 							for (const ruleName in plugin.rules) {
 								const rule = plugin.rules[ruleName];
-								addRule(pkg, ruleName, rule);
+								if (subPkg === 'eslint-plugin') {
+									addRule(pkg, ruleName, rule);
+								} else {
+									addRule(pkg, `${subPkg.slice('eslint-plugin-'.length)}/${ruleName}`, rule);
+								}
 							}
 						}
-					}
-					else if (subPkg.startsWith('eslint-plugin-')) {
-						// Ignored
 					}
 				}
 			}
