@@ -106,7 +106,10 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 	return rules;
 }
 
-export async function convertRules(rulesConfig: ESLintRulesConfig) {
+export async function convertRules(
+	rulesConfig: ESLintRulesConfig,
+	resolve = resolveRuleKey
+) {
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
 		let rawSeverity: 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
@@ -137,7 +140,7 @@ export async function convertRules(rulesConfig: ESLintRulesConfig) {
 			rules[rule] = noop;
 			continue;
 		}
-		const ruleModule = await getRuleByKey(rule);
+		const ruleModule = await getRule(...resolve(rule));
 		if (!ruleModule) {
 			rules[rule] = noop;
 			continue;
@@ -147,12 +150,15 @@ export async function convertRules(rulesConfig: ESLintRulesConfig) {
 	return rules;
 }
 
-export async function convertFormattingRules(config: {
-	[K in keyof ESLintRulesConfig]?: ESLintRulesConfig[K] extends O<infer T> | undefined ? T : never;
-}) {
+export async function convertFormattingRules(
+	config: {
+		[K in keyof ESLintRulesConfig]?: ESLintRulesConfig[K] extends O<infer T> | undefined ? T : never;
+	},
+	resolve = resolveRuleKey
+) {
 	const processes: TSSLint.FormattingProcess[] = [];
 	for (const [rule, options] of Object.entries(config)) {
-		const ruleModule = await getRuleByKey(rule);
+		const ruleModule = await getRule(...resolve(rule));
 		if (!ruleModule) {
 			continue;
 		}
@@ -190,14 +196,25 @@ export async function convertFormattingRules(config: {
 	return processes;
 }
 
-async function getRuleByKey(rule: string) {
+function resolveRuleKey(rule: string): [
+	pluginName: string | undefined,
+	ruleName: string,
+] {
 	const slashIndex = rule.indexOf('/');
 	if (slashIndex !== -1) {
 		const pluginName = rule.startsWith('@')
 			? `${rule.slice(0, slashIndex)}/eslint-plugin`
 			: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 		const ruleName = rule.slice(slashIndex + 1);
+		return [pluginName, ruleName];
+	}
+	else {
+		return [undefined, rule];
+	}
+}
 
+async function getRule(pluginName: string | undefined, ruleName: string) {
+	if (pluginName) {
 		try {
 			plugins[pluginName] ??= loader(pluginName);
 		} catch (e) {
@@ -218,9 +235,9 @@ async function getRuleByKey(rule: string) {
 	}
 	else {
 		try {
-			return require(`../../eslint/lib/rules/${rule}.js`);
+			return require(`../../eslint/lib/rules/${ruleName}.js`);
 		} catch {
-			return require(`./node_modules/eslint/lib/rules/${rule}.js`);
+			return require(`./node_modules/eslint/lib/rules/${ruleName}.js`);
 		}
 	}
 }
