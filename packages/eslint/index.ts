@@ -18,14 +18,7 @@ const noop = () => { };
  */
 export function convertConfig(
 	rulesConfig: ESLintRulesConfig,
-	loader?: typeof require
-) {
-	return convertRules(rulesConfig, loader);
-}
-
-export function convertRules(
-	rulesConfig: ESLintRulesConfig,
-	loader = require
+	loader: (mod: string) => any = require
 ) {
 	const rules: TSSLint.Rules = {};
 	const plugins: Record<string, {
@@ -93,9 +86,9 @@ export function convertRules(
 				}
 				else {
 					try {
-						ruleModule = loader(`../../eslint/lib/rules/${rule}.js`);
+						ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
 					} catch {
-						ruleModule = loader(`./node_modules/eslint/lib/rules/${rule}.js`);
+						ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
 					}
 				}
 				_rule = rules[rule] = convertRule(ruleModule, options, tsSeverity);
@@ -104,6 +97,91 @@ export function convertRules(
 		};
 	}
 	return rules;
+}
+
+export async function convertRules(
+	rulesConfig: ESLintRulesConfig,
+	loader = async (mod: string) => {
+		try {
+			return require(mod);
+		} catch {
+			return await import(mod);
+		}
+	}
+) {
+	const rules: TSSLint.Rules = {};
+	const plugins: Record<string, Promise<{
+		rules: Record<string, ESLint.Rule.RuleModule>;
+	}>> = {};
+	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
+		let rawSeverity: 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
+		let options: any[];
+		if (Array.isArray(severityOrOptions)) {
+			[rawSeverity, ...options] = severityOrOptions;
+		}
+		else {
+			rawSeverity = severityOrOptions;
+			options = [];
+		}
+		let tsSeverity: ts.DiagnosticCategory | undefined;
+		if (rawSeverity === 'off' || rawSeverity === 0) {
+			tsSeverity = undefined;
+		}
+		else if (rawSeverity === 'warn' || rawSeverity === 1) {
+			tsSeverity = 0 satisfies ts.DiagnosticCategory.Warning;
+		}
+		else if (rawSeverity === 'error' || rawSeverity === 2) {
+			tsSeverity = 1 satisfies ts.DiagnosticCategory.Error;
+		}
+		else if (rawSeverity === 'suggestion') {
+			tsSeverity = 2 satisfies ts.DiagnosticCategory.Suggestion;
+		} else {
+			tsSeverity = 3 satisfies ts.DiagnosticCategory.Message;
+		}
+		if (tsSeverity === undefined) {
+			rules[rule] = noop;
+			continue;
+		}
+		rules[rule] = await loadRuleByKey(rule, options, tsSeverity);
+	}
+	return rules;
+
+	async function loadRuleByKey(rule: string, options: any[], tsSeverity?: ts.DiagnosticCategory) {
+		let ruleModule: ESLint.Rule.RuleModule;
+		const slashIndex = rule.indexOf('/');
+		if (slashIndex !== -1) {
+			const pluginName = rule.startsWith('@')
+				? `${rule.slice(0, slashIndex)}/eslint-plugin`
+				: `eslint-plugin-${rule.slice(0, slashIndex)}`;
+			const ruleName = rule.slice(slashIndex + 1);
+
+			try {
+				plugins[pluginName] ??= loader(pluginName);
+			} catch (e) {
+				console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
+				return noop;
+			}
+
+			let plugin = await plugins[pluginName];
+			if ('default' in plugin) {
+				// @ts-expect-error
+				plugin = plugin.default;
+			}
+			ruleModule = plugin.rules[ruleName];
+			if (!ruleModule) {
+				console.log('\n\n', new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
+				return noop;
+			}
+		}
+		else {
+			try {
+				ruleModule = require(`../../eslint/lib/rules/${rule}.js`);
+			} catch {
+				ruleModule = require(`./node_modules/eslint/lib/rules/${rule}.js`);
+			}
+		}
+		return convertRule(ruleModule, options, tsSeverity);
+	}
 }
 
 export function convertRule(
