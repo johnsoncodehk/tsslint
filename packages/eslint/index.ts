@@ -176,14 +176,11 @@ export async function convertFormattingRules(config: {
 				},
 			};
 			tsslingRule({
-				get languageService(): ts.LanguageService {
-					throw new Error('The `languageService` property is not available in formatting rules.');
-				},
-				get languageServiceHost(): ts.LanguageServiceHost {
-					throw new Error('The `languageServiceHost` property is not available in formatting rules.');
-				},
-				typescript: ctx.typescript,
-				sourceFile: ctx.sourceFile,
+				...ctx,
+				languageService: {} as any,
+				languageServiceHost: {
+					getCompilationSettings: () => ({}),
+				} as any,
 				reportError: () => reporter,
 				reportWarning: () => reporter,
 				reportSuggestion: () => reporter,
@@ -260,7 +257,7 @@ export function convertRule(
 		const { sourceCode, eventQueue } = getEstree(
 			sourceFile,
 			languageService,
-			() => languageServiceHost.getCompilationSettings()
+			languageServiceHost.getCompilationSettings()
 		);
 		const emitter = createEmitter();
 
@@ -548,7 +545,7 @@ export function convertRule(
 function getEstree(
 	sourceFile: ts.SourceFile,
 	languageService: ts.LanguageService,
-	getCompilationSettings: () => ts.CompilerOptions
+	compilationSettings: ts.CompilerOptions
 ) {
 	if (!estrees.has(sourceFile)) {
 		let program: ts.Program | undefined;
@@ -574,8 +571,8 @@ function getEstree(
 			range: true,
 			preserveNodeMaps: true,
 			filePath: sourceFile.fileName,
-			emitDecoratorMetadata: getCompilationSettings().emitDecoratorMetadata ?? false,
-			experimentalDecorators: getCompilationSettings().experimentalDecorators ?? false,
+			emitDecoratorMetadata: compilationSettings.emitDecoratorMetadata ?? false,
+			experimentalDecorators: compilationSettings.experimentalDecorators ?? false,
 		});
 		const sourceCode = new SourceCode({
 			text: sourceFile.text,
