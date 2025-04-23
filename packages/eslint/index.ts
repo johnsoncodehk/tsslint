@@ -14,12 +14,21 @@ const estrees = new WeakMap<ts.SourceFile, {
 const noop = () => { };
 const plugins: Record<string, Promise<{
 	rules: Record<string, ESLint.Rule.RuleModule>;
-}>> = {};
-const loader = async (mod: string) => {
+} | undefined>> = {};
+const loader = async (moduleName: string) => {
+	let mod;
 	try {
-		return require(mod);
+		mod = require(moduleName);
 	} catch {
-		return await import(mod);
+		try {
+			mod = await import(moduleName);
+		} catch { }
+	}
+	if (mod) {
+		if ('default' in mod) {
+			return mod.default;
+		}
+		return mod;
 	}
 };
 
@@ -140,10 +149,9 @@ export async function convertRules(
 			rules[rule] = noop;
 			continue;
 		}
-		const ruleModule = await getRule(...resolveRuleKey(rule));
+		const ruleModule = await getRuleByKey(rule);
 		if (!ruleModule) {
-			rules[rule] = noop;
-			continue;
+			throw new Error(`Failed to resolve rule "${rule}".`);
 		}
 		rules[rule] = convertRule(
 			ruleModule,
@@ -163,9 +171,9 @@ export async function convertFormattingRules(
 ) {
 	const processes: TSSLint.FormattingProcess[] = [];
 	for (const [rule, options] of Object.entries(config)) {
-		const ruleModule = await getRule(...resolveRuleKey(rule));
+		const ruleModule = await getRuleByKey(rule);
 		if (!ruleModule) {
-			continue;
+			throw new Error(`Failed to resolve rule "${rule}".`);
 		}
 		const tsslingRule = convertRule(
 			ruleModule,
@@ -206,10 +214,10 @@ export async function convertFormattingRules(
 	return processes;
 }
 
-function resolveRuleKey(rule: string): [
+function* resolveRuleKey(rule: string): Generator<[
 	pluginName: string | undefined,
 	ruleName: string,
-] {
+]> {
 	const slashIndex = rule.indexOf('/');
 	if (slashIndex !== -1) {
 		let pluginName = rule.startsWith('@')
@@ -217,44 +225,38 @@ function resolveRuleKey(rule: string): [
 			: `eslint-plugin-${rule.slice(0, slashIndex)}`;
 		let ruleName = rule.slice(slashIndex + 1);
 
+		yield [pluginName, ruleName];
+
 		if (ruleName.indexOf('/') >= 0) {
 			pluginName += `-${ruleName.slice(0, ruleName.indexOf('/'))}`;
 			ruleName = ruleName.slice(ruleName.indexOf('/') + 1);
+			yield [pluginName, ruleName];
 		}
-
-		return [pluginName, ruleName];
 	}
 	else {
-		return [undefined, rule];
+		yield [undefined, rule];
 	}
 }
 
-async function getRule(pluginName: string | undefined, ruleName: string) {
-	if (pluginName) {
-		try {
-			plugins[pluginName] ??= loader(pluginName);
-		} catch (e) {
-			console.log('\n\n', new Error(`Plugin "${pluginName}" does not exist.`));
-			return;
+async function getRuleByKey(rule: string): Promise<ESLint.Rule.RuleModule | undefined> {
+	for (const resolved of resolveRuleKey(rule)) {
+		const ruleModule = await getRule(...resolved);
+		if (ruleModule) {
+			return ruleModule;
 		}
-
-		let plugin = await plugins[pluginName];
-		if ('default' in plugin) {
-			// @ts-expect-error
-			plugin = plugin.default;
-		}
-		if (!plugin.rules[ruleName]) {
-			console.log('\n\n', new Error(`Rule "${ruleName}" does not exist in plugin "${pluginName}".`));
-			return;
-		}
-		return plugin.rules[ruleName];
 	}
-	else {
-		try {
-			return require(`../../eslint/lib/rules/${ruleName}.js`);
-		} catch {
-			return require(`./node_modules/eslint/lib/rules/${ruleName}.js`);
-		}
+}
+
+async function getRule(pluginName: string | undefined, ruleName: string): Promise<ESLint.Rule.RuleModule | undefined> {
+	if (pluginName) {
+		plugins[pluginName] ??= loader(pluginName);
+		const plugin = await plugins[pluginName];
+		return plugin?.rules[ruleName];
+	}
+	try {
+		return require(`../../eslint/lib/rules/${ruleName}.js`);
+	} catch {
+		return require(`./node_modules/eslint/lib/rules/${ruleName}.js`);
 	}
 }
 
