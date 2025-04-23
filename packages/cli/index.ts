@@ -115,7 +115,7 @@ class Project {
 	const formattingSettings = getFormattingSettings();
 
 	let projects: Project[] = [];
-	let spinner = clack.spinner();
+	let spinner = process.stdout.isTTY ? clack.spinner() : undefined;
 	let lastSpinnerUpdate = Date.now();
 	let hasFix = false;
 	let allFilesNum = 0;
@@ -293,7 +293,7 @@ class Project {
 		projects.push(await new Project(tsconfig, languages).init(clack));
 	}
 
-	spinner.start();
+	spinner?.start();
 
 	projects = projects.filter(project => !!project.configFile);
 	projects = projects.filter(project => !!project.fileNames.length);
@@ -306,7 +306,7 @@ class Project {
 	}
 
 	if (allFilesNum === 0) {
-		spinner.stop(lightYellow('No input files.'));
+		(spinner?.stop ?? clack.log.message)(lightYellow('No input files.'));
 		process.exit(1);
 	}
 
@@ -318,7 +318,7 @@ class Project {
 		}));
 	}
 
-	spinner.stop(
+	(spinner?.stop ?? clack.log.message)(
 		cached
 			? darkGray(`Processed ${processed} files with cache. (Use `) + cyan(`--force`) + darkGray(` to ignore cache.)`)
 			: darkGray(`Processed ${processed} files.`)
@@ -405,7 +405,7 @@ class Project {
 
 			addProcessFile(fileName);
 
-			if (Date.now() - lastSpinnerUpdate > 100) {
+			if (spinner && Date.now() - lastSpinnerUpdate > 100) {
 				lastSpinnerUpdate = Date.now();
 				await setTimeout(0);
 			}
@@ -554,16 +554,26 @@ class Project {
 	function updateSpinner() {
 		if (processFiles.size === 1) {
 			const fileName = processFiles.values().next().value!;
-			spinner.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), fileName)}`));
+			spinner?.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), fileName)}`));
 		} else {
-			spinner.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`));
+			spinner?.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`));
 		}
 	}
 
 	function log(msg: string, code?: number) {
-		spinner.stop(msg, code);
-		spinner = clack.spinner();
-		spinner.start();
+		if (spinner) {
+			spinner.stop(msg, code);
+			spinner = clack.spinner();
+			spinner.start();
+		} else {
+			if (code === 1) {
+				clack.log.error(msg);
+			} else if (code === 2) {
+				clack.log.warn(msg);
+			} else {
+				clack.log.success(msg);
+			}
+		}
 	}
 
 	function resolvePath(p: string) {
