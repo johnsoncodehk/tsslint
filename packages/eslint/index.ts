@@ -108,7 +108,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 
 export async function convertRules(
 	rulesConfig: ESLintRulesConfig,
-	resolve = resolveRuleKey
+	context: Partial<ESLint.Rule.RuleContext> = {}
 ) {
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
@@ -140,12 +140,17 @@ export async function convertRules(
 			rules[rule] = noop;
 			continue;
 		}
-		const ruleModule = await getRule(...resolve(rule));
+		const ruleModule = await getRule(...resolveRuleKey(rule));
 		if (!ruleModule) {
 			rules[rule] = noop;
 			continue;
 		}
-		rules[rule] = convertRule(ruleModule, options, tsSeverity);
+		rules[rule] = convertRule(
+			ruleModule,
+			options,
+			tsSeverity,
+			{ id: rule, ...context }
+		);
 	}
 	return rules;
 }
@@ -154,15 +159,20 @@ export async function convertFormattingRules(
 	config: {
 		[K in keyof ESLintRulesConfig]?: ESLintRulesConfig[K] extends O<infer T> | undefined ? T : never;
 	},
-	resolve = resolveRuleKey
+	context: Partial<ESLint.Rule.RuleContext> = {}
 ) {
 	const processes: TSSLint.FormattingProcess[] = [];
 	for (const [rule, options] of Object.entries(config)) {
-		const ruleModule = await getRule(...resolve(rule));
+		const ruleModule = await getRule(...resolveRuleKey(rule));
 		if (!ruleModule) {
 			continue;
 		}
-		const tsslingRule = convertRule(ruleModule, options, 2 satisfies ts.DiagnosticCategory.Suggestion);
+		const tsslingRule = convertRule(
+			ruleModule,
+			options,
+			2 satisfies ts.DiagnosticCategory.Suggestion,
+			{ id: rule, ...context }
+		);
 		processes.push(ctx => {
 			const reporter: TSSLint.Reporter = {
 				withDeprecated: () => reporter,
@@ -290,13 +300,29 @@ export function convertRule(
 			}
 		}
 
-		// @ts-expect-error
+		const cwd = languageServiceHost.getCurrentDirectory();
 		const ruleListeners = eslintRule.create({
-			settings: {},
-			languageOptions: {},
+			cwd,
+			getCwd() {
+				return cwd;
+			},
 			filename: sourceFile.fileName,
+			getFilename() {
+				return sourceFile.fileName;
+			},
 			physicalFilename: sourceFile.fileName,
+			getPhysicalFilename() {
+				return sourceFile.fileName;
+			},
 			sourceCode,
+			getSourceCode() {
+				return sourceCode;
+			},
+			settings: {},
+			parserOptions: {},
+			languageOptions: {},
+			parserPath: undefined,
+			id: 'unknown',
 			options,
 			report(descriptor) {
 				let message = 'message' in descriptor
@@ -331,6 +357,7 @@ export function convertRule(
 				} catch { }
 				const reporter = report(message, start, end, 3);
 				if (descriptor.fix) {
+					// @ts-expect-error
 					const textChanges = getTextChanges(descriptor.fix);
 					reporter.withFix(
 						getTextChangeMessage(textChanges),
@@ -350,11 +377,13 @@ export function convertRule(
 							message,
 							() => [{
 								fileName: sourceFile.fileName,
+								// @ts-expect-error
 								textChanges: getTextChanges(suggest.fix),
 							}]
 						);
 					}
 					else {
+						// @ts-expect-error
 						const textChanges = getTextChanges(suggest.fix);
 						reporter.withRefactor(
 							getTextChangeMessage(textChanges),
@@ -365,6 +394,18 @@ export function convertRule(
 						);
 					}
 				}
+			},
+			getAncestors(...args) {
+				return sourceCode.getAncestors(...args);
+			},
+			getDeclaredVariables(...args) {
+				return sourceCode.getDeclaredVariables(...args);
+			},
+			getScope(...args) {
+				return sourceCode.getScope(...args);
+			},
+			markVariableAsUsed(...args) {
+				return sourceCode.markVariableAsUsed(...args);
 			},
 			...context,
 		});
@@ -476,8 +517,8 @@ export function convertRule(
 			return `Replace \`${text}\` with \`${newText}\`.`;
 		}
 
-		function getTextChanges(fix: ESLint.Rule.ReportFixer) {
-			const fixes = fix({
+		function getTextChanges(fix: ESLint.Rule.ReportFixer | null | undefined) {
+			const fixes = fix?.({
 				insertTextAfter(nodeOrToken, text) {
 					if (!nodeOrToken.loc?.end) {
 						throw new Error('Cannot insert text after a node without a location.');
