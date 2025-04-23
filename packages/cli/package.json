@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/cli",
-	"version": "1.5.12",
+	"version": "1.5.13",
 	"license": "MIT",
 	"bin": {
 		"tsslint": "./bin/tsslint.js"
@@ -16,8 +16,8 @@
 	},
 	"dependencies": {
 		"@clack/prompts": "^0.8.2",
-		"@tsslint/config": "1.5.12",
-		"@tsslint/core": "1.5.12",
+		"@tsslint/config": "1.5.13",
+		"@tsslint/core": "1.5.13",
 		"@volar/language-core": "~2.4.0",
 		"@volar/typescript": "~2.4.0",
 		"glob": "^10.4.1",
