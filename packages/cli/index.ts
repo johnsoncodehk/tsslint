@@ -7,7 +7,6 @@ import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
 import languagePlugins = require('./lib/languagePlugins.js');
-import { setTimeout } from 'node:timers/promises';
 import { getVSCodeFormattingSettings } from './lib/formatting.js';
 
 const _reset = '\x1b[0m';
@@ -113,11 +112,11 @@ class Project {
 	const processFiles = new Set<string>();
 	const tsconfigAndLanguages = new Map<string, string[]>();
 	const formattingSettings = getFormattingSettings();
+	const isTTY = process.stdout.isTTY;
 
 	let projects: Project[] = [];
-	let spinner = process.stdout.isTTY ? clack.spinner() : undefined;
+	let spinner = isTTY ? clack.spinner() : undefined;
 	let spinnerStopingWarn = false;
-	let lastSpinnerUpdate = Date.now();
 	let hasFix = false;
 	let allFilesNum = 0;
 	let processed = 0;
@@ -127,7 +126,7 @@ class Project {
 	let warnings = 0;
 	let cached = 0;
 
-	if (spinner) {
+	if (isTTY) {
 		const write = process.stdout.write.bind(process.stdout);
 		process.stdout.write = (...args) => {
 			if (spinnerStopingWarn && typeof args[0] === 'string') {
@@ -322,12 +321,12 @@ class Project {
 		process.exit(1);
 	}
 
-	if (threads === 1) {
-		await startWorker(worker.createLocal() as any);
-	} else {
+	if (isTTY || threads >= 2) {
 		await Promise.all(new Array(threads).fill(0).map(() => {
 			return startWorker(worker.create());
 		}));
+	} else {
+		await startWorker(worker.createLocal() as any);
 	}
 
 	(spinner?.stop ?? clack.log.message)(
@@ -408,18 +407,12 @@ class Project {
 		}
 
 		while (project.currentFileIndex < project.fileNames.length) {
-			const i = project.currentFileIndex++;
-			const fileName = project.fileNames[i];
+			const fileName = project.fileNames[project.currentFileIndex++];
+			addProcessFile(fileName);
+
 			const fileStat = fs.statSync(fileName, { throwIfNoEntry: false });
 			if (!fileStat) {
 				continue;
-			}
-
-			addProcessFile(fileName);
-
-			if (spinner && Date.now() - lastSpinnerUpdate > 100) {
-				lastSpinnerUpdate = Date.now();
-				await setTimeout(0);
 			}
 
 			let fileCache = project.cache[fileName];
@@ -478,7 +471,12 @@ class Project {
 			}
 			processed++;
 
-			removeProcessFile(fileName);
+			removeProcessFile(
+				fileName,
+				project.currentFileIndex < project.fileNames.length
+					? project.fileNames[project.currentFileIndex]
+					: undefined
+			);
 		}
 
 		cache.saveCache(project.tsconfig, project.configFile!, project.cache, ts.sys.createHash);
@@ -558,17 +556,28 @@ class Project {
 		updateSpinner();
 	}
 
-	function removeProcessFile(fileName: string) {
+	function removeProcessFile(fileName: string, nextFileName?: string) {
 		processFiles.delete(fileName);
-		updateSpinner();
+		updateSpinner(nextFileName);
 	}
 
-	function updateSpinner() {
-		if (processFiles.size === 1) {
-			const fileName = processFiles.values().next().value!;
-			spinner?.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), fileName)}`));
+	function updateSpinner(nextFileName?: string) {
+		let msg: string | undefined;
+		if (processFiles.size === 0) {
+			if (nextFileName) {
+				msg = darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), nextFileName)}`);
+			}
+		}
+		else if (processFiles.size === 1) {
+			msg = darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`);
 		} else {
-			spinner?.message(darkGray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`));
+			msg = darkGray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
+		}
+		if (!spinner && isTTY) {
+			spinner = clack.spinner();
+			spinner.start(msg);
+		} else {
+			spinner?.message(msg);
 		}
 	}
 
@@ -577,8 +586,7 @@ class Project {
 			spinnerStopingWarn = code === 2;
 			spinner.stop(msg, code);
 			spinnerStopingWarn = false;
-			spinner = clack.spinner();
-			spinner.start();
+			spinner = undefined;
 		} else {
 			if (code === 1) {
 				clack.log.error(msg);
