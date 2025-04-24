@@ -116,6 +116,7 @@ class Project {
 
 	let projects: Project[] = [];
 	let spinner = process.stdout.isTTY ? clack.spinner() : undefined;
+	let spinnerStopingWarn = false;
 	let lastSpinnerUpdate = Date.now();
 	let hasFix = false;
 	let allFilesNum = 0;
@@ -125,6 +126,17 @@ class Project {
 	let errors = 0;
 	let warnings = 0;
 	let cached = 0;
+
+	if (spinner) {
+		const write = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (...args) => {
+			if (spinnerStopingWarn && typeof args[0] === 'string') {
+				args[0] = args[0].replace('▲', lightYellow('▲'));
+			}
+			// @ts-ignore
+			return write(...args);
+		};
+	}
 
 	if (
 		![
@@ -562,7 +574,9 @@ class Project {
 
 	function log(msg: string, code?: number) {
 		if (spinner) {
+			spinnerStopingWarn = code === 2;
 			spinner.stop(msg, code);
+			spinnerStopingWarn = false;
 			spinner = clack.spinner();
 			spinner.start();
 		} else {
