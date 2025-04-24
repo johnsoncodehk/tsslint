@@ -571,7 +571,7 @@ class Project {
 			} else if (code === 2) {
 				clack.log.warn(msg);
 			} else {
-				clack.log.success(msg);
+				clack.log.step(msg);
 			}
 		}
 	}
