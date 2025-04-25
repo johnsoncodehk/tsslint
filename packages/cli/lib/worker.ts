@@ -135,17 +135,17 @@ export function create() {
 		setup(...args: Parameters<typeof setup>) {
 			return sendRequest(setup, ...args);
 		},
-		async lint(...args: Parameters<typeof lint>) {
-			const [res, newCache] = await sendRequest(lint, ...args);
-			Object.assign(args[1], newCache); // Sync the cache
+		async lint(...[fileName, fix, cache]: Parameters<typeof lint>) {
+			const [res, newCache] = await sendRequest(lint, fileName, fix, cache);
+			Object.assign(cache, newCache); // Sync the cache
 			return res;
 		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return sendRequest(hasCodeFixes, ...args);
 		},
-		async hasRules(...args: Parameters<typeof hasRules>) {
-			const [res, newCache] = await sendRequest(hasRules, ...args);
-			Object.assign(args[1], newCache); // Sync the cache
+		async hasRules(...[fileName, cache]: Parameters<typeof hasRules>) {
+			const [res, newCache] = await sendRequest(hasRules, fileName, cache);
+			Object.assign(cache, newCache); // Sync the cache
 			return res;
 		},
 	};
