@@ -101,6 +101,9 @@ importers:
       '@volar/language-core':
         specifier: ~2.4.0
         version: 2.4.12
+      '@volar/language-hub':
+        specifier: 0.0.1
+        version: 0.0.1
       '@volar/typescript':
         specifier: ~2.4.0
         version: 2.4.12
@@ -943,6 +946,9 @@ packages:
 
   '@volar/language-core@2.4.12':
     resolution: {integrity: sha512-RLrFdXEaQBWfSnYGVxvR2WrO6Bub0unkdHYIdC31HzIEqATIuuhRRzYu76iGPZ6OtA4Au1SnW0ZwIqPP217YhA==}
+
+  '@volar/language-hub@0.0.1':
+    resolution: {integrity: sha512-2eOUnlMKTyjtlXIVd+6pfAtcuVugxCOgpNgcLWmlPuncQTG5C1E5mTDL/PUMw7aEnLySUOtMTIp8lT3vk/7w6Q==}
 
   '@volar/language-server@2.4.12':
     resolution: {integrity: sha512-KC0YqTXCZMaImMWyAKC+dLB2BXjfz80kqesJkV6oXxJsGEQPfmdqug299idwtrT6FVSmZ7q5UrPfvgKwA0S3JA==}
@@ -4371,6 +4377,8 @@ snapshots:
   '@volar/language-core@2.4.12':
     dependencies:
       '@volar/source-map': 2.4.12
+
+  '@volar/language-hub@0.0.1': {}
 
   '@volar/language-server@2.4.12':
     dependencies:
