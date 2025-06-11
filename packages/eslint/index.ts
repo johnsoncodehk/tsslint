@@ -7,8 +7,8 @@ export { create as createDisableNextLinePlugin } from './lib/plugins/disableNext
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
 
 const estrees = new WeakMap<ts.SourceFile, {
-	estree: any;
-	sourceCode: any;
+	estree: ESLint.AST.Program;
+	sourceCode: ESLint.SourceCode;
 	eventQueue: any[];
 }>();
 const noop = () => { };
@@ -302,6 +302,8 @@ export function convertRule(
 			}
 		}
 
+		let currentNode: any;
+
 		const cwd = languageServiceHost.getCurrentDirectory();
 		const ruleListeners = eslintRule.create({
 			cwd,
@@ -397,17 +399,17 @@ export function convertRule(
 					}
 				}
 			},
-			getAncestors(...args) {
-				return sourceCode.getAncestors(...args);
+			getAncestors() {
+				return sourceCode.getAncestors(currentNode);
 			},
-			getDeclaredVariables(...args) {
-				return sourceCode.getDeclaredVariables(...args);
+			getDeclaredVariables(node) {
+				return sourceCode.getDeclaredVariables(node);
 			},
-			getScope(...args) {
-				return sourceCode.getScope(...args);
+			getScope() {
+				return sourceCode.getScope(currentNode);
 			},
-			markVariableAsUsed(...args) {
-				return sourceCode.markVariableAsUsed(...args);
+			markVariableAsUsed(name) {
+				return sourceCode.markVariableAsUsed(name, currentNode);
 			},
 			...context,
 		});
@@ -423,6 +425,7 @@ export function convertRule(
 				case 1: {
 					try {
 						if (step.phase === 1) {
+							currentNode = step.target;
 							eventGenerator.enterNode(step.target);
 						} else {
 							eventGenerator.leaveNode(step.target);
