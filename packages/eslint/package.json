@@ -22,6 +22,6 @@
 	"dependencies": {
 		"@tsslint/config": "1.5.16",
 		"@typescript-eslint/parser": "^8.16.0",
-		"eslint": "^9.0.0"
+		"eslint": ">=9.0.0 <9.28.0"
 	}
 }
