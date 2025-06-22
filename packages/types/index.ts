@@ -19,23 +19,10 @@ export interface Config {
 	exclude?: string[];
 	rules?: Rules;
 	plugins?: Plugin[];
-	formatting?: FormattingProcess[];
 }
 
 export interface Plugin {
 	(ctx: ProjectContext): PluginInstance;
-}
-
-export interface FormattingProcess {
-	(ctx: FormattingContext): void;
-}
-
-export interface FormattingContext {
-	typescript: typeof import('typescript');
-	sourceFile: SourceFile;
-	insert(pos: number, text: string): void;
-	remove(start: number, end: number): void;
-	replace(start: number, end: number, text: string): void;
 }
 
 export interface PluginInstance {

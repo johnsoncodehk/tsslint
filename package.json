@@ -11,7 +11,7 @@
 		"release:vscode": "cd packages/vscode && npm run release",
 		"start": "node packages/cli/bin/tsslint.js",
 		"lint": "node packages/cli/bin/tsslint.js --project packages/*/tsconfig.json",
-		"lint:fix": "npm run lint -- --fix --vscode-settings .vscode/settings.json",
+		"lint:fix": "npm run lint -- --fix",
 		"lint:fixtures": "node packages/cli/bin/tsslint.js --project fixtures/*/tsconfig.json --vue-project fixtures/meta-frameworks-support/tsconfig.json --mdx-project fixtures/meta-frameworks-support/tsconfig.json --astro-project fixtures/meta-frameworks-support/tsconfig.json --ts-macro-project fixtures/meta-frameworks-support/tsconfig.json"
 	},
 	"devDependencies": {
