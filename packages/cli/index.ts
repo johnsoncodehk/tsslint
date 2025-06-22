@@ -335,13 +335,6 @@ class Project {
 			: darkGray(`Processed ${processed} files.`)
 	);
 
-	if (process.argv.includes('--fix') && !formattingSettings) {
-		const vscodeSettings = ts.findConfigFile(process.cwd(), ts.sys.fileExists, '.vscode/settings.json');
-		if (vscodeSettings) {
-			clack.log.message(darkGray(`Found available editor settings, you can use `) + cyan(`--vscode-settings ${path.relative(process.cwd(), vscodeSettings)}`) + darkGray(` to enable code format.`));
-		}
-	}
-
 	const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
 	if (projectsFlag) {
 		clack.log.warn(
