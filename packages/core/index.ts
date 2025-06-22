@@ -8,8 +8,6 @@ import type {
 	Rule,
 	RuleContext,
 	Rules,
-	FormattingProcess,
-	FormattingContext,
 } from '@tsslint/types';
 import type * as ts from 'typescript';
 
@@ -24,7 +22,6 @@ export type FileLintCache = [
 		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
 	>,
 	minimatchResult: Record<string, boolean>,
-	formated: boolean,
 ];
 
 export type Linter = ReturnType<typeof createLinter>;
@@ -40,7 +37,6 @@ export function createLinter(
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
-	const fileFmtProcesses = new Map<string, FormattingProcess[]>();
 	const fileConfigs = new Map<string, typeof configs>();
 	const lintResults = new Map<
 		/* fileName */ string,
@@ -62,7 +58,6 @@ export function createLinter(
 			include: config.include,
 			exclude: config.exclude,
 			rules: config.rules ?? {},
-			formatting: config.formatting,
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
@@ -72,52 +67,11 @@ export function createLinter(
 	let shouldEnableTypeAware = false;
 
 	return {
-		format(sourceFile: ts.SourceFile, minimatchCache?: FileLintCache[2]): ts.TextChange[] {
-			const preprocess = getFileFmtProcesses(sourceFile.fileName, minimatchCache);
-			const changes: ts.TextChange[] = [];
-			const tmpChanges: ts.TextChange[] = [];
-			const fmtCtx: FormattingContext = {
-				typescript: ts,
-				sourceFile,
-				insert(pos, text) {
-					tmpChanges.push({ span: { start: pos, length: 0 }, newText: text });
-				},
-				remove(start, end) {
-					tmpChanges.push({ span: { start, length: end - start }, newText: '' });
-				},
-				replace(start, end, text) {
-					tmpChanges.push({ span: { start, length: end - start }, newText: text });
-				},
-			};
-			for (const process of preprocess) {
-				process(fmtCtx);
-				if (tmpChanges.every(a => {
-					const aStart = a.span.start;
-					const aEnd = aStart + a.span.length;
-					for (const b of changes) {
-						const bStart = b.span.start;
-						const bEnd = bStart + b.span.length;
-						if (
-							(bStart >= aEnd && bStart > aStart)
-							|| (bEnd <= aStart && bEnd < aEnd)
-						) {
-							continue;
-						}
-						return false;
-					}
-					return true;
-				})) {
-					changes.push(...tmpChanges);
-				}
-				tmpChanges.length = 0;
-			}
-			return changes;
-		},
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
 			let shouldRetry = false;
 
-			const rules = getFileRules(fileName, cache?.[2]);
+			const rules = getRulesForFile(fileName, cache?.[2]);
 			const typeAwareMode = !getNonBoundSourceFile
 				|| shouldEnableTypeAware && !Object.keys(rules).some(ruleId => !rule2Mode.has(ruleId));
 			const rulesContext: RuleContext = typeAwareMode
@@ -137,7 +91,7 @@ export function createLinter(
 					reportSuggestion,
 				};
 			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const configs = getFileConfigs(fileName, cache?.[2]);
+			const configs = getConfigsForFile(fileName, cache?.[2]);
 
 			lintResults.set(fileName, [rulesContext.sourceFile, new Map(), []]);
 
@@ -339,7 +293,7 @@ export function createLinter(
 			}
 
 			const sourceFile = lintResult[0];
-			const configs = getFileConfigs(fileName, minimatchCache);
+			const configs = getConfigsForFile(fileName, minimatchCache);
 			const result: ts.CodeFixAction[] = [];
 
 			for (const [diagnostic, actions] of lintResult[1]) {
@@ -418,29 +372,15 @@ export function createLinter(
 				}
 			}
 		},
-		getRules: getFileRules,
-		getConfigs: getFileConfigs,
+		getRules: getRulesForFile,
+		getConfigs: getConfigsForFile,
 	};
 
-	function getFileFmtProcesses(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
-		if (!fileFmtProcesses.has(fileName)) {
-			const allPreprocess: FormattingProcess[] = [];
-			const configs = getFileConfigs(fileName, minimatchCache);
-			for (const { formatting } of configs) {
-				if (formatting) {
-					allPreprocess.push(...formatting);
-				}
-			}
-			fileFmtProcesses.set(fileName, allPreprocess);
-		}
-		return fileFmtProcesses.get(fileName)!;
-	}
-
-	function getFileRules(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+	function getRulesForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
 		let rules = fileRules.get(fileName);
 		if (!rules) {
 			rules = {};
-			const configs = getFileConfigs(fileName, minimatchCache);
+			const configs = getConfigsForFile(fileName, minimatchCache);
 			for (const config of configs) {
 				collectRules(rules, config.rules, []);
 			}
@@ -456,17 +396,7 @@ export function createLinter(
 		return rules;
 	}
 
-	function collectRules(record: Record<string, Rule>, rules: Rules, paths: string[]) {
-		for (const [path, rule] of Object.entries(rules)) {
-			if (typeof rule === 'object') {
-				collectRules(record, rule, [...paths, path]);
-				continue;
-			}
-			record[[...paths, path].join('/')] = rule;
-		}
-	}
-
-	function getFileConfigs(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+	function getConfigsForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
@@ -479,26 +409,36 @@ export function createLinter(
 				return true;
 			});
 			fileConfigs.set(fileName, result);
-
-			function _minimatch(pattern: string) {
-				if (minimatchCache) {
-					if (pattern in minimatchCache) {
-						return minimatchCache[pattern];
-					}
-				}
-				let normalized = normalizedPath.get(pattern);
-				if (!normalized) {
-					normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
-					normalizedPath.set(pattern, normalized);
-				}
-				const res = minimatch.minimatch(fileName, normalized, { dot: true });
-				if (minimatchCache) {
-					minimatchCache[pattern] = res;
-				}
-				return res;
-			}
 		}
 		return result;
+
+		function _minimatch(pattern: string) {
+			if (minimatchCache) {
+				if (pattern in minimatchCache) {
+					return minimatchCache[pattern];
+				}
+			}
+			let normalized = normalizedPath.get(pattern);
+			if (!normalized) {
+				normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
+				normalizedPath.set(pattern, normalized);
+			}
+			const res = minimatch.minimatch(fileName, normalized, { dot: true });
+			if (minimatchCache) {
+				minimatchCache[pattern] = res;
+			}
+			return res;
+		}
+	}
+
+	function collectRules(record: Record<string, Rule>, rules: Rules, paths: string[]) {
+		for (const [path, rule] of Object.entries(rules)) {
+			if (typeof rule === 'object') {
+				collectRules(record, rule, [...paths, path]);
+				continue;
+			}
+			record[[...paths, path].join('/')] = rule;
+		}
 	}
 }
 

@@ -7,11 +7,9 @@ import path = require('path');
 import worker_threads = require('worker_threads');
 import languagePlugins = require('./languagePlugins.js');
 
-import { createLanguage, FileMap, forEachEmbeddedCode, isCodeActionsEnabled, isFormattingEnabled, Language } from '@volar/language-core';
+import { createLanguage, FileMap, isCodeActionsEnabled, Language } from '@volar/language-core';
 import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
 import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
-import { transformTextChange } from '@volar/typescript/lib/node/transform.js';
-import { computeInitialIndent, type getVSCodeFormattingSettings } from './formatting.js';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
@@ -21,44 +19,6 @@ let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
 let linterSyntaxOnlyLanguageService!: ts.LanguageService;
-let fmtSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined;
-
-const formatLanguageService = ts.createLanguageService({
-	...ts.sys,
-	getCompilationSettings() {
-		return options;
-	},
-	getScriptFileNames() {
-		return [];
-	},
-	getScriptVersion() {
-		return '0';
-	},
-	getScriptSnapshot() {
-		return formattingSnapshot;
-	},
-	getScriptKind() {
-		return formattingScriptKind;
-	},
-	useCaseSensitiveFileNames() {
-		return ts.sys.useCaseSensitiveFileNames;
-	},
-	getCurrentDirectory() {
-		return ts.sys.getCurrentDirectory();
-	},
-	getDefaultLibFileName() {
-		return ts.getDefaultLibFilePath(options);
-	},
-}, undefined, true);
-let formattingSnapshot: ts.IScriptSnapshot;
-let formattingScriptKind: ts.ScriptKind;
-let formattingIndex = 0;
-
-function formatVirtualScript(kind: ts.ScriptKind, settings: ts.FormatCodeSettings, snapshot: ts.IScriptSnapshot) {
-	formattingSnapshot = snapshot;
-	formattingScriptKind = kind;
-	return formatLanguageService.getFormattingEditsForDocument(`${formattingIndex++}.txt`, settings);
-}
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -179,8 +139,7 @@ async function setup(
 	configFile: string,
 	builtConfig: string,
 	_fileNames: string[],
-	_options: ts.CompilerOptions,
-	_fmtSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined
+	_options: ts.CompilerOptions
 ) {
 	const clack = await import('@clack/prompts');
 
@@ -245,7 +204,6 @@ async function setup(
 			allowNonTsExtensions: true,
 		}
 		: _options;
-	fmtSettings = _fmtSettings;
 	linter = core.createLinter(
 		{
 			languageService: linterLanguageService,
@@ -288,169 +246,11 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 
 		const textChanges = core.combineCodeFixes(fileName, fixes);
 		if (textChanges.length) {
-			fileCache[3] = false;
 			const oldSnapshot = snapshots.get(fileName)!;
 			newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
 			snapshots.set(fileName, newSnapshot);
 			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 			projectVersion++;
-		}
-
-		if (!fileCache[3] && fmtSettings) {
-			fileCache[3] = true;
-
-			let script = language?.scripts.get(fileName);
-			let linterEdits: ts.TextChange[] = [];
-			let serviceEdits: ts.TextChange[] = [];
-
-			if (script?.generated) {
-				for (const code of forEachEmbeddedCode(script.generated.root)) {
-					if (
-						(
-							code.languageId === 'javascript'
-							|| code.languageId === 'typescript'
-							|| code.languageId === 'javascriptreact'
-							|| code.languageId === 'typescriptreact'
-						)
-						&& code.mappings.some(mapping => isFormattingEnabled(mapping.data))
-					) {
-						const scriptKind = code.languageId === 'javascript' ? ts.ScriptKind.JS
-							: code.languageId === 'javascriptreact' ? ts.ScriptKind.JSX
-								: code.languageId === 'typescript' ? ts.ScriptKind.TS
-									: ts.ScriptKind.TSX;
-						const sourceFile = ts.createSourceFile(
-							fileName,
-							code.snapshot.getText(0, code.snapshot.getLength()),
-							ts.ScriptTarget.Latest,
-							true,
-							scriptKind
-						);
-						linterEdits.push(
-							...linter
-								.format(sourceFile, fileCache[2])
-								.map(edit => {
-									return transformTextChange(
-										script,
-										language!,
-										{
-											code,
-											extension: '',
-											scriptKind: scriptKind,
-											preventLeadingOffset: true,
-										},
-										edit,
-										false,
-										isFormattingEnabled
-									)?.[1];
-								})
-								.filter(edit => !!edit)
-						);
-					}
-				}
-			}
-			else {
-				const sourceFile: ts.SourceFile = (originalSyntaxOnlyService as any).getNonBoundSourceFile(fileName);
-				linterEdits = linter.format(sourceFile, fileCache[2]);
-			}
-
-			if (linterEdits.length) {
-				const oldSnapshot = snapshots.get(fileName)!;
-				newSnapshot = core.applyTextChanges(oldSnapshot, linterEdits);
-				snapshots.set(fileName, newSnapshot);
-				versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
-				projectVersion++;
-				script = language?.scripts.get(fileName);
-			}
-
-			if (script?.generated) {
-				let sourceFile: ts.SourceFile | undefined;
-				for (const code of forEachEmbeddedCode(script.generated.root)) {
-					if (
-						(
-							code.languageId === 'javascript'
-							|| code.languageId === 'typescript'
-							|| code.languageId === 'javascriptreact'
-							|| code.languageId === 'typescriptreact'
-						)
-						&& code.mappings.some(mapping => isFormattingEnabled(mapping.data))
-					) {
-						const scriptKind = code.languageId === 'javascript' ? ts.ScriptKind.JS
-							: code.languageId === 'javascriptreact' ? ts.ScriptKind.JSX
-								: code.languageId === 'typescript' ? ts.ScriptKind.TS
-									: ts.ScriptKind.TSX;
-						let settings = scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX
-							? fmtSettings.javascript
-							: fmtSettings.typescript;
-
-						if (settings.tabSize !== undefined) {
-							const firstMapping = code.mappings[0];
-							sourceFile ??= ts.createSourceFile(
-								fileName,
-								script.snapshot.getText(0, script.snapshot.getLength()),
-								ts.ScriptTarget.Latest,
-								true,
-								ts.ScriptKind.Deferred
-							);
-							const line = sourceFile.getLineAndCharacterOfPosition(firstMapping.sourceOffsets[0]).line;
-							const offset = sourceFile.getPositionOfLineAndCharacter(line, 0);
-							let initialIndentLevel = computeInitialIndent(
-								script.snapshot.getText(0, script.snapshot.getLength()),
-								offset,
-								settings.tabSize
-							);
-							if (
-								script.languageId === 'vue'
-								&& fmtSettings.vue['script.initialIndent']
-								&& (
-									code.id === 'script_raw'
-									|| code.id === 'scriptsetup_raw'
-								)
-							) {
-								initialIndentLevel++;
-							}
-							settings = {
-								...settings,
-								baseIndentSize: initialIndentLevel * settings.tabSize,
-							};
-						}
-						serviceEdits.push(
-							...formatVirtualScript(
-								scriptKind,
-								settings,
-								code.snapshot)
-								.map(edit => {
-									return transformTextChange(
-										script,
-										language!,
-										{
-											code,
-											extension: '',
-											scriptKind: scriptKind,
-											preventLeadingOffset: true,
-										},
-										edit,
-										false,
-										isFormattingEnabled
-									)?.[1];
-								})
-								.filter(edit => !!edit)
-						);
-					}
-				}
-			}
-			else {
-				const scriptKind = linterHost.getScriptKind!(fileName);
-				const settings = scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX ? fmtSettings.javascript : fmtSettings.typescript;
-				serviceEdits = linterLanguageService.getFormattingEditsForDocument(fileName, settings);
-			}
-
-			if (serviceEdits.length) {
-				const oldSnapshot = snapshots.get(fileName)!;
-				newSnapshot = core.applyTextChanges(oldSnapshot, serviceEdits);
-				snapshots.set(fileName, newSnapshot);
-				versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
-				projectVersion++;
-			}
 		}
 	}
 
@@ -462,7 +262,6 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 			fileCache[0] = fs.statSync(fileName).mtimeMs;
 			fileCache[1] = {};
 			fileCache[2] = {};
-			fileCache[3] = false;
 			shouldCheck = true;
 		}
 	}

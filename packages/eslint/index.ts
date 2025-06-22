@@ -1,7 +1,7 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
-import type { ESLintRulesConfig, O } from './lib/types.js';
+import type { ESLintRulesConfig } from './lib/types.js';
 
 export { create as createDisableNextLinePlugin } from './lib/plugins/disableNextLine.js';
 export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
@@ -161,57 +161,6 @@ export async function convertRules(
 		);
 	}
 	return rules;
-}
-
-export async function convertFormattingRules(
-	config: {
-		[K in keyof ESLintRulesConfig]?: ESLintRulesConfig[K] extends O<infer T> | undefined ? T : never;
-	},
-	context: Partial<ESLint.Rule.RuleContext> = {}
-) {
-	const processes: TSSLint.FormattingProcess[] = [];
-	for (const [rule, options] of Object.entries(config)) {
-		const ruleModule = await getRuleByKey(rule);
-		if (!ruleModule) {
-			throw new Error(`Failed to resolve rule "${rule}".`);
-		}
-		const tsslingRule = convertRule(
-			ruleModule,
-			options,
-			2 satisfies ts.DiagnosticCategory.Suggestion,
-			{ id: rule, ...context }
-		);
-		processes.push(ctx => {
-			const reporter: TSSLint.Reporter = {
-				withDeprecated: () => reporter,
-				withUnnecessary: () => reporter,
-				withRefactor: () => reporter,
-				withFix(_title, getChanges) {
-					const changes = getChanges();
-					for (const change of changes) {
-						if (change.fileName !== ctx.sourceFile.fileName) {
-							continue;
-						}
-						for (const textChange of change.textChanges) {
-							ctx.replace(textChange.span.start, textChange.span.start + textChange.span.length, textChange.newText);
-						}
-					}
-					return reporter;
-				},
-			};
-			tsslingRule({
-				...ctx,
-				languageService: {} as any,
-				languageServiceHost: {
-					getCompilationSettings: () => ({}),
-				} as any,
-				reportError: () => reporter,
-				reportWarning: () => reporter,
-				reportSuggestion: () => reporter,
-			});
-		});
-	}
-	return processes;
 }
 
 function* resolveRuleKey(rule: string): Generator<[

@@ -7,7 +7,6 @@ import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
 import languagePlugins = require('./lib/languagePlugins.js');
-import { getVSCodeFormattingSettings } from './lib/formatting.js';
 
 const _reset = '\x1b[0m';
 const purple = (s: string) => '\x1b[35m' + s + _reset;
@@ -111,7 +110,6 @@ class Project {
 	const clack = await import('@clack/prompts');
 	const processFiles = new Set<string>();
 	const tsconfigAndLanguages = new Map<string, string[]>();
-	const formattingSettings = getFormattingSettings();
 	const isTTY = process.stdout.isTTY;
 
 	let projects: Project[] = [];
@@ -391,7 +389,6 @@ class Project {
 			project.builtConfig!,
 			project.fileNames,
 			project.options,
-			formattingSettings
 		);
 		if (!setupSuccess) {
 			projects = projects.filter(p => p !== project);
@@ -420,7 +417,7 @@ class Project {
 				}
 			}
 			else {
-				project.cache[fileName] = fileCache = [fileStat.mtimeMs, {}, {}, false];
+				project.cache[fileName] = fileCache = [fileStat.mtimeMs, {}, {}];
 			}
 
 			let diagnostics = await linterWorker.lint(
@@ -475,66 +472,6 @@ class Project {
 		cache.saveCache(project.tsconfig, project.configFile!, project.cache, ts.sys.createHash);
 
 		await startWorker(linterWorker);
-	}
-
-	function getFormattingSettings() {
-		let formattingSettings: ReturnType<typeof getVSCodeFormattingSettings> | undefined;
-
-		if (process.argv.includes('--vscode-settings')) {
-
-			formattingSettings = {
-				typescript: {},
-				javascript: {},
-				vue: {},
-			};
-
-			for (const section of ['typescript', 'javascript'] as const) {
-				formattingSettings[section] = {
-					...ts.getDefaultFormatCodeSettings('\n'),
-					indentStyle: ts.IndentStyle.Smart,
-					newLineCharacter: '\n',
-					insertSpaceAfterCommaDelimiter: true,
-					insertSpaceAfterConstructor: false,
-					insertSpaceAfterSemicolonInForStatements: true,
-					insertSpaceBeforeAndAfterBinaryOperators: true,
-					insertSpaceAfterKeywordsInControlFlowStatements: true,
-					insertSpaceAfterFunctionKeywordForAnonymousFunctions: true,
-					insertSpaceBeforeFunctionParenthesis: false,
-					insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis: false,
-					insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets: false,
-					insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces: true,
-					insertSpaceAfterOpeningAndBeforeClosingEmptyBraces: true,
-					insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces: false,
-					insertSpaceAfterOpeningAndBeforeClosingJsxExpressionBraces: false,
-					insertSpaceAfterTypeAssertion: false,
-					placeOpenBraceOnNewLineForFunctions: false,
-					placeOpenBraceOnNewLineForControlBlocks: false,
-					semicolons: ts.SemicolonPreference.Ignore,
-				};
-			}
-
-			let vscodeSettingsConfig = process.argv[process.argv.indexOf('--vscode-settings') + 1];
-			if (!vscodeSettingsConfig || vscodeSettingsConfig.startsWith('-')) {
-				clack.log.error(lightRed(`Missing argument for --vscode-settings.`));
-				process.exit(1);
-			}
-			const vscodeSettingsFile = resolvePath(vscodeSettingsConfig);
-			const vscodeSettings = getVSCodeFormattingSettings(vscodeSettingsFile);
-			formattingSettings.typescript = {
-				...formattingSettings.typescript,
-				...vscodeSettings.typescript,
-			};
-			formattingSettings.javascript = {
-				...formattingSettings.javascript,
-				...vscodeSettings.javascript,
-			};
-			formattingSettings.vue = {
-				...formattingSettings.vue,
-				...vscodeSettings.vue,
-			};
-		}
-
-		return formattingSettings;
 	}
 
 	async function getBuiltConfig(configFile: string) {
