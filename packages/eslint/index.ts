@@ -115,6 +115,13 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 	return rules;
 }
 
+/**
+ * Converts an ESLint rules configuration to TSSLint rules.
+ *
+ * The type definitions are generated when `@tsslint/eslint` is installed.
+ * If the type definitions become outdated, please run
+ * `node node_modules/@tsslint/eslint/scripts/generateDts.js` to update them.
+ */
 export async function convertRules(
 	rulesConfig: ESLintRulesConfig,
 	context: Partial<ESLint.Rule.RuleContext> = {}
