@@ -16,20 +16,17 @@ const plugins: Record<string, Promise<{
 	rules: Record<string, ESLint.Rule.RuleModule>;
 } | undefined>> = {};
 const loader = async (moduleName: string) => {
-	let mod;
+	let mod: {} | undefined;
 	try {
-		mod = require(moduleName);
-	} catch {
-		try {
-			mod = await import(moduleName);
-		} catch { }
+		mod ??= require(moduleName);
+	} catch { }
+	try {
+		mod ??= await import(moduleName);
+	} catch { }
+	if (mod && 'default' in mod) {
+		return mod.default;
 	}
-	if (mod) {
-		if ('default' in mod) {
-			return mod.default;
-		}
-		return mod;
-	}
+	return mod as any;
 };
 
 /**
