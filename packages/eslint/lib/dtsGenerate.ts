@@ -27,11 +27,11 @@ export async function generate(
 	const defs = new Map<any, [string, string]>();
 
 	for (const nodeModulesDir of nodeModulesDirs) {
-		const pkgs = fs.readdirSync(nodeModulesDir);
+		const pkgs = readdirDirSync(nodeModulesDir);
 
 		for (const pkg of pkgs) {
 			if (pkg.startsWith('@')) {
-				const subPkgs = fs.readdirSync(path.join(nodeModulesDir, pkg));
+				const subPkgs = readdirDirSync(path.join(nodeModulesDir, pkg));
 				for (const subPkg of subPkgs) {
 					if (subPkg === 'eslint-plugin' || subPkg.startsWith('eslint-plugin-')) {
 						const pluginName = `${pkg}/${subPkg}`;
@@ -277,5 +277,24 @@ export async function generate(
 		} else {
 			return `{ [key: string]: ${parseSchema(schema, item, indentLevel)} }`;
 		}
+	}
+
+	function readdirDirSync(_path: string): string[] {
+		return fs.readdirSync(_path, { withFileTypes: true })
+			.filter(dirent => {
+				if (dirent.isDirectory()) {
+					return true;
+				}
+				if (dirent.isSymbolicLink()) {
+					const fullPath = path.join(_path, dirent.name);
+					try {
+						return fs.statSync(fullPath).isDirectory();
+					} catch {
+						return false;
+					}
+				}
+				return false;
+			})
+			.map(dirent => dirent.name);
 	}
 }
