@@ -6,3 +6,4 @@ node_modules
 packages/*/index.js
 packages/*/lib/**/*.js
 .tsslint/
+.DS_Store
