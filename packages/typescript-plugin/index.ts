@@ -1,4 +1,4 @@
-import type { Config, ProjectContext } from '@tsslint/config';
+import type { Config, LinterContext } from '@tsslint/config';
 import type * as ts from 'typescript';
 
 import core = require('@tsslint/core');
@@ -147,7 +147,7 @@ function decorateLanguageService(
 				return;
 			}
 
-			const projectContext: ProjectContext = {
+			const projectContext: LinterContext = {
 				languageServiceHost: info.languageServiceHost,
 				languageService: info.languageService,
 				typescript: ts,

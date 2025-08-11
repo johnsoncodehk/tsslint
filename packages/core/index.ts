@@ -3,7 +3,7 @@ export * from './lib/watch';
 
 import type {
 	Config,
-	ProjectContext,
+	LinterContext,
 	Reporter,
 	Rule,
 	RuleContext,
@@ -26,7 +26,7 @@ export type FileLintCache = [
 export type Linter = ReturnType<typeof createLinter>;
 
 export function createLinter(
-	ctx: ProjectContext,
+	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
 	handleError: (diag: ts.DiagnosticWithLocation, err: Error, stackOffset: number) => void,

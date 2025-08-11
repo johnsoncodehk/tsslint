@@ -8,7 +8,7 @@ import type {
 	SourceFile,
 } from 'typescript';
 
-export interface ProjectContext {
+export interface LinterContext {
 	typescript: typeof import('typescript');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
@@ -22,7 +22,7 @@ export interface Config {
 }
 
 export interface Plugin {
-	(ctx: ProjectContext): PluginInstance;
+	(ctx: LinterContext): PluginInstance;
 }
 
 export interface PluginInstance {
