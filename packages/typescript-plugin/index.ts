@@ -5,6 +5,7 @@ import core = require('@tsslint/core');
 import path = require('path');
 import url = require('url');
 import fs = require('fs');
+import ErrorStackParser = require('error-stack-parser');
 
 const languageServiceDecorators = new WeakMap<ts.server.Project, ReturnType<typeof decorateLanguageService>>();
 const plugin: ts.server.PluginModuleFactory = modules => {
@@ -27,6 +28,7 @@ const plugin: ts.server.PluginModuleFactory = modules => {
 	};
 	return pluginModule;
 };
+const fsFiles = new Map<string, [exist: boolean, mtime: number, ts.SourceFile]>();
 
 export = plugin;
 
@@ -192,13 +194,18 @@ function decorateLanguageService(
 								initSourceMapSupport();
 								const mtime = ts.sys.getModifiedTime?.(builtConfig)?.getTime() ?? Date.now();
 								config = (await import(url.pathToFileURL(builtConfig).toString() + '?tsslint_time=' + mtime)).default;
-								linter = core.createLinter(projectContext, path.dirname(configFile!), config!, 'typescript-plugin');
+								linter = core.createLinter(projectContext, path.dirname(configFile!), config!, (diag, err, stackOffset) => {
+									const relatedInfo = createRelatedInformation(ts, err, stackOffset);
+									if (relatedInfo) {
+										diag.relatedInformation!.push(relatedInfo);
+									}
+								});
 							} catch (err) {
 								config = undefined;
 								linter = undefined;
 								const prevLength = configFileDiagnostics.length;
 								if (err instanceof Error) {
-									const relatedInfo = core.createRelatedInformation(ts, err, 0);
+									const relatedInfo = createRelatedInformation(ts, err, 0);
 									if (relatedInfo) {
 										configFileDiagnostics.push({
 											category: ts.DiagnosticCategory.Error,
@@ -277,4 +284,49 @@ function initSourceMapSupport() {
 			}
 		},
 	});
+}
+
+function createRelatedInformation(ts: typeof import('typescript'), err: Error, stackOffset: number): ts.DiagnosticRelatedInformation | undefined {
+	const stacks = ErrorStackParser.parse(err);
+	if (stacks.length <= stackOffset) {
+		return;
+	}
+	const stack = stacks[stackOffset];
+	if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
+		let fileName = stack.fileName.replace(/\\/g, '/');
+		if (fileName.startsWith('file://')) {
+			fileName = fileName.substring('file://'.length);
+		}
+		if (fileName.includes('http-url:')) {
+			fileName = fileName.split('http-url:')[1];
+		}
+		const mtime = ts.sys.getModifiedTime?.(fileName)?.getTime() ?? 0;
+		const lastMtime = fsFiles.get(fileName)?.[1];
+		if (mtime !== lastMtime) {
+			const text = ts.sys.readFile(fileName);
+			fsFiles.set(
+				fileName,
+				[
+					text !== undefined,
+					mtime,
+					ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
+				]
+			);
+		}
+		const [exist, _mtime, relatedFile] = fsFiles.get(fileName)!;
+		let pos = 0;
+		if (exist) {
+			try {
+				pos = relatedFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
+			} catch { }
+		}
+		return {
+			category: ts.DiagnosticCategory.Message,
+			code: 0,
+			file: relatedFile,
+			start: pos,
+			length: 0,
+			messageText: 'at ' + (stack.functionName ?? '<anonymous>'),
+		};
+	}
 }

@@ -11,7 +11,6 @@ import type {
 } from '@tsslint/types';
 import type * as ts from 'typescript';
 
-import ErrorStackParser = require('error-stack-parser');
 import path = require('path');
 import minimatch = require('minimatch');
 
@@ -30,7 +29,7 @@ export function createLinter(
 	ctx: ProjectContext,
 	rootDir: string,
 	config: Config | Config[],
-	mode: 'cli' | 'typescript-plugin',
+	handleError: (diag: ts.DiagnosticWithLocation, err: Error, stackOffset: number) => void,
 	syntaxOnlyLanguageService?: ts.LanguageService & {
 		getNonBoundSourceFile?(fileName: string): ts.SourceFile;
 	}
@@ -227,12 +226,8 @@ export function createLinter(
 					});
 				}
 
-				if (mode === 'typescript-plugin' && typeof stackOffset === 'number') {
-					err ??= new Error();
-					const relatedInfo = createRelatedInformation(ts, err, stackOffset);
-					if (relatedInfo) {
-						error.relatedInformation!.push(relatedInfo);
-					}
+				if (typeof stackOffset === 'number') {
+					handleError(error, err ?? new Error(), stackOffset);
 				}
 
 				let lintResult = lintResults.get(fileName);
@@ -439,53 +434,6 @@ export function createLinter(
 			}
 			record[[...paths, path].join('/')] = rule;
 		}
-	}
-}
-
-const fsFiles = new Map<string, [exist: boolean, mtime: number, ts.SourceFile]>();
-
-export function createRelatedInformation(ts: typeof import('typescript'), err: Error, stackOffset: number): ts.DiagnosticRelatedInformation | undefined {
-	const stacks = ErrorStackParser.parse(err);
-	if (stacks.length <= stackOffset) {
-		return;
-	}
-	const stack = stacks[stackOffset];
-	if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
-		let fileName = stack.fileName.replace(/\\/g, '/');
-		if (fileName.startsWith('file://')) {
-			fileName = fileName.substring('file://'.length);
-		}
-		if (fileName.includes('http-url:')) {
-			fileName = fileName.split('http-url:')[1];
-		}
-		const mtime = ts.sys.getModifiedTime?.(fileName)?.getTime() ?? 0;
-		const lastMtime = fsFiles.get(fileName)?.[1];
-		if (mtime !== lastMtime) {
-			const text = ts.sys.readFile(fileName);
-			fsFiles.set(
-				fileName,
-				[
-					text !== undefined,
-					mtime,
-					ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
-				]
-			);
-		}
-		const [exist, _mtime, relatedFile] = fsFiles.get(fileName)!;
-		let pos = 0;
-		if (exist) {
-			try {
-				pos = relatedFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
-			} catch { }
-		}
-		return {
-			category: ts.DiagnosticCategory.Message,
-			code: 0,
-			file: relatedFile,
-			start: pos,
-			length: 0,
-			messageText: 'at ' + (stack.functionName ?? '<anonymous>'),
-		};
 	}
 }
 

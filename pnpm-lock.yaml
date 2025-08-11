@@ -138,9 +138,6 @@ importers:
       '@tsslint/types':
         specifier: 1.5.18
         version: link:../types
-      error-stack-parser:
-        specifier: ^2.1.4
-        version: 2.1.4
       esbuild:
         specifier: '>=0.17.0'
         version: 0.25.5
@@ -193,6 +190,9 @@ importers:
       '@tsslint/core':
         specifier: 1.5.18
         version: link:../core
+      error-stack-parser:
+        specifier: ^2.1.4
+        version: 2.1.4
       source-map-support:
         specifier: ^0.5.21
         version: 0.5.21
