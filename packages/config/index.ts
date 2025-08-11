@@ -1,4 +1,5 @@
 export * from '@tsslint/types';
+export { create as createDiagnosticsPlugin } from './lib/plugins/diagnostics.js';
 export { create as createIgnorePlugin } from './lib/plugins/ignore.js';
 
 import type { Config, Plugin, Rule } from '@tsslint/types';
