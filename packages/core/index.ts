@@ -84,7 +84,7 @@ export function createLinter(
 				}
 				: {
 					...ctx,
-					languageService: syntaxOnlyLanguageService!,
+					languageService: syntaxOnlyLanguageService,
 					sourceFile: getNonBoundSourceFile(fileName),
 					reportError,
 					reportWarning,

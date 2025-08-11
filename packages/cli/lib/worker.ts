@@ -7,7 +7,7 @@ import path = require('path');
 import worker_threads = require('worker_threads');
 import languagePlugins = require('./languagePlugins.js');
 
-import { createLanguage, FileMap, isCodeActionsEnabled, Language } from '@volar/language-core';
+import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
 import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
 import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 
