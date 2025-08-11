@@ -11,6 +11,8 @@ import type {
 } from '@tsslint/types';
 import type * as ts from 'typescript';
 
+let foo: string = 1;
+
 import path = require('path');
 import minimatch = require('minimatch');
 
