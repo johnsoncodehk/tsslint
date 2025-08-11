@@ -14,3 +14,7 @@ export function definePlugin(plugin: Plugin) {
 export function defineConfig(config: Config | Config[]) {
 	return config;
 }
+
+export function isCLI() {
+	return !!process.env.TSSLINT_CLI;
+}
