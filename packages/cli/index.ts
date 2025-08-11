@@ -8,6 +8,8 @@ import fs = require('fs');
 import os = require('os');
 import languagePlugins = require('./lib/languagePlugins.js');
 
+process.env.TSSLINT_CLI = '1';
+
 const _reset = '\x1b[0m';
 const purple = (s: string) => '\x1b[35m' + s + _reset;
 const cyan = (s: string) => '\x1b[36m' + s + _reset;
