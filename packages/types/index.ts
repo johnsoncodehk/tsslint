@@ -44,19 +44,19 @@ export interface RuleContext {
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	sourceFile: SourceFile;
-	report(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	report(message: string, start: number, end: number, stackOffset?: number): Reporter;
 	/**
 	 * @deprecated Use `report` instead.
 	 */
-	reportError(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	reportError(message: string, start: number, end: number, stackOffset?: number): Reporter;
 	/**
 	 * @deprecated Use `report` instead.
 	 */
-	reportWarning(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	reportWarning(message: string, start: number, end: number, stackOffset?: number): Reporter;
 	/**
 	 * @deprecated Use `report` instead.
 	 */
-	reportSuggestion(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	reportSuggestion(message: string, start: number, end: number, stackOffset?: number): Reporter;
 }
 
 export interface Reporter {

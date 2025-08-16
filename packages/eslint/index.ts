@@ -42,31 +42,20 @@ export async function convertRules(
 ) {
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let rawSeverity: 'off' | 'error' | 'warn' | 'suggestion' | 'message' | 0 | 1 | 2 | 3;
+		let severity: boolean;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
-			[rawSeverity, ...options] = severityOrOptions;
+			[severity, ...options] = severityOrOptions;
 		}
 		else {
-			rawSeverity = severityOrOptions;
+			severity = severityOrOptions;
 			options = [];
 		}
-		let tsSeverity: ts.DiagnosticCategory | undefined;
-		if (rawSeverity === 'off' || rawSeverity === 0) {
-			tsSeverity = undefined;
+		// @ts-expect-error backward compatibility
+		if (severity === 'off' || severity === 0) {
+			severity = false;
 		}
-		else if (rawSeverity === 'warn' || rawSeverity === 1) {
-			tsSeverity = 0 satisfies ts.DiagnosticCategory.Warning;
-		}
-		else if (rawSeverity === 'error' || rawSeverity === 2) {
-			tsSeverity = 1 satisfies ts.DiagnosticCategory.Error;
-		}
-		else if (rawSeverity === 'suggestion') {
-			tsSeverity = 2 satisfies ts.DiagnosticCategory.Suggestion;
-		} else {
-			tsSeverity = 3 satisfies ts.DiagnosticCategory.Message;
-		}
-		if (tsSeverity === undefined) {
+		if (!severity) {
 			rules[rule] = noop;
 			continue;
 		}
@@ -77,7 +66,6 @@ export async function convertRules(
 		rules[rule] = convertRule(
 			ruleModule,
 			options,
-			tsSeverity,
 			{ id: rule, ...context }
 		);
 	}
@@ -133,11 +121,6 @@ async function getRule(pluginName: string | undefined, ruleName: string): Promis
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
-	severity: ts.DiagnosticCategory =
-		eslintRule.meta?.type === 'problem' ? 1 satisfies ts.DiagnosticCategory.Error
-			: eslintRule.meta?.type === 'suggestion' ? 0 satisfies ts.DiagnosticCategory.Warning
-				: eslintRule.meta?.type === 'layout' ? 2 satisfies ts.DiagnosticCategory.Suggestion
-					: 3 satisfies ts.DiagnosticCategory.Message,
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
 	// ESLint internal scripts
@@ -154,11 +137,7 @@ export function convertRule(
 		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
 	}
 
-	const tsslintRule: TSSLint.Rule = ({ typescript: ts, sourceFile, languageService, languageServiceHost, reportError, reportWarning, reportSuggestion }) => {
-		const report =
-			severity === ts.DiagnosticCategory.Error ? reportError
-				: severity === ts.DiagnosticCategory.Warning ? reportWarning
-					: reportSuggestion;
+	const tsslintRule: TSSLint.Rule = ({ sourceFile, languageService, languageServiceHost, report }) => {
 		const { sourceCode, eventQueue } = getEstree(
 			sourceFile,
 			languageService,
@@ -229,7 +208,7 @@ export function convertRule(
 						}
 					}
 				} catch { }
-				const reporter = report(message, start, end, 3);
+				const reporter = report(message, start, end, 2);
 				if (descriptor.fix) {
 					// @ts-expect-error
 					const textChanges = getTextChanges(descriptor.fix);

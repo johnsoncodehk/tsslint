@@ -1,14 +1,14 @@
 import { defineRule } from '@tsslint/config';
 
 export function create() {
-	return defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
+	return defineRule(({ typescript: ts, sourceFile, report }) => {
 		ts.forEachChild(sourceFile, function cb(node) {
 			if (
 				ts.isPropertyAccessExpression(node) &&
 				ts.isIdentifier(node.expression) &&
 				node.expression.text === 'console'
 			) {
-				reportWarning(
+				report(
 					`Calls to 'console.x' are not allowed.`,
 					node.parent.getStart(sourceFile),
 					node.parent.getEnd()

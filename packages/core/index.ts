@@ -77,19 +77,19 @@ export function createLinter(
 				? {
 					...ctx,
 					sourceFile: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
-					report: reportMessage,
-					reportError,
-					reportWarning,
-					reportSuggestion,
+					report,
+					reportError: report,
+					reportWarning: report,
+					reportSuggestion: report,
 				}
 				: {
 					...ctx,
 					languageService: syntaxOnlyLanguageService,
 					sourceFile: getNonBoundSourceFile(fileName),
-					report: reportMessage,
-					reportError,
-					reportWarning,
-					reportSuggestion,
+					report,
+					reportError: report,
+					reportWarning: report,
+					reportSuggestion: report,
 				};
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName, cache?.[2]);
@@ -138,9 +138,9 @@ export function createLinter(
 						rule2Mode.set(currentRuleId, true);
 						shouldRetry = true;
 					} else if (err instanceof Error) {
-						report(ts.DiagnosticCategory.Error, err.stack ?? err.message, 0, 0, 0, err);
+						report(err.stack ?? err.message, 0, 0, 0, err);
 					} else {
-						report(ts.DiagnosticCategory.Error, String(err), 0, 0, false);
+						report(String(err), 0, 0, Number.MAX_VALUE);
 					}
 				}
 
@@ -192,25 +192,9 @@ export function createLinter(
 
 			return diagnostics;
 
-			function reportMessage(message: string, start: number, end: number, stackOffset?: false | number) {
-				return report(ts.DiagnosticCategory.Message, message, start, end, stackOffset);
-			}
-
-			function reportError(message: string, start: number, end: number, stackOffset?: false | number) {
-				return report(ts.DiagnosticCategory.Error, message, start, end, stackOffset);
-			}
-
-			function reportWarning(message: string, start: number, end: number, stackOffset?: false | number) {
-				return report(ts.DiagnosticCategory.Warning, message, start, end, stackOffset);
-			}
-
-			function reportSuggestion(message: string, start: number, end: number, stackOffset?: false | number) {
-				return report(ts.DiagnosticCategory.Suggestion, message, start, end, stackOffset);
-			}
-
-			function report(category: ts.DiagnosticCategory, message: string, start: number, end: number, stackOffset: false | number = 2, err?: Error): Reporter {
+			function report(message: string, start: number, end: number, stackOffset: number = 1, err?: Error): Reporter {
 				const error: ts.DiagnosticWithLocation = {
-					category,
+					category: ts.DiagnosticCategory.Message,
 					code: currentRuleId as any,
 					messageText: message,
 					file: rulesContext.sourceFile,
@@ -232,9 +216,7 @@ export function createLinter(
 					});
 				}
 
-				if (typeof stackOffset === 'number') {
-					handleError(error, err ?? new Error(), stackOffset);
-				}
+				handleError(error, err ?? new Error(), stackOffset);
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
