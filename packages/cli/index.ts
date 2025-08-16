@@ -17,6 +17,7 @@ const darkGray = (s: string) => '\x1b[90m' + s + _reset;
 const lightRed = (s: string) => '\x1b[91m' + s + _reset;
 const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
 const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
+const lightBlue = (s: string) => '\x1b[94m' + s + _reset;
 
 // https://talyian.github.io/ansicolors/
 const tsColor = (s: string) => '\x1b[34m' + s + _reset;
@@ -124,6 +125,7 @@ class Project {
 	let passed = 0;
 	let errors = 0;
 	let warnings = 0;
+	let messages = 0;
 	let cached = 0;
 
 	if (isTTY) {
@@ -350,8 +352,10 @@ class Project {
 		[passed, 'passed', lightGreen] as const,
 		[errors, 'errors', lightRed] as const,
 		[warnings, 'warnings', lightYellow] as const,
+		[messages, 'messages', lightBlue] as const,
 		[excluded, 'excluded', darkGray] as const,
 	];
+	const hasFailed = !!(errors || warnings || messages);
 
 	let summary = data
 		.filter(([count]) => count)
@@ -360,12 +364,12 @@ class Project {
 
 	if (hasFix) {
 		summary += darkGray(` (Use `) + cyan(`--fix`) + darkGray(` to apply automatic fixes.)`);
-	} else if (errors || warnings) {
+	} else if (hasFailed) {
 		summary += darkGray(` (No fixes available.)`);
 	}
 
 	clack.outro(summary);
-	process.exit(errors ? 1 : 0);
+	process.exit(hasFailed ? 1 : 0);
 
 	async function startWorker(linterWorker: ReturnType<typeof worker.create>) {
 		const unfinishedProjects = projects.filter(project => project.currentFileIndex < project.fileNames.length);
@@ -452,6 +456,10 @@ class Project {
 						warnings++;
 						log(output, 2);
 					}
+					else if (diagnostic.category === ts.DiagnosticCategory.Message) {
+						messages++;
+						log(output);
+					}
 					else {
 						log(output);
 					}
@@ -524,6 +532,8 @@ class Project {
 				clack.log.error(msg);
 			} else if (code === 2) {
 				clack.log.warn(msg);
+			} else if (code === 3) {
+				clack.log.message(msg);
 			} else {
 				clack.log.step(msg);
 			}
