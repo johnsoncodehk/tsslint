@@ -99,6 +99,10 @@ vscode.languages.registerCodeActionsProvider(
 				);`)
 			}
 
+			// Ensure tsslint is the first plugin to be loaded, which fixes compatibility with "astro-build.astro-vscode"
+			const pluginName = require('./package.json').contributes.typescriptServerPlugins[0].name;
+			text = text.replace('"--globalPlugins",i.plugins', `"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="${pluginName}"?1:0)-(a.name==="${pluginName}"?1:0))`);
+
 			return text;
 		}
 		return readFileSync(...args);
