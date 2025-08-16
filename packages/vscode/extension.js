@@ -13,10 +13,13 @@ try {
 		if (args[0] === extensionJsPath) {
 			let text = readFileSync(...args);
 
-			// patch getFixableDiagnosticsForContext
+			// Fix DiagnosticCategory.Message display
+			text = text.replace('.category){case', '.category){case "message":return 2;case')
+
+			// Patch getFixableDiagnosticsForContext
 			text = text.replace('t.has(e.code+"")', s => `(${s}||e.source==="tsslint")`);
 
-			// support "Fix all"
+			// Support "Fix all"
 			for (const replaceText of [
 				'const i=new y(t,n,r);',
 				// VSCode 1.93.1 (#36)
