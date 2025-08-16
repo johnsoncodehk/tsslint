@@ -445,7 +445,10 @@ class Project {
 						getNewLine: () => ts.sys.newLine,
 					});
 					output = output.trimEnd();
-					output = output.replace(`TS${diagnostic.code}`, String(diagnostic.code));
+
+					if (typeof diagnostic.code === 'string') {
+						output = output.replace(`TS${diagnostic.code}`, diagnostic.code);
+					}
 
 					if (diagnostic.category === ts.DiagnosticCategory.Error) {
 						errors++;
