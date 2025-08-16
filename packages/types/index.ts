@@ -45,8 +45,17 @@ export interface RuleContext {
 	languageService: LanguageService;
 	sourceFile: SourceFile;
 	report(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	/**
+	 * @deprecated Use `report` instead.
+	 */
 	reportError(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	/**
+	 * @deprecated Use `report` instead.
+	 */
 	reportWarning(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
+	/**
+	 * @deprecated Use `report` instead.
+	 */
 	reportSuggestion(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
 }
 
