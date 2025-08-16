@@ -61,7 +61,7 @@ To enable TSSLint in VSCode, follow these steps:
 
 ### Create a Rule
 
-To create a rule, you need to define a function that receives the context of the current diagnostic task. Within this function, you can call `reportError()` or `reportWarning()` to report an error.
+To create a rule, you need to define a function that receives the context of the current diagnostic task. Within this function, you can call `report()` to report an error.
 
 As an example, let's create a `no-console` rule under `[project root]/rules/`.
 
@@ -71,14 +71,14 @@ Here's the code for `[project root]/rules/noConsoleRule.ts`:
 import { defineRule } from '@tsslint/config';
 
 export function create() {
-	return defineRule(({ typescript: ts, sourceFile, reportWarning }) => {
+	return defineRule(({ typescript: ts, sourceFile, report }) => {
 		ts.forEachChild(sourceFile, function cb(node) {
 			if (
 				ts.isPropertyAccessExpression(node) &&
 				ts.isIdentifier(node.expression) &&
 				node.expression.text === 'console'
 			) {
-				reportWarning(
+				report(
 					`Calls to 'console.x' are not allowed.`,
 					node.parent.getStart(sourceFile),
 					node.parent.getEnd()
@@ -114,7 +114,7 @@ export default defineConfig({
 });
 ```
 
-After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `reportWarning()` code is located.
+After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `report()` code is located.
 
 > Full example: https://github.com/johnsoncodehk/tsslint/tree/master/fixtures/define-a-rule
 
