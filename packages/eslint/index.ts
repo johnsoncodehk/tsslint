@@ -38,7 +38,7 @@ export function convertConfig(rulesConfig: ESLintRulesConfig) {
 		rules: Record<string, ESLint.Rule.RuleModule>;
 	}> = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let rawSeverity: 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
+		let rawSeverity: 'off' | 'error' | 'warn' | 'suggestion' | 'message' | 0 | 1 | 2 | 3;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
 			[rawSeverity, ...options] = severityOrOptions;
@@ -125,7 +125,7 @@ export async function convertRules(
 ) {
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let rawSeverity: 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
+		let rawSeverity: 'off' | 'error' | 'warn' | 'suggestion' | 'message' | 0 | 1 | 2 | 3;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
 			[rawSeverity, ...options] = severityOrOptions;
