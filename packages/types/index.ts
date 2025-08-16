@@ -44,6 +44,7 @@ export interface RuleContext {
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	sourceFile: SourceFile;
+	report(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
 	reportError(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
 	reportWarning(message: string, start: number, end: number, stackOffset?: number | false): Reporter;
 	reportSuggestion(message: string, start: number, end: number, stackOffset?: number | false): Reporter;

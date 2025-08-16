@@ -77,6 +77,7 @@ export function createLinter(
 				? {
 					...ctx,
 					sourceFile: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
+					report: reportMessage,
 					reportError,
 					reportWarning,
 					reportSuggestion,
@@ -85,6 +86,7 @@ export function createLinter(
 					...ctx,
 					languageService: syntaxOnlyLanguageService,
 					sourceFile: getNonBoundSourceFile(fileName),
+					report: reportMessage,
 					reportError,
 					reportWarning,
 					reportSuggestion,
@@ -189,6 +191,10 @@ export function createLinter(
 			lintResult[2] = lintResult[2].filter(refactor => diagnosticSet.has(refactor.diagnostic));
 
 			return diagnostics;
+
+			function reportMessage(message: string, start: number, end: number, stackOffset?: false | number) {
+				return report(ts.DiagnosticCategory.Message, message, start, end, stackOffset);
+			}
 
 			function reportError(message: string, start: number, end: number, stackOffset?: false | number) {
 				return report(ts.DiagnosticCategory.Error, message, start, end, stackOffset);
