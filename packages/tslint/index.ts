@@ -14,12 +14,13 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 		disabledIntervals: [],
 	}) as TSLint.IRule | TSLint.ITypedRule;
 	return ({ sourceFile, languageService, report }) => {
-		let lastFailure: TSLint.RuleFailure | undefined;
-		const onAddFailure = (failure: TSLint.RuleFailure) => {
-			if (lastFailure === failure) {
-				return;
-			}
-			lastFailure = failure;
+		const failures = 'applyWithProgram' in rule
+			? rule.applyWithProgram(sourceFile, languageService.getProgram()!)
+			: rule.apply(sourceFile);
+		for (const failure of new Set(failures)) {
+			onAddFailure(failure);
+		}
+		function onAddFailure(failure: TSLint.RuleFailure) {
 			const reporter = report(
 				failure.getFailure(),
 				failure.getStartPosition().getPosition(),
@@ -52,11 +53,5 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				}
 			}
 		};
-		const failures = 'applyWithProgram' in rule
-			? rule.applyWithProgram(sourceFile, languageService.getProgram()!)
-			: rule.apply(sourceFile);
-		for (const failure of failures) {
-			onAddFailure(failure);
-		}
 	};
 }
