@@ -70,8 +70,8 @@ Here's the code for `[project root]/rules/noConsoleRule.ts`:
 import { defineRule } from '@tsslint/config';
 
 export function create() {
-	return defineRule(({ typescript: ts, sourceFile, report }) => {
-		ts.forEachChild(sourceFile, function cb(node) {
+	return defineRule(({ typescript: ts, file, report }) => {
+		ts.forEachChild(file, function cb(node) {
 			if (
 				ts.isPropertyAccessExpression(node) &&
 				ts.isIdentifier(node.expression) &&
@@ -79,17 +79,17 @@ export function create() {
 			) {
 				report(
 					`Calls to 'console.x' are not allowed.`,
-					node.parent.getStart(sourceFile),
+					node.parent.getStart(file),
 					node.parent.getEnd()
 				).withFix(
 					'Remove this console expression',
 					() => [{
-						fileName: sourceFile.fileName,
+						fileName: file.fileName,
 						textChanges: [{
 							newText: '/* deleted */',
 							span: {
-								start: node.parent.getStart(sourceFile),
-								length: node.parent.getWidth(sourceFile),
+								start: node.parent.getStart(file),
+								length: node.parent.getWidth(file),
 							},
 						}],
 					}]

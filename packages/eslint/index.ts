@@ -178,9 +178,9 @@ export function convertRule(
 		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
 	}
 
-	const tsslintRule: TSSLint.Rule = ({ sourceFile, languageService, languageServiceHost, report }) => {
+	const tsslintRule: TSSLint.Rule = ({ file, languageService, languageServiceHost, report }) => {
 		const { sourceCode, eventQueue } = getEstree(
-			sourceFile,
+			file,
 			languageService,
 			languageServiceHost.getCompilationSettings()
 		);
@@ -200,13 +200,13 @@ export function convertRule(
 			getCwd() {
 				return cwd;
 			},
-			filename: sourceFile.fileName,
+			filename: file.fileName,
 			getFilename() {
-				return sourceFile.fileName;
+				return file.fileName;
 			},
-			physicalFilename: sourceFile.fileName,
+			physicalFilename: file.fileName,
 			getPhysicalFilename() {
-				return sourceFile.fileName;
+				return file.fileName;
 			},
 			sourceCode,
 			getSourceCode() {
@@ -230,12 +230,12 @@ export function convertRule(
 				try {
 					if ('loc' in descriptor) {
 						if ('line' in descriptor.loc) {
-							start = sourceFile.getPositionOfLineAndCharacter(descriptor.loc.line - 1, descriptor.loc.column);
+							start = file.getPositionOfLineAndCharacter(descriptor.loc.line - 1, descriptor.loc.column);
 							end = start;
 						}
 						else {
-							start = sourceFile.getPositionOfLineAndCharacter(descriptor.loc.start.line - 1, descriptor.loc.start.column);
-							end = sourceFile.getPositionOfLineAndCharacter(descriptor.loc.end.line - 1, descriptor.loc.end.column);
+							start = file.getPositionOfLineAndCharacter(descriptor.loc.start.line - 1, descriptor.loc.start.column);
+							end = file.getPositionOfLineAndCharacter(descriptor.loc.end.line - 1, descriptor.loc.end.column);
 						}
 					}
 					else if ('node' in descriptor) {
@@ -244,8 +244,8 @@ export function convertRule(
 							end = descriptor.node.range[1];
 						}
 						else if (descriptor.node.loc) {
-							start = sourceFile.getPositionOfLineAndCharacter(descriptor.node.loc.start.line - 1, descriptor.node.loc.start.column);
-							end = sourceFile.getPositionOfLineAndCharacter(descriptor.node.loc.end.line - 1, descriptor.node.loc.end.column);
+							start = file.getPositionOfLineAndCharacter(descriptor.node.loc.start.line - 1, descriptor.node.loc.start.column);
+							end = file.getPositionOfLineAndCharacter(descriptor.node.loc.end.line - 1, descriptor.node.loc.end.column);
 						}
 					}
 				} catch { }
@@ -256,7 +256,7 @@ export function convertRule(
 					reporter.withFix(
 						getTextChangeMessage(textChanges),
 						() => [{
-							fileName: sourceFile.fileName,
+							fileName: file.fileName,
 							textChanges,
 						}]
 					);
@@ -270,7 +270,7 @@ export function convertRule(
 						reporter.withRefactor(
 							message,
 							() => [{
-								fileName: sourceFile.fileName,
+								fileName: file.fileName,
 								// @ts-expect-error
 								textChanges: getTextChanges(suggest.fix),
 							}]
@@ -282,7 +282,7 @@ export function convertRule(
 						reporter.withRefactor(
 							getTextChangeMessage(textChanges),
 							() => [{
-								fileName: sourceFile.fileName,
+								fileName: file.fileName,
 								textChanges,
 							}]
 						);
@@ -339,14 +339,14 @@ export function convertRule(
 		function getTextChangeMessage(textChanges: ts.TextChange[]) {
 			if (textChanges.length === 1) {
 				const change = textChanges[0];
-				const originalText = sourceFile.text.substring(change.span.start, change.span.start + change.span.length);
+				const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
 				if (change.newText.length === 0) {
 					return `Remove \`${originalText}\`.`;
 				}
 				else if (change.span.length === 0) {
-					const line = sourceFile.getLineAndCharacterOfPosition(change.span.start).line;
-					const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-					const lineText = sourceFile.text.substring(lineStart, change.span.start).trimStart();
+					const line = file.getLineAndCharacterOfPosition(change.span.start).line;
+					const lineStart = file.getPositionOfLineAndCharacter(line, 0);
+					const lineText = file.text.substring(lineStart, change.span.start).trimStart();
 					return `Insert \`${change.newText}\` after \`${lineText}\`.`;
 				}
 			}
@@ -355,7 +355,7 @@ export function convertRule(
 			let newText = '';
 			for (let i = 0; i < changes.length; i++) {
 				const change = changes[i];
-				text += sourceFile.text.substring(change.span.start, change.span.start + change.span.length);
+				text += file.text.substring(change.span.start, change.span.start + change.span.length);
 				newText += change.newText;
 				if (i !== changes.length - 1) {
 					text += '…';
@@ -418,7 +418,7 @@ export function convertRule(
 					if (!nodeOrToken.loc?.end) {
 						throw new Error('Cannot insert text after a node without a location.');
 					}
-					const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
 					return this.insertTextAfterRange([start, start], text);
 				},
 				insertTextAfterRange(range, text) {
@@ -431,7 +431,7 @@ export function convertRule(
 					if (!nodeOrToken.loc?.start) {
 						throw new Error('Cannot insert text before a node without a location.');
 					}
-					const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
 					return this.insertTextBeforeRange([start, start], text);
 				},
 				insertTextBeforeRange(range, text) {
@@ -444,8 +444,8 @@ export function convertRule(
 					if (!nodeOrToken.loc) {
 						throw new Error('Cannot remove a node without a location.');
 					}
-					const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
-					const end = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
 					return this.removeRange([start, end]);
 				},
 				removeRange(range) {
@@ -458,8 +458,8 @@ export function convertRule(
 					if (!nodeOrToken.loc) {
 						throw new Error('Cannot replace text of a node without a location.');
 					}
-					const start = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
-					const end = sourceFile.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
 					return this.replaceTextRange([start, end], text);
 				},
 				replaceTextRange(range, text) {
@@ -502,11 +502,11 @@ export function convertRule(
 }
 
 function getEstree(
-	sourceFile: ts.SourceFile,
+	file: ts.SourceFile,
 	languageService: ts.LanguageService,
 	compilationSettings: ts.CompilerOptions
 ) {
-	if (!estrees.has(sourceFile)) {
+	if (!estrees.has(file)) {
 		let program: ts.Program | undefined;
 		let SourceCode;
 
@@ -523,18 +523,18 @@ function getEstree(
 				return Reflect.get(program, p, receiver);
 			},
 		});
-		const { ast, scopeManager, visitorKeys, services } = Parser.parseForESLint(sourceFile, {
+		const { ast, scopeManager, visitorKeys, services } = Parser.parseForESLint(file, {
 			tokens: true,
 			comment: true,
 			loc: true,
 			range: true,
 			preserveNodeMaps: true,
-			filePath: sourceFile.fileName,
+			filePath: file.fileName,
 			emitDecoratorMetadata: compilationSettings.emitDecoratorMetadata ?? false,
 			experimentalDecorators: compilationSettings.experimentalDecorators ?? false,
 		});
 		const sourceCode = new SourceCode({
-			text: sourceFile.text,
+			text: file.text,
 			ast,
 			scopeManager,
 			visitorKeys,
@@ -546,7 +546,7 @@ function getEstree(
 			},
 		});
 		const eventQueue = sourceCode.traverse();
-		estrees.set(sourceFile, { estree: ast, sourceCode, eventQueue });
+		estrees.set(file, { estree: ast, sourceCode, eventQueue });
 	}
-	return estrees.get(sourceFile)!;
+	return estrees.get(file)!;
 }

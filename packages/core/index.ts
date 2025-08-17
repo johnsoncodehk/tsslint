@@ -40,7 +40,7 @@ export function createLinter(
 	const lintResults = new Map<
 		/* fileName */ string,
 		[
-			sourceFile: ts.SourceFile,
+			file: ts.SourceFile,
 			diagnostic2Fixes: Map<ts.DiagnosticWithLocation, {
 				title: string;
 				getEdits: () => ts.FileTextChanges[];
@@ -76,7 +76,12 @@ export function createLinter(
 			const rulesContext: RuleContext = typeAwareMode
 				? {
 					...ctx,
-					sourceFile: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
+					get file() {
+						return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+					},
+					get sourceFile() {
+						return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+					},
 					get program() {
 						return ctx.languageService.getProgram()!;
 					},
@@ -91,7 +96,12 @@ export function createLinter(
 					get program(): ts.Program {
 						throw new Error('Not supported');
 					},
-					sourceFile: getNonBoundSourceFile(fileName),
+					get file() {
+						return getNonBoundSourceFile(fileName);
+					},
+					get sourceFile() {
+						return getNonBoundSourceFile(fileName);
+					},
 					report,
 					reportError: report,
 					reportWarning: report,
@@ -100,7 +110,7 @@ export function createLinter(
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName, cache?.[2]);
 
-			lintResults.set(fileName, [rulesContext.sourceFile, new Map(), []]);
+			lintResults.set(fileName, [rulesContext.file, new Map(), []]);
 
 			const lintResult = lintResults.get(fileName)!;
 
@@ -115,12 +125,12 @@ export function createLinter(
 				if (ruleCache) {
 					let lintResult = lintResults.get(fileName);
 					if (!lintResult) {
-						lintResults.set(fileName, lintResult = [rulesContext.sourceFile, new Map(), []]);
+						lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
 					}
 					for (const cacheDiagnostic of ruleCache[1]) {
 						lintResult[1].set({
 							...cacheDiagnostic,
-							file: rulesContext.sourceFile,
+							file: rulesContext.file,
 							relatedInformation: cacheDiagnostic.relatedInformation?.map(info => ({
 								...info,
 								file: info.file ? (syntaxOnlyLanguageService as any).getNonBoundSourceFile(info.file.fileName) : undefined,
@@ -174,7 +184,7 @@ export function createLinter(
 				for (const { plugins } of configs) {
 					for (const { resolveDiagnostics } of plugins) {
 						if (resolveDiagnostics) {
-							diagnostics = resolveDiagnostics(rulesContext.sourceFile, diagnostics);
+							diagnostics = resolveDiagnostics(rulesContext.file, diagnostics);
 						}
 					}
 				}
@@ -203,7 +213,7 @@ export function createLinter(
 					category: ts.DiagnosticCategory.Message,
 					code: currentRuleId as any,
 					messageText: message,
-					file: rulesContext.sourceFile,
+					file: rulesContext.file,
 					start,
 					length: end - start,
 					source: 'tsslint',
@@ -226,7 +236,7 @@ export function createLinter(
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
-					lintResults.set(fileName, lintResult = [rulesContext.sourceFile, new Map(), []]);
+					lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
 				}
 				const diagnostic2Fixes = lintResult[1];
 				const refactors = lintResult[2];
@@ -281,7 +291,7 @@ export function createLinter(
 				return [];
 			}
 
-			const sourceFile = lintResult[0];
+			const file = lintResult[0];
 			const configs = getConfigsForFile(fileName, minimatchCache);
 			const result: ts.CodeFixAction[] = [];
 
@@ -310,7 +320,7 @@ export function createLinter(
 					for (const { plugins } of configs) {
 						for (const { resolveCodeFixes } of plugins) {
 							if (resolveCodeFixes) {
-								codeFixes = resolveCodeFixes(sourceFile, diagnostic, codeFixes);
+								codeFixes = resolveCodeFixes(file, diagnostic, codeFixes);
 							}
 						}
 					}

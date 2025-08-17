@@ -13,10 +13,10 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 		ruleSeverity: 'warning',
 		disabledIntervals: [],
 	}) as TSLint.IRule | TSLint.ITypedRule;
-	return ({ sourceFile, languageService, report }) => {
+	return ({ file, languageService, report }) => {
 		const failures = 'applyWithProgram' in rule
-			? rule.applyWithProgram(sourceFile, languageService.getProgram()!)
-			: rule.apply(sourceFile);
+			? rule.applyWithProgram(file, languageService.getProgram()!)
+			: rule.apply(file);
 		for (const failure of new Set(failures)) {
 			onAddFailure(failure);
 		}
@@ -39,7 +39,7 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 									? 'Delete ' + replace.start + ' to ' + replace.end
 									: 'Replace with ' + replace.text,
 							() => [{
-								fileName: sourceFile.fileName,
+								fileName: file.fileName,
 								textChanges: [{
 									newText: replace.text,
 									span: {

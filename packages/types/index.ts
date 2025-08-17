@@ -28,8 +28,8 @@ export interface Plugin {
 
 export interface PluginInstance {
 	resolveRules?(fileName: string, rules: Record<string, Rule>): Record<string, Rule>;
-	resolveDiagnostics?(sourceFile: SourceFile, diagnostics: DiagnosticWithLocation[]): DiagnosticWithLocation[];
-	resolveCodeFixes?(sourceFile: SourceFile, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
+	resolveDiagnostics?(file: SourceFile, diagnostics: DiagnosticWithLocation[]): DiagnosticWithLocation[];
+	resolveCodeFixes?(file: SourceFile, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
 }
 
 export interface Rules {
@@ -45,8 +45,13 @@ export interface RuleContext {
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 	program: Program;
-	sourceFile: SourceFile;
+	file: SourceFile;
 	report(message: string, start: number, end: number, stackOffset?: number): Reporter;
+
+	/**
+	 * @deprecated Use `file` instead.
+	 */
+	sourceFile: SourceFile;
 	/**
 	 * @deprecated Use `report` instead.
 	 */

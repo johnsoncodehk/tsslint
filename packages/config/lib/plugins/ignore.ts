@@ -122,7 +122,7 @@ export function create(
 		};
 
 		return {
-			resolveDiagnostics(sourceFile, results) {
+			resolveDiagnostics(file, results) {
 				if (
 					!reportsUnusedComments &&
 					!results.some(error => error.source === 'tsslint')
@@ -132,7 +132,7 @@ export function create(
 				const comments = new Map<string | undefined, CommentState[]>();
 				const logs: string[] = [];
 
-				forEachComment(sourceFile, (fullText, { pos, end }) => {
+				forEachComment(file, (fullText, { pos, end }) => {
 					pos += 2; // Trim the // or /* characters
 					const commentText = fullText.substring(pos, end);
 					logs.push(commentText);
@@ -146,13 +146,13 @@ export function create(
 							comments.set(ruleId, []);
 						}
 						const disabledLines = comments.get(ruleId)!;
-						const line = sourceFile.getLineAndCharacterOfPosition(index).line;
+						const line = file.getLineAndCharacterOfPosition(index).line;
 
 						let startLine = line;
 
 						if (mode === 'singleLine') {
-							const startWithComment = sourceFile.text.slice(
-								sourceFile.getPositionOfLineAndCharacter(line, 0),
+							const startWithComment = file.text.slice(
+								file.getPositionOfLineAndCharacter(line, 0),
 								index - 2
 							).trim() === '';
 							if (startWithComment) {
@@ -173,7 +173,7 @@ export function create(
 
 						if (endComment?.index !== undefined) {
 							const index = endComment.index + pos;
-							const prevLine = sourceFile.getLineAndCharacterOfPosition(index).line;
+							const prevLine = file.getLineAndCharacterOfPosition(index).line;
 							const ruleId = endComment.groups?.ruleId;
 
 							const disabledLines = comments.get(ruleId);
@@ -184,10 +184,10 @@ export function create(
 					}
 				});
 
-				let reportedRules = reportedRulesOfFile.get(sourceFile.fileName);
+				let reportedRules = reportedRulesOfFile.get(file.fileName);
 				if (!reportedRules) {
 					reportedRules = [];
-					reportedRulesOfFile.set(sourceFile.fileName, reportedRules);
+					reportedRulesOfFile.set(file.fileName, reportedRules);
 				}
 				reportedRules.length = 0;
 
@@ -195,7 +195,7 @@ export function create(
 					if (error.source !== 'tsslint') {
 						return true;
 					}
-					const line = sourceFile.getLineAndCharacterOfPosition(error.start).line;
+					const line = file.getLineAndCharacterOfPosition(error.start).line;
 
 					reportedRules.push([error.code as any, line]);
 
@@ -227,7 +227,7 @@ export function create(
 						for (const state of comment.values()) {
 							if (!state.used) {
 								results.push({
-									file: sourceFile,
+									file: file,
 									start: state.commentRange[0],
 									length: state.commentRange[1] - state.commentRange[0],
 									code: 'tsslint:unused-ignore-comment' as any,
@@ -241,23 +241,23 @@ export function create(
 				}
 				return results;
 			},
-			resolveCodeFixes(sourceFile, diagnostic, codeFixes) {
+			resolveCodeFixes(file, diagnostic, codeFixes) {
 				if (diagnostic.source !== 'tsslint' || diagnostic.start === undefined) {
 					return codeFixes;
 				}
-				const line = sourceFile.getLineAndCharacterOfPosition(diagnostic.start).line;
+				const line = file.getLineAndCharacterOfPosition(diagnostic.start).line;
 				codeFixes.push({
 					fixName: cmd,
 					description: `Ignore with ${cmdText}`,
 					changes: [
 						{
-							fileName: sourceFile.fileName,
+							fileName: file.fileName,
 							textChanges: [{
 								newText: reg.test(`${cmdText}${diagnostic.code}`)
 									? `// ${cmdText}${diagnostic.code}\n`
 									: `// ${cmdText} ${diagnostic.code}\n`,
 								span: {
-									start: sourceFile.getPositionOfLineAndCharacter(line, 0),
+									start: file.getPositionOfLineAndCharacter(line, 0),
 									length: 0,
 								},
 							}],

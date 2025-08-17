@@ -15,10 +15,10 @@ export default defineConfig({
 
 function createIngorePlugin(pattern: RegExp) {
 	return definePlugin(() => ({
-		resolveDiagnostics(sourceFile, results) {
-			const comments = [...sourceFile.text.matchAll(pattern)];
-			const lines = new Set(comments.map(comment => sourceFile.getLineAndCharacterOfPosition(comment.index).line));
-			return results.filter(error => error.source !== 'tsslint' || !lines.has(sourceFile.getLineAndCharacterOfPosition(error.start).line - 1));
+		resolveDiagnostics(file, results) {
+			const comments = [...file.text.matchAll(pattern)];
+			const lines = new Set(comments.map(comment => file.getLineAndCharacterOfPosition(comment.index).line));
+			return results.filter(error => error.source !== 'tsslint' || !lines.has(file.getLineAndCharacterOfPosition(error.start).line - 1));
 		},
 	}));
 }

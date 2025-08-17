@@ -58,12 +58,12 @@ function decorateLanguageService(
 			return result;
 		}
 		if (configFileDiagnostics.length) {
-			const sourceFile = info.languageService.getProgram()?.getSourceFile(fileName);
-			if (sourceFile) {
+			const file = info.languageService.getProgram()?.getSourceFile(fileName);
+			if (file) {
 				result = result.concat(configFileDiagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
 					...diagnostic,
 					source: 'tsslint',
-					file: sourceFile,
+					file,
 					start: 0,
 					length: 0,
 				})));

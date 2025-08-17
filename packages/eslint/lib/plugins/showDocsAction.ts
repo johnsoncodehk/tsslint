@@ -33,7 +33,7 @@ export function create(): Plugin {
 				collectMetadata(rules);
 				return rules;
 			},
-			resolveCodeFixes(sourceFile, diagnostic, codeFixes) {
+			resolveCodeFixes(file, diagnostic, codeFixes) {
 				const ruleMeta = ruleId2Meta.get(diagnostic.code as any);
 				if (!ruleMeta?.docs?.url) {
 					return codeFixes;
@@ -46,7 +46,7 @@ export function create(): Plugin {
 						fixName: 'Show documentation',
 						commands: [{
 							command: cmd,
-							file: sourceFile.fileName,
+							file: file.fileName,
 							url: ruleMeta.docs.url,
 						} satisfies Cmd],
 					},
