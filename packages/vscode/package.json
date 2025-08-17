@@ -19,15 +19,9 @@
 		"vscode": "^1.82.0"
 	},
 	"activationEvents": [
-		"onStartupFinished"
+		"onLanguage"
 	],
 	"contributes": {
-		"languages": [
-			{
-				"id": "plaintext",
-				"configuration": "./stub-language-configuration.json"
-			}
-		],
 		"typescriptServerPlugins": [
 			{
 				"name": "@tsslint/typescript-plugin",
