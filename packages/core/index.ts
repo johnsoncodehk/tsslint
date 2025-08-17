@@ -45,7 +45,7 @@ export function createLinter(
 				title: string;
 				getEdits: () => ts.FileTextChanges[];
 			}[]>,
-			{
+			refactors: {
 				title: string;
 				diagnostic: ts.DiagnosticWithLocation;
 				getEdits: () => ts.FileTextChanges[];
@@ -130,7 +130,7 @@ export function createLinter(
 							file: rulesContext.file,
 							relatedInformation: cacheDiagnostic.relatedInformation?.map(info => ({
 								...info,
-								file: info.file ? (syntaxOnlyLanguageService as any).getNonBoundSourceFile(info.file.fileName) : undefined,
+								file: info.file ? getNonBoundSourceFile?.(info.file.fileName) : undefined,
 							})),
 						}, []);
 					}
@@ -172,6 +172,10 @@ export function createLinter(
 			if (shouldRetry) {
 				// Retry
 				shouldEnableTypeAware = true;
+				if (cache && Object.values(cache[1]).some(([hasFix]) => hasFix)) {
+					cache[1] = {};
+					cache[2] = {};
+				}
 				return this.lint(fileName, cache);
 			}
 
@@ -189,6 +193,10 @@ export function createLinter(
 				if (!typeAwareMode) {
 					// Retry
 					shouldEnableTypeAware = true;
+					if (cache && Object.values(cache[1]).some(([hasFix]) => hasFix)) {
+						cache[1] = {};
+						cache[2] = {};
+					}
 					return this.lint(fileName, cache);
 				}
 				throw error;
