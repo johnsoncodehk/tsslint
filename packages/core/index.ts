@@ -69,46 +69,43 @@ export function createLinter(
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
 			let shouldRetry = false;
+			let rulesContext: RuleContext;
 
 			const rules = getRulesForFile(fileName, cache?.[2]);
 			const typeAwareMode = !getNonBoundSourceFile
 				|| shouldEnableTypeAware && !Object.keys(rules).some(ruleId => !rule2Mode.has(ruleId));
-			const rulesContext: RuleContext = typeAwareMode
-				? {
+			const token = ctx.languageServiceHost.getCancellationToken?.();
+			const configs = getConfigsForFile(fileName, cache?.[2]);
+
+			if (typeAwareMode) {
+				const program = ctx.languageService.getProgram()!;
+				const file = ctx.languageService.getProgram()!.getSourceFile(fileName)!;
+				rulesContext = {
 					...ctx,
-					get file() {
-						return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
-					},
-					get sourceFile() {
-						return ctx.languageService.getProgram()!.getSourceFile(fileName)!;
-					},
-					get program() {
-						return ctx.languageService.getProgram()!;
-					},
-					report,
-					reportError: report,
-					reportWarning: report,
-					reportSuggestion: report,
-				}
-				: {
-					...ctx,
-					languageService: syntaxOnlyLanguageService,
-					get program(): ts.Program {
-						throw new Error('Not supported');
-					},
-					get file() {
-						return getNonBoundSourceFile(fileName);
-					},
-					get sourceFile() {
-						return getNonBoundSourceFile(fileName);
-					},
+					file,
+					sourceFile: file,
+					program,
 					report,
 					reportError: report,
 					reportWarning: report,
 					reportSuggestion: report,
 				};
-			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const configs = getConfigsForFile(fileName, cache?.[2]);
+			} else {
+				const file = getNonBoundSourceFile(fileName);
+				rulesContext = {
+					...ctx,
+					languageService: syntaxOnlyLanguageService,
+					get program(): ts.Program {
+						throw new Error('Not supported');
+					},
+					file,
+					sourceFile: file,
+					report,
+					reportError: report,
+					reportWarning: report,
+					reportSuggestion: report,
+				};
+			}
 
 			lintResults.set(fileName, [rulesContext.file, new Map(), []]);
 
