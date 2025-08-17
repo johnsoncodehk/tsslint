@@ -32,7 +32,6 @@ TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overh
 - Writing config in typescript.
 - Direct support for meta framework files based on TS Plugin without a parser. (e.g., Vue, MDX)
 - Pure ESM.
-- Supports HTTP URL import, no need to add dependencies in package.json.
 - Designed to allow simple, direct access to rule source code without an intermediary layer.
 
 ## Usage
@@ -117,27 +116,6 @@ export default defineConfig({
 After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `report()` code is located.
 
 > Full example: https://github.com/johnsoncodehk/tsslint/tree/master/fixtures/define-a-rule
-
-### Import Rules from HTTP URL
-
-You can directly import rules from other repositories using HTTP URLs. This allows you to easily share and reuse rules across different projects.
-
-Here's an example of how to import a rule from a HTTP URL:
-
-```diff
-import { defineConfig } from '@tsslint/config';
-
-export default defineConfig({
-	rules: {
-		'no-console': (await import('./rules/noConsoleRule.ts')).create(),
-+ 		'no-alert': (await import('https://gist.githubusercontent.com/johnsoncodehk/55a4c45a5a35fc30b83de20507fb2bdc/raw/5f9c9a67ace76c0a77995fd71c3fb4fb504a40c8/TSSLint_noAlertRule.ts')).create(),
-	},
-});
-```
-
-In this example, the `no-alert` rule is imported from a file hosted on GitHub. After saving the config file, you will notice that `alert()` calls are now reporting errors in the editor.
-
-> Full example: https://github.com/johnsoncodehk/tsslint/tree/master/fixtures/http-import
 
 ### Modify the Error
 

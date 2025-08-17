@@ -27,8 +27,6 @@ export function buildConfig(
 				},
 				false,
 				createHash,
-				spinner,
-				stopSnipper
 			);
 		} catch (e) {
 			stopSnipper?.('Failed to build ' + configFileDisplayPath + ' in ' + (Date.now() - buildStart) + 'ms', 1);
