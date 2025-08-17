@@ -29,15 +29,14 @@ const loader = async (moduleName: string) => {
 	return mod as any;
 };
 
+type S = 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
+type O<T extends any[]> = S | [S, ...options: T];
+
 /**
- * Converts an ESLint rules configuration to TSSLint rules.
- *
- * The type definitions are generated when `@tsslint/eslint` is installed.
- * If the type definitions become outdated, please run
- * `node node_modules/@tsslint/eslint/scripts/generateDts.js` to update them.
+ * @deprecated Use `defineRules` instead
  */
 export async function convertRules(
-	rulesConfig: ESLintRulesConfig,
+	rulesConfig: { [K in keyof ESLintRulesConfig]: O<ESLintRulesConfig[K]> },
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ) {
 	const rules: TSSLint.Rules = {};
@@ -45,9 +44,11 @@ export async function convertRules(
 		let severity: boolean;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
+			// @ts-expect-error
 			[severity, ...options] = severityOrOptions;
 		}
 		else {
+			// @ts-expect-error
 			severity = severityOrOptions;
 			options = [];
 		}
@@ -59,7 +60,47 @@ export async function convertRules(
 			rules[rule] = noop;
 			continue;
 		}
-		const ruleModule = await getRuleByKey(rule);
+		const ruleModule = await loadRuleByKey(rule);
+		if (!ruleModule) {
+			throw new Error(`Failed to resolve rule "${rule}".`);
+		}
+		rules[rule] = convertRule(
+			ruleModule,
+			options,
+			{ id: rule, ...context }
+		);
+	}
+	return rules;
+}
+
+/**
+ * Converts an ESLint rules configuration to TSSLint rules.
+ *
+ * The type definitions are generated when `@tsslint/eslint` is installed.
+ * If the type definitions become outdated, please run
+ * `node node_modules/@tsslint/eslint/scripts/generateDts.js` to update them.
+ */
+export async function defineRules(
+	rulesConfig: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
+	context: Partial<ESLint.Rule.RuleContext> = {}
+) {
+	const rules: TSSLint.Rules = {};
+	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
+		let severity: boolean;
+		let options: any[];
+		if (Array.isArray(severityOrOptions)) {
+			severity = true;
+			options = severityOrOptions;
+		}
+		else {
+			severity = severityOrOptions;
+			options = [];
+		}
+		if (!severity) {
+			rules[rule] = noop;
+			continue;
+		}
+		const ruleModule = await loadRuleByKey(rule);
 		if (!ruleModule) {
 			throw new Error(`Failed to resolve rule "${rule}".`);
 		}
@@ -96,16 +137,16 @@ function* resolveRuleKey(rule: string): Generator<[
 	}
 }
 
-async function getRuleByKey(rule: string): Promise<ESLint.Rule.RuleModule | undefined> {
+async function loadRuleByKey(rule: string): Promise<ESLint.Rule.RuleModule | undefined> {
 	for (const resolved of resolveRuleKey(rule)) {
-		const ruleModule = await getRule(...resolved);
+		const ruleModule = await loadRule(...resolved);
 		if (ruleModule) {
 			return ruleModule;
 		}
 	}
 }
 
-async function getRule(pluginName: string | undefined, ruleName: string): Promise<ESLint.Rule.RuleModule | undefined> {
+async function loadRule(pluginName: string | undefined, ruleName: string): Promise<ESLint.Rule.RuleModule | undefined> {
 	if (pluginName) {
 		plugins[pluginName] ??= loader(pluginName);
 		const plugin = await plugins[pluginName];

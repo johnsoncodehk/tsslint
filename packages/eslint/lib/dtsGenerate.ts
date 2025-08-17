@@ -17,8 +17,6 @@ export async function generate(
 	let dts = '';
 	let defId = 0;
 
-	line(`export type O<T extends any[]> = boolean | [boolean, ...options: T];`);
-	line(``);
 	line(`export interface ESLintRulesConfig {`);
 	indentLevel++;
 
@@ -136,9 +134,9 @@ export async function generate(
 		}
 
 		if (optionsType) {
-			line(`'${ruleKey}'?: O<${optionsType}>,`);
+			line(`'${ruleKey}'?: ${optionsType},`);
 		} else {
-			line(`'${ruleKey}'?: O<any[]>,`);
+			line(`'${ruleKey}'?: any[],`);
 		}
 	}
 
