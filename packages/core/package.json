@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/core",
-	"version": "1.6.1",
+	"version": "2.0.0",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -12,7 +12,7 @@
 		"directory": "packages/core"
 	},
 	"dependencies": {
-		"@tsslint/types": "1.6.1",
+		"@tsslint/types": "2.0.0",
 		"esbuild": ">=0.17.0",
 		"minimatch": "^10.0.1"
 	},
