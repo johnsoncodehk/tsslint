@@ -77,6 +77,9 @@ export function createLinter(
 				? {
 					...ctx,
 					sourceFile: ctx.languageService.getProgram()!.getSourceFile(fileName)!,
+					get program() {
+						return ctx.languageService.getProgram()!;
+					},
 					report,
 					reportError: report,
 					reportWarning: report,
@@ -85,6 +88,9 @@ export function createLinter(
 				: {
 					...ctx,
 					languageService: syntaxOnlyLanguageService,
+					get program(): ts.Program {
+						throw new Error('Not supported');
+					},
 					sourceFile: getNonBoundSourceFile(fileName),
 					report,
 					reportError: report,
