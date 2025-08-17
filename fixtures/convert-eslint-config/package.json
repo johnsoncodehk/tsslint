@@ -1,10 +1,10 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/convert-eslint-config",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"devDependencies": {
-		"@tsslint/config": "2.0.0",
-		"@tsslint/eslint": "2.0.0",
+		"@tsslint/config": "2.0.1",
+		"@tsslint/eslint": "2.0.1",
 		"eslint-plugin-expect-type": "^0.4.0"
 	}
 }
