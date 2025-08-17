@@ -10,12 +10,12 @@ importers:
     devDependencies:
       '@lerna-lite/cli':
         specifier: latest
-        version: 4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)
+        version: 4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)
       '@lerna-lite/publish':
         specifier: latest
-        version: 4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
+        version: 4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:packages/config
       '@types/node':
         specifier: latest
@@ -27,10 +27,10 @@ importers:
   fixtures/convert-a-tslint-rule:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/config
       '@tsslint/tslint':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/tslint
       tslint:
         specifier: ^6.1.3
@@ -39,10 +39,10 @@ importers:
   fixtures/convert-eslint-config:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/eslint
       eslint-plugin-expect-type:
         specifier: ^0.4.0
@@ -51,10 +51,10 @@ importers:
   fixtures/convert-eslint-rules:
     devDependencies:
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/eslint
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.16.0
@@ -73,7 +73,7 @@ importers:
         version: 0.3.4
       '@vue-vine/language-service':
         specifier: latest
-        version: 1.7.3(typescript@5.9.2)
+        version: 1.7.5(typescript@5.9.2)
       '@vue/language-core':
         specifier: latest
         version: 3.0.5(typescript@5.9.2)
@@ -81,7 +81,7 @@ importers:
   fixtures/typescript-plugin:
     devDependencies:
       '@tsslint/typescript-plugin':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../../packages/typescript-plugin
       typescript:
         specifier: latest
@@ -93,10 +93,10 @@ importers:
         specifier: ^0.8.2
         version: 0.8.2
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../config
       '@tsslint/core':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../core
       '@volar/language-core':
         specifier: ~2.4.0
@@ -119,7 +119,7 @@ importers:
     devDependencies:
       '@vue-vine/language-service':
         specifier: latest
-        version: 1.7.3(typescript@5.9.2)
+        version: 1.7.5(typescript@5.9.2)
       '@vue/language-core':
         specifier: latest
         version: 3.0.5(typescript@5.9.2)
@@ -127,7 +127,7 @@ importers:
   packages/config:
     dependencies:
       '@tsslint/types':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../types
       ts-api-utils:
         specifier: ^2.0.0
@@ -136,7 +136,7 @@ importers:
   packages/core:
     dependencies:
       '@tsslint/types':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../types
       esbuild:
         specifier: '>=0.17.0'
@@ -152,7 +152,7 @@ importers:
   packages/eslint:
     dependencies:
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../config
       '@typescript-eslint/parser':
         specifier: ^8.16.0
@@ -162,7 +162,7 @@ importers:
         version: 9.27.0(jiti@2.5.1)
     devDependencies:
       '@tsslint/types':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../types
       '@types/eslint':
         specifier: ^8.56.10
@@ -174,7 +174,7 @@ importers:
   packages/tslint:
     devDependencies:
       '@tsslint/types':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../types
       tslint:
         specifier: ^6.0.0
@@ -188,7 +188,7 @@ importers:
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../core
       error-stack-parser:
         specifier: ^2.1.4
@@ -198,13 +198,13 @@ importers:
         version: 0.5.21
     devDependencies:
       '@tsslint/config':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../config
 
   packages/vscode:
     dependencies:
       '@tsslint/typescript-plugin':
-        specifier: 1.6.0
+        specifier: 1.6.1
         version: link:../typescript-plugin
     devDependencies:
       '@types/vscode':
@@ -593,8 +593,8 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.0':
     resolution: {integrity: sha512-gv3ZRaISU3fjPAgNsriBRqGWQL6quFx04YMPW/zD8XMLsU32mhCCbfbO6KZFLjvYpCZ8zyDEgqsgf+PwPaM7GQ==}
 
-  '@lerna-lite/cli@4.7.1':
-    resolution: {integrity: sha512-KSMab+EgJDND1Kf1Pt5sSk+gcvIAo2jVzSUcrMX6Q9CP0oOcwTgMnHwsB8yjTZb7NyM+MyRtmvN5aXKARP+gxg==}
+  '@lerna-lite/cli@4.7.2':
+    resolution: {integrity: sha512-QGOGMG4/GppeQZEsmiwiS9gGDgyM7/dhL45VBFID4mw+Ya/iUAntGiISibEvmeow5G0jUfPSFyY+Csydtk+5zw==}
     engines: {node: ^20.17.0 || >=22.9.0}
     hasBin: true
     peerDependencies:
@@ -618,24 +618,24 @@ packages:
       '@lerna-lite/watch':
         optional: true
 
-  '@lerna-lite/core@4.7.1':
-    resolution: {integrity: sha512-o82+bPTlnK8A19xycc2NTQ6MUBTlPAax+BLVta4wvCecXgn00hr9yRlqMHI24LFzvT3QLbuzEioVyj2n3zkNvA==}
+  '@lerna-lite/core@4.7.2':
+    resolution: {integrity: sha512-d5ZCp65XYWn7y3r3Wis7nlc4/N8isgee86a8ch81ZgnhySY6npcWfdMFeD1PyKLJs6LMAfUFvFmAcpSPnWNYdg==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@lerna-lite/init@4.7.1':
-    resolution: {integrity: sha512-oDDUi1sGuMVoffro0OEfaC1inPkbO82IsOT7KUr+2Ks7OZqXa030qUP+jr0ZYFz5MtFFtR55GEJCa7nZPFIT4Q==}
+  '@lerna-lite/init@4.7.2':
+    resolution: {integrity: sha512-kWVHJuTaW1tkkE6lhArF2xafssUW0mtxMQ6BrlgPvTKPfXimPNmrLW72361rEsdAV6VmWSJq0NE/iCIghO+h4w==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
   '@lerna-lite/npmlog@4.7.1':
     resolution: {integrity: sha512-s0HyfeuPhGEvLPnf+aOyFxRHR/ooeGc7Wut+kFImZ0Ht6Q38SthxBHI4HId6PfRN7UBaKQuN/SYkZ7xnx4BDZQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@lerna-lite/publish@4.7.1':
-    resolution: {integrity: sha512-EBkElRm8sQD/4jzdRVcpMVRXnGpRx975a+QNievrK1agOpZyDSeGuWEmS5Rmjb4Y73gqvU9f6h2nvIPpimw6rA==}
+  '@lerna-lite/publish@4.7.2':
+    resolution: {integrity: sha512-JIJ2jkP9TR0UzBj3h99T4tb6EEvY0A3ZSL5at3xBzRzyyngfMF5ykYxczVjsFr/HHDsMd3Gefb0KATZJkc+4Ww==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@lerna-lite/version@4.7.1':
-    resolution: {integrity: sha512-AicbWD+jDknBbKqnLNNNGlBJMa9c9518hn3kyrkYfrooF7WEkYrWzJskrAlQuRpxP1aHjMDj/iOcKU7zs8GoKg==}
+  '@lerna-lite/version@4.7.2':
+    resolution: {integrity: sha512-Z33Hr3ilYkeVJiI6++9RzNbcC8eE9qQPa/SIoYRmwjV7DF3VjqKc3hXXIkbTsxr8np1V9zzOECKPDqG6s6XIyQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
   '@mdx-js/language-service@0.7.2':
@@ -1002,6 +1002,9 @@ packages:
   '@umami/node@0.4.0':
     resolution: {integrity: sha512-pyphprbiF7KiDSc+SWZ4/rVM8B5vU27zIiFfEPj2lEqczpI4xAKSp+dM3tlzyRAWJL32fcbCfAaLGhJZQV13Rg==}
 
+  '@volar/language-core@2.4.17':
+    resolution: {integrity: sha512-chmRZMbKmcGpKMoO7Reb70uiLrzo0KWC2CkFttKUuKvrE+VYgi+fL9vWMJ07Fv5ulX0V1TAyyacN9q3nc5/ecA==}
+
   '@volar/language-core@2.4.22':
     resolution: {integrity: sha512-gp4M7Di5KgNyIyO903wTClYBavRt6UyFNpc5LWfyZr1lBsTUY+QrVZfmbNF2aCyfklBOVk9YC4p+zkwoyT7ECg==}
 
@@ -1011,17 +1014,26 @@ packages:
   '@volar/language-hub@0.0.1':
     resolution: {integrity: sha512-2eOUnlMKTyjtlXIVd+6pfAtcuVugxCOgpNgcLWmlPuncQTG5C1E5mTDL/PUMw7aEnLySUOtMTIp8lT3vk/7w6Q==}
 
-  '@volar/language-server@2.4.23':
-    resolution: {integrity: sha512-k0iO+tybMGMMyrNdWOxgFkP0XJTdbH0w+WZlM54RzJU3WZSjHEupwL30klpM7ep4FO6qyQa03h+VcGHD4Q8gEg==}
+  '@volar/language-server@2.4.17':
+    resolution: {integrity: sha512-KUa0v5JjgbQ8hqDTJDoUFDcAfHoE34kd13qAldHst2+zCeOoAthDBg6ZU7d2cGQznCsx7Vm0k5dRrOxj8JG+dg==}
+
+  '@volar/language-service@2.4.17':
+    resolution: {integrity: sha512-FPmLSJL5znBbfDANuemGeXY3WSLqACs8+NcC4BtATD77nQBx5zubsSXlU1lVJv005pzXqtyhd4dzICUTwo61CQ==}
 
   '@volar/language-service@2.4.23':
     resolution: {integrity: sha512-h5mU9DZ/6u3LCB9xomJtorNG6awBNnk9VuCioGsp6UtFiM8amvS5FcsaC3dabdL9zO0z+Gq9vIEMb/5u9K6jGQ==}
+
+  '@volar/source-map@2.4.17':
+    resolution: {integrity: sha512-QDybtQyO3Ms/NjFqNHTC5tbDN2oK5VH7ZaKrcubtfHBDj63n2pizHC3wlMQ+iT55kQXZUUAbmBX5L1C8CHFeBw==}
 
   '@volar/source-map@2.4.22':
     resolution: {integrity: sha512-L2nVr/1vei0xKRgO2tYVXtJYd09HTRjaZi418e85Q+QdbbqA8h7bBjfNyPPSsjnrOO4l4kaAo78c8SQUAdHvgA==}
 
   '@volar/source-map@2.4.23':
     resolution: {integrity: sha512-Z1Uc8IB57Lm6k7q6KIDu/p+JWtf3xsXJqAX/5r18hYOTpJyBn0KXUR8oTJ4WFYOcDzWC9n3IflGgHowx6U6z9Q==}
+
+  '@volar/typescript@2.4.17':
+    resolution: {integrity: sha512-3paEFNh4P5DkgNUB2YkTRrfUekN4brAXxd3Ow1syMqdIPtCZHbUy4AW99S5RO/7mzyTWPMdDSo3mqTpB/LPObQ==}
 
   '@volar/typescript@2.4.23':
     resolution: {integrity: sha512-lAB5zJghWxVPqfcStmAP1ZqQacMpe90UrP5RJ3arDyrhy4aCUQqmxPPLB2PWDKugvylmO41ljK7vZ+t6INMTag==}
@@ -1079,11 +1091,11 @@ packages:
     engines: {node: '>= 20'}
     hasBin: true
 
-  '@vue-vine/compiler@1.7.3':
-    resolution: {integrity: sha512-QokcxtRQROkVeJYCrnfth7vDOnI2pkrLqIuL8va4ZVaICAAJkF2gpI8+XzW62UL9dkP9BmcHUd2dbZdbZolYoQ==}
+  '@vue-vine/compiler@1.7.5':
+    resolution: {integrity: sha512-7kT7uuQYGT07YWECktEQDxMiqKYRT9LVR/OocqKjSQnuFt2l1K/8UAtdQzqjAE/6WmGyk7JzfC9jAILGq06+jw==}
 
-  '@vue-vine/language-service@1.7.3':
-    resolution: {integrity: sha512-t3nv+v/38nYtN1dp/3rvPwOgbmq6tDqzZDVTzwXyAA8iRY1T6p8KTyZiMrKqKBo4HIoH1qc+Ph2fsPCz4NC7hQ==}
+  '@vue-vine/language-service@1.7.5':
+    resolution: {integrity: sha512-g2tgZJ2hA+w3rY123UIyxXDvZDnR1VOLx70QYlUEyUTql2icyH7vdwwsrt8/GnQH/SxUOpNtQ80gO5Z25eywCQ==}
 
   '@vue/compiler-core@3.5.18':
     resolution: {integrity: sha512-3slwjQrrV1TO8MoXgy3aynDQ7lslj5UqDxuHnrzHtpON5CBinhWjJETciPngpin/T3OuW3tXUf86tEurusnztw==}
@@ -1096,6 +1108,14 @@ packages:
 
   '@vue/compiler-vue2@2.7.16':
     resolution: {integrity: sha512-qYC3Psj9S/mfu9uVi5WvNZIzq+xnXMhOwbTFKKDD7b1lhpnn71jXSFdTQ+WsIEk0ONCd7VV2IMm7ONl6tbQ86A==}
+
+  '@vue/language-core@3.0.1':
+    resolution: {integrity: sha512-sq+/Mc1IqIexWEQ+Q2XPiDb5SxSvY5JPqHnMOl/PlF5BekslzduX8dglSkpC17VeiAQB6dpS+4aiwNLJRduCNw==}
+    peerDependencies:
+      typescript: '*'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   '@vue/language-core@3.0.5':
     resolution: {integrity: sha512-gCEjn9Ik7I/seHVNIEipOm8W+f3/kg60e8s1IgIkMYma2wu9ZGUTMv3mSL2bX+Md2L8fslceJ4SU8j1fgSRoiw==}
@@ -2631,9 +2651,9 @@ packages:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
     engines: {node: '>=10'}
 
-  p-limit@6.2.0:
-    resolution: {integrity: sha512-kuUqqHNUqoIWp/c467RI4X6mmyuojY5jGutNU0wVTmEOOfcuwLqyMVoAi9MKi2Ak+5i9+nhmrK4ufZE8069kHA==}
-    engines: {node: '>=18'}
+  p-limit@7.0.0:
+    resolution: {integrity: sha512-WeCdPG5OjujcMWjSkOS0kt3bo+LmroXLmOnJ4SPhZfz5pffQxDUNcYscbZgyGwKf9r9z7gRfKjDNno5cZyQAZQ==}
+    engines: {node: '>=20'}
 
   p-locate@4.1.0:
     resolution: {integrity: sha512-R79ZZ/0wAxKGu3oYMlz8jy/kbhsNrS7SKZ7PxEHBgJ5+F2mtFW2fK2cOtBh1cHYkQsbzFV7I+EoRKe6Yt0oK7A==}
@@ -3835,10 +3855,10 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.0': {}
 
-  '@lerna-lite/cli@4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)':
+  '@lerna-lite/cli@4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)':
     dependencies:
-      '@lerna-lite/core': 4.7.1(@types/node@24.3.0)
-      '@lerna-lite/init': 4.7.1(@types/node@24.3.0)
+      '@lerna-lite/core': 4.7.2(@types/node@24.3.0)
+      '@lerna-lite/init': 4.7.2(@types/node@24.3.0)
       '@lerna-lite/npmlog': 4.7.1
       dedent: 1.6.0
       dotenv: 17.2.1
@@ -3846,14 +3866,14 @@ snapshots:
       load-json-file: 7.0.1
       yargs: 18.0.0
     optionalDependencies:
-      '@lerna-lite/publish': 4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
-      '@lerna-lite/version': 4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/publish': 4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/version': 4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
     transitivePeerDependencies:
       - '@types/node'
       - babel-plugin-macros
       - supports-color
 
-  '@lerna-lite/core@4.7.1(@types/node@24.3.0)':
+  '@lerna-lite/core@4.7.2(@types/node@24.3.0)':
     dependencies:
       '@inquirer/expand': 4.0.17(@types/node@24.3.0)
       '@inquirer/input': 4.2.1(@types/node@24.3.0)
@@ -3888,9 +3908,9 @@ snapshots:
       - babel-plugin-macros
       - supports-color
 
-  '@lerna-lite/init@4.7.1(@types/node@24.3.0)':
+  '@lerna-lite/init@4.7.2(@types/node@24.3.0)':
     dependencies:
-      '@lerna-lite/core': 4.7.1(@types/node@24.3.0)
+      '@lerna-lite/core': 4.7.2(@types/node@24.3.0)
       fs-extra: 11.3.1
       p-map: 7.0.3
       write-json-file: 6.0.0
@@ -3910,12 +3930,12 @@ snapshots:
       signal-exit: 4.1.0
       wide-align: 1.1.5
 
-  '@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0)':
+  '@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0)':
     dependencies:
-      '@lerna-lite/cli': 4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)
-      '@lerna-lite/core': 4.7.1(@types/node@24.3.0)
+      '@lerna-lite/cli': 4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)
+      '@lerna-lite/core': 4.7.2(@types/node@24.3.0)
       '@lerna-lite/npmlog': 4.7.1
-      '@lerna-lite/version': 4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/version': 4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0)
       '@npmcli/arborist': 9.1.3
       '@npmcli/package-json': 6.2.0
       byte-size: 9.0.1
@@ -3947,11 +3967,11 @@ snapshots:
       - conventional-commits-filter
       - supports-color
 
-  '@lerna-lite/version@4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0)':
+  '@lerna-lite/version@4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0)':
     dependencies:
       '@conventional-changelog/git-client': 2.5.1(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.2.0)
-      '@lerna-lite/cli': 4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.1(@lerna-lite/publish@4.7.1(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)
-      '@lerna-lite/core': 4.7.1(@types/node@24.3.0)
+      '@lerna-lite/cli': 4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.7.2(@lerna-lite/publish@4.7.2(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)(conventional-commits-filter@5.0.0))(@types/node@24.3.0)
+      '@lerna-lite/core': 4.7.2(@types/node@24.3.0)
       '@lerna-lite/npmlog': 4.7.1
       '@octokit/plugin-enterprise-rest': 6.0.1
       '@octokit/rest': 22.0.0
@@ -3968,7 +3988,7 @@ snapshots:
       load-json-file: 7.0.1
       new-github-release-url: 2.0.0
       npm-package-arg: 13.0.0
-      p-limit: 6.2.0
+      p-limit: 7.0.0
       p-map: 7.0.3
       p-pipe: 4.0.0
       p-reduce: 3.0.0
@@ -4535,6 +4555,10 @@ snapshots:
 
   '@umami/node@0.4.0': {}
 
+  '@volar/language-core@2.4.17':
+    dependencies:
+      '@volar/source-map': 2.4.17
+
   '@volar/language-core@2.4.22':
     dependencies:
       '@volar/source-map': 2.4.22
@@ -4545,14 +4569,21 @@ snapshots:
 
   '@volar/language-hub@0.0.1': {}
 
-  '@volar/language-server@2.4.23':
+  '@volar/language-server@2.4.17':
     dependencies:
-      '@volar/language-core': 2.4.23
-      '@volar/language-service': 2.4.23
-      '@volar/typescript': 2.4.23
+      '@volar/language-core': 2.4.17
+      '@volar/language-service': 2.4.17
+      '@volar/typescript': 2.4.17
       path-browserify: 1.0.1
       request-light: 0.7.0
       vscode-languageserver: 9.0.1
+      vscode-languageserver-protocol: 3.17.5
+      vscode-languageserver-textdocument: 1.0.12
+      vscode-uri: 3.1.0
+
+  '@volar/language-service@2.4.17':
+    dependencies:
+      '@volar/language-core': 2.4.17
       vscode-languageserver-protocol: 3.17.5
       vscode-languageserver-textdocument: 1.0.12
       vscode-uri: 3.1.0
@@ -4564,9 +4595,17 @@ snapshots:
       vscode-languageserver-textdocument: 1.0.12
       vscode-uri: 3.1.0
 
+  '@volar/source-map@2.4.17': {}
+
   '@volar/source-map@2.4.22': {}
 
   '@volar/source-map@2.4.23': {}
+
+  '@volar/typescript@2.4.17':
+    dependencies:
+      '@volar/language-core': 2.4.17
+      path-browserify: 1.0.1
+      vscode-uri: 3.1.0
 
   '@volar/typescript@2.4.23':
     dependencies:
@@ -4649,7 +4688,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vue-vine/compiler@1.7.3':
+  '@vue-vine/compiler@1.7.5':
     dependencies:
       '@babel/parser': 7.28.0
       '@babel/types': 7.28.2
@@ -4666,14 +4705,14 @@ snapshots:
       postcss-selector-parser: 7.1.0
       ts-morph: 26.0.0
 
-  '@vue-vine/language-service@1.7.3(typescript@5.9.2)':
+  '@vue-vine/language-service@1.7.5(typescript@5.9.2)':
     dependencies:
       '@umami/node': 0.4.0
-      '@volar/language-core': 2.4.23
-      '@volar/language-server': 2.4.23
-      '@volar/typescript': 2.4.23
-      '@vue-vine/compiler': 1.7.3
-      '@vue/language-core': 3.0.5(typescript@5.9.2)
+      '@volar/language-core': 2.4.17
+      '@volar/language-server': 2.4.17
+      '@volar/typescript': 2.4.17
+      '@vue-vine/compiler': 1.7.5
+      '@vue/language-core': 3.0.1(typescript@5.9.2)
       '@vue/shared': 3.5.18
       destr: 2.0.5
       detect-port: 2.1.0
@@ -4707,6 +4746,19 @@ snapshots:
     dependencies:
       de-indent: 1.0.2
       he: 1.2.0
+
+  '@vue/language-core@3.0.1(typescript@5.9.2)':
+    dependencies:
+      '@volar/language-core': 2.4.17
+      '@vue/compiler-dom': 3.5.18
+      '@vue/compiler-vue2': 2.7.16
+      '@vue/shared': 3.5.18
+      alien-signals: 2.0.6
+      minimatch: 10.0.3
+      muggle-string: 0.4.1
+      path-browserify: 1.0.1
+    optionalDependencies:
+      typescript: 5.9.2
 
   '@vue/language-core@3.0.5(typescript@5.9.2)':
     dependencies:
@@ -6520,7 +6572,7 @@ snapshots:
     dependencies:
       yocto-queue: 0.1.0
 
-  p-limit@6.2.0:
+  p-limit@7.0.0:
     dependencies:
       yocto-queue: 1.2.1
 
