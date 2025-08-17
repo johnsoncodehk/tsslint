@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/eslint",
-	"version": "1.6.1",
+	"version": "2.0.0-alpha.0",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -15,12 +15,12 @@
 		"postinstall": "node scripts/generateDts.js"
 	},
 	"devDependencies": {
-		"@tsslint/types": "1.6.1",
+		"@tsslint/types": "2.0.0-alpha.0",
 		"@types/eslint": "^8.56.10",
 		"typescript": "latest"
 	},
 	"dependencies": {
-		"@tsslint/config": "1.6.1",
+		"@tsslint/config": "2.0.0-alpha.0",
 		"@typescript-eslint/parser": "^8.16.0",
 		"eslint": ">=9.0.0 <9.28.0"
 	}
