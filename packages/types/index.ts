@@ -5,6 +5,7 @@ import type {
 	FileTextChanges,
 	LanguageService,
 	LanguageServiceHost,
+	Program,
 	SourceFile,
 } from 'typescript';
 
@@ -43,6 +44,7 @@ export interface RuleContext {
 	typescript: typeof import('typescript');
 	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
+	program: Program;
 	sourceFile: SourceFile;
 	report(message: string, start: number, end: number, stackOffset?: number): Reporter;
 	/**
