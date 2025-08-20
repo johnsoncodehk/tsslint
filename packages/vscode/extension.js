@@ -1,10 +1,14 @@
-const vscode = require('vscode');
-
 module.exports.activate = () => { };
 module.exports.deactivate = () => { };
 
-try {
-	const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
+const vscode = require('vscode');
+const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
+if (tsExtension.isActive) {
+	vscode.window.showWarningMessage(
+		'When the TypeScript Language Features extension is activated before the TSSLint extension, TSSLint may not work as expected.'
+		+ ' Please try restarting the extension host, or report the issue to us.'
+	);
+} else {
 	const extensionJsPath = require.resolve('./dist/extension.js', { paths: [tsExtension.extensionPath] });
 	const readFileSync = require('fs').readFileSync;
 
@@ -110,4 +114,11 @@ vscode.languages.registerCodeActionsProvider(
 		}
 		return readFileSync(...args);
 	};
-} catch { }
+
+	const loadedModule = require.cache[extensionJsPath];
+	if (loadedModule) {
+		delete require.cache[extensionJsPath];
+		const patchedModule = require(extensionJsPath);
+		Object.assign(loadedModule.exports, patchedModule);
+	}
+}
