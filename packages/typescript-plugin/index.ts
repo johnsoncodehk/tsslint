@@ -157,12 +157,9 @@ function decorateLanguageService(
 				configFileBuildContext = await core.watchConfig(
 					configFile,
 					async (builtConfig, { errors, warnings }) => {
-						configFileDiagnostics = [
-							...errors.map(error => [error, ts.DiagnosticCategory.Error] as const),
-							...warnings.map(error => [error, ts.DiagnosticCategory.Warning] as const),
-						].map(([error, category]) => {
+						configFileDiagnostics = [...errors, ...warnings].map(error => {
 							const diag: typeof configFileDiagnostics[number] = {
-								category,
+								category: ts.DiagnosticCategory.Message,
 								code: error.id as any,
 								messageText: error.text,
 							};
@@ -178,7 +175,7 @@ function decorateLanguageService(
 								if (relatedFile) {
 									diag.messageText = `Error building config file.`;
 									diag.relatedInformation = [{
-										category,
+										category: ts.DiagnosticCategory.Message,
 										code: error.id as any,
 										messageText: error.text,
 										file: relatedFile,
@@ -208,7 +205,7 @@ function decorateLanguageService(
 									const relatedInfo = createRelatedInformation(ts, err, 0);
 									if (relatedInfo) {
 										configFileDiagnostics.push({
-											category: ts.DiagnosticCategory.Error,
+											category: ts.DiagnosticCategory.Message,
 											code: 0,
 											messageText: err.message,
 											relatedInformation: [relatedInfo],
@@ -217,7 +214,7 @@ function decorateLanguageService(
 								}
 								if (prevLength === configFileDiagnostics.length) {
 									configFileDiagnostics.push({
-										category: ts.DiagnosticCategory.Error,
+										category: ts.DiagnosticCategory.Message,
 										code: 0,
 										messageText: String(err),
 									});
@@ -231,7 +228,7 @@ function decorateLanguageService(
 				);
 			} catch (err) {
 				configFileDiagnostics.push({
-					category: ts.DiagnosticCategory.Error,
+					category: ts.DiagnosticCategory.Message,
 					code: 'config-build-error' as any,
 					messageText: String(err),
 				});
