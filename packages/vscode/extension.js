@@ -4,10 +4,18 @@ module.exports.deactivate = () => { };
 const vscode = require('vscode');
 const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
 if (tsExtension.isActive) {
-	vscode.window.showWarningMessage(
-		'When the TypeScript Language Features extension is activated before the TSSLint extension, TSSLint may not work as expected.'
-		+ ' Please try restarting the extension host, or report the issue to us.'
-	);
+	vscode.window.showInformationMessage(
+		'TSSLint may not work properly if the TypeScript Language Features extension is activated first.' +
+		' Try restarting the Extension Host in VSCode, or let us know if you keep seeing this issue.',
+		'Restart Extension Host',
+		'Report Issue'
+	).then(selection => {
+		if (selection === 'Restart Extension Host') {
+			vscode.commands.executeCommand('workbench.action.restartExtensionHost');
+		} else if (selection === 'Report Issue') {
+			vscode.commands.executeCommand('vscode.open', vscode.Uri.parse('https://github.com/johnsoncodehk/tsslint/issues/new'));
+		}
+	});
 } else {
 	const extensionJsPath = require.resolve('./dist/extension.js', { paths: [tsExtension.extensionPath] });
 	const readFileSync = require('fs').readFileSync;
