@@ -1,6 +1,7 @@
 import type {
 	CodeFixAction,
 	Diagnostic,
+	DiagnosticCategory,
 	DiagnosticWithLocation,
 	FileTextChanges,
 	LanguageService,
@@ -46,7 +47,7 @@ export interface RuleContext {
 	languageService: LanguageService;
 	program: Program;
 	file: SourceFile;
-	report(message: string, start: number, end: number, stackOffset?: number): Reporter;
+	report(message: string, start: number, end: number, category?: DiagnosticCategory, stackOffset?: number): Reporter;
 
 	/**
 	 * @deprecated Use `file` instead.

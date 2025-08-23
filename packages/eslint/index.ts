@@ -29,7 +29,7 @@ const loader = async (moduleName: string) => {
 	return mod as any;
 };
 
-type S = 'error' | 'warn' | 'suggestion' | 'off' | 0 | 1 | 2;
+type S = 'off' | 'error' | 'warn' | 'suggestion' | 'message' | 0 | 1 | 2 | 3 | 4;
 type O<T extends any[]> = S | [S, ...options: T];
 
 /**
@@ -41,22 +41,16 @@ export async function convertRules(
 ) {
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
-		let severity: boolean;
+		let severity: S;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
-			// @ts-expect-error
 			[severity, ...options] = severityOrOptions;
 		}
 		else {
-			// @ts-expect-error
 			severity = severityOrOptions;
 			options = [];
 		}
-		// @ts-expect-error backward compatibility
 		if (severity === 'off' || severity === 0) {
-			severity = false;
-		}
-		if (!severity) {
 			rules[rule] = noop;
 			continue;
 		}
@@ -67,6 +61,13 @@ export async function convertRules(
 		rules[rule] = convertRule(
 			ruleModule,
 			options,
+			severity === 'warn' || severity === 1
+				? 0
+				: severity === 'error' || severity === 2
+					? 1
+					: severity === 'suggestion' || severity === 3
+						? 2
+						: 3,
 			{ id: rule, ...context }
 		);
 	}
@@ -82,6 +83,7 @@ export async function convertRules(
  */
 export async function defineRules(
 	rulesConfig: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ) {
 	const rules: TSSLint.Rules = {};
@@ -107,6 +109,7 @@ export async function defineRules(
 		rules[rule] = convertRule(
 			ruleModule,
 			options,
+			category,
 			{ id: rule, ...context }
 		);
 	}
@@ -162,6 +165,7 @@ async function loadRule(pluginName: string | undefined, ruleName: string): Promi
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 	context: Partial<ESLint.Rule.RuleContext> = {}
 ): TSSLint.Rule {
 	// ESLint internal scripts
@@ -249,7 +253,7 @@ export function convertRule(
 						}
 					}
 				} catch { }
-				const reporter = report(message, start, end, 2);
+				const reporter = report(message, start, end, category, 2);
 				if (descriptor.fix) {
 					// @ts-expect-error
 					const textChanges = getTextChanges(descriptor.fix);

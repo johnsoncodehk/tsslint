@@ -151,9 +151,9 @@ export function createLinter(
 						rule2Mode.set(currentRuleId, true);
 						shouldRetry = true;
 					} else if (err instanceof Error) {
-						report(err.stack ?? err.message, 0, 0, 0, err);
+						report(err.stack ?? err.message, 0, 0, ts.DiagnosticCategory.Message, 0, err);
 					} else {
-						report(String(err), 0, 0, Number.MAX_VALUE);
+						report(String(err), 0, 0, ts.DiagnosticCategory.Message, Number.MAX_VALUE);
 					}
 				}
 
@@ -213,9 +213,9 @@ export function createLinter(
 
 			return diagnostics;
 
-			function report(message: string, start: number, end: number, stackOffset: number = 1, err?: Error): Reporter {
+			function report(message: string, start: number, end: number, category: ts.DiagnosticCategory = ts.DiagnosticCategory.Message, stackOffset: number = 1, err?: Error): Reporter {
 				const error: ts.DiagnosticWithLocation = {
-					category: ts.DiagnosticCategory.Message,
+					category,
 					code: currentRuleId as any,
 					messageText: message,
 					file: rulesContext.file,

@@ -1,11 +1,13 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as TSLint from 'tslint';
+import type * as ts from 'typescript';
 
 type TSLintRule = import('tslint/lib/language/rule/rule').RuleConstructor;
 
 export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 	Rule: T,
 	ruleArguments: any[] = [],
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
 	const rule = new (Rule as TSLintRule)({
 		ruleName: Rule.metadata?.ruleName ?? 'unknown',
@@ -25,6 +27,7 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				failure.getFailure(),
 				failure.getStartPosition().getPosition(),
 				failure.getEndPosition().getPosition(),
+				category,
 				Number.MAX_VALUE
 			);
 			if (failure.hasFix()) {
