@@ -11,11 +11,11 @@ import languagePlugins = require('./lib/languagePlugins.js');
 process.env.TSSLINT_CLI = '1';
 
 const _reset = '\x1b[0m';
-const darkGray = (s: string) => '\x1b[90m' + s + _reset;
-const lightRed = (s: string) => '\x1b[91m' + s + _reset;
-const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
-const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
-const lightBlue = (s: string) => '\x1b[94m' + s + _reset;
+const gray = (s: string) => '\x1b[90m' + s + _reset;
+const red = (s: string) => '\x1b[91m' + s + _reset;
+const green = (s: string) => '\x1b[92m' + s + _reset;
+const yellow = (s: string) => '\x1b[93m' + s + _reset;
+const blue = (s: string) => '\x1b[94m' + s + _reset;
 const purple = (s: string) => '\x1b[95m' + s + _reset;
 const cyan = (s: string) => '\x1b[96m' + s + _reset;
 
@@ -33,7 +33,7 @@ if (process.argv.includes('--threads')) {
 	const threadsIndex = process.argv.indexOf('--threads');
 	const threadsArg = process.argv[threadsIndex + 1];
 	if (!threadsArg || threadsArg.startsWith('-')) {
-		console.error(lightRed(`Missing argument for --threads.`));
+		console.error(red(`Missing argument for --threads.`));
 		process.exit(1);
 	}
 	threads = Math.min(os.availableParallelism(), Number(threadsArg));
@@ -81,10 +81,10 @@ class Project {
 			}
 		}
 
-		const label = labels.join(darkGray(' | '));
+		const label = labels.join(gray(' | '));
 
 		if (!this.configFile) {
-			clack.log.error(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No tsslint.config.ts found)')}`);
+			clack.log.error(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No tsslint.config.ts found)')}`);
 			return this;
 		}
 
@@ -94,11 +94,11 @@ class Project {
 		this.options = commonLine.options;
 
 		if (!this.fileNames.length) {
-			clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray('(No included files)')}`);
+			clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No included files)')}`);
 			return this;
 		}
 
-		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${darkGray(`(${this.fileNames.length})`)}`);
+		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray(`(${this.fileNames.length})`)}`);
 
 		if (!process.argv.includes('--force')) {
 			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
@@ -133,7 +133,7 @@ class Project {
 		const write = process.stdout.write.bind(process.stdout);
 		process.stdout.write = (...args) => {
 			if (spinnerStopingWarn && typeof args[0] === 'string') {
-				args[0] = args[0].replace('▲', lightYellow('▲'));
+				args[0] = args[0].replace('▲', yellow('▲'));
 			}
 			// @ts-ignore
 			return write(...args);
@@ -211,7 +211,7 @@ class Project {
 		}
 
 		if (!options.length) {
-			clack.log.error(lightRed('No projects found.'));
+			clack.log.error(red('No projects found.'));
 			process.exit(1);
 		}
 
@@ -234,7 +234,7 @@ class Project {
 			command += ` --${language}-project ` + selectedTsconfigs.join(' ');
 		}
 
-		clack.log.info(`${darkGray('Command:')} ${purple(command)}`);
+		clack.log.info(`${gray('Command:')} ${purple(command)}`);
 
 		for (let tsconfig of selectedTsconfigs) {
 			tsconfig = resolvePath(tsconfig);
@@ -283,7 +283,7 @@ class Project {
 				const searchGlob = process.argv[i];
 				const tsconfigs = glob.sync(searchGlob);
 				if (!tsconfigs.length) {
-					clack.log.error(lightRed(`No projects found for ${projectFlag} ${searchGlob}.`));
+					clack.log.error(red(`No projects found for ${projectFlag} ${searchGlob}.`));
 					process.exit(1);
 				}
 				for (let tsconfig of tsconfigs) {
@@ -297,7 +297,7 @@ class Project {
 				}
 			}
 			if (!foundArg) {
-				clack.log.error(lightRed(`Missing argument for ${projectFlag}.`));
+				clack.log.error(red(`Missing argument for ${projectFlag}.`));
 				process.exit(1);
 			}
 		}
@@ -320,7 +320,7 @@ class Project {
 	}
 
 	if (allFilesNum === 0) {
-		(spinner?.stop ?? clack.log.message)(lightYellow('No input files.'));
+		(spinner?.stop ?? clack.log.message)(yellow('No input files.'));
 		process.exit(1);
 	}
 
@@ -334,39 +334,39 @@ class Project {
 
 	(spinner?.stop ?? clack.log.message)(
 		cached
-			? darkGray(`Processed ${processed} files with cache. (Use `) + cyan(`--force`) + darkGray(` to ignore cache.)`)
-			: darkGray(`Processed ${processed} files.`)
+			? gray(`Processed ${processed} files with cache. (Use `) + cyan(`--force`) + gray(` to ignore cache.)`)
+			: gray(`Processed ${processed} files.`)
 	);
 
 	const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
 	if (projectsFlag) {
 		clack.log.warn(
-			darkGray(`Please use `)
+			gray(`Please use `)
 			+ cyan(`${projectsFlag.slice(0, -1)}`)
-			+ darkGray(` instead of `)
+			+ gray(` instead of `)
 			+ cyan(`${projectsFlag}`)
-			+ darkGray(` starting from version 1.5.0.`)
+			+ gray(` starting from version 1.5.0.`)
 		);
 	}
 
 	const data = [
-		[passed, 'passed', lightGreen] as const,
-		[errors, 'errors', lightRed] as const,
-		[warnings, 'warnings', lightYellow] as const,
-		[messages, 'messages', lightBlue] as const,
-		[suggestions, 'suggestions', darkGray] as const,
-		[excluded, 'excluded', darkGray] as const,
+		[passed, 'passed', green] as const,
+		[errors, 'errors', red] as const,
+		[warnings, 'warnings', yellow] as const,
+		[messages, 'messages', blue] as const,
+		[suggestions, 'suggestions', gray] as const,
+		[excluded, 'excluded', gray] as const,
 	];
 
 	let summary = data
 		.filter(([count]) => count)
 		.map(([count, label, color]) => color(`${count} ${label}`))
-		.join(darkGray(' | '));
+		.join(gray(' | '));
 
 	if (hasFix) {
-		summary += darkGray(` (Use `) + cyan(`--fix`) + darkGray(` to apply automatic fixes.)`);
+		summary += gray(` (Use `) + cyan(`--fix`) + gray(` to apply automatic fixes.)`);
 	} else if (errors || warnings || messages) {
-		summary += darkGray(` (No fixes available.)`);
+		summary += gray(` (No fixes available.)`);
 	}
 
 	clack.outro(summary);
@@ -502,7 +502,7 @@ class Project {
 
 	async function getBuiltConfig(configFile: string) {
 		if (!builtConfigs.has(configFile)) {
-			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, spinner, (s, code) => log(darkGray(s), code)));
+			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, spinner, (s, code) => log(gray(s), code)));
 		}
 		return await builtConfigs.get(configFile);
 	}
@@ -521,13 +521,13 @@ class Project {
 		let msg: string | undefined;
 		if (processFiles.size === 0) {
 			if (nextFileName) {
-				msg = darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), nextFileName)}`);
+				msg = gray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), nextFileName)}`);
 			}
 		}
 		else if (processFiles.size === 1) {
-			msg = darkGray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`);
+			msg = gray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`);
 		} else {
-			msg = darkGray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
+			msg = gray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
 		}
 		if (!spinner && isTTY) {
 			spinner = clack.spinner();
@@ -567,7 +567,7 @@ class Project {
 		try {
 			return require.resolve(p, { paths: [process.cwd()] });
 		} catch {
-			clack.log.error(lightRed(`No such file: ${p}`));
+			clack.log.error(red(`No such file: ${p}`));
 			process.exit(1);
 		}
 	}
