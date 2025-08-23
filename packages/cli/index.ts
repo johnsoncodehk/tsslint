@@ -11,13 +11,13 @@ import languagePlugins = require('./lib/languagePlugins.js');
 process.env.TSSLINT_CLI = '1';
 
 const _reset = '\x1b[0m';
-const purple = (s: string) => '\x1b[35m' + s + _reset;
-const cyan = (s: string) => '\x1b[36m' + s + _reset;
 const darkGray = (s: string) => '\x1b[90m' + s + _reset;
 const lightRed = (s: string) => '\x1b[91m' + s + _reset;
 const lightGreen = (s: string) => '\x1b[92m' + s + _reset;
 const lightYellow = (s: string) => '\x1b[93m' + s + _reset;
 const lightBlue = (s: string) => '\x1b[94m' + s + _reset;
+const purple = (s: string) => '\x1b[95m' + s + _reset;
+const cyan = (s: string) => '\x1b[96m' + s + _reset;
 
 // https://talyian.github.io/ansicolors/
 const tsColor = (s: string) => '\x1b[34m' + s + _reset;
@@ -126,6 +126,7 @@ class Project {
 	let errors = 0;
 	let warnings = 0;
 	let messages = 0;
+	let suggestions = 0;
 	let cached = 0;
 
 	if (isTTY) {
@@ -353,6 +354,7 @@ class Project {
 		[errors, 'errors', lightRed] as const,
 		[warnings, 'warnings', lightYellow] as const,
 		[messages, 'messages', lightBlue] as const,
+		[suggestions, 'suggestions', darkGray] as const,
 		[excluded, 'excluded', darkGray] as const,
 	];
 
@@ -425,13 +427,16 @@ class Project {
 				project.cache[fileName] = fileCache = [fileStat.mtimeMs, {}, {}];
 			}
 
-			let diagnostics = await linterWorker.lint(
+			const diagnostics = await linterWorker.lint(
 				fileName,
 				process.argv.includes('--fix'),
 				fileCache
 			);
-
-			diagnostics = diagnostics.filter(diagnostic => diagnostic.category !== ts.DiagnosticCategory.Suggestion);
+			const formatHost: ts.FormatDiagnosticsHost = {
+				getCurrentDirectory: ts.sys.getCurrentDirectory,
+				getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
+				getNewLine: () => ts.sys.newLine,
+			};
 
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
@@ -439,11 +444,19 @@ class Project {
 				for (const diagnostic of diagnostics) {
 					hasFix ||= !!fileCache[1][diagnostic.code]?.[0];
 
-					let output = ts.formatDiagnosticsWithColorAndContext([diagnostic], {
-						getCurrentDirectory: ts.sys.getCurrentDirectory,
-						getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
-						getNewLine: () => ts.sys.newLine,
-					});
+					let output: string;
+
+					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
+						output = ts.formatDiagnosticsWithColorAndContext([{
+							...diagnostic,
+							category: ts.DiagnosticCategory.Message,
+						}], formatHost);
+						output = output.replace(/\[94mmessage/, '[90msuggestion');
+						output = output.replace(/\[94m/g, '[90m');
+					} else {
+						output = ts.formatDiagnosticsWithColorAndContext([diagnostic], formatHost);
+					}
+
 					output = output.trimEnd();
 
 					if (typeof diagnostic.code === 'string') {
@@ -463,6 +476,7 @@ class Project {
 						log(output);
 					}
 					else {
+						suggestions++;
 						log(output);
 					}
 				}
