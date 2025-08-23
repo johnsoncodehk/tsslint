@@ -133,7 +133,7 @@ export default defineConfig({
 	},
 	plugins: [
 		({ typescript: ts }) => ({
-			resolveDiagnostics(_fileName, diagnostics) {
+			resolveDiagnostics(file, diagnostics) {
 				for (const diagnostic of diagnostics) {
 					if (diagnostic.code === 'no-console') {
 						diagnostic.category = ts.DiagnosticCategory.Error;
@@ -170,7 +170,7 @@ You can also lint multiple projects at once:
 
 ```sh
 npx tsslint --project packages/*/tsconfig.json
-npx tsslint --project packages/pkg-a/tsconfig.json packages/pkg-b/tsconfig.json
+npx tsslint --project {packages/pkg-a/tsconfig.json,packages/pkg-b/tsconfig.json}
 ```
 
 This command will run the linter on all TypeScript projects located in the subdirectories of the `packages` directory. Each subdirectory should contain a `tsconfig.json` file defining a TypeScript project. Any linting errors will be output to the console.

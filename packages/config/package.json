@@ -13,6 +13,7 @@
 	},
 	"dependencies": {
 		"@tsslint/types": "2.0.2",
+		"minimatch": "^10.0.1",
 		"ts-api-utils": "^2.0.0"
 	}
 }
