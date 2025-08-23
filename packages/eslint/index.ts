@@ -61,14 +61,14 @@ export async function convertRules(
 		rules[rule] = convertRule(
 			ruleModule,
 			options,
+			{ id: rule, ...context },
 			severity === 'warn' || severity === 1
 				? 0
 				: severity === 'error' || severity === 2
 					? 1
 					: severity === 'suggestion' || severity === 3
 						? 2
-						: 3,
-			{ id: rule, ...context }
+						: 3
 		);
 	}
 	return rules;
@@ -82,12 +82,12 @@ export async function convertRules(
  * `node node_modules/@tsslint/eslint/scripts/generateDts.js` to update them.
  */
 export async function defineRules(
-	rulesConfig: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
-	context: Partial<ESLint.Rule.RuleContext> = {}
+	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
+	context: Partial<ESLint.Rule.RuleContext> = {},
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
 ) {
 	const rules: TSSLint.Rules = {};
-	for (const [rule, severityOrOptions] of Object.entries(rulesConfig)) {
+	for (const [rule, severityOrOptions] of Object.entries(config)) {
 		let severity: boolean;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
@@ -109,8 +109,8 @@ export async function defineRules(
 		rules[rule] = convertRule(
 			ruleModule,
 			options,
+			{ id: rule, ...context },
 			category,
-			{ id: rule, ...context }
 		);
 	}
 	return rules;
@@ -165,8 +165,8 @@ async function loadRule(pluginName: string | undefined, ruleName: string): Promi
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
-	context: Partial<ESLint.Rule.RuleContext> = {}
+	context: Partial<ESLint.Rule.RuleContext> = {},
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
 ): TSSLint.Rule {
 	// ESLint internal scripts
 	let createEmitter;
