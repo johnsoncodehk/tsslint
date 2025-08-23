@@ -129,6 +129,9 @@ importers:
       '@tsslint/types':
         specifier: 2.0.2
         version: link:../types
+      minimatch:
+        specifier: ^10.0.1
+        version: 10.0.3
       ts-api-utils:
         specifier: ^2.0.0
         version: 2.1.0(typescript@5.9.2)

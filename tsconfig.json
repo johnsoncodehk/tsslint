@@ -3,7 +3,7 @@
 	"compilerOptions": {
 		"noEmit": true,
 	},
-	"include": [ ],
+	"include": [ "tsslint.config.ts" ],
 	"references": [
 		{ "path": "./packages/cli/tsconfig.json" },
 		{ "path": "./packages/tslint/tsconfig.json" },
