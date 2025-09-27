@@ -55,7 +55,8 @@ class Project {
 
 	async init(
 		// @ts-expect-error
-		clack: typeof import('@clack/prompts')
+		clack: typeof import('@clack/prompts'),
+		filesFilter: Set<string>
 	) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
@@ -98,7 +99,18 @@ class Project {
 			return this;
 		}
 
-		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray(`(${this.fileNames.length})`)}`);
+		const originalFileNamesLength = this.fileNames.length;
+		
+		if (filesFilter.size) {
+			this.fileNames = this.fileNames.filter(f => filesFilter.has(f));
+			if (!this.fileNames.length) {
+				clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No files left after filter)')}`);
+				return this;
+			}
+		}
+
+		const filteredLengthDiff = originalFileNamesLength - this.fileNames.length;
+		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)}`);
 
 		if (!process.argv.includes('--force')) {
 			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
@@ -303,8 +315,31 @@ class Project {
 		}
 	}
 
+	// get filter glob option
+	let filterSet: Set<string> = new Set();
+
+	const filterArgIndex = process.argv.findIndex(arg => arg === '--filter');
+	if (filterArgIndex !== -1) {
+		for (let i = filterArgIndex + 1; i < process.argv.length; i++) {
+			const filterGlob = process.argv[i];
+			if (!filterGlob || filterGlob.startsWith('-')) {
+				clack.log.error(red(`Missing argument for --filter.`));
+				process.exit(1);
+			}
+
+			const fileNames = glob.sync(filterGlob).map(f => path.resolve(f));
+			for (const fileName of fileNames)
+				filterSet.add(fileName);
+		}
+
+		if (!filterSet.size) {
+			clack.log.error(red(`No files found after --filter files.`));
+			process.exit(1);
+		}
+	}
+
 	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(await new Project(tsconfig, languages).init(clack));
+		projects.push(await new Project(tsconfig, languages).init(clack, filterSet));
 	}
 
 	spinner?.start();
