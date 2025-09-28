@@ -40,7 +40,7 @@ if (process.argv.includes('--threads')) {
 }
 
 class Project {
-	workers: ReturnType<typeof worker.create>[] = [];
+	worker: ReturnType<typeof worker.create> | undefined;
 	fileNames: string[] = [];
 	options: ts.CompilerOptions = {};
 	configFile: string | undefined;
@@ -100,7 +100,7 @@ class Project {
 		}
 
 		const originalFileNamesLength = this.fileNames.length;
-		
+
 		if (filesFilter.size) {
 			this.fileNames = this.fileNames.filter(f => filesFilter.has(f));
 			if (!this.fileNames.length) {
@@ -412,17 +412,12 @@ class Project {
 		if (!unfinishedProjects.length) {
 			return;
 		}
-		// Select a project that has not has a worker yet
-		let project = unfinishedProjects.find(project => !project.workers.length);
+		// Select a project that does not have a worker yet
+		const project = unfinishedProjects.find(project => !project.worker);
 		if (!project) {
-			// Choose a project with the most files left per worker
-			project = unfinishedProjects.sort((a, b) => {
-				const aFilesPerWorker = (a.fileNames.length - a.currentFileIndex) / a.workers.length;
-				const bFilesPerWorker = (b.fileNames.length - b.currentFileIndex) / b.workers.length;
-				return bFilesPerWorker - aFilesPerWorker;
-			})[0];
+			return;
 		}
-		project.workers.push(linterWorker);
+		project.worker = linterWorker;
 
 		const setupSuccess = await linterWorker.setup(
 			project.tsconfig,
