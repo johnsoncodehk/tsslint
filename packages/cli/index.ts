@@ -95,7 +95,7 @@ class Project {
 		this.options = commonLine.options;
 
 		if (!this.fileNames.length) {
-			clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No included files)')}`);
+			clack.log.message(`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(0)')}`);
 			return this;
 		}
 
