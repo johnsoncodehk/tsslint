@@ -112,6 +112,8 @@ class Project {
 				clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No files left after filter)')}`);
 				return this;
 			}
+		} else {
+			this.fileNames = this.rawFileNames;
 		}
 
 		const filteredLengthDiff = this.rawFileNames.length - this.fileNames.length;
