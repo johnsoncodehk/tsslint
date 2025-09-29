@@ -41,6 +41,13 @@ if (process.argv.includes('--threads')) {
 
 class Project {
 	worker: ReturnType<typeof worker.create> | undefined;
+	/**
+	 * file names for passing to ts language service host (getScriptFileNames)
+	 */
+	rawFileNames: string[] = [];
+	/**
+	 * file names after filter, for linting process
+	 */
 	fileNames: string[] = [];
 	options: ts.CompilerOptions = {};
 	configFile: string | undefined;
@@ -91,25 +98,23 @@ class Project {
 
 		const commonLine = await parseCommonLine(this.tsconfig, this.languages);
 
-		this.fileNames = commonLine.fileNames;
+		this.rawFileNames = commonLine.fileNames;
 		this.options = commonLine.options;
 
-		if (!this.fileNames.length) {
+		if (!this.rawFileNames.length) {
 			clack.log.message(`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(0)')}`);
 			return this;
 		}
 
-		const originalFileNamesLength = this.fileNames.length;
-
 		if (filesFilter.size) {
-			this.fileNames = this.fileNames.filter(f => filesFilter.has(f));
+			this.fileNames = this.rawFileNames.filter(f => filesFilter.has(f));
 			if (!this.fileNames.length) {
 				clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No files left after filter)')}`);
 				return this;
 			}
 		}
 
-		const filteredLengthDiff = originalFileNamesLength - this.fileNames.length;
+		const filteredLengthDiff = this.rawFileNames.length - this.fileNames.length;
 		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)}`);
 
 		if (!process.argv.includes('--force')) {
@@ -424,7 +429,7 @@ class Project {
 			project.languages,
 			project.configFile!,
 			project.builtConfig!,
-			project.fileNames,
+			project.rawFileNames,
 			project.options,
 		);
 		if (!setupSuccess) {
