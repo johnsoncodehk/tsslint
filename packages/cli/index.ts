@@ -327,7 +327,7 @@ class Project {
 				process.exit(1);
 			}
 
-			const fileNames = glob.sync(filterGlob).map(f => path.resolve(f));
+			const fileNames = glob.sync(filterGlob, { dot: true }).map(f => path.resolve(f));
 			for (const fileName of fileNames)
 				filterSet.add(fileName);
 		}
