@@ -327,7 +327,14 @@ class Project {
 		}
 	}
 
-	// get filter glob option
+	function normalizeFilterGlobPath(filterGlob: string, expandDirToGlob = true) {
+		let filterPath = path.resolve(process.cwd(), filterGlob)
+		if (expandDirToGlob && fs.existsSync(filterPath) && fs.statSync(filterPath).isDirectory()) {
+			filterPath = path.join(filterPath, '**/*');
+		}
+		return ts.server.toNormalizedPath(filterPath);
+	}
+
 	const filters: string[] = [];
 	const filterArgIndex = process.argv.indexOf('--filter');
 	if (filterArgIndex !== -1) {
