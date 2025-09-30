@@ -6,6 +6,7 @@ import worker = require('./lib/worker.js');
 import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
+import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
 
 process.env.TSSLINT_CLI = '1';
@@ -63,7 +64,7 @@ class Project {
 	async init(
 		// @ts-expect-error
 		clack: typeof import('@clack/prompts'),
-		filesFilter: Set<string>
+		filesFilter: string[]
 	) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
@@ -106,10 +107,14 @@ class Project {
 			return this;
 		}
 
-		if (filesFilter.size) {
-			this.fileNames = this.rawFileNames.filter(f => filesFilter.has(f));
+		if (filesFilter.length) {
+			this.fileNames = this.rawFileNames.filter(
+				fileName => filesFilter.some(
+					filter => minimatch.minimatch(fileName, filter, { dot: true })
+				)
+			);
 			if (!this.fileNames.length) {
-				clack.log.warn(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No files left after filter)')}`);
+				clack.log.message(`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(No files left after filter)')}`);
 				return this;
 			}
 		} else {
@@ -322,31 +327,34 @@ class Project {
 		}
 	}
 
-	// get filter glob option
-	let filterSet: Set<string> = new Set();
-
-	const filterArgIndex = process.argv.findIndex(arg => arg === '--filter');
-	if (filterArgIndex !== -1) {
-		for (let i = filterArgIndex + 1; i < process.argv.length; i++) {
-			const filterGlob = process.argv[i];
-			if (!filterGlob || filterGlob.startsWith('-')) {
-				clack.log.error(red(`Missing argument for --filter.`));
-				process.exit(1);
-			}
-
-			const fileNames = glob.sync(filterGlob, { dot: true }).map(f => path.resolve(f));
-			for (const fileName of fileNames)
-				filterSet.add(fileName);
+	function normalizeFilterGlobPath(filterGlob: string, expandDirToGlob = true) {
+		let filterPath = path.resolve(process.cwd(), filterGlob);
+		if (expandDirToGlob && fs.existsSync(filterPath) && fs.statSync(filterPath).isDirectory()) {
+			filterPath = path.join(filterPath, '**/*');
 		}
+		return ts.server.toNormalizedPath(filterPath);
+	}
 
-		if (!filterSet.size) {
-			clack.log.error(red(`No files found after --filter files.`));
+	const filters: string[] = [];
+	const filterArgIndex = process.argv.indexOf('--filter');
+	if (filterArgIndex !== -1) {
+		const filterGlob = process.argv[filterArgIndex + 1];
+		if (!filterGlob || filterGlob.startsWith('-')) {
+			clack.log.error(red(`Missing argument for --filter.`));
 			process.exit(1);
+		}
+		filters.push(normalizeFilterGlobPath(filterGlob));
+		for (let i = filterArgIndex + 2; i < process.argv.length; i++) {
+			const filterGlob = process.argv[i];
+			if (filterGlob.startsWith('-')) {
+				break;
+			}
+			filters.push(normalizeFilterGlobPath(filterGlob));
 		}
 	}
 
 	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(await new Project(tsconfig, languages).init(clack, filterSet));
+		projects.push(await new Project(tsconfig, languages).init(clack, filters));
 	}
 
 	spinner?.start();

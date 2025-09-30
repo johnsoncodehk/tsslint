@@ -113,6 +113,9 @@ importers:
       json5:
         specifier: ^2.2.3
         version: 2.2.3
+      minimatch:
+        specifier: ^10.0.1
+        version: 10.0.3
       typescript:
         specifier: '*'
         version: 5.9.2
