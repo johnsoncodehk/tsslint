@@ -10,16 +10,16 @@ importers:
     devDependencies:
       '@lerna-lite/cli':
         specifier: latest
-        version: 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)
+        version: 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)
       '@lerna-lite/publish':
         specifier: latest
-        version: 4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0)
+        version: 4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0)
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:packages/config
       '@types/node':
         specifier: latest
-        version: 24.5.2
+        version: 24.6.0
       typescript:
         specifier: latest
         version: 5.9.2
@@ -27,10 +27,10 @@ importers:
   fixtures/convert-a-tslint-rule:
     devDependencies:
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/config
       '@tsslint/tslint':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/tslint
       tslint:
         specifier: ^6.1.3
@@ -39,10 +39,10 @@ importers:
   fixtures/convert-eslint-config:
     devDependencies:
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/eslint
       eslint-plugin-expect-type:
         specifier: ^0.4.0
@@ -51,10 +51,10 @@ importers:
   fixtures/convert-eslint-rules:
     devDependencies:
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/config
       '@tsslint/eslint':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/eslint
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.16.0
@@ -76,12 +76,12 @@ importers:
         version: 1.7.6(typescript@5.9.2)
       '@vue/language-core':
         specifier: latest
-        version: 3.0.8(typescript@5.9.2)
+        version: 3.1.0(typescript@5.9.2)
 
   fixtures/typescript-plugin:
     devDependencies:
       '@tsslint/typescript-plugin':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../../packages/typescript-plugin
       typescript:
         specifier: latest
@@ -93,10 +93,10 @@ importers:
         specifier: ^0.8.2
         version: 0.8.2
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../config
       '@tsslint/core':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../core
       '@volar/language-core':
         specifier: ~2.4.0
@@ -125,12 +125,12 @@ importers:
         version: 1.7.6(typescript@5.9.2)
       '@vue/language-core':
         specifier: latest
-        version: 3.0.8(typescript@5.9.2)
+        version: 3.1.0(typescript@5.9.2)
 
   packages/config:
     dependencies:
       '@tsslint/types':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../types
       minimatch:
         specifier: ^10.0.1
@@ -142,7 +142,7 @@ importers:
   packages/core:
     dependencies:
       '@tsslint/types':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../types
       esbuild:
         specifier: '>=0.17.0'
@@ -158,7 +158,7 @@ importers:
   packages/eslint:
     dependencies:
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../config
       '@typescript-eslint/parser':
         specifier: ^8.16.0
@@ -168,7 +168,7 @@ importers:
         version: 9.27.0(jiti@2.5.1)
     devDependencies:
       '@tsslint/types':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../types
       '@types/eslint':
         specifier: ^8.56.10
@@ -180,7 +180,7 @@ importers:
   packages/tslint:
     devDependencies:
       '@tsslint/types':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../types
       tslint:
         specifier: ^6.0.0
@@ -194,7 +194,7 @@ importers:
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../core
       error-stack-parser:
         specifier: ^2.1.4
@@ -204,13 +204,13 @@ importers:
         version: 0.5.21
     devDependencies:
       '@tsslint/config':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../config
 
   packages/vscode:
     dependencies:
       '@tsslint/typescript-plugin':
-        specifier: 2.0.5
+        specifier: 2.0.6
         version: link:../typescript-plugin
     devDependencies:
       '@types/vscode':
@@ -928,8 +928,8 @@ packages:
   '@types/node@22.15.31':
     resolution: {integrity: sha512-jnVe5ULKl6tijxUhvQeNbQG/84fHfg+yMak02cT8QVhBx/F05rAVxCGBYYTh2EKz22D6JF5ktXuNwdx7b9iEGw==}
 
-  '@types/node@24.5.2':
-    resolution: {integrity: sha512-FYxk1I7wPv3K2XBaoyH2cTnocQEu8AOZ60hPbsyukMPLv5/5qr7V1i8PLHdl6Zf87I+xZXFvPCXYjiTFq+YSDQ==}
+  '@types/node@24.6.0':
+    resolution: {integrity: sha512-F1CBxgqwOMc4GKJ7eY22hWhBVQuMYTtqI8L0FcszYcpYX0fzfDGpez22Xau8Mgm7O9fI+zA/TYIdq3tGWfweBA==}
 
   '@types/normalize-package-data@2.4.4':
     resolution: {integrity: sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA==}
@@ -1125,8 +1125,8 @@ packages:
       typescript:
         optional: true
 
-  '@vue/language-core@3.0.8':
-    resolution: {integrity: sha512-eYs6PF7bxoPYvek9qxceo1BCwFbJZYqJll+WaYC8o8ec60exqj+n+QRGGiJHSeUfYp0hDxARbMdxMq/fbPgU5g==}
+  '@vue/language-core@3.1.0':
+    resolution: {integrity: sha512-a7ns+X9vTbdmk7QLrvnZs8s4E1wwtxG/sELzr6F2j4pU+r/OoAv6jJGSz+5tVTU6e4+3rjepGhSP8jDmBBcb3w==}
     peerDependencies:
       typescript: '*'
     peerDependenciesMeta:
@@ -1166,6 +1166,9 @@ packages:
 
   alien-signals@2.0.6:
     resolution: {integrity: sha512-P3TxJSe31bUHBiblg59oU1PpaWPtmxF9GhJ/cB7OkgJ0qN/ifFSKUI25/v8ZhsT+lIG6ac8DpTOplXxORX6F3Q==}
+
+  alien-signals@3.0.0:
+    resolution: {integrity: sha512-JHoRJf18Y6HN4/KZALr3iU+0vW9LKG+8FMThQlbn4+gv8utsLIkwpomjElGPccGeNwh0FI2HN6BLnyFLo6OyLQ==}
 
   ansi-escapes@7.0.0:
     resolution: {integrity: sha512-GdYO7a61mR0fOlAsvC9/rIHf7L96sBc6dEWzeOu+KAea5bZyQRPIpojrVoI4AXGJS/ycu/fBTdLrUkA4ODrvjw==}
@@ -3255,8 +3258,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici-types@7.12.0:
-    resolution: {integrity: sha512-goOacqME2GYyOZZfb5Lgtu+1IDmAlAEu5xnD3+xTzS10hT0vzpf0SPjkXwAw9Jm+4n/mQGDP3LO8CPbYROeBfQ==}
+  undici-types@7.13.0:
+    resolution: {integrity: sha512-Ov2Rr9Sx+fRgagJ5AX0qvItZG/JKKoBRAVITs1zk7IqZGTJUwgUr7qoYBpWwakpWilTZFM98rG/AFRocu10iIQ==}
 
   undici@7.10.0:
     resolution: {integrity: sha512-u5otvFBOBZvmdjWLVW+5DAc9Nkq8f24g0O9oY7qw2JVIF1VocIFoyz9JFkuVOS2j41AufeO0xnlweJ2RLT8nGw==}
@@ -3786,49 +3789,49 @@ snapshots:
 
   '@inquirer/ansi@1.0.0': {}
 
-  '@inquirer/core@10.2.2(@types/node@24.5.2)':
+  '@inquirer/core@10.2.2(@types/node@24.6.0)':
     dependencies:
       '@inquirer/ansi': 1.0.0
       '@inquirer/figures': 1.0.13
-      '@inquirer/type': 3.0.8(@types/node@24.5.2)
+      '@inquirer/type': 3.0.8(@types/node@24.6.0)
       cli-width: 4.1.0
       mute-stream: 2.0.0
       signal-exit: 4.1.0
       wrap-ansi: 6.2.0
       yoctocolors-cjs: 2.1.2
     optionalDependencies:
-      '@types/node': 24.5.2
+      '@types/node': 24.6.0
 
-  '@inquirer/expand@4.0.20(@types/node@24.5.2)':
+  '@inquirer/expand@4.0.20(@types/node@24.6.0)':
     dependencies:
-      '@inquirer/core': 10.2.2(@types/node@24.5.2)
-      '@inquirer/type': 3.0.8(@types/node@24.5.2)
+      '@inquirer/core': 10.2.2(@types/node@24.6.0)
+      '@inquirer/type': 3.0.8(@types/node@24.6.0)
       yoctocolors-cjs: 2.1.2
     optionalDependencies:
-      '@types/node': 24.5.2
+      '@types/node': 24.6.0
 
   '@inquirer/figures@1.0.13': {}
 
-  '@inquirer/input@4.2.4(@types/node@24.5.2)':
+  '@inquirer/input@4.2.4(@types/node@24.6.0)':
     dependencies:
-      '@inquirer/core': 10.2.2(@types/node@24.5.2)
-      '@inquirer/type': 3.0.8(@types/node@24.5.2)
+      '@inquirer/core': 10.2.2(@types/node@24.6.0)
+      '@inquirer/type': 3.0.8(@types/node@24.6.0)
     optionalDependencies:
-      '@types/node': 24.5.2
+      '@types/node': 24.6.0
 
-  '@inquirer/select@4.3.4(@types/node@24.5.2)':
+  '@inquirer/select@4.3.4(@types/node@24.6.0)':
     dependencies:
       '@inquirer/ansi': 1.0.0
-      '@inquirer/core': 10.2.2(@types/node@24.5.2)
+      '@inquirer/core': 10.2.2(@types/node@24.6.0)
       '@inquirer/figures': 1.0.13
-      '@inquirer/type': 3.0.8(@types/node@24.5.2)
+      '@inquirer/type': 3.0.8(@types/node@24.6.0)
       yoctocolors-cjs: 2.1.2
     optionalDependencies:
-      '@types/node': 24.5.2
+      '@types/node': 24.6.0
 
-  '@inquirer/type@3.0.8(@types/node@24.5.2)':
+  '@inquirer/type@3.0.8(@types/node@24.6.0)':
     optionalDependencies:
-      '@types/node': 24.5.2
+      '@types/node': 24.6.0
 
   '@isaacs/balanced-match@4.0.1': {}
 
@@ -3853,10 +3856,10 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.0': {}
 
-  '@lerna-lite/cli@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)':
+  '@lerna-lite/cli@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)':
     dependencies:
-      '@lerna-lite/core': 4.9.0(@types/node@24.5.2)
-      '@lerna-lite/init': 4.9.0(@types/node@24.5.2)
+      '@lerna-lite/core': 4.9.0(@types/node@24.6.0)
+      '@lerna-lite/init': 4.9.0(@types/node@24.6.0)
       '@lerna-lite/npmlog': 4.7.3
       dedent: 1.7.0
       dotenv: 17.2.2
@@ -3864,18 +3867,18 @@ snapshots:
       load-json-file: 7.0.1
       yargs: 18.0.0
     optionalDependencies:
-      '@lerna-lite/publish': 4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0)
-      '@lerna-lite/version': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/publish': 4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/version': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0)
     transitivePeerDependencies:
       - '@types/node'
       - babel-plugin-macros
       - supports-color
 
-  '@lerna-lite/core@4.9.0(@types/node@24.5.2)':
+  '@lerna-lite/core@4.9.0(@types/node@24.6.0)':
     dependencies:
-      '@inquirer/expand': 4.0.20(@types/node@24.5.2)
-      '@inquirer/input': 4.2.4(@types/node@24.5.2)
-      '@inquirer/select': 4.3.4(@types/node@24.5.2)
+      '@inquirer/expand': 4.0.20(@types/node@24.6.0)
+      '@inquirer/input': 4.2.4(@types/node@24.6.0)
+      '@inquirer/select': 4.3.4(@types/node@24.6.0)
       '@lerna-lite/npmlog': 4.7.3
       '@npmcli/run-script': 10.0.0
       ci-info: 4.3.0
@@ -3906,9 +3909,9 @@ snapshots:
       - babel-plugin-macros
       - supports-color
 
-  '@lerna-lite/init@4.9.0(@types/node@24.5.2)':
+  '@lerna-lite/init@4.9.0(@types/node@24.6.0)':
     dependencies:
-      '@lerna-lite/core': 4.9.0(@types/node@24.5.2)
+      '@lerna-lite/core': 4.9.0(@types/node@24.6.0)
       fs-extra: 11.3.2
       p-map: 7.0.3
       write-json-file: 7.0.0
@@ -3928,12 +3931,12 @@ snapshots:
       signal-exit: 4.1.0
       wide-align: 1.1.5
 
-  '@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0)':
+  '@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0)':
     dependencies:
-      '@lerna-lite/cli': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)
-      '@lerna-lite/core': 4.9.0(@types/node@24.5.2)
+      '@lerna-lite/cli': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)
+      '@lerna-lite/core': 4.9.0(@types/node@24.6.0)
       '@lerna-lite/npmlog': 4.7.3
-      '@lerna-lite/version': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/version': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0)
       '@npmcli/arborist': 9.1.5
       '@npmcli/package-json': 7.0.1
       byte-size: 9.0.1
@@ -3966,11 +3969,11 @@ snapshots:
       - conventional-commits-filter
       - supports-color
 
-  '@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0)':
+  '@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0)':
     dependencies:
       '@conventional-changelog/git-client': 2.5.1(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.2.0)
-      '@lerna-lite/cli': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)(conventional-commits-filter@5.0.0))(@types/node@24.5.2)
-      '@lerna-lite/core': 4.9.0(@types/node@24.5.2)
+      '@lerna-lite/cli': 4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@4.9.0(@lerna-lite/publish@4.9.0(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)(conventional-commits-filter@5.0.0))(@types/node@24.6.0)
+      '@lerna-lite/core': 4.9.0(@types/node@24.6.0)
       '@lerna-lite/npmlog': 4.7.3
       '@octokit/plugin-enterprise-rest': 6.0.1
       '@octokit/rest': 22.0.0
@@ -4442,9 +4445,9 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
-  '@types/node@24.5.2':
+  '@types/node@24.6.0':
     dependencies:
-      undici-types: 7.12.0
+      undici-types: 7.13.0
 
   '@types/normalize-package-data@2.4.4': {}
 
@@ -4761,13 +4764,12 @@ snapshots:
     optionalDependencies:
       typescript: 5.9.2
 
-  '@vue/language-core@3.0.8(typescript@5.9.2)':
+  '@vue/language-core@3.1.0(typescript@5.9.2)':
     dependencies:
       '@volar/language-core': 2.4.23
       '@vue/compiler-dom': 3.5.18
-      '@vue/compiler-vue2': 2.7.16
       '@vue/shared': 3.5.18
-      alien-signals: 2.0.6
+      alien-signals: 3.0.0
       muggle-string: 0.4.1
       path-browserify: 1.0.1
       picomatch: 4.0.3
@@ -4803,6 +4805,8 @@ snapshots:
       require-from-string: 2.0.2
 
   alien-signals@2.0.6: {}
+
+  alien-signals@3.0.0: {}
 
   ansi-escapes@7.0.0:
     dependencies:
@@ -7241,7 +7245,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici-types@7.12.0: {}
+  undici-types@7.13.0: {}
 
   undici@7.10.0: {}
 

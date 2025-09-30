@@ -1,7 +1,7 @@
 {
 	"private": true,
 	"name": "vscode-tsslint",
-	"version": "2.0.5",
+	"version": "2.0.6",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
@@ -50,7 +50,7 @@
 		"postpublish:all": "rm -rf node_modules && pnpm install"
 	},
 	"dependencies": {
-		"@tsslint/typescript-plugin": "2.0.5"
+		"@tsslint/typescript-plugin": "2.0.6"
 	},
 	"devDependencies": {
 		"@types/vscode": "^1.82.0",
