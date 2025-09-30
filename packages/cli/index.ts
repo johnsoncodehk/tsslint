@@ -343,7 +343,7 @@ class Project {
 			clack.log.error(red(`Missing argument for --filter.`));
 			process.exit(1);
 		}
-		filters.push(ts.server.toNormalizedPath(path.resolve(process.cwd(), filterGlob)));
+		filters.push(normalizeFilterGlobPath(filterGlob));
 		for (let i = filterArgIndex + 2; i < process.argv.length; i++) {
 			const filterGlob = process.argv[i];
 			if (filterGlob.startsWith('-')) {
