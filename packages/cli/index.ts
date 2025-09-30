@@ -109,8 +109,8 @@ class Project {
 
 		if (filesFilter.length) {
 			this.fileNames = this.rawFileNames.filter(
-				fileName => filesFilter.every(
-					filter => !minimatch.minimatch(fileName, filter, { dot: true })
+				fileName => filesFilter.some(
+					filter => minimatch.minimatch(fileName, filter, { dot: true })
 				)
 			);
 			if (!this.fileNames.length) {
