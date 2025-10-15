@@ -3,7 +3,6 @@ import path = require('path');
 import core = require('@tsslint/core');
 import cache = require('./lib/cache.js');
 import worker = require('./lib/worker.js');
-import glob = require('glob');
 import fs = require('fs');
 import os = require('os');
 import minimatch = require('minimatch');
@@ -208,7 +207,7 @@ class Project {
 			process.exit(1);
 		}
 
-		const tsconfigOptions = glob.sync('**/{tsconfig.json,tsconfig.*.json,jsconfig.json}');
+		const tsconfigOptions = fs.globSync('**/{tsconfig.json,tsconfig.*.json,jsconfig.json}');
 
 		let options = await Promise.all(
 			tsconfigOptions.map(async tsconfigOption => {
@@ -305,7 +304,7 @@ class Project {
 				}
 				foundArg = true;
 				const searchGlob = process.argv[i];
-				const tsconfigs = glob.sync(searchGlob);
+				const tsconfigs = fs.globSync(searchGlob);
 				if (!tsconfigs.length) {
 					clack.log.error(red(`No projects found for ${projectFlag} ${searchGlob}.`));
 					process.exit(1);
