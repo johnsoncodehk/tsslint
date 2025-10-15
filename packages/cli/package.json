@@ -2,6 +2,9 @@
 	"name": "@tsslint/cli",
 	"version": "2.0.6",
 	"license": "MIT",
+	"engines": {
+		"node": ">=22"
+	},
 	"bin": {
 		"tsslint": "./bin/tsslint.js"
 	},
