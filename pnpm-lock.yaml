@@ -107,9 +107,6 @@ importers:
       '@volar/typescript':
         specifier: ~2.4.0
         version: 2.4.23
-      glob:
-        specifier: ^10.4.1
-        version: 10.4.5
       json5:
         specifier: ^2.2.3
         version: 2.2.3
