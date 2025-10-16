@@ -28,9 +28,5 @@
 	},
 	"peerDependencies": {
 		"typescript": "*"
-	},
-	"devDependencies": {
-		"@vue-vine/language-service": "latest",
-		"@vue/language-core": "latest"
 	}
 }

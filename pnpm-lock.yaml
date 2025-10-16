@@ -113,13 +113,6 @@ importers:
       typescript:
         specifier: '*'
         version: 5.9.3
-    devDependencies:
-      '@vue-vine/language-service':
-        specifier: latest
-        version: 1.7.11(typescript@5.9.3)
-      '@vue/language-core':
-        specifier: latest
-        version: 3.1.1(typescript@5.9.3)
 
   packages/config:
     dependencies:
