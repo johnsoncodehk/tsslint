@@ -13,8 +13,7 @@
 	},
 	"dependencies": {
 		"@tsslint/core": "2.0.7",
-		"error-stack-parser": "^2.1.4",
-		"source-map-support": "^0.5.21"
+		"error-stack-parser": "^2.1.4"
 	},
 	"devDependencies": {
 		"@tsslint/config": "2.0.7"

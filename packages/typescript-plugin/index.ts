@@ -3,8 +3,6 @@ import type * as ts from 'typescript';
 
 import core = require('@tsslint/core');
 import path = require('path');
-import url = require('url');
-import fs = require('fs');
 import ErrorStackParser = require('error-stack-parser');
 
 const languageServiceDecorators = new WeakMap<ts.server.Project, ReturnType<typeof decorateLanguageService>>();
@@ -47,7 +45,6 @@ function decorateLanguageService(
 	const projectFileNameKeys = new Set<string>();
 
 	let configFile: string | undefined;
-	let configFileBuildContext: Awaited<ReturnType<typeof core.watchConfig>> | undefined;
 	let configFileDiagnostics: Omit<ts.Diagnostic, 'file' | 'start' | 'length' | 'source'>[] = [];
 	let config: Config | Config[] | undefined;
 	let linter: core.Linter | undefined;
@@ -140,7 +137,6 @@ function decorateLanguageService(
 			configFile = newConfigFile;
 			config = undefined;
 			linter = undefined;
-			configFileBuildContext?.dispose();
 			configFileDiagnostics = [];
 
 			if (!configFile) {
@@ -153,134 +149,40 @@ function decorateLanguageService(
 				typescript: ts,
 			};
 
+
 			try {
-				configFileBuildContext = await core.watchConfig(
-					configFile,
-					async (builtConfig, { errors, warnings }) => {
-						configFileDiagnostics = [...errors, ...warnings].map(error => {
-							const diag: typeof configFileDiagnostics[number] = {
-								category: ts.DiagnosticCategory.Message,
-								code: error.id as any,
-								messageText: error.text,
-							};
-							if (error.location) {
-								const fileName = path.resolve(error.location.file).replace('http-url:', '');
-								let relatedFile = (info.languageService as any).getCurrentProgram()?.getSourceFile(fileName);
-								if (!relatedFile) {
-									const fileText = ts.sys.readFile(error.location.file);
-									if (fileText !== undefined) {
-										relatedFile = ts.createSourceFile(fileName, fileText, ts.ScriptTarget.Latest, true);
-									}
-								}
-								if (relatedFile) {
-									diag.messageText = `Error building config file.`;
-									diag.relatedInformation = [{
-										category: ts.DiagnosticCategory.Message,
-										code: error.id as any,
-										messageText: error.text,
-										file: relatedFile,
-										start: relatedFile.getPositionOfLineAndCharacter(error.location.line - 1, error.location.column),
-										length: error.location.lineText.length,
-									}];
-								}
-							}
-							return diag;
-						});
-						if (builtConfig) {
-							try {
-								initSourceMapSupport();
-								const mtime = ts.sys.getModifiedTime?.(builtConfig)?.getTime() ?? Date.now();
-								config = (await import(url.pathToFileURL(builtConfig).toString() + '?tsslint_time=' + mtime)).default;
-								linter = core.createLinter(projectContext, path.dirname(configFile!), config!, (diag, err, stackOffset) => {
-									const relatedInfo = createRelatedInformation(ts, err, stackOffset);
-									if (relatedInfo) {
-										diag.relatedInformation!.push(relatedInfo);
-									}
-								});
-							} catch (err) {
-								config = undefined;
-								linter = undefined;
-								const prevLength = configFileDiagnostics.length;
-								if (err instanceof Error) {
-									const relatedInfo = createRelatedInformation(ts, err, 0);
-									if (relatedInfo) {
-										configFileDiagnostics.push({
-											category: ts.DiagnosticCategory.Message,
-											code: 0,
-											messageText: err.message,
-											relatedInformation: [relatedInfo],
-										});
-									}
-								}
-								if (prevLength === configFileDiagnostics.length) {
-									configFileDiagnostics.push({
-										category: ts.DiagnosticCategory.Message,
-										code: 0,
-										messageText: String(err),
-									});
-								}
-							}
-						}
-						info.project.refreshDiagnostics();
-					},
-					true,
-					ts.sys.createHash
-				);
-			} catch (err) {
-				configFileDiagnostics.push({
-					category: ts.DiagnosticCategory.Message,
-					code: 'config-build-error' as any,
-					messageText: String(err),
+				config = (await import(configFile)).default;
+				linter = core.createLinter(projectContext, path.dirname(configFile), config!, (diag, err, stackOffset) => {
+					const relatedInfo = createRelatedInformation(ts, err, stackOffset);
+					if (relatedInfo) {
+						diag.relatedInformation!.push(relatedInfo);
+					}
 				});
+			} catch (err) {
+				config = undefined;
+				linter = undefined;
+				const prevLength = configFileDiagnostics.length;
+				if (err instanceof Error) {
+					const relatedInfo = createRelatedInformation(ts, err, 0);
+					if (relatedInfo) {
+						configFileDiagnostics.push({
+							category: ts.DiagnosticCategory.Message,
+							code: 0,
+							messageText: err.message,
+							relatedInformation: [relatedInfo],
+						});
+					}
+				}
+				if (prevLength === configFileDiagnostics.length) {
+					configFileDiagnostics.push({
+						category: ts.DiagnosticCategory.Message,
+						code: 0,
+						messageText: String(err),
+					});
+				}
 			}
 		}
 	}
-}
-
-function initSourceMapSupport() {
-	delete require.cache[require.resolve('source-map-support')];
-
-	require('source-map-support').install({
-		retrieveFile(pathOrUrl: string) {
-			if (pathOrUrl.includes('?tsslint_time=')) {
-				pathOrUrl = pathOrUrl.replace(/\?tsslint_time=\d*/, '');
-				if (pathOrUrl.includes('://')) {
-					pathOrUrl = url.fileURLToPath(pathOrUrl);
-				}
-				return fs.readFileSync(pathOrUrl, 'utf8');
-			}
-		},
-	});
-	require('source-map-support').install({
-		retrieveFile(pathOrUrl: string) {
-			if (pathOrUrl.endsWith('.map')) {
-				try {
-					if (pathOrUrl.includes('://')) {
-						pathOrUrl = url.fileURLToPath(pathOrUrl);
-					}
-					const contents = fs.readFileSync(pathOrUrl, 'utf8');
-					const map = JSON.parse(contents);
-					for (let source of map.sources) {
-						if (!source.startsWith('./') && !source.startsWith('../')) {
-							source = './' + source;
-						}
-						source = path.resolve(path.dirname(pathOrUrl), source);
-						if (!fs.existsSync(source)) {
-							// Fixes https://github.com/typescript-eslint/typescript-eslint/issues/9352
-							return JSON.stringify({
-								version: 3,
-								sources: [],
-								sourcesContent: [],
-								mappings: '',
-								names: [],
-							});
-						}
-					}
-					return contents;
-				} catch { }
-			}
-		},
-	});
 }
 
 function createRelatedInformation(ts: typeof import('typescript'), err: Error, stackOffset: number): ts.DiagnosticRelatedInformation | undefined {

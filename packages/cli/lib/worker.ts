@@ -137,7 +137,6 @@ async function setup(
 	tsconfig: string,
 	languages: string[],
 	configFile: string,
-	builtConfig: string,
 	_fileNames: string[],
 	_options: ts.CompilerOptions
 ) {
@@ -145,7 +144,7 @@ async function setup(
 
 	let config: config.Config | config.Config[];
 	try {
-		config = (await import(url.pathToFileURL(builtConfig).toString())).default;
+		config = (await import(url.pathToFileURL(configFile).toString())).default;
 	} catch (err) {
 		if (err instanceof Error) {
 			clack.log.error(err.stack ?? err.message);
