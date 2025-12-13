@@ -137,10 +137,6 @@ importers:
       minimatch:
         specifier: ^10.0.1
         version: 10.0.3
-    devDependencies:
-      '@clack/prompts':
-        specifier: ^0.8.2
-        version: 0.8.2
 
   packages/eslint:
     dependencies:

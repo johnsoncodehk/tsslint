@@ -4,14 +4,13 @@ import _path = require('path');
 export function buildConfig(
 	configFilePath: string,
 	createHash?: (path: string) => string,
-	// @ts-expect-error
-	spinner?: ReturnType<typeof import('@clack/prompts').spinner>,
+	message?: (message: string) => void,
 	stopSnipper?: (message: string, code?: number) => void
 ): Promise<string | undefined> {
 	const buildStart = Date.now();
 	const configFileDisplayPath = _path.relative(process.cwd(), configFilePath);
 
-	spinner?.message('Building ' + configFileDisplayPath);
+	message?.('Building ' + configFileDisplayPath);
 
 	return new Promise(async resolve => {
 		try {

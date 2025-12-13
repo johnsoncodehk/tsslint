@@ -546,7 +546,7 @@ class Project {
 
 	async function getBuiltConfig(configFile: string) {
 		if (!builtConfigs.has(configFile)) {
-			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, spinner, (s, code) => log(gray(s), code)));
+			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, msg => spinner?.message(msg), (s, code) => log(gray(s), code)));
 		}
 		return await builtConfigs.get(configFile);
 	}

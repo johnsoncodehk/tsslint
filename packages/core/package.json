@@ -16,9 +16,6 @@
 		"esbuild": ">=0.17.0",
 		"minimatch": "^10.0.1"
 	},
-	"devDependencies": {
-		"@clack/prompts": "^0.8.2"
-	},
 	"scripts": {
 		"postinstall": "node scripts/cleanCache.js"
 	}
