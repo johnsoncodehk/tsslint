@@ -1,6 +1,5 @@
 import ts = require('typescript');
 import path = require('path');
-import core = require('@tsslint/core');
 import cache = require('./lib/cache.js');
 import worker = require('./lib/worker.js');
 import fs = require('fs');
@@ -52,7 +51,6 @@ class Project {
 	options: ts.CompilerOptions = {};
 	configFile: string | undefined;
 	currentFileIndex = 0;
-	builtConfig: string | undefined;
 	cache: cache.CacheData = {};
 
 	constructor(
@@ -132,7 +130,6 @@ class Project {
 }
 
 (async () => {
-	const builtConfigs = new Map<string, Promise<string | undefined>>();
 	const clack = await import('@clack/prompts');
 	const processFiles = new Set<string>();
 	const tsconfigAndLanguages = new Map<string, string[]>();
@@ -360,10 +357,8 @@ class Project {
 
 	projects = projects.filter(project => !!project.configFile);
 	projects = projects.filter(project => !!project.fileNames.length);
-	for (const project of projects) {
-		project.builtConfig = await getBuiltConfig(project.configFile!);
-	}
-	projects = projects.filter(project => !!project.builtConfig);
+	projects = projects.filter(project => !!project.configFile);
+
 	for (const project of projects) {
 		allFilesNum += project.fileNames.length;
 	}
@@ -437,7 +432,6 @@ class Project {
 			project.tsconfig,
 			project.languages,
 			project.configFile!,
-			project.builtConfig!,
 			project.rawFileNames,
 			project.options,
 		);
@@ -542,13 +536,6 @@ class Project {
 		cache.saveCache(project.tsconfig, project.configFile!, project.cache, ts.sys.createHash);
 
 		await startWorker(linterWorker);
-	}
-
-	async function getBuiltConfig(configFile: string) {
-		if (!builtConfigs.has(configFile)) {
-			builtConfigs.set(configFile, core.buildConfig(configFile, ts.sys.createHash, msg => spinner?.message(msg), (s, code) => log(gray(s), code)));
-		}
-		return await builtConfigs.get(configFile);
 	}
 
 	function addProcessFile(fileName: string) {

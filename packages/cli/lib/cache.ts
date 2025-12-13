@@ -9,7 +9,7 @@ export function loadCache(
 	configFilePath: string,
 	createHash: (path: string) => string = btoa
 ): CacheData {
-	const outDir = core.getDotTsslintPath(configFilePath);
+	const outDir = getDotTsslintPath(configFilePath);
 	const cacheFileName = createHash(path.relative(outDir, configFilePath)) + '_' + createHash(JSON.stringify(process.argv)) + '_' + createHash(path.relative(outDir, tsconfig)) + '.cache.json';
 	const cacheFilePath = path.join(outDir, cacheFileName);
 	const cacheFileStat = fs.statSync(cacheFilePath, { throwIfNoEntry: false });
@@ -30,8 +30,13 @@ export function saveCache(
 	cache: CacheData,
 	createHash: (path: string) => string = btoa
 ): void {
-	const outDir = core.getDotTsslintPath(configFilePath);
+	const outDir = getDotTsslintPath(configFilePath);
 	const cacheFileName = createHash(path.relative(outDir, configFilePath)) + '_' + createHash(JSON.stringify(process.argv)) + '_' + createHash(path.relative(outDir, tsconfig)) + '.cache.json';
 	const cacheFilePath = path.join(outDir, cacheFileName);
+	fs.mkdirSync(outDir, { recursive: true });
 	fs.writeFileSync(cacheFilePath, JSON.stringify(cache));
+}
+
+function getDotTsslintPath(configFilePath: string): string {
+	return path.resolve(configFilePath, '..', 'node_modules', '.tsslint');
 }

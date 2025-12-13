@@ -29,26 +29,6 @@
 			}
 		]
 	},
-	"scripts": {
-		"pack:win32-x64": "rm -rf node_modules && npm install --no-package-lock --os=win32 --cpu=x64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:win32-arm64": "rm -rf node_modules && npm install --no-package-lock --os=win32 --cpu=arm64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:linux-x64": "rm -rf node_modules && npm install --no-package-lock --os=linux --cpu=x64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:linux-arm64": "rm -rf node_modules && npm install --no-package-lock --os=linux --cpu=arm64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:linux-armhf": "rm -rf node_modules && npm install --no-package-lock --os=linux --cpu=arm && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:darwin-x64": "rm -rf node_modules && npm install --no-package-lock --os=darwin --cpu=x64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:darwin-arm64": "rm -rf node_modules && npm install --no-package-lock --os=darwin --cpu=arm64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce package",
-		"pack:all": "npm run pack:win32-x64 && npm run pack:win32-arm64 && npm run pack:linux-x64 && npm run pack:linux-arm64 && npm run pack:linux-armhf && npm run pack:darwin-x64 && npm run pack:darwin-arm64",
-		"postpack:all": "rm -rf node_modules && pnpm install",
-		"publish:win32-x64": "rm -rf node_modules && npm install --no-package-lock --os=win32 --cpu=x64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target win32-x64",
-		"publish:win32-arm64": "rm -rf node_modules && npm install --no-package-lock --os=win32 --cpu=arm64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target win32-arm64",
-		"publish:linux-x64": "rm -rf node_modules && npm install --no-package-lock --os=linux --cpu=x64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target linux-x64 alpine-x64",
-		"publish:linux-arm64": "rm -rf node_modules && npm install --no-package-lock --os=linux --cpu=arm64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target linux-arm64 alpine-arm64",
-		"publish:linux-armhf": "rm -rf node_modules && npm install --no-package-lock --os=linux --cpu=arm && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target linux-armhf",
-		"publish:darwin-x64": "rm -rf node_modules && npm install --no-package-lock --os=darwin --cpu=x64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target darwin-x64",
-		"publish:darwin-arm64": "rm -rf node_modules && npm install --no-package-lock --os=darwin --cpu=arm64 && rm -f {node_modules/esbuild/bin/esbuild,node_modules/esbuild/lib/downloaded-*} && vsce publish --target darwin-arm64",
-		"publish:all": "npm run publish:win32-x64 && npm run publish:win32-arm64 && npm run publish:linux-x64 && npm run publish:linux-arm64 && npm run publish:linux-armhf && npm run publish:darwin-x64 && npm run publish:darwin-arm64",
-		"postpublish:all": "rm -rf node_modules && pnpm install"
-	},
 	"dependencies": {
 		"@tsslint/typescript-plugin": "2.0.7"
 	},

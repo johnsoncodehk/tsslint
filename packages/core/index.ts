@@ -1,6 +1,3 @@
-export * from './lib/build';
-export * from './lib/watch';
-
 import type {
 	Config,
 	LinterContext,
