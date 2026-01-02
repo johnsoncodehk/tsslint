@@ -48,23 +48,6 @@ export interface RuleContext {
 	program: Program;
 	file: SourceFile;
 	report(message: string, start: number, end: number, category?: DiagnosticCategory, stackOffset?: number): Reporter;
-
-	/**
-	 * @deprecated Use `file` instead.
-	 */
-	sourceFile: SourceFile;
-	/**
-	 * @deprecated Use `report` instead.
-	 */
-	reportError(message: string, start: number, end: number, stackOffset?: number): Reporter;
-	/**
-	 * @deprecated Use `report` instead.
-	 */
-	reportWarning(message: string, start: number, end: number, stackOffset?: number): Reporter;
-	/**
-	 * @deprecated Use `report` instead.
-	 */
-	reportSuggestion(message: string, start: number, end: number, stackOffset?: number): Reporter;
 }
 
 export interface Reporter {

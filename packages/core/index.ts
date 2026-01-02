@@ -80,12 +80,8 @@ export function createLinter(
 				rulesContext = {
 					...ctx,
 					file,
-					sourceFile: file,
 					program,
 					report,
-					reportError: report,
-					reportWarning: report,
-					reportSuggestion: report,
 				};
 			} else {
 				const file = getNonBoundSourceFile(fileName);
@@ -96,11 +92,7 @@ export function createLinter(
 						throw new Error('Not supported');
 					},
 					file,
-					sourceFile: file,
 					report,
-					reportError: report,
-					reportWarning: report,
-					reportSuggestion: report,
 				};
 			}
 
