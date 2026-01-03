@@ -26,7 +26,7 @@ export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
-	handleError: (diag: ts.DiagnosticWithLocation, err: Error, stackOffset: number) => void,
+	handleError: (diag: ts.DiagnosticWithLocation, reportAt: [Error, number]) => void,
 	syntaxOnlyLanguageService?: ts.LanguageService & {
 		getNonBoundSourceFile?(fileName: string): ts.SourceFile;
 	}
@@ -140,9 +140,9 @@ export function createLinter(
 						rule2Mode.set(currentRuleId, true);
 						shouldRetry = true;
 					} else if (err instanceof Error) {
-						report(err.stack ?? err.message, 0, 0, ts.DiagnosticCategory.Message, 0, err);
+						report(err.stack ?? err.message, 0, 0, ts.DiagnosticCategory.Message, [err, 0]);
 					} else {
-						report(String(err), 0, 0, ts.DiagnosticCategory.Message, Number.MAX_VALUE);
+						report(String(err), 0, 0, ts.DiagnosticCategory.Message, [new Error(), Number.MAX_VALUE]);
 					}
 				}
 
@@ -202,7 +202,7 @@ export function createLinter(
 
 			return diagnostics;
 
-			function report(message: string, start: number, end: number, category: ts.DiagnosticCategory = ts.DiagnosticCategory.Message, stackOffset: number = 1, err?: Error): Reporter {
+			function report(message: string, start: number, end: number, category: ts.DiagnosticCategory = ts.DiagnosticCategory.Message, reportAt: [Error, number] = [new Error(), 1]): Reporter {
 				const error: ts.DiagnosticWithLocation = {
 					category,
 					code: currentRuleId as any,
@@ -226,7 +226,7 @@ export function createLinter(
 					});
 				}
 
-				handleError(error, err ?? new Error(), stackOffset);
+				handleError(error, reportAt);
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {

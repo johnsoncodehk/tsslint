@@ -28,7 +28,7 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				failure.getStartPosition().getPosition(),
 				failure.getEndPosition().getPosition(),
 				category,
-				Number.MAX_VALUE
+				[new Error(), Number.MAX_VALUE]
 			);
 			if (failure.hasFix()) {
 				const fix = failure.getFix();

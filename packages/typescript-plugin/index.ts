@@ -152,8 +152,12 @@ function decorateLanguageService(
 
 			try {
 				config = (await import(configFile)).default;
-				linter = core.createLinter(projectContext, path.dirname(configFile), config!, (diag, err, stackOffset) => {
-					const relatedInfo = createRelatedInformation(ts, err, stackOffset);
+				linter = core.createLinter(projectContext, path.dirname(configFile), config!, (diag, reportAt) => {
+					const stacks = ErrorStackParser.parse(reportAt[0]);
+					if (stacks.length <= reportAt[1]) {
+						return;
+					}
+					const relatedInfo = createRelatedInformation(ts, stacks[reportAt[1]]);
 					if (relatedInfo) {
 						diag.relatedInformation!.push(relatedInfo);
 					}
@@ -163,7 +167,7 @@ function decorateLanguageService(
 				linter = undefined;
 				const prevLength = configFileDiagnostics.length;
 				if (err instanceof Error) {
-					const relatedInfo = createRelatedInformation(ts, err, 0);
+					const relatedInfo = createRelatedInformation(ts, ErrorStackParser.parse(err)[0]);
 					if (relatedInfo) {
 						configFileDiagnostics.push({
 							category: ts.DiagnosticCategory.Message,
@@ -185,12 +189,7 @@ function decorateLanguageService(
 	}
 }
 
-function createRelatedInformation(ts: typeof import('typescript'), err: Error, stackOffset: number): ts.DiagnosticRelatedInformation | undefined {
-	const stacks = ErrorStackParser.parse(err);
-	if (stacks.length <= stackOffset) {
-		return;
-	}
-	const stack = stacks[stackOffset];
+function createRelatedInformation(ts: typeof import('typescript'), stack: ErrorStackParser.StackFrame): ts.DiagnosticRelatedInformation | undefined {
 	if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
 		let fileName = stack.fileName.replace(/\\/g, '/');
 		if (fileName.startsWith('file://')) {

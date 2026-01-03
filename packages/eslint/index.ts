@@ -253,7 +253,7 @@ export function convertRule(
 						}
 					}
 				} catch { }
-				const reporter = report(message, start, end, category, 2);
+				const reporter = report(message, start, end, category, [new Error(), 1]);
 				if (descriptor.fix) {
 					// @ts-expect-error
 					const textChanges = getTextChanges(descriptor.fix);

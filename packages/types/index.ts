@@ -47,7 +47,7 @@ export interface RuleContext {
 	languageService: LanguageService;
 	program: Program;
 	file: SourceFile;
-	report(message: string, start: number, end: number, category?: DiagnosticCategory, stackOffset?: number): Reporter;
+	report(message: string, start: number, end: number, category?: DiagnosticCategory, reportAt?: [Error, number]): Reporter;
 }
 
 export interface Reporter {
