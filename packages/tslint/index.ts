@@ -1,28 +1,26 @@
 import type * as TSSLint from '@tsslint/types';
-import type * as TSLint from 'tslint';
+import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
 import type * as ts from 'typescript';
 
-type TSLintRule = import('tslint/lib/language/rule/rule').RuleConstructor;
-
-export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
-	Rule: T,
+export function convertRule(
+	Rule: {
+		metadata?: IRuleMetadata;
+		new(options: IOptions): IRule;
+	},
 	ruleArguments: any[] = [],
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
-	const rule = new (Rule as TSLintRule)({
+	const rule = new Rule({
 		ruleName: Rule.metadata?.ruleName ?? 'unknown',
 		ruleArguments,
 		ruleSeverity: 'warning',
 		disabledIntervals: [],
-	}) as TSLint.IRule | TSLint.ITypedRule;
+	}) as IRule | ITypedRule;
 	return ({ file, languageService, report }) => {
 		const failures = 'applyWithProgram' in rule
 			? rule.applyWithProgram(file, languageService.getProgram()!)
 			: rule.apply(file);
-		for (const failure of new Set(failures)) {
-			onAddFailure(failure);
-		}
-		function onAddFailure(failure: TSLint.RuleFailure) {
+		for (const failure of failures) {
 			const reporter = report(
 				failure.getFailure(),
 				failure.getStartPosition().getPosition(),
@@ -31,30 +29,25 @@ export function convertRule<T extends Partial<TSLintRule> | TSLintRule>(
 				[new Error(), Number.MAX_VALUE]
 			);
 			if (failure.hasFix()) {
-				const fix = failure.getFix();
-				const replaces = Array.isArray(fix) ? fix : [fix];
-				for (const replace of replaces) {
-					if (replace) {
-						reporter.withFix(
-							replace.length === 0
-								? 'Insert ' + replace.text
-								: replace.text.length === 0
-									? 'Delete ' + replace.start + ' to ' + replace.end
-									: 'Replace with ' + replace.text,
-							() => [{
-								fileName: file.fileName,
-								textChanges: [{
-									newText: replace.text,
-									span: {
-										start: replace.start,
-										length: replace.length,
-									},
-								}],
-							}]
-						);
-					}
-				}
+				const ruleName = Rule.metadata?.ruleName;
+				reporter.withFix(
+					ruleName ? `Fix with ${ruleName}` : 'Fix',
+					() => {
+						const fix = failure.getFix();
+						const replaces = Array.isArray(fix) ? fix : fix ? [fix] : [];
+						return [{
+							fileName: file.fileName,
+							textChanges: replaces.map(replace => ({
+								newText: replace.text,
+								span: {
+									start: replace.start,
+									length: replace.length,
+								},
+							})),
+						}];
+					},
+				);
 			}
-		};
+		}
 	};
 }
