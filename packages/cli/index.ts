@@ -163,17 +163,11 @@ class Project {
 	if (
 		![
 			'--project',
-			'--projects',
 			'--vue-project',
-			'--vue-projects',
 			'--vue-vine-project',
-			'--vue-vine-projects',
 			'--mdx-project',
-			'--mdx-projects',
 			'--astro-project',
-			'--astro-projects',
 			'--ts-macro-project',
-			'--ts-macro-projects',
 		].some(flag => process.argv.includes(flag))
 	) {
 		const language = await clack.select({
@@ -263,34 +257,32 @@ class Project {
 	} else {
 		const options = [
 			{
-				projectFlags: ['--project', '--projects'],
+				projectFlag: '--project',
 				language: undefined,
 			},
 			{
-				projectFlags: ['--vue-project', '--vue-projects'],
+				projectFlag: '--vue-project',
 				language: 'vue',
 			},
 			{
-				projectFlags: ['--vue-vine-project', '--vue-vine-projects'],
+				projectFlag: '--vue-vine-project',
 				language: 'vue-vine',
 			},
 			{
-				projectFlags: ['--mdx-project', '--mdx-projects'],
-				projectsFlag: '--mdx-projects',
+				projectFlag: '--mdx-project',
 				language: 'mdx',
 			},
 			{
-				projectFlags: ['--astro-project', '--astro-projects'],
+				projectFlag: '--astro-project',
 				language: 'astro',
 			},
 			{
-				projectFlags: ['--ts-macro-project', '--ts-macro-projects'],
+				projectFlag: '--ts-macro-project',
 				language: 'ts-macro',
 			},
 		];
-		for (const { projectFlags, language } of options) {
-			const projectFlag = projectFlags.find(flag => process.argv.includes(flag));
-			if (!projectFlag) {
+		for (const { projectFlag, language } of options) {
+			if (!process.argv.includes(projectFlag)) {
 				continue;
 			}
 			let foundArg = false;
@@ -382,14 +374,13 @@ class Project {
 			: gray(`Processed ${processed} files.`)
 	);
 
-	const projectsFlag = process.argv.find(arg => arg.endsWith('-projects'));
-	if (projectsFlag) {
-		clack.log.warn(
-			gray(`Please use `)
-			+ cyan(`${projectsFlag.slice(0, -1)}`)
+	const deprecatedFlag = process.argv.find(arg => arg.endsWith('-projects'));
+	if (deprecatedFlag) {
+		clack.log.error(
+			gray(`Use `)
+			+ cyan(`${deprecatedFlag.slice(0, -1)}`)
 			+ gray(` instead of `)
-			+ cyan(`${projectsFlag}`)
-			+ gray(` starting from version 1.5.0.`)
+			+ cyan(`${deprecatedFlag}.`)
 		);
 	}
 
