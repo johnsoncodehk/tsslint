@@ -31,6 +31,7 @@ TSSLint operates as a TypeScript Language Server Plugin, reusing the `TypeChecke
 *   **TypeScript Configuration**: Rules and configs defined in TypeScript for type safety and autocompletion.
 *   **Meta-Framework Friendly**: Supports Vue, Astro, MDX, etc., through underlying TypeScript language services.
 *   **Direct Rule Development**: Direct access to TypeScript AST for precise custom rules, prioritizing DX.
+*   **No Built-in Rules**: TSSLint provides the engine, not the rules. It comes with no built-in rules, giving users complete control to define their own or integrate from external sources like ESLint.
 
 ## Getting Started
 
