@@ -166,8 +166,9 @@ The `@tsslint/cli` package offers a command-line interface for integrating TSSLi
 
 While TSSLint offers significant advantages, it's important to be aware of its current technical considerations:
 
-1.  **TypeScript v7 (typescript-go) Compatibility**: As of now, `typescript-go` (TS v7) does not support Language Service Plugins. This means if your IDE is configured to use TS v7, TSSLint will not function within the IDE environment.
-2.  **Rules API Performance**: The Rules API is designed for simplicity and direct access to the TypeScript AST. However, unlike some other linters that use node visitors, the direct AST traversal for rule execution might be comparatively slower. Nevertheless, this node traversal cost is generally negligible when compared to the overall type-checking time saved by TSSLint's minimalist approach.
+1.  **Node.js 23.6.0 Requirement for `tsslint.config.ts` (v3.0+)**: Starting from TSSLint v3.0, `tsslint.config.ts` is no longer bundled with esbuild but directly imported by Node.js. This requires Node.js v23.6.0 or newer. Until VSCode bundles Node.js v23.6.0 or higher, you might need to configure `typescript.tsserver.nodePath` in your VSCode settings to point to a local Node.js v23.6.0+ installation, or temporarily use TSSLint v2.
+2.  **TypeScript v7 (typescript-go) Compatibility**: As of now, `typescript-go` (TS v7) does not support Language Service Plugins. This means if your IDE is configured to use TS v7, TSSLint will not function within the IDE environment.
+3.  **Rules API Performance**: The Rules API is designed for simplicity and direct access to the TypeScript AST. However, unlike some other linters that use node visitors, the direct AST traversal for rule execution might be comparatively slower. Nevertheless, this node traversal cost is generally negligible when compared to the overall type-checking time saved by TSSLint's minimalist approach.
 
 ## Contributing
 
