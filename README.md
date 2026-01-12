@@ -14,10 +14,11 @@
 
 ## Our Philosophy
 
-TSSLint is built upon two core principles:
+TSSLint is built upon three core principles:
 
 1.  **Developer Experience (DX) over Raw Performance for Custom Rules**: While overall performance is paramount, TSSLint prioritizes making custom rule authoring as intuitive and straightforward as possible. We believe that the ease with which developers can express their code quality requirements directly in TypeScript, leveraging the native TypeScript AST, outweighs the marginal performance gains of overly complex, abstracted rule engines.
-2.  **Minimalist Implementation**: TSSLint aims to be as small and unobtrusive as possible. Instead of duplicating functionality, it leverages the existing `tsserver` instance that your IDE already runs. This approach minimizes resource consumption and reduces the tool's footprint, ensuring it remains a lightweight diagnostic engine rather than a heavy, standalone linter.
+2.  **Does Not Favor Plugin Pattern**: TSSLint intentionally avoids a complex plugin system. Instead, it encourages direct rule definition and integration within the `tsslint.config.ts`. This approach reduces abstraction layers, keeps the implementation minimal, and provides developers with direct, transparent control over their diagnostic logic, aligning with our minimalist philosophy. While overall performance is paramount, TSSLint prioritizes making custom rule authoring as intuitive and straightforward as possible. We believe that the ease with which developers can express their code quality requirements directly in TypeScript, leveraging the native TypeScript AST, outweighs the marginal performance gains of overly complex, abstracted rule engines.
+3.  **Minimalist Implementation**: TSSLint aims to be as small and unobtrusive as possible. Instead of duplicating functionality, it leverages the existing `tsserver` instance that your IDE already runs. This approach minimizes resource consumption and reduces the tool's footprint, ensuring it remains a lightweight diagnostic engine rather than a heavy, standalone linter.
 
 ## How TSSLint Works
 
