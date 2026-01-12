@@ -1,7 +1,7 @@
 # TSSLint: A Minimalist TypeScript Diagnostic Tool
 
 <p align="center">
-  <img src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663270325602/oKArPgMLAKuWjlHE.svg" alt="TSSLint Logo" width="200">
+  <img src="logo.png" alt="TSSLint Logo" width="200">
 </p>
 
 <p align="center">
