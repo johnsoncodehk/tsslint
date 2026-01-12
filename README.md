@@ -44,10 +44,10 @@ To use TSSLint in VSCode:
 1.  **Install VSCode Extension**: [TSSLint for VSCode](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
 2.  **Add Dependencies**:
     ```bash
-    npm install @tsslint/config typescript --save-dev
+    npm install @tsslint/config --save-dev
     ```
 3.  **Create `tsslint.config.ts`** in your project root:
-    ```typescript
+    ```ts
     import { defineConfig } from '@tsslint/config';
 
     export default defineConfig({
@@ -63,7 +63,7 @@ TSSLint simplifies custom rule authoring by providing direct access to the TypeS
 
 **Example: A simple `no-debugger` rule**
 
-```typescript
+```ts
 // rules/no-debugger.ts
 import { defineRule } from '@tsslint/config';
 
@@ -83,7 +83,7 @@ export default defineRule(({ typescript: ts, file, report }) => {
 
 **Enable the rule in `tsslint.config.ts`**:
 
-```typescript
+```ts
 import { defineConfig } from '@tsslint/config';
 import noDebuggerRule from './rules/no-debugger';
 
@@ -102,14 +102,14 @@ TSSLint integrates with existing ESLint rules via the `@tsslint/eslint` package,
 
 1.  **Install `@tsslint/eslint` and ESLint plugins** (e.g., `@typescript-eslint/eslint-plugin`, `eslint`):
     ```bash
-    npm install @tsslint/eslint @typescript-eslint/eslint-plugin @typescript-eslint/parser eslint --save-dev
+    npm install @tsslint/eslint @typescript-eslint/eslint-plugin eslint --save-dev
     ```
 
 2.  **`postinstall` Script for Type Definitions**: `@tsslint/eslint` uses a `postinstall` script to generate type definitions for `defineRules`. For **pnpm** users, ensure `postinstall` scripts are allowed (e.g., by setting `onlyBuiltDependencies=false` in `.npmrc`).
 
 3.  **Use `defineRules` in `tsslint.config.ts`**: The `defineRules` function converts ESLint rules into TSSLint-compatible rules. Pass an object of ESLint rules and their configurations directly to it:
 
-    ```typescript
+    ```ts
     // tsslint.config.ts
     import { defineConfig } from '@tsslint/config';
     import { defineRules } from '@tsslint/eslint';
