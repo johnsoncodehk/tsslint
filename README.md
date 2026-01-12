@@ -25,6 +25,10 @@ TSSLint's design is guided by a philosophy that prioritizes developer experience
 
 TSSLint operates as a TypeScript Language Server Plugin, reusing the `TypeChecker` instance from your editor's `tsserver`. This provides custom diagnostic capabilities without the overhead of separate type-checking processes.
 
+<p align="center">
+  <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
+</p>
+
 ## Features
 
 *   **Integrated Diagnostics**: Custom messages directly in your editor via `tsserver`.
