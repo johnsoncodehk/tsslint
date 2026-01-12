@@ -14,12 +14,12 @@
 
 ## Our Philosophy
 
-TSSLint is built upon four core principles:
+TSSLint's design is guided by a philosophy that prioritizes developer experience and minimalist implementation:
 
-1.  **Developer Experience (DX) for Custom Rules**: Prioritizes intuitive rule authoring using native TypeScript AST, valuing developer ease over marginal raw performance gains from complex abstractions.
-2.  **No Plugin Pattern**: Intentionally avoids complex plugin systems, favoring direct rule definition in `tsslint.config.ts` for minimal abstraction and transparent control.
-3.  **TypeScript Error Reliability**: Reports rule violations as messages, not errors/warnings, to preserve the integrity of TypeScript's own error reporting and reduce cognitive load.
-4.  **Minimalist Implementation (Lightest, not Fastest)**: TSSLint aims to be the lightest linter, not necessarily the fastest. It leverages the existing `tsserver` instance to minimize resource consumption and tool footprint, ensuring it remains a lightweight diagnostic engine rather than a heavy, standalone linter.
+1.  **DX-First Rule Authoring**: We believe writing custom rules should be intuitive. By providing direct access to the TypeScript AST, TSSLint empowers developers to author rules with minimal cognitive overhead, valuing developer ease over complex abstractions.
+2.  **Minimalist Interface, Not a Framework**: TSSLint is a diagnostic extension interface for `tsserver`, not a full-fledged linter framework. It intentionally avoids complex plugin patterns and comes with **no built-in rules**, offering complete control and transparency to the user.
+3.  **Lightest, Not Fastest**: Our goal is to be the lightest linter, not necessarily the fastest. By leveraging the existing `tsserver` instance, TSSLint minimizes resource consumption and avoids redundant type-checking, ensuring a lightweight footprint.
+4.  **Preserving Diagnostic Integrity**: TSSLint reports rule violations as messages, not errors or warnings. This design choice maintains the reliability and clarity of TypeScript's native error reporting, preventing signal noise and reducing developer cognitive load.
 
 ## How TSSLint Works
 
