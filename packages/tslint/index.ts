@@ -51,3 +51,5 @@ export function convertRule(
 		}
 	};
 }
+
+export { defineRules } from './defineRules';

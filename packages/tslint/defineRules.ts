@@ -1,0 +1,91 @@
+import type * as TSSLint from '@tsslint/types';
+import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
+import { convertRule } from './index';
+import * as path from 'path';
+import * as fs from 'fs';
+
+// Helper function to convert kebab-case to PascalCase
+function toPascalCase(kebabCase: string): string {
+  return kebabCase.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('');
+}
+
+// Helper function to find TSLint rule class
+function findTslintRule(ruleName: string, rulesDirectory?: string | string[]): { metadata?: IRuleMetadata; new(options: IOptions): IRule; } | undefined {
+  const pascalCaseRuleName = toPascalCase(ruleName) + 'Rule';
+
+  // 1. Try to load from tslint/lib/rules (built-in rules)
+  try {
+    const tslint = require('tslint'); // Dynamically require tslint
+    const Rule = tslint.Rules[pascalCaseRuleName];
+    if (Rule) {
+      return Rule;
+    }
+  } catch (e) {
+    // tslint might not be directly resolvable or Rules might not be exposed this way
+    // console.error(`[TSSLint/TSLint] Error loading built-in rule ${ruleName}:`, e);
+  }
+
+  // 2. Try to load from specified rulesDirectory
+  const directories = Array.isArray(rulesDirectory) ? rulesDirectory : (rulesDirectory ? [rulesDirectory] : []);
+  for (const dir of directories) {
+    const rulePath = path.join(dir, ruleName + '.js'); // TSLint rules are often .js files
+    if (fs.existsSync(rulePath)) {
+      try {
+        // TSLint custom rules usually export a class directly
+        const Rule = require(rulePath).Rule; // Assuming the class is exported as 'Rule'
+        if (Rule) {
+          return Rule;
+        }
+      } catch (e) {
+        console.error(`[TSSLint/TSLint] Failed to load rule from ${rulePath}:`, e);
+      }
+    }
+  }
+
+  // 3. Try to load from node_modules for plugin rules (e.g., tslint-plugin-foo)
+  // This is more complex as TSLint plugins often export rules differently.
+  // For simplicity, we'll assume a direct require for now, but a more robust solution
+  // would involve parsing plugin's package.json or conventions.
+  // Example: tslint-plugin-foo -> require('tslint-plugin-foo').Rules['NoFooRule']
+  try {
+    const pluginName = ruleName.split('/')[0]; // e.g., '@angular-eslint/template'
+    if (pluginName.startsWith('tslint-plugin-') || pluginName.startsWith('@')) {
+      const plugin = require(pluginName); // Dynamically require the plugin package
+      const Rule = plugin.Rules?.[pascalCaseRuleName]; // Try to find in plugin.Rules
+      if (Rule) {
+        return Rule;
+      }
+    }
+  } catch (e) {
+    // console.error(`[TSSLint/TSLint] Error loading plugin rule ${ruleName}:`, e);
+  }
+
+  console.warn(`[TSSLint/TSLint] TSLint rule '${ruleName}' not found.`);
+  return undefined;
+}
+
+export async function defineRules(config: {
+  rules: Record<string, any>;
+  rulesDirectory?: string | string[];
+}): Promise<Record<string, TSSLint.Rule>> {
+  const tsslintRules: Record<string, TSSLint.Rule> = {};
+  const { rules, rulesDirectory } = config;
+
+  for (const [ruleName, ruleConfig] of Object.entries(rules)) {
+    const RuleClass = findTslintRule(ruleName, rulesDirectory);
+
+    if (RuleClass) {
+      // TSLint rule config can be [severity, option1, option2] or just severity
+      // We assume ruleConfig is an array where the first element is severity (which we ignore)
+      // and subsequent elements are rule arguments.
+      const ruleArguments = Array.isArray(ruleConfig) && ruleConfig.length > 1 ? ruleConfig.slice(1) : [];
+      const category = 3; // Default to Message category
+
+      tsslintRules[ruleName] = convertRule(RuleClass, ruleArguments, category);
+    } else {
+      console.warn(`[TSSLint/TSLint] TSLint rule '${ruleName}' not found.`);
+    }
+  }
+
+  return tsslintRules;
+}
