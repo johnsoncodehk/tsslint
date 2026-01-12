@@ -20,5 +20,5 @@ while (true) {
 
 generate(nodeModulesDirs).then(dts => {
 	fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
-	console.log("Generated packages/tslint/lib/types.d.ts");
+	console.log("Generated packages/tslint/lib/types.d.ts for importTslintRules.");
 });

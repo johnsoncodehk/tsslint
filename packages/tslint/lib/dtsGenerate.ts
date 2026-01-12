@@ -2,6 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { IRuleMetadata } from 'tslint';
 
+/**
+ * Generates TypeScript declaration file for TSLint rules, to be used with `importTslintRules`.
+ */
 export async function generate(
 	nodeModulesDirs: string[],
 	loader = async (mod: string) => {
