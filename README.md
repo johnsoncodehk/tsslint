@@ -97,7 +97,7 @@ Once configured, TSSLint will provide diagnostic feedback for `debugger;` statem
 
 ## ESLint Compatibility
 
-TSSLint offers robust compatibility with existing ESLint rules through the `@tsslint/eslint` package. This allows you to unify your linting setup and leverage the vast ESLint ecosystem within TSSLint's minimalist architecture.
+TSSLint offers robust compatibility with existing ESLint rules through the `@tsslint/eslint` package, allowing you to leverage the vast ESLint ecosystem within TSSLint's minimalist architecture.
 
 1.  **Install `@tsslint/eslint` and ESLint plugins**:
     ```bash
@@ -105,12 +105,12 @@ TSSLint offers robust compatibility with existing ESLint rules through the `@tss
     ```
 
 2.  **`postinstall` Script and pnpm Considerations**:
-    The `@tsslint/eslint` package includes a `postinstall` script that automatically scans your `node_modules` to generate type definitions for `defineRules`. This enhances Developer Experience by providing autocompletion and type safety for ESLint rules within your `tsslint.config.ts`.
+    `@tsslint/eslint` utilizes a `postinstall` script to generate type definitions for `defineRules`, enhancing Developer Experience with autocompletion and type safety.
 
-    If you are using **pnpm**, you might need to explicitly allow the execution of `postinstall` scripts for `@tsslint/eslint`. This can typically be configured in your `.npmrc` file or by ensuring pnpm's `shamefully-hoist` or similar settings are compatible with postinstall script execution.
+    When using **pnpm**, ensure `postinstall` scripts are allowed. A common approach is to configure `onlyBuiltDependencies=false` in your `.npmrc` to enable the execution of all `postinstall` scripts.
 
 3.  **Use `defineRules` in `tsslint.config.ts`**:
-    The `defineRules` function from `@tsslint/eslint` allows you to convert ESLint rules into TSSLint-compatible rules. You can pass an object of ESLint rules and their configurations directly to it.
+    The `defineRules` function from `@tsslint/eslint` converts ESLint rules into TSSLint-compatible rules. You can pass an object of ESLint rules and their configurations directly to it:
 
     ```typescript
     // tsslint.config.ts
@@ -139,7 +139,7 @@ TSSLint offers robust compatibility with existing ESLint rules through the `@tss
     });
     ```
 
-This powerful compatibility allows you to consolidate your code quality checks under TSSLint, benefiting from its minimalist architecture while still leveraging the vast ecosystem of ESLint rules.
+This compatibility allows you to consolidate code quality checks under TSSLint, benefiting from its minimalist architecture while still leveraging the vast ESLint rules ecosystem.
 
 ## CLI Usage
 
