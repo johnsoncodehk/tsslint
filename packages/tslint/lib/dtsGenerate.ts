@@ -113,7 +113,7 @@ export async function generate(
 			// TSLint options are often less structured than ESLint schemas.
 			// For now, we'll generate a simple array type. A more advanced solution
 			// would involve parsing the 'options' field if it contains a JSON schema.
-			optionsType = `[boolean, ...any[]]`; // TSLint rules usually start with a boolean severity
+			optionsType = `boolean | any[]`; // TSLint rules usually start with a boolean severity
 		} else {
 			optionsType = `boolean`; // If no options, just boolean for severity
 		}
