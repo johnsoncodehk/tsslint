@@ -19,7 +19,7 @@ TSSLint is built upon four core principles:
 1.  **Developer Experience (DX) for Custom Rules**: Prioritizes intuitive rule authoring using native TypeScript AST, valuing developer ease over marginal raw performance gains from complex abstractions.
 2.  **No Plugin Pattern**: Intentionally avoids complex plugin systems, favoring direct rule definition in `tsslint.config.ts` for minimal abstraction and transparent control.
 3.  **TypeScript Error Reliability**: Reports rule violations as messages, not errors/warnings, to preserve the integrity of TypeScript's own error reporting and reduce cognitive load.
-4.  **Minimalist Implementation**: Leverages the existing `tsserver` instance to minimize resource consumption and tool footprint, acting as a lightweight diagnostic engine.
+4.  **Minimalist Implementation (Lightest, not Fastest)**: TSSLint aims to be the lightest linter, not necessarily the fastest. It leverages the existing `tsserver` instance to minimize resource consumption and tool footprint, ensuring it remains a lightweight diagnostic engine rather than a heavy, standalone linter.
 
 ## How TSSLint Works
 
