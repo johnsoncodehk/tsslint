@@ -10,44 +10,38 @@
   <a href="https://github.com/johnsoncodehk/tsslint/tree/master/LICENSE"><img src="https://img.shields.io/github/license/johnsoncodehk/tsslint.svg?labelColor=18181B&color=1584FC" alt="License"></a>
 </p>
 
-**TSSLint** is a minimalist diagnostic extension interface for the TypeScript Language Server (`tsserver`). It provides a direct and efficient pathway to define and apply custom code quality rules, focusing on extending `tsserver`'s capabilities rather than building a separate linting framework.
+**TSSLint** is a minimalist diagnostic extension interface for the TypeScript Language Server (`tsserver`), enabling custom code quality rules with efficiency and directness.
 
 ## Our Philosophy
 
 TSSLint is built upon four core principles:
 
-1.  **Developer Experience (DX) over Raw Performance for Custom Rules**: While overall performance is paramount, TSSLint prioritizes making custom rule authoring as intuitive and straightforward as possible. We believe that the ease with which developers can express their code quality requirements directly in TypeScript, leveraging the native TypeScript AST, outweighs the marginal performance gains of overly complex, abstracted rule engines.
-2.  **Does Not Favor Plugin Pattern**: TSSLint intentionally avoids a complex plugin system. Instead, it encourages direct rule definition and integration within the `tsslint.config.ts`. This approach reduces abstraction layers, keeps the implementation minimal, and provides developers with direct, transparent control over their diagnostic logic, aligning with our minimalist philosophy.
-3.  **Prioritizes TypeScript's Error Reliability (Message-based Reporting)**: Unlike many linters that report issues as warnings or errors, TSSLint defaults to reporting rule violations as simple messages. This deliberate choice is to preserve the integrity and reliability of TypeScript's own error reporting. When an IDE highlights an error, developers can quickly discern if it's a fundamental TypeScript compilation issue or a stylistic/best-practice suggestion from TSSLint, reducing cognitive load and preventing "lint fatigue."
-4.  **Minimalist Implementation**: TSSLint aims to be as small and unobtrusive as possible. Instead of duplicating functionality, it leverages the existing `tsserver` instance that your IDE already runs. This approach minimizes resource consumption and reduces the tool's footprint, ensuring it remains a lightweight diagnostic engine rather than a heavy, standalone linter.
+1.  **Developer Experience (DX) for Custom Rules**: Prioritizes intuitive rule authoring using native TypeScript AST, valuing developer ease over marginal raw performance gains from complex abstractions.
+2.  **No Plugin Pattern**: Intentionally avoids complex plugin systems, favoring direct rule definition in `tsslint.config.ts` for minimal abstraction and transparent control.
+3.  **TypeScript Error Reliability**: Reports rule violations as messages, not errors/warnings, to preserve the integrity of TypeScript's own error reporting and reduce cognitive load.
+4.  **Minimalist Implementation**: Leverages the existing `tsserver` instance to minimize resource consumption and tool footprint, acting as a lightweight diagnostic engine.
 
 ## How TSSLint Works
 
-TSSLint operates as a TypeScript Language Server Plugin. This design choice means it reuses the `TypeChecker` instance already managed by your editor for providing core language features. By doing so, TSSLint adds custom diagnostic capabilities without introducing the additional overhead typically associated with separate type-checking processes.
-
-This integration allows TSSLint to provide timely and relevant feedback on your code, harmonizing with your existing `tsserver` setup.
+TSSLint operates as a TypeScript Language Server Plugin, reusing the `TypeChecker` instance from your editor's `tsserver`. This provides custom diagnostic capabilities without the overhead of separate type-checking processes.
 
 ## Features
 
-*   **Integrated Diagnostics**: Extends `tsserver` to provide custom diagnostic messages directly in your editor.
-*   **TypeScript Configuration**: Define your linting rules and configurations using TypeScript, benefiting from type safety and autocompletion.
-*   **Meta-Framework Friendly**: Supports various project types, including Vue, Astro, and MDX, by working with the underlying TypeScript language services.
-*   **Direct Rule Development**: Offers direct access to the TypeScript Abstract Syntax Tree (AST) for crafting precise and powerful custom rules, emphasizing DX.
+*   **Integrated Diagnostics**: Custom messages directly in your editor via `tsserver`.
+*   **TypeScript Configuration**: Rules and configs defined in TypeScript for type safety and autocompletion.
+*   **Meta-Framework Friendly**: Supports Vue, Astro, MDX, etc., through underlying TypeScript language services.
+*   **Direct Rule Development**: Direct access to TypeScript AST for precise custom rules, prioritizing DX.
 
 ## Getting Started
 
-To begin using TSSLint in your VSCode environment:
+To use TSSLint in VSCode:
 
-1.  **Install the VSCode Extension**:
-    *   [TSSLint for VSCode](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
-
+1.  **Install VSCode Extension**: [TSSLint for VSCode](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
 2.  **Add Dependencies**:
     ```bash
     npm install @tsslint/config typescript --save-dev
     ```
-
-3.  **Create `tsslint.config.ts`**:
-    Place a `tsslint.config.ts` file in your project root:
+3.  **Create `tsslint.config.ts`** in your project root:
     ```typescript
     import { defineConfig } from '@tsslint/config';
 
@@ -60,7 +54,7 @@ To begin using TSSLint in your VSCode environment:
 
 ## Creating a Custom Rule
 
-In line with our philosophy of prioritizing Developer Experience for custom rules, TSSLint offers a straightforward process for rule authoring by providing direct access to the TypeScript AST.
+TSSLint simplifies custom rule authoring by providing direct access to the TypeScript AST, aligning with our DX philosophy.
 
 **Example: A simple `no-debugger` rule**
 
@@ -99,20 +93,16 @@ Once configured, TSSLint will provide diagnostic feedback for `debugger;` statem
 
 ## ESLint Compatibility
 
-TSSLint offers robust compatibility with existing ESLint rules through the `@tsslint/eslint` package, allowing you to leverage the vast ESLint ecosystem within TSSLint's minimalist architecture.
+TSSLint integrates with existing ESLint rules via the `@tsslint/eslint` package, extending its minimalist architecture to the vast ESLint ecosystem.
 
-1.  **Install `@tsslint/eslint` and ESLint plugins**:
+1.  **Install `@tsslint/eslint` and ESLint plugins** (e.g., `@typescript-eslint/eslint-plugin`, `eslint`):
     ```bash
     npm install @tsslint/eslint @typescript-eslint/eslint-plugin @typescript-eslint/parser eslint --save-dev
     ```
 
-2.  **`postinstall` Script and pnpm Considerations**:
-    `@tsslint/eslint` utilizes a `postinstall` script to generate type definitions for `defineRules`, enhancing Developer Experience with autocompletion and type safety.
+2.  **`postinstall` Script for Type Definitions**: `@tsslint/eslint` uses a `postinstall` script to generate type definitions for `defineRules`. For **pnpm** users, ensure `postinstall` scripts are allowed (e.g., by setting `onlyBuiltDependencies=false` in `.npmrc`).
 
-    When using **pnpm**, ensure `postinstall` scripts are allowed. A common approach is to configure `onlyBuiltDependencies=false` in your `.npmrc` to enable the execution of all `postinstall` scripts.
-
-3.  **Use `defineRules` in `tsslint.config.ts`**:
-    The `defineRules` function from `@tsslint/eslint` converts ESLint rules into TSSLint-compatible rules. You can pass an object of ESLint rules and their configurations directly to it:
+3.  **Use `defineRules` in `tsslint.config.ts`**: The `defineRules` function converts ESLint rules into TSSLint-compatible rules. Pass an object of ESLint rules and their configurations directly to it:
 
     ```typescript
     // tsslint.config.ts
@@ -141,34 +131,32 @@ TSSLint offers robust compatibility with existing ESLint rules through the `@tss
     });
     ```
 
-This compatibility allows you to consolidate code quality checks under TSSLint, benefiting from its minimalist architecture while still leveraging the vast ESLint rules ecosystem.
+This allows consolidating code quality checks under TSSLint, leveraging the ESLint ecosystem within its minimalist architecture.
 
 ## CLI Usage
 
-The `@tsslint/cli` package offers a command-line interface for integrating TSSLint into your build processes or CI/CD pipelines.
+The `@tsslint/cli` package provides a CLI for build processes and CI/CD.
 
 *   **Lint a project**:
     ```bash
     npx tsslint --project path/to/your/tsconfig.json
     ```
-
 *   **Auto-fix errors**:
     ```bash
     npx tsslint --project path/to/your/tsconfig.json --fix
     ```
-
-*   **Lint multiple projects (e.g., Vue, Astro)**:
+*   **Lint multiple projects** (e.g., Vue, Astro):
     ```bash
     npx tsslint --project 'packages/*/tsconfig.json' --vue-project 'apps/web/tsconfig.json'
     ```
 
 ## Technical Considerations
 
-While TSSLint offers significant advantages, it's important to be aware of its current technical considerations:
+Be aware of these technical considerations:
 
-1.  **Node.js 23.6.0 Requirement for `tsslint.config.ts` (v3.0+)**: Starting from TSSLint v3.0, `tsslint.config.ts` is no longer bundled with esbuild but directly imported by Node.js. This requires Node.js v23.6.0 or newer. Until VSCode bundles Node.js v23.6.0 or higher, you might need to configure `typescript.tsserver.nodePath` in your VSCode settings to point to a local Node.js v23.6.0+ installation, or temporarily use TSSLint v2.
-2.  **TypeScript v7 (typescript-go) Compatibility**: As of now, `typescript-go` (TS v7) does not support Language Service Plugins. This means if your IDE is configured to use TS v7, TSSLint will not function within the IDE environment.
-3.  **Rules API Performance**: The Rules API is designed for simplicity and direct access to the TypeScript AST. However, unlike some other linters that use node visitors, the direct AST traversal for rule execution might be comparatively slower. Nevertheless, this node traversal cost is generally negligible when compared to the overall type-checking time saved by TSSLint's minimalist approach.
+1.  **Node.js 23.6.0+ Requirement (v3.0+)**: `tsslint.config.ts` is now directly imported, requiring Node.js 23.6.0+. For VSCode, you may need to set `typescript.tsserver.nodePath` to a local Node.js v23.6.0+ installation or use TSSLint v2.
+2.  **TypeScript v7 (typescript-go) Incompatibility**: `typescript-go` does not support Language Service Plugins, so TSSLint will not function in IDEs using it.
+3.  **Rules API Performance**: Direct AST traversal may be slower than optimized node visitors in other linters, but this cost is generally negligible compared to the type-checking time saved.
 
 ## Contributing
 
