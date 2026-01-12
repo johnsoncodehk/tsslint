@@ -100,6 +100,10 @@ Once configured, TSSLint will provide diagnostic feedback for `debugger;` statem
 
 TSSLint integrates with existing ESLint rules via the `@tsslint/eslint` package, extending its minimalist architecture to the vast ESLint ecosystem.
 
+`defineRules` automatically resolves ESLint plugin names based on standard conventions:
+*   **Core Rules**: Rules without a slash (e.g., `for-direction`) are treated as ESLint's built-in core rules.
+*   **Plugin Rules**: Rules with a slash (e.g., `@typescript-eslint/await-thenable`) are resolved to their respective ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`).
+
 1.  **Install `@tsslint/eslint` and ESLint plugins** (e.g., `@typescript-eslint/eslint-plugin`, `eslint`):
     ```bash
     npm install @tsslint/eslint @typescript-eslint/eslint-plugin eslint --save-dev
