@@ -1,4 +1,4 @@
-# TSSLint: A Minimalist TypeScript Diagnostic Tool
+# TSSLint: A Minimalist TS Server Diagnostic Extension Interface
 
 <p align="center">
   <img src="logo.png" alt="TSSLint Logo" width="200">
@@ -10,7 +10,7 @@
   <a href="https://github.com/johnsoncodehk/tsslint/tree/master/LICENSE"><img src="https://img.shields.io/github/license/johnsoncodehk/tsslint.svg?labelColor=18181B&color=1584FC" alt="License"></a>
 </p>
 
-**TSSLint** is a diagnostic tool crafted to seamlessly extend your TypeScript development environment. It integrates directly with the TypeScript Language Server (`tsserver`), offering a pathway to define and apply custom code quality rules with a focus on developer experience and a minimalist implementation.
+**TSSLint** is a minimalist diagnostic extension interface for the TypeScript Language Server (`tsserver`). It provides a direct and efficient pathway to define and apply custom code quality rules, focusing on extending `tsserver`'s capabilities rather than building a separate linting framework.
 
 ## Our Philosophy
 
