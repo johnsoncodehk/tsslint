@@ -79,6 +79,21 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
+## CLI Usage
+
+The `@tsslint/cli` package provides a command-line tool for CI/CD and build processes.
+
+```bash
+# Lint a project
+npx tsslint --project path/to/tsconfig.json
+
+# Auto-fix violations
+npx tsslint --project path/to/tsconfig.json --fix
+
+# Lint multiple projects
+npx tsslint --project 'packages/*/tsconfig.json' --vue-project 'apps/web/tsconfig.json'
+```
+
 ## Extensions
 
 ### Ignoring Rules
