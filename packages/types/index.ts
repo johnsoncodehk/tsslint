@@ -43,8 +43,6 @@ export interface Rule {
 
 export interface RuleContext {
 	typescript: typeof import('typescript');
-	languageServiceHost: LanguageServiceHost;
-	languageService: LanguageService;
 	program: Program;
 	file: SourceFile;
 	report(message: string, start: number, end: number, category?: DiagnosticCategory, reportAt?: [Error, number]): Reporter;

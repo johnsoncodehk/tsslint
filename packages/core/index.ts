@@ -78,7 +78,7 @@ export function createLinter(
 				const program = ctx.languageService.getProgram()!;
 				const file = ctx.languageService.getProgram()!.getSourceFile(fileName)!;
 				rulesContext = {
-					...ctx,
+					typescript: ctx.typescript,
 					file,
 					program,
 					report,
@@ -86,8 +86,7 @@ export function createLinter(
 			} else {
 				const file = getNonBoundSourceFile(fileName);
 				rulesContext = {
-					...ctx,
-					languageService: syntaxOnlyLanguageService,
+					typescript: ctx.typescript,
 					get program(): ts.Program {
 						throw new Error('Not supported');
 					},
