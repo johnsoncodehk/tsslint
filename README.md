@@ -179,11 +179,8 @@ debugger;
     export default defineConfig({
       rules: {
         ...await defineRules({
-          // 核心規則
           'for-direction': true,
-          // 插件規則
           '@typescript-eslint/await-thenable': true,
-          // 帶選項的規則
           '@typescript-eslint/consistent-type-imports': [
             { disallowTypeAnnotations: false, fixStyle: 'inline-type-imports' },
           ],
@@ -191,6 +188,22 @@ debugger;
       },
     });
     ```
+
+#### 使用 `convertRule` 轉換單個規則
+
+如果你需要更細緻地控制單個 ESLint 規則，可以使用 `convertRule`：
+
+```ts
+import { defineConfig } from '@tsslint/config';
+import { convertRule } from '@tsslint/eslint';
+import * as noConsoleRule from 'eslint/lib/rules/no-console';
+
+export default defineConfig({
+  rules: {
+    'no-console': convertRule(noConsoleRule, ['error', { allow: ['warn', 'error'] }]),
+  },
+});
+```
 
 ### TSLint 兼容性
 
