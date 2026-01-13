@@ -191,16 +191,17 @@ debugger;
 
 #### 使用 `convertRule` 轉換單個規則
 
-如果你需要更細緻地控制單個 ESLint 規則，可以使用 `convertRule`：
+如果你需要更細緻地控制單個 ESLint 規則，可以使用 `convertRule`。這在需要手動引入特定插件規則或調整診斷類別時非常有用。
 
 ```ts
 import { defineConfig } from '@tsslint/config';
 import { convertRule } from '@tsslint/eslint';
-import * as noConsoleRule from 'eslint/lib/rules/no-console';
+import noConsoleRule = require('eslint/lib/rules/no-console');
 
 export default defineConfig({
   rules: {
-    'no-console': convertRule(noConsoleRule, ['error', { allow: ['warn', 'error'] }]),
+    // convertRule(規則模組, 選項陣列, 額外上下文, 診斷類別)
+    'no-console': convertRule(noConsoleRule, [{ allow: ['warn', 'error'] }]),
   },
 });
 ```
