@@ -1,209 +1,140 @@
 # TSSLint
 
-<p>
-  <a href="https://npmjs.com/package/@tsslint/core"><img src="https://badgen.net/npm/v/@tsslint/core" alt="npm package"></a>
-  <a href="https://deepwiki.com/johnsoncodehk/tsslint"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-  <a href="https://github.com/johnsoncodehk/tsslint/tree/master/LICENSE"><img src="https://img.shields.io/github/license/johnsoncodehk/tsslint.svg?labelColor=18181B&color=1584FC" alt="License"></a>
+<p align="center">
+  <img src="logo.png" alt="TSSLint Logo" width="200">
 </p>
 
-> A lightweight inspection tool that seamlessly integrates with TypeScript Language Server
+<p align="center">
+  <a href="https://npmjs.com/package/@tsslint/core"><img src="https://badgen.net/npm/v/@tsslint/core" alt="npm package"></a>
+  <a href="https://discord.gg/NpdmPEUNjE"><img src="https://img.shields.io/discord/854968233938354226?color=7289DA&label=discord" alt="Discord"></a>
+  <a href="https://github.com/johnsoncodehk/tsslint/tree/master/LICENSE"><img src="https://img.shields.io/github/license/johnsoncodehk/tsslint.svg?labelColor=18181B&color=1584FC" alt="License"></a>
+  <a href="https://deepwiki.com/johnsoncodehk/tsslint"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+</p>
 
-TSSLint is not your typical linter. Its main purpose is to expose the TypeScript Language Server diagnostic interface, allowing you to add your own diagnostic rules without additional overhead to creating a TypeChecker.
+TSSLint is a minimalist diagnostic extension interface built on the TypeScript Language Server (`tsserver`). It provides zero default rules, allowing developers to implement custom rules that complement TypeScript's native checks with minimal overhead.
 
-Discord Server: https://discord.gg/NpdmPEUNjE
+## Motivation
 
-Special thanks to @basarat for transferring the `tsl` package name.
+TSSLint was created to solve a specific pain point: **editor lag during "Auto Fix on Save"**.
 
-## Packages
+In large-scale TypeScript projects, traditional linters (like ESLint) often cause noticeable delays when performing auto-fixes on save, as they frequently need to re-initialize type-checking or run in separate processes. By running directly as a `tsserver` plugin and sharing the existing type-checking context, TSSLint provides near-instant diagnostics and fixes, ensuring a smooth and uninterrupted development experience.
 
-This repository is a monorepo that we manage using [Lerna-Lite](https://github.com/lerna-lite/lerna-lite). That means that we actually publish several packages to npm from the same codebase, including:
+## Key Features
 
-- [`cli`](packages/cli): This package provides the command line interface for TSSLint.
-- [`config`](packages/config): This package allows you to define and build configuration files for TSSLint.
-- [`core`](packages/core): This is the core package for TSSLint, which provides the main functionality of the tool.
-- [`typescript-plugin`](packages/typescript-plugin): This package integrates TSSLint with the TypeScript language server.
-- [`vscode`](packages/vscode): This package is a Visual Studio Code extension that integrates TSSLint into the editor.
+*   **Zero Assumptions**: Comes with no built-in rules. It does not enforce any specific coding style or patterns, leaving full control to the developer.
+*   **High Performance**: Runs as a `tsserver` plugin, sharing the existing `TypeChecker` instance to avoid redundant parsing and type-checking.
+*   **Low Noise**: Violations are reported as "Message" diagnostics, ensuring they don't interfere with actual compiler errors or warnings.
+*   **Direct AST Access**: Rule authoring uses native TypeScript APIs directly, without unnecessary abstraction layers.
 
-## Why TSSLint?
+## How It Works
 
-The performance of TypeScript in code editors has always been a crucial concern. Most TypeScript tools integrate TypeScript libraries to enable type checking and query code types through the LanguageService or TypeChecker API.
+TSSLint integrates into `tsserver` via the TypeScript plugin system, leveraging the semantic information already computed by your editor.
 
-However, for complex types or large codebases, the tsserver process can consume significant memory and CPU resources. When linter tools integrate with TypeScript and create their own LanguageService instances, memory and CPU usage can continue to increase. In some cases, this has caused projects to experience long save times when codeActionOnSave is enabled in VSCode.
+<p align="center">
+  <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
+</p>
 
-TSSLint aims to seamlessly integrate with tsserver to minimize unnecessary overhead and provide linting capabilities on top of it.
+## Getting Started
 
-## Features
+### 1. Install
 
-- Integration with tsserver to minimize semantic linting overhead in IDEs.
-- Writing config in typescript.
-- Direct support for meta framework files based on TS Plugin without a parser. (e.g., Vue, MDX)
-- Pure ESM.
-- Designed to allow simple, direct access to rule source code without an intermediary layer.
-
-## Usage
-
-To enable TSSLint in VSCode, follow these steps:
-
-1. Install the [TSSLint VSCode Extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
-2. Add the `@tsslint/config` dependency to your project.
-	```json
-	{
-		"devDependencies": {
-			"@tsslint/config": "latest"
-		}
-	}
-	```
-3. Create the `tsslint.config.ts` config file:
-	```js
-	import { defineConfig } from '@tsslint/config';
-
-	export default defineConfig({
-		rules: {
-			// ... your rules
-		},
-	});
-	```
-
-### Create a Rule
-
-To create a rule, you need to define a function that receives the context of the current diagnostic task. Within this function, you can call `report()` to report an error.
-
-As an example, let's create a `no-console` rule under `[project root]/rules/`.
-
-Here's the code for `[project root]/rules/noConsoleRule.ts`:
-
-```js
-import { defineRule } from '@tsslint/config';
-
-export function create() {
-	return defineRule(({ typescript: ts, file, report }) => {
-		ts.forEachChild(file, function cb(node) {
-			if (
-				ts.isPropertyAccessExpression(node) &&
-				ts.isIdentifier(node.expression) &&
-				node.expression.text === 'console'
-			) {
-				report(
-					`Calls to 'console.x' are not allowed.`,
-					node.parent.getStart(file),
-					node.parent.getEnd()
-				).withFix(
-					'Remove this console expression',
-					() => [{
-						fileName: file.fileName,
-						textChanges: [{
-							newText: '/* deleted */',
-							span: {
-								start: node.parent.getStart(file),
-								length: node.parent.getWidth(file),
-							},
-						}],
-					}]
-				);
-			}
-			ts.forEachChild(node, cb);
-		});
-	});
-}
+```bash
+npm install @tsslint/config --save-dev
 ```
 
-Then add it to the `tsslint.config.ts` config file.
+### 2. Configure `tsslint.config.ts`
 
-```diff
+```ts
 import { defineConfig } from '@tsslint/config';
 
 export default defineConfig({
-	rules: {
-+ 		'no-console': (await import('./rules/noConsoleRule.ts')).create(),
-	},
+  rules: {
+    // Define or import your rules here
+  },
 });
 ```
 
-After saving the config file, you will notice that `console.log` is now reporting errors in the editor. The error message will also display the specific line of code where the error occurred. Clicking on the error message will take you to line 11 in `noConsoleRule.ts`, where the `report()` code is located.
+### 3. Editor Integration
 
-> Full example: https://github.com/johnsoncodehk/tsslint/tree/master/fixtures/define-a-rule
+*   **VSCode**: 
+    1. Install the [TSSLint extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
+    2. Since TSSLint requires Node.js 23.6.0+ to import `tsslint.config.ts`, and VSCode (v1.108.0) currently bundles Node.js 22.21.1, you must configure `typescript.tsserver.nodePath` to point to a Node.js 23.6.0+ executable:
+       ```json
+       {
+         "typescript.tsserver.nodePath": "/path/to/node-23.6.0"
+       }
+       ```
+*   **Other Editors**: Configure TSSLint as a plugin in your `tsconfig.json`:
+    ```json
+    {
+      "compilerOptions": {
+        "plugins": [{ "name": "@tsslint/typescript-plugin" }]
+      }
+    }
+    ```
 
-### Modify the Error
+## Rule Example
 
-While you cannot directly configure the severity of a rule, you can modify the reported errors through the `resolveDiagnostics()` API in the config file. This allows you to customize the severity of specific rules and even add additional errors.
+```ts
+// rules/no-debugger.ts
+import { defineRule } from '@tsslint/config';
 
-Here's an example of changing the severity of the `no-console` rule from Warning to Error in the `tsslint.config.ts` file:
-
-```js
-import { defineConfig } from '@tsslint/config';
-import noConsoleRule from './rules/noConsoleRule.ts';
-
-export default defineConfig({
-	rules: {
-		'no-console': noConsoleRule
-	},
-	plugins: [
-		({ typescript: ts }) => ({
-			resolveDiagnostics(file, diagnostics) {
-				for (const diagnostic of diagnostics) {
-					if (diagnostic.code === 'no-console') {
-						diagnostic.category = ts.DiagnosticCategory.Error;
-					}
-				}
-				return diagnostics;
-			},
-		}),
-	],
+export default defineRule(({ typescript: ts, file, report }) => {
+  ts.forEachChild(file, function cb(node) {
+    if (node.kind === ts.SyntaxKind.DebuggerStatement) {
+      report(
+        'Debugger statement is not allowed.',
+        node.getStart(file),
+        node.getEnd()
+      );
+    }
+    ts.forEachChild(node, cb);
+  });
 });
 ```
 
 ## CLI Usage
 
-The `@tsslint/cli` package provides a command-line interface for running the TSSLint tool across your TypeScript projects. It can be used by running the `tsslint` command in your terminal.
+The `@tsslint/cli` package provides a command-line tool for CI/CD and build processes.
 
-Here is a basic example of how to use it:
+```bash
+# Lint a project
+npx tsslint --project path/to/tsconfig.json
 
-```sh
-npx tsslint --project path/to/your/tsconfig.json
+# Auto-fix violations
+npx tsslint --project path/to/tsconfig.json --fix
+
+# Lint multiple projects
+npx tsslint --project 'packages/*/tsconfig.json' --vue-project 'apps/web/tsconfig.json'
 ```
 
-This command will run the linter on the TypeScript project defined by the provided `tsconfig.json` file. Any linting errors will be output to the console.
+> [!TIP]
+> TSSLint focuses on diagnostic fixes and does not include a built-in formatter. It is recommended to run a dedicated formatter like **Prettier**, **dprint**, or **oxfmt** after running TSSLint with `--fix`.
 
-If you want to automatically fix any fixable linting errors, you can use the `--fix` option:
 
-```sh
-npx tsslint --project path/to/your/tsconfig.json --fix
+## Extensions
+
+### Ignoring Rules
+```ts
+import { defineConfig, createIgnorePlugin } from '@tsslint/config';
+
+export default defineConfig({
+  plugins: [
+    createIgnorePlugin('tsslint-ignore', true)
+  ],
+});
 ```
+*Usage: Use `// tsslint-ignore` comments in your code.*
 
-This will run the linter and automatically apply any fixes that are available.
+### Ecosystem Integration
+*   **ESLint**: Convert rules via `@tsslint/eslint`.
+*   **TSLint**: Convert rules via `@tsslint/tslint`.
 
-You can also lint multiple projects at once:
+## Technical Notes
 
-```sh
-npx tsslint --project packages/*/tsconfig.json
-npx tsslint --project {packages/pkg-a/tsconfig.json,packages/pkg-b/tsconfig.json}
-```
+*   **Node.js**: Requires 23.6.0+ (v3.0+).
+*   **TypeScript**: Incompatible with `typescript-go` (v7) as it does not support Language Service Plugins.
 
-This command will run the linter on all TypeScript projects located in the subdirectories of the `packages` directory. Each subdirectory should contain a `tsconfig.json` file defining a TypeScript project. Any linting errors will be output to the console.
+## License
 
-### Linting Different Project Types
-
-TSSLint also supports linting different types of projects, such as Vue, Vue Vine, MDX, and Astro. You can specify the project type using the relevant flags:
-
-- **Vue projects**:
-  ```sh
-  npx tsslint --vue-project path/to/vue/tsconfig.json
-  ```
-- **Vue Vine projects**:
-  ```sh
-  npx tsslint --vue-vine-project path/to/vue-vine/tsconfig.json
-  ```
-- **MDX projects**:
-  ```sh
-  npx tsslint --mdx-project path/to/mdx/tsconfig.json
-  ```
-- **Astro projects**:
-  ```sh
-  npx tsslint --astro-project path/to/astro/tsconfig.json
-  ```
-- **TS Macro projects**:
-  ```sh
-  npx tsslint --ts-macro-project path/to/ts-macro/tsconfig.json
-  ```
-
-This allows flexibility in linting different project structures while maintaining the same CLI workflow.
+[MIT](LICENSE)
