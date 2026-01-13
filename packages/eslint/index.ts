@@ -181,12 +181,8 @@ export function convertRule(
 		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
 	}
 
-	const tsslintRule: TSSLint.Rule = ({ file, languageService, languageServiceHost, report }) => {
-		const { sourceCode, eventQueue } = getEstree(
-			file,
-			languageService,
-			languageServiceHost.getCompilationSettings()
-		);
+	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
+		const { sourceCode, eventQueue } = getEstree(file, () => ctx.program);
 		const emitter = createEmitter();
 
 		if (eslintRule.meta?.defaultOptions) {
@@ -197,11 +193,12 @@ export function convertRule(
 
 		let currentNode: any;
 
-		const cwd = languageServiceHost.getCurrentDirectory();
 		const ruleListeners = eslintRule.create({
-			cwd,
+			get cwd() {
+				return ctx.program.getCurrentDirectory();
+			},
 			getCwd() {
-				return cwd;
+				return ctx.program.getCurrentDirectory();
 			},
 			filename: file.fileName,
 			getFilename() {
@@ -506,8 +503,7 @@ export function convertRule(
 
 function getEstree(
 	file: ts.SourceFile,
-	languageService: ts.LanguageService,
-	compilationSettings: ts.CompilerOptions
+	getProgram: () => ts.Program,
 ) {
 	if (!estrees.has(file)) {
 		let program: ts.Program | undefined;
@@ -522,7 +518,7 @@ function getEstree(
 
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
-				program ??= languageService.getProgram()!;
+				program ??= getProgram();
 				return Reflect.get(program, p, receiver);
 			},
 		});
@@ -533,8 +529,6 @@ function getEstree(
 			range: true,
 			preserveNodeMaps: true,
 			filePath: file.fileName,
-			emitDecoratorMetadata: compilationSettings.emitDecoratorMetadata ?? false,
-			experimentalDecorators: compilationSettings.experimentalDecorators ?? false,
 		});
 		const sourceCode = new SourceCode({
 			text: file.text,

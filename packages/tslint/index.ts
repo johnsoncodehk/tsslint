@@ -16,9 +16,9 @@ export function convertRule(
 		ruleSeverity: 'warning',
 		disabledIntervals: [],
 	}) as IRule | ITypedRule;
-	return ({ file, languageService, report }) => {
+	return ({ file, report, ...ctx }) => {
 		const failures = 'applyWithProgram' in rule
-			? rule.applyWithProgram(file, languageService.getProgram()!)
+			? rule.applyWithProgram(file, ctx.program)
 			: rule.apply(file);
 		for (const failure of failures) {
 			const reporter = report(
