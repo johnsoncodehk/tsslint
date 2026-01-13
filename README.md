@@ -12,6 +12,12 @@
 
 TSSLint is a minimalist diagnostic extension interface built on the TypeScript Language Server (`tsserver`). It provides zero default rules, allowing developers to implement custom rules that complement TypeScript's native checks with minimal overhead.
 
+## Motivation
+
+TSSLint was created to solve a specific pain point: **editor lag during "Auto Fix on Save"**.
+
+In large-scale TypeScript projects, traditional linters (like ESLint) often cause noticeable delays when performing auto-fixes on save, as they frequently need to re-initialize type-checking or run in separate processes. By running directly as a `tsserver` plugin and sharing the existing type-checking context, TSSLint provides near-instant diagnostics and fixes, ensuring a smooth and uninterrupted development experience.
+
 ## Key Features
 
 *   **Zero Assumptions**: Comes with no built-in rules. It does not enforce any specific coding style or patterns, leaving full control to the developer.
