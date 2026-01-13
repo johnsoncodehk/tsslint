@@ -10,20 +10,18 @@
   <a href="https://github.com/johnsoncodehk/tsslint/tree/master/LICENSE"><img src="https://img.shields.io/github/license/johnsoncodehk/tsslint.svg?labelColor=18181B&color=1584FC" alt="License"></a>
 </p>
 
-**Linter 應該是 TypeScript 的延伸，而非負擔。**
+TSSLint 是一個基於 TypeScript Language Server (`tsserver`) 的極簡診斷擴充介面。它不提供任何預設規則，旨在讓開發者能以最低的開銷編寫補充 TypeScript 原生檢查之外的自定義規則。
 
-目前的 Linter 生態系統往往過於臃腫且固執己見。TSSLint 的出現是為了打破「拿著錘子找釘子」的現狀。我們不提供任何預設假設，也不強加任何審美。TSSLint 的定位是 **TypeScript 的補完計畫**——它專注於補充 TS 本身未做或做不到的事，而不是重複 TS 已經做好的工作。
+## 核心特點
 
-## 核心哲學
-
-*   **不提供假設 (Zero Assumptions)**：TSSLint 內建 **零規則**。我們不定義什麼是「好」的程式碼，我們把定義標準的權力完全還給開發者。
-*   **寄生於 tsserver**：直接作為 TypeScript Language Server 插件運行，共享已有的 `TypeChecker` 實例。沒有獨立進程，沒有重複的型別計算，極致輕量。
-*   **直球對決的 DX**：規則編寫不經過多餘的抽象層。你直接與 TypeScript 的 AST 對話，用最原始、最精確的方式定義檢查邏輯。
-*   **安靜的提醒**：違規行為被報告為「訊息 (Message)」而非錯誤。它是一個安靜的副駕駛，在旁邊遞張紙條提醒你，而不是搶過你的方向盤。
+*   **零預設 (Zero-config by default)**：內建零規則，不對程式碼風格或規範做任何假設。
+*   **高效能**：作為 `tsserver` 插件運行，直接共享已有的 `TypeChecker` 實例，避免重複解析與型別計算。
+*   **低干擾**：診斷結果以「訊息 (Message)」類別報告，不干擾原有的編譯錯誤或警告。
+*   **直接存取 AST**：規則編寫直接使用 TypeScript 原生 API，無需學習額外的抽象層。
 
 ## 運作原理
 
-TSSLint 重用了編輯器 `tsserver` 中的 `TypeChecker` 實例，這使其能在幾乎不佔用額外資源的情況下，提供即時的自定義診斷能力。
+TSSLint 透過 TypeScript 插件機制整合進 `tsserver`，直接利用編輯器已計算好的語義資訊。
 
 <p align="center">
   <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
@@ -44,7 +42,7 @@ import { defineConfig } from '@tsslint/config';
 
 export default defineConfig({
   rules: {
-    // 在這裡定義或引入你的規則
+    // 在這裡定義或引入規則
   },
 });
 ```
@@ -52,7 +50,7 @@ export default defineConfig({
 ### 3. 編輯器整合
 
 *   **VSCode**: 安裝 [TSSLint 擴充套件](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)。
-*   **其他編輯器**: 在 `tsconfig.json` 中加入插件配置：
+*   **其他編輯器**: 在 `tsconfig.json` 中配置：
     ```json
     {
       "compilerOptions": {
@@ -61,9 +59,7 @@ export default defineConfig({
     }
     ```
 
-## 編寫規則：與 AST 對話
-
-TSSLint 讓規則編寫回歸本質。
+## 編寫規則範例
 
 ```ts
 // rules/no-debugger.ts
@@ -73,7 +69,7 @@ export default defineRule(({ typescript: ts, file, report }) => {
   ts.forEachChild(file, function cb(node) {
     if (node.kind === ts.SyntaxKind.DebuggerStatement) {
       report(
-        '這裡建議不要使用 debugger。',
+        'Debugger statement is not allowed.',
         node.getStart(file),
         node.getEnd()
       );
@@ -83,27 +79,28 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
-## 功能擴充
+## 擴充功能
 
-### 規則忽略 (Ignore)
-透過內建插件支援自定義忽略指令：
+### 忽略規則 (Ignore)
 ```ts
 import { defineConfig, createIgnorePlugin } from '@tsslint/config';
 
 export default defineConfig({
-  plugins: [createIgnorePlugin('tsslint-ignore', true)],
+  plugins: [
+    createIgnorePlugin('tsslint-ignore', true)
+  ],
 });
 ```
+*使用：在程式碼中使用 `// tsslint-ignore` 註解。*
 
-### 生態系統整合
-如果你仍需要傳統 Linter 的規則，可以透過兼容層引入：
-*   **ESLint**: 使用 `@tsslint/eslint` 的 `defineRules` 或 `convertRule`。
-*   **TSLint**: 使用 `@tsslint/tslint` 的 `convertRule`。
+### 整合現有生態
+*   **ESLint**: 透過 `@tsslint/eslint` 轉換規則。
+*   **TSLint**: 透過 `@tsslint/tslint` 轉換規則。
 
-## 技術備註
+## 技術限制
 
-*   **環境要求**: Node.js 23.6.0+ (v3.0+)。
-*   **兼容性**: 不支援 `typescript-go` (TypeScript v7)，因為其不支援 Language Service Plugins。
+*   **Node.js**: 需 23.6.0+ (v3.0+)。
+*   **TypeScript**: 不支援 `typescript-go` (v7)，因其不支援 Language Service Plugins。
 
 ## 授權
 
