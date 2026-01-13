@@ -10,20 +10,20 @@
   <a href="https://github.com/johnsoncodehk/tsslint/tree/master/LICENSE"><img src="https://img.shields.io/github/license/johnsoncodehk/tsslint.svg?labelColor=18181B&color=1584FC" alt="License"></a>
 </p>
 
-**TSSLint** is a minimalist diagnostic extension interface for the TypeScript Language Server (`tsserver`), enabling custom code quality rules with efficiency and directness.
+TSSLint 是一個輕量級的診斷擴充介面，它直接在 TypeScript Language Server (`tsserver`) 內部運行。這讓你可以編寫自定義的程式碼品質規則，同時避免了運行獨立 Linter 或重複執行型別檢查的額外開銷。
 
-## Our Philosophy
+## Why TSSLint?
 
-TSSLint's design is guided by a philosophy that prioritizes developer experience and minimalist implementation:
+TSSLint 的設計基於幾個核心理念：
 
-1.  **DX-First Rule Authoring**: We believe writing custom rules should be intuitive. By providing direct access to the TypeScript AST, TSSLint empowers developers to author rules with minimal cognitive overhead, valuing developer ease over complex abstractions.
-2.  **Minimalist Interface, Not a Framework**: TSSLint is a diagnostic extension interface for `tsserver`, not a full-fledged linter framework. It intentionally avoids complex plugin patterns and comes with **no built-in rules**, offering complete control and transparency to the user.
-3.  **Lightest, Not Fastest**: Our goal is to be the lightest linter, not necessarily the fastest. By leveraging the existing `tsserver` instance, TSSLint minimizes resource consumption and avoids redundant type-checking, ensuring a lightweight footprint.
-4.  **Preserving Diagnostic Integrity**: TSSLint reports rule violations as messages, not errors or warnings. This design choice maintains the reliability and clarity of TypeScript's native error reporting, preventing signal noise and reducing developer cognitive load.
+*   **重用型別檢查器 (Type Checker)**：作為 `tsserver` 插件運行，TSSLint 重複利用了 TypeScript 編譯器已有的型別資訊。這使其極為快速和輕量。
+*   **DX 優先的規則編寫**：規則編寫非常簡單。你可以直接存取 TypeScript AST，輕鬆編寫精確的規則，減少樣板程式碼。
+*   **僅是介面，而非框架**：TSSLint 僅提供運行引擎，**沒有內建規則**。你需要引入自己的規則，或整合來自 ESLint/TSLint 的現有規則。
+*   **乾淨的診斷輸出**：規則違規會以普通訊息 (message) 報告，而非錯誤 (error) 或警告 (warning)，確保編輯器的錯誤面板保持乾淨，專注於真正的 TypeScript 問題。
 
 ## How TSSLint Works
 
-TSSLint operates as a TypeScript Language Server Plugin, reusing the `TypeChecker` instance from your editor's `tsserver`. This provides custom diagnostic capabilities without the overhead of separate type-checking processes.
+TSSLint 作為一個 TypeScript Language Server Plugin 運行，它重用了編輯器 `tsserver` 中的 `TypeChecker` 實例。這提供了自定義診斷能力，且沒有獨立型別檢查流程的額外負擔。
 
 <p align="center">
   <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
@@ -31,42 +31,48 @@ TSSLint operates as a TypeScript Language Server Plugin, reusing the `TypeChecke
 
 ## Features
 
-*   **Integrated Diagnostics**: Custom messages directly in your editor via `tsserver`.
-*   **TypeScript Configuration**: Rules and configs defined in TypeScript for type safety and autocompletion.
-*   **Meta-Framework Friendly**: Supports Vue, Astro, MDX, etc., through underlying TypeScript language services.
-*   **Direct Rule Development**: Direct access to TypeScript AST for precise custom rules, prioritizing DX.
-*   **Refactor Support**: Supports providing refactor actions (quick fixes) for rule violations.
-*   **No Built-in Rules**: TSSLint provides the engine, not the rules. It comes with no built-in rules, giving users complete control to define their own or integrate from external sources like ESLint or TSLint.
+*   **整合式診斷**：規則訊息直接在編輯器中顯示。
+*   **型別安全配置**：配置檔 `tsslint.config.ts` 提供完整的型別安全和自動補全。
+*   **框架友好**：支援 Vue, Astro, MDX 等，只要底層有 TypeScript 語言服務即可。
+*   **快速修復**：支援為規則違規提供重構動作 (Refactor Actions) 和快速修復 (Quick Fixes)。
 
 ## Getting Started
 
-### Using in VSCode
+### 1. 安裝核心依賴
 
-1.  **Install VSCode Extension**: [TSSLint for VSCode](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint)
-2.  **Add Dependencies**:
-    ```bash
-    npm install @tsslint/config --save-dev
-    ```
-3.  **Create `tsslint.config.ts`** in your project root:
-    ```ts
-    import { defineConfig } from '@tsslint/config';
+```bash
+npm install @tsslint/config --save-dev
+```
 
-    export default defineConfig({
-      rules: {
-        // Your custom rules or imported rules go here
-      },
-    });
-    ```
+### 2. 建立配置檔
 
-### Manual Setup (Other Editors)
+在專案根目錄建立 `tsslint.config.ts`：
 
-For editors other than VSCode, you can configure TSSLint as a TypeScript plugin in your `tsconfig.json`:
+```ts
+import { defineConfig } from '@tsslint/config';
 
-1.  **Install Plugin**:
+export default defineConfig({
+  rules: {
+    // 你的自定義規則或引入的規則
+  },
+});
+```
+
+### 3. 編輯器整合
+
+#### VSCode
+
+安裝 [TSSLint for VSCode 擴充套件](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint) 即可。
+
+#### 其他編輯器 (手動設定)
+
+對於其他編輯器，你可以將 TSSLint 配置為 TypeScript 插件：
+
+1.  **安裝插件**:
     ```bash
     npm install @tsslint/typescript-plugin --save-dev
     ```
-2.  **Configure `tsconfig.json`**:
+2.  **配置 `tsconfig.json`**:
     ```json
     {
       "compilerOptions": {
@@ -81,9 +87,9 @@ For editors other than VSCode, you can configure TSSLint as a TypeScript plugin 
 
 ## Creating a Custom Rule
 
-TSSLint simplifies custom rule authoring by providing direct access to the TypeScript AST, aligning with our DX philosophy.
+TSSLint 讓自定義規則的編寫變得簡單，你可以直接存取 TypeScript AST。
 
-**Example: A simple `no-debugger` rule**
+**範例：一個簡單的 `no-debugger` 規則**
 
 ```ts
 // rules/no-debugger.ts
@@ -103,7 +109,7 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
-**Enable the rule in `tsslint.config.ts`**:
+**在 `tsslint.config.ts` 中啟用規則**：
 
 ```ts
 import { defineConfig } from '@tsslint/config';
@@ -116,23 +122,19 @@ export default defineConfig({
 });
 ```
 
-## ESLint Compatibility
+## 整合現有規則
 
-TSSLint integrates with existing ESLint rules via the `@tsslint/eslint` package, extending its minimalist architecture to the vast ESLint ecosystem.
+### ESLint 兼容性
 
-`defineRules` automatically resolves ESLint plugin names based on standard conventions:
-*   **Core Rules**: Rules without a slash (e.g., `for-direction`) are treated as ESLint's built-in core rules.
-*   **Plugin Rules**: Rules with a slash (e.g., `@typescript-eslint/await-thenable`) are resolved to their respective ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`).
+透過 `@tsslint/eslint` 套件，你可以將龐大的 ESLint 生態系統整合到 TSSLint 中。
 
-1.  **Install `@tsslint/eslint` and ESLint plugins**:
+1.  **安裝依賴**:
     ```bash
     npm install @tsslint/eslint @typescript-eslint/eslint-plugin eslint --save-dev
     ```
 
-2.  **Type Definitions**: `@tsslint/eslint` generates type definitions for `defineRules` via a `postinstall` script. This provides full autocompletion for ESLint rules in your `tsslint.config.ts`.
-    *   For **pnpm** users, ensure `postinstall` scripts are allowed (e.g., by setting `onlyBuiltDependencies=false` in `.npmrc`).
-
-3.  **Use `defineRules` in `tsslint.config.ts`**:
+2.  **使用 `defineRules`**:
+    `defineRules` 會自動解析 ESLint 插件名稱，並提供完整的型別安全和規則自動補全。
 
     ```ts
     // tsslint.config.ts
@@ -142,9 +144,11 @@ TSSLint integrates with existing ESLint rules via the `@tsslint/eslint` package,
     export default defineConfig({
       rules: {
         ...await defineRules({
+          // 核心規則
           'for-direction': true,
-          'no-debugger': true,
+          // 插件規則
           '@typescript-eslint/await-thenable': true,
+          // 帶選項的規則
           '@typescript-eslint/consistent-type-imports': [
             { disallowTypeAnnotations: false, fixStyle: 'inline-type-imports' },
           ],
@@ -153,16 +157,16 @@ TSSLint integrates with existing ESLint rules via the `@tsslint/eslint` package,
     });
     ```
 
-## TSLint Compatibility
+### TSLint 兼容性
 
-For legacy projects, TSSLint also supports TSLint rules via the `@tsslint/tslint` package.
+對於舊專案，TSSLint 也支援透過 `@tsslint/tslint` 套件轉換 TSLint 規則。
 
-1.  **Install `@tsslint/tslint`**:
+1.  **安裝依賴**:
     ```bash
     npm install @tsslint/tslint tslint --save-dev
     ```
 
-2.  **Convert TSLint Rules**:
+2.  **轉換規則**:
     ```ts
     import { defineConfig } from '@tsslint/config';
     import { convertRule } from '@tsslint/tslint';
@@ -177,30 +181,29 @@ For legacy projects, TSSLint also supports TSLint rules via the `@tsslint/tslint
 
 ## CLI Usage
 
-The `@tsslint/cli` package provides a CLI for build processes and CI/CD.
+`@tsslint/cli` 套件提供了用於建構流程和 CI/CD 的命令列工具。
 
-*   **Lint a project**:
+*   **Lint 專案**:
     ```bash
     npx tsslint --project path/to/your/tsconfig.json
     ```
-*   **Auto-fix errors**:
+*   **自動修復**:
     ```bash
     npx tsslint --project path/to/your/tsconfig.json --fix
     ```
-*   **Lint multiple projects** (e.g., Vue, Astro):
+*   **Lint 多個專案** (例如 Vue, Astro):
     ```bash
     npx tsslint --project 'packages/*/tsconfig.json' --vue-project 'apps/web/tsconfig.json'
     ```
 
-## Technical Considerations
+## Technical Notes
 
-1.  **Node.js 23.6.0+ Requirement (v3.0+)**: `tsslint.config.ts` is now directly imported, requiring Node.js 23.6.0+. For VSCode, you may need to set `typescript.tsserver.nodePath` to a local Node.js v23.6.0+ installation or use TSSLint v2.
-2.  **TypeScript v7 (typescript-go) Incompatibility**: `typescript-go` does not support Language Service Plugins, so TSSLint will not function in IDEs using it.
-3.  **Rules API Performance**: Direct AST traversal may be slower than optimized node visitors in other linters, but this cost is generally negligible compared to the type-checking time saved.
+1.  **Node.js 23.6.0+ (v3.0+)**: `tsslint.config.ts` 現在是直接導入的，需要 Node.js 23.6.0+。
+2.  **TypeScript v7 (typescript-go) 不兼容**: `typescript-go` 不支援 Language Service Plugins，因此 TSSLint 無法在採用它的 IDE 中運行。
 
 ## Contributing
 
-We welcome contributions! Please feel free to open an issue or submit a pull request.
+歡迎貢獻！請隨時開啟 Issue 或提交 Pull Request。
 
 ## License
 
