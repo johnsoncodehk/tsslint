@@ -122,6 +122,41 @@ export default defineConfig({
 });
 ```
 
+## 忽略規則 (Ignoring Rules)
+
+TSSLint 透過插件系統支援忽略規則。你可以使用內建的 `createIgnorePlugin` 來配置自定義的忽略指令。
+
+### 配置插件
+
+在 `tsslint.config.ts` 中加入 `plugins` 配置：
+
+```ts
+import { defineConfig, createIgnorePlugin } from '@tsslint/config';
+
+export default defineConfig({
+  rules: {
+    // ... rules
+  },
+  plugins: [
+    createIgnorePlugin('tsslint-ignore', true), // 指令名稱, 是否報告未使用的註解
+  ],
+});
+```
+
+### 使用方式
+
+在程式碼中使用註解來忽略特定的診斷訊息：
+
+```ts
+// tsslint-ignore
+debugger;
+
+// tsslint-ignore no-debugger
+debugger;
+```
+
+如果註解位於行首，它會忽略**下一行**的錯誤；如果位於行尾，則忽略**當前行**。
+
 ## 整合現有規則
 
 ### ESLint 兼容性
