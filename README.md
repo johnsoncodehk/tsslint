@@ -57,7 +57,14 @@ export default defineConfig({
 
 ### 3. Editor Integration
 
-*   **VSCode**: Install the [TSSLint extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
+*   **VSCode**: 
+    1. Install the [TSSLint extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
+    2. Since TSSLint requires Node.js 23.6.0+ to import `tsslint.config.ts`, and VSCode (v1.108.0) currently bundles Node.js 22.21.1, you must configure `typescript.tsserver.nodePath` to point to a Node.js 23.6.0+ executable:
+       ```json
+       {
+         "typescript.tsserver.nodePath": "/path/to/node-23.6.0"
+       }
+       ```
 *   **Other Editors**: Configure TSSLint as a plugin in your `tsconfig.json`:
     ```json
     {
