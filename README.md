@@ -94,6 +94,10 @@ npx tsslint --project path/to/tsconfig.json --fix
 npx tsslint --project 'packages/*/tsconfig.json' --vue-project 'apps/web/tsconfig.json'
 ```
 
+> [!TIP]
+> TSSLint focuses on diagnostic fixes and does not include a built-in formatter. It is recommended to run a dedicated formatter like **Prettier**, **dprint**, or **oxfmt** after running TSSLint with `--fix`.
+
+
 ## Extensions
 
 ### Ignoring Rules
