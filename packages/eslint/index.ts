@@ -76,9 +76,21 @@ export async function convertRules(
 	/**
 	 * Converts an ESLint rules configuration to TSSLint rules.
 	 *
-	 * The type definitions are generated when `@tsslint/eslint` is installed.
-	 * If the type definitions become outdated, please run
-	 * `node node_modules/@tsslint/eslint/scripts/generateDts.js` to update them.
+	 * ---
+	 * ⚠️ **Type definitions not generated**
+	 *
+	 * Please add `@tsslint/eslint` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
+	 *
+	 * ```json
+	 * {
+	 *   "pnpm": {
+	 *     "onlyBuiltDependencies": ["@tsslint/eslint"]
+	 *   }
+	 * }
+	 * ```
+	 *
+	 * After that, run `pnpm install` again to generate type definitions.
+	 * ---
 	 */
 export async function defineRules(
 	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
