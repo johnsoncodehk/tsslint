@@ -73,25 +73,25 @@ export async function convertRules(
 	return rules;
 }
 
-	/**
-	 * Converts an ESLint rules configuration to TSSLint rules.
-	 *
-	 * ---
-	 * ⚠️ **Type definitions not generated**
-	 *
-	 * Please add `@tsslint/eslint` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
-	 *
-	 * ```json
-	 * {
-	 *   "pnpm": {
-	 *     "onlyBuiltDependencies": ["@tsslint/eslint"]
-	 *   }
-	 * }
-	 * ```
-	 *
-	 * After that, run `pnpm install` again to generate type definitions.
-	 * ---
-	 */
+/**
+ * Converts an ESLint rules configuration to TSSLint rules.
+ *
+ * ---
+ * ⚠️ **Type definitions not generated**
+ *
+ * Please add `@tsslint/eslint` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
+ *
+ * ```json
+ * {
+ *   "pnpm": {
+ *     "onlyBuiltDependencies": ["@tsslint/eslint"]
+ *   }
+ * }
+ * ```
+ *
+ * After that, run `pnpm install` again to generate type definitions.
+ * ---
+ */
 export async function defineRules(
 	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
