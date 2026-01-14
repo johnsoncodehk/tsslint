@@ -21,9 +21,10 @@ export async function generate(
 	indentLevel++;
 
 	const visited = new Set<string>();
-	const defs = new Map<any, [string, string]>();
-
-	for (const nodeModulesDir of nodeModulesDirs) {
+		const defs = new Map<any, [string, string]>();
+		const stats: Record<string, number> = {};
+	
+		for (const nodeModulesDir of nodeModulesDirs) {
 		const pkgs = readdirDirSync(nodeModulesDir);
 
 		for (const pkg of pkgs) {
@@ -37,14 +38,19 @@ export async function generate(
 							plugin = plugin.default;
 						}
 						if (plugin.rules) {
-							for (const ruleName in plugin.rules) {
-								const rule = plugin.rules[ruleName];
-								if (subPkg === 'eslint-plugin') {
-									addRule(pkg, ruleName, rule);
-								} else {
-									addRule(pkg, `${subPkg.slice('eslint-plugin-'.length)}/${ruleName}`, rule);
+								stats[pluginName] = 0;
+								for (const ruleName in plugin.rules) {
+									const rule = plugin.rules[ruleName];
+									if (subPkg === 'eslint-plugin') {
+										if (addRule(pkg, ruleName, rule)) {
+											stats[pluginName]++;
+										}
+									} else {
+										if (addRule(pkg, `${subPkg.slice('eslint-plugin-'.length)}/${ruleName}`, rule)) {
+											stats[pluginName]++;
+										}
+									}
 								}
-							}
 						}
 					}
 				}
@@ -54,25 +60,31 @@ export async function generate(
 				if ('default' in plugin) {
 					plugin = plugin.default;
 				}
-				if (plugin.rules) {
-					const scope = pkg.replace('eslint-plugin-', '');
-					for (const ruleName in plugin.rules) {
-						const rule = plugin.rules[ruleName];
-						addRule(scope, ruleName, rule);
+					if (plugin.rules) {
+						const scope = pkg.replace('eslint-plugin-', '');
+						stats[pkg] = 0;
+						for (const ruleName in plugin.rules) {
+							const rule = plugin.rules[ruleName];
+							if (addRule(scope, ruleName, rule)) {
+								stats[pkg]++;
+							}
+						}
+					}
+			}
+				else if (pkg === 'eslint') {
+					const rulesDir = path.join(nodeModulesDir, pkg, 'lib', 'rules');
+					const ruleFiles = fs.readdirSync(rulesDir);
+					stats['eslint'] = 0;
+					for (const ruleFile of ruleFiles) {
+						if (ruleFile.endsWith('.js')) {
+							const ruleName = ruleFile.replace('.js', '');
+							const rule = await loader(path.join(rulesDir, ruleFile));
+							if (addRule(undefined, ruleName, rule)) {
+								stats['eslint']++;
+							}
+						}
 					}
 				}
-			}
-			else if (pkg === 'eslint') {
-				const rulesDir = path.join(nodeModulesDir, pkg, 'lib', 'rules');
-				const ruleFiles = fs.readdirSync(rulesDir);
-				for (const ruleFile of ruleFiles) {
-					if (ruleFile.endsWith('.js')) {
-						const ruleName = ruleFile.replace('.js', '');
-						const rule = await loader(path.join(rulesDir, ruleFile));
-						addRule(undefined, ruleName, rule);
-					}
-				}
-			}
 		}
 	}
 
@@ -80,13 +92,13 @@ export async function generate(
 	line(`}`);
 	line(``);
 
-	for (const [typeName, typeString] of defs.values()) {
-		line(`type ${typeName} = ${typeString};`);
-	}
-
-	return dts;
-
-	function addRule(scope: string | undefined, ruleName: string, rule: any) {
+		for (const [typeName, typeString] of defs.values()) {
+			line(`type ${typeName} = ${typeString};`);
+		}
+	
+		return { dts, stats };
+	
+		function addRule(scope: string | undefined, ruleName: string, rule: any) {
 		let ruleKey: string;
 		if (scope) {
 			ruleKey = `${scope}/${ruleName}`;
@@ -94,10 +106,10 @@ export async function generate(
 			ruleKey = `${ruleName}`;
 		}
 
-		if (visited.has(ruleKey)) {
-			return;
-		}
-		visited.add(ruleKey);
+			if (visited.has(ruleKey)) {
+				return false;
+			}
+			visited.add(ruleKey);
 
 		const meta = rule.meta ?? {};
 		const { description, url } = meta.docs ?? {};
@@ -133,12 +145,13 @@ export async function generate(
 			}
 		}
 
-		if (optionsType) {
-			line(`'${ruleKey}'?: ${optionsType},`);
-		} else {
-			line(`'${ruleKey}'?: any[],`);
+			if (optionsType) {
+				line(`'${ruleKey}'?: ${optionsType},`);
+			} else {
+				line(`'${ruleKey}'?: any[],`);
+			}
+			return true;
 		}
-	}
 
 	function line(line: string) {
 		dts += indent(indentLevel) + line + '\n';

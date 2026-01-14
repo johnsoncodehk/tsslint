@@ -16,9 +16,38 @@ while (true) {
 	dir = parentDir;
 }
 
-try {
-	const { generate } = require('../lib/dtsGenerate.js');
-	generate(nodeModulesDirs).then(dts => {
-		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
-	});
-} catch { }
+	try {
+		const { generate } = require('../lib/dtsGenerate.js');
+		generate(nodeModulesDirs).then(({ dts, stats }) => {
+			fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
+
+			const indexPath = path.resolve(__dirname, '..', 'index.ts');
+			if (fs.existsSync(indexPath)) {
+				let indexContent = fs.readFileSync(indexPath, 'utf8');
+					const defineRulesIndex = indexContent.indexOf('export async function defineRules');
+					const jsDocEnd = indexContent.lastIndexOf('*/', defineRulesIndex) + 2;
+					const jsDocStart = indexContent.lastIndexOf('/**', jsDocEnd);
+
+				if (jsDocStart !== -1 && jsDocEnd !== -1 && jsDocStart < defineRulesIndex) {
+					const statsTable = [
+						'| Plugin | Rules |',
+						'| :--- | :--- |',
+						...Object.entries(stats)
+							.filter(([_, count]) => count > 0)
+							.sort((a, b) => b[1] - a[1])
+							.map(([name, count]) => `| ${name} | ${count} |`),
+					].join('\n\t * ');
+
+					const newJsDoc = `/**
+	 * Converts an ESLint rules configuration to TSSLint rules.
+	 *
+	 * ${statsTable}
+	 */`;
+					indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
+					fs.writeFileSync(indexPath, indexContent);
+				}
+			}
+		});
+	} catch (err) {
+		console.error(err);
+	}
