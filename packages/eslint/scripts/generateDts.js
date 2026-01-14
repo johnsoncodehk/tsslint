@@ -21,10 +21,10 @@ while (true) {
 		generate(nodeModulesDirs).then(({ dts, stats }) => {
 			fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
 
-			const indexPath = path.resolve(__dirname, '..', 'index.ts');
+			const indexPath = path.resolve(__dirname, '..', 'index.d.ts');
 			if (fs.existsSync(indexPath)) {
 				let indexContent = fs.readFileSync(indexPath, 'utf8');
-				const defineRulesIndex = indexContent.indexOf('export async function defineRules');
+				const defineRulesIndex = indexContent.indexOf('export declare function defineRules');
 				const jsDocEnd = indexContent.lastIndexOf('*/', defineRulesIndex) + 2;
 				const jsDocStart = indexContent.lastIndexOf('/**', jsDocEnd);
 
