@@ -3,6 +3,59 @@ import * as path from 'path';
 
 const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
 
+export async function generateTSLintTypes(
+	nodeModulesDirs: string[],
+	loader = async (mod: string) => {
+		try {
+			return require(mod);
+		} catch {
+			return await import(mod);
+		}
+	}
+) {
+	let indentLevel = 0;
+	let dts = '';
+
+	line(`export interface TSLintRulesConfig {`);
+	indentLevel++;
+
+	const visited = new Set<string>();
+	const stats: Record<string, number> = {};
+
+	for (const nodeModulesDir of nodeModulesDirs) {
+		const tslintDir = path.join(nodeModulesDir, 'tslint', 'lib', 'rules');
+		if (fs.existsSync(tslintDir)) {
+			const ruleFiles = fs.readdirSync(tslintDir);
+			stats['tslint'] = 0;
+			for (const ruleFile of ruleFiles) {
+				if (ruleFile.endsWith('Rule.js')) {
+					const camelCaseName = ruleFile.replace('Rule.js', '');
+					const ruleName = camelCaseName.replace(/[A-Z]/g, (c, i) => (i === 0 ? c.toLowerCase() : '-' + c.toLowerCase()));
+					if (visited.has(ruleName)) {
+						continue;
+					}
+					visited.add(ruleName);
+					line(`'${ruleName}'?: any[],`);
+					stats['tslint']++;
+				}
+			}
+		}
+	}
+
+	indentLevel--;
+	line(`}`);
+
+	return { dts, stats };
+
+	function line(line: string) {
+		dts += indent(indentLevel) + line + '\n';
+	}
+
+	function indent(indentLevel: number) {
+		return '\t'.repeat(indentLevel);
+	}
+}
+
 export async function generateESlintTypes(
 	nodeModulesDirs: string[],
 	loader = async (mod: string) => {
