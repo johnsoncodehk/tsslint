@@ -25,18 +25,18 @@ if (fs.existsSync(dtsGeneratePath)) {
 }
 
 try {
-	const { generate } = require('../lib/dtsGenerate.js');
-	generate(nodeModulesDirs).then(({ dts, stats }) => {
-		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
+	const { generateESlintTypes } = require('../lib/eslint-gen');
+	generateESlintTypes(nodeModulesDirs).then(({ dts, stats }) => {
+		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'eslint-types.d.ts'), dts);
 
-		const indexPath = path.resolve(__dirname, '..', 'index.d.ts');
+		const indexPath = path.resolve(__dirname, '..', 'lib', 'eslint.d.ts');
 		if (fs.existsSync(indexPath)) {
 			let indexContent = fs.readFileSync(indexPath, 'utf8');
-			const defineRulesIndex = indexContent.indexOf('export declare function defineRules');
-			const jsDocEnd = indexContent.lastIndexOf('*/', defineRulesIndex) + 2;
+			const fnIndex = indexContent.indexOf('export declare function importESLintRules');
+			const jsDocEnd = indexContent.lastIndexOf('*/', fnIndex) + 2;
 			const jsDocStart = indexContent.lastIndexOf('/**', jsDocEnd);
 
-			if (jsDocStart !== -1 && jsDocEnd !== -1 && jsDocStart < defineRulesIndex) {
+			if (jsDocStart !== -1 && jsDocEnd !== -1 && jsDocStart < fnIndex) {
 				const statsTable = [
 					'| Plugin | Rules |',
 					'| :--- | :--- |',
@@ -52,7 +52,7 @@ try {
  * ${statsTable}
  *
  * ---
- * If you have added new ESLint plugins, please run \`npx tsslint-eslint-update\` to update this list.
+ * If you have added new ESLint plugins, please run \`npx tsslint-config-update\` to update this list.
  */`;
 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
 				fs.writeFileSync(indexPath, indexContent);
