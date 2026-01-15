@@ -54,6 +54,8 @@ npm install @tsslint/config --save-dev
 
 ### 2. Configure `tsslint.config.ts`
 
+A minimal configuration looks like this. For a complete, real-world example, see the [vuejs/language-tools tsslint.config.ts](https://github.com/vuejs/language-tools/blob/master/tsslint.config.ts).
+
 ```ts
 import { defineConfig } from '@tsslint/config';
 
