@@ -8,7 +8,6 @@
 		{ "path": "./packages/cli/tsconfig.json" },
 		{ "path": "./packages/compat-tslint/tsconfig.json" },
 		{ "path": "./packages/compat-eslint/tsconfig.json" },
-		{ "path": "./packages/compat-tsl/tsconfig.json" },
 		{ "path": "./packages/typescript-plugin/tsconfig.json" }
 	]
 }

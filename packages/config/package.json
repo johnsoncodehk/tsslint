@@ -21,17 +21,13 @@
 	},
 	"peerDependencies": {
 		"@tsslint/compat-eslint": "3.0.0-alpha.0",
-		"@tsslint/compat-tslint": "3.0.0-alpha.0",
-		"@tsslint/compat-tsl": "3.0.0-alpha.0"
+		"@tsslint/compat-tslint": "3.0.0-alpha.0"
 	},
 	"peerDependenciesMeta": {
 		"@tsslint/compat-eslint": {
 			"optional": true
 		},
 		"@tsslint/compat-tslint": {
-			"optional": true
-		},
-		"@tsslint/compat-tsl": {
 			"optional": true
 		}
 	}
