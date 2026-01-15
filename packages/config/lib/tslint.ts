@@ -70,8 +70,11 @@ export async function importTSLintRules(
 		);
 		if (ruleModule.metadata?.typescriptOnly) {
 			rules[ruleName] = context => {
-				const fileName = context.file.fileName;
-				if (fileName.endsWith('.js') || fileName.endsWith('.jsx')) {
+				const scriptKind = context.file.scriptKind;
+				if (
+					scriptKind === context.typescript.ScriptKind.JS
+					|| scriptKind === context.typescript.ScriptKind.JSX
+				) {
 					return;
 				}
 				return tsslintRule(context);
