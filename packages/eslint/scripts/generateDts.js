@@ -35,8 +35,8 @@ try {
 					...Object.entries(stats)
 						.filter(([_, count]) => count > 0)
 						.sort((a, b) => b[1] - a[1])
-						.map(([name, count]) => `| ${name} | ${count} |`),
-				].join('\n\t * ');
+						.map(([name, count]) => `| <span>${name}</span> | ${count} |`),
+				].join('\n * ');
 
 				const newJsDoc = `/**
  * Converts an ESLint rules configuration to TSSLint rules.
@@ -45,6 +45,7 @@ try {
  *
  * ---
  * If you have added new ESLint plugins, please run \`node node_modules/@tsslint/eslint/scripts/generateDts.js\` to update this list.
+ * 
  * ---
  */`;
 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);

@@ -90,6 +90,7 @@ export async function convertRules(
  * ```
  *
  * After that, run `pnpm install` again to generate type definitions.
+ * 
  * ---
  */
 export async function defineRules(
