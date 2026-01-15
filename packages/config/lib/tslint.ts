@@ -39,6 +39,8 @@ export async function importTSLintRules(
 	}
 
 	const rules: TSSLint.Rules = {};
+	const rulesDirectories = getTSLintRulesDirectories();
+
 	for (const [ruleName, severityOrOptions] of Object.entries(config)) {
 		let severity: boolean;
 		let options: any[];
@@ -54,7 +56,7 @@ export async function importTSLintRules(
 			rules[ruleName] = noop;
 			continue;
 		}
-		const ruleModule = await loadTSLintRule(ruleName);
+		const ruleModule = await loadTSLintRule(ruleName, rulesDirectories);
 		if (!ruleModule) {
 			throw new Error(`Failed to resolve TSLint rule "${ruleName}".`);
 		}
@@ -67,18 +69,62 @@ export async function importTSLintRules(
 	return rules;
 }
 
-async function loadTSLintRule(ruleName: string): Promise<any | undefined> {
-	const camelCaseName = ruleName.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-	const className = camelCaseName.charAt(0).toUpperCase() + camelCaseName.slice(1) + 'Rule';
+function getTSLintRulesDirectories(): string[] {
+	const directories: string[] = [];
+	let dir = process.cwd();
+	while (true) {
+		const tslintJsonPath = path.join(dir, 'tslint.json');
+		if (fs.existsSync(tslintJsonPath)) {
+			try {
+				const tslintJson = JSON.parse(fs.readFileSync(tslintJsonPath, 'utf8'));
+				if (tslintJson.rulesDirectory) {
+					const rulesDirs = Array.isArray(tslintJson.rulesDirectory)
+						? tslintJson.rulesDirectory
+						: [tslintJson.rulesDirectory];
+					for (const rulesDir of rulesDirs) {
+						directories.push(path.resolve(dir, rulesDir));
+					}
+				}
+			}
+			catch {
+				// Ignore parse errors
+			}
+			break;
+		}
+		const parentDir = path.resolve(dir, '..');
+		if (parentDir === dir) {
+			break;
+		}
+		dir = parentDir;
+	}
+	return directories;
+}
 
+async function loadTSLintRule(ruleName: string, rulesDirectories: string[]): Promise<any | undefined> {
+	const camelCaseName = ruleName.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+	const ruleFileName = `${camelCaseName}Rule.js`;
+
+	// 1. Try directories from tslint.json
+	for (const rulesDir of rulesDirectories) {
+		const rulePath = path.resolve(rulesDir, ruleFileName);
+		if (fs.existsSync(rulePath)) {
+			const mod = require(rulePath);
+			return mod.Rule;
+		}
+	}
+
+	// 2. Try TSLint core rules
 	let dir = __dirname;
 	while (true) {
-		const tslintDir = path.join(dir, 'node_modules', 'tslint', 'lib', 'rules');
-		if (fs.existsSync(tslintDir)) {
-			const rulePath = path.join(tslintDir, `${camelCaseName}Rule.js`);
-			if (fs.existsSync(rulePath)) {
-				const mod = require(rulePath);
-				return mod.Rule;
+		const nodeModulesDir = path.join(dir, 'node_modules');
+		if (fs.existsSync(nodeModulesDir)) {
+			const tslintDir = path.join(nodeModulesDir, 'tslint', 'lib', 'rules');
+			if (fs.existsSync(tslintDir)) {
+				const rulePath = path.join(tslintDir, ruleFileName);
+				if (fs.existsSync(rulePath)) {
+					const mod = require(rulePath);
+					return mod.Rule;
+				}
 			}
 		}
 		const parentDir = path.resolve(dir, '..');
