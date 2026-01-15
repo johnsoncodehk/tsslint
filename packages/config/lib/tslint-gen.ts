@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { RuleConstructor } from 'tslint';
 
+const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
+
 export async function generateTSLintTypes(
 	nodeModulesDirs: string[],
 	loader = async (mod: string) => {
@@ -15,11 +17,13 @@ export async function generateTSLintTypes(
 ) {
 	let indentLevel = 0;
 	let dts = '';
+	let defId = 0;
 
 	line(`export interface TSLintRulesConfig {`);
 	indentLevel++;
 
 	const visited = new Set<string>();
+	const defs = new Map<any, [string, string]>();
 	const stats: Record<string, number> = {};
 
 	// 1. Scan directories from tslint.json
@@ -99,6 +103,11 @@ export async function generateTSLintTypes(
 
 	indentLevel--;
 	line(`}`);
+	line(``);
+
+	for (const [typeName, typeString] of defs.values()) {
+		line(`type ${typeName} = ${typeString};`);
+	}
 
 	return { dts, stats };
 
@@ -139,14 +148,175 @@ export async function generateTSLintTypes(
 			}
 			line(` */`);
 		}
-		line(`'${ruleName}'?: any[],`);
+
+		let optionsType: string | undefined;
+		const schema = metadata?.options;
+
+		if (schema) {
+			if (Array.isArray(schema)) {
+				const optionsTypes: string[] = [];
+				for (const item of schema) {
+					const itemType = parseSchema(schema, item, indentLevel);
+					optionsTypes.push(itemType);
+				}
+				optionsType = `[`;
+				optionsType += optionsTypes
+					.map(type => `(${type})?`)
+					.join(', ');
+				optionsType += `]`;
+			}
+			else {
+				optionsType = parseSchema(schema, schema, indentLevel);
+			}
+		}
+
+		if (optionsType) {
+			line(`'${ruleName}'?: ${optionsType},`);
+		}
+		else {
+			line(`'${ruleName}'?: any[],`);
+		}
 	}
 
 	function line(line: string) {
 		dts += indent(indentLevel) + line + '\n';
 	}
 
+	function parseSchema(schema: any, item: any, indentLevel: number): string {
+		if (typeof item === 'object' && item !== null) {
+			if (item.$ref) {
+				const paths = item.$ref
+					.replace('#/items/', '#/')
+					.split('/').slice(1);
+				let current = schema;
+				for (const path of paths) {
+					try {
+						current = current[path];
+					}
+					catch {
+						current = undefined;
+						break;
+					}
+				}
+				if (current) {
+					let resolved = defs.get(current);
+					if (!resolved) {
+						resolved = [`Def${defId++}_${paths[paths.length - 1]}`, parseSchema(schema, current, 0)];
+						defs.set(current, resolved);
+					}
+					return resolved[0];
+				}
+				else {
+					console.error(`Failed to resolve schema path: ${item.$ref}`);
+					return 'unknown';
+				}
+			}
+			else if (Array.isArray(item)) {
+				return item.map(item => parseSchema(schema, item, indentLevel)).join(' | ');
+			}
+			else if (Array.isArray(item.type)) {
+				return item.type.map((type: any) => parseSchema(schema, type, indentLevel)).join(' | ');
+			}
+			else if (item.properties) {
+				let res = `{\n`;
+				indentLevel++;
+				const properties = item.properties;
+				const requiredArr = item.required ?? [];
+				for (const key in properties) {
+					const property = properties[key];
+					if (property.description) {
+						res += indent(indentLevel) + `/**\n`;
+						res += indent(indentLevel) + ` * ${property.description.replace(/\*\//g, '* /')}\n`;
+						res += indent(indentLevel) + ` */\n`;
+					}
+					const propertyType = parseSchema(schema, property, indentLevel);
+					const isRequired = requiredArr.includes(key);
+					if (!variableNameRegex.test(key)) {
+						res += indent(indentLevel) + `'${key}'${isRequired ? '' : '?'}: ${propertyType},\n`;
+					}
+					else {
+						res += indent(indentLevel) + `${key}${isRequired ? '' : '?'}: ${propertyType},\n`;
+					}
+				}
+				indentLevel--;
+				res += indent(indentLevel) + `}`;
+				if (item.additionalProperties) {
+					res += ` & `;
+					res += parseAdditionalProperties(schema, item.additionalProperties, indentLevel);
+				}
+				return res;
+			}
+			else if (Array.isArray(item.required)) {
+				let res = `{ `;
+				const propertiesType: string[] = [];
+				for (const key of item.required) {
+					const propertyType = `any`;
+					if (!variableNameRegex.test(key)) {
+						propertiesType.push(`'${key}': ${propertyType}`);
+					}
+					else {
+						propertiesType.push(`${key}: ${propertyType}`);
+					}
+				}
+				res += propertiesType.join(', ');
+				res += ` }`;
+				return res;
+			}
+			else if (item.const) {
+				return JSON.stringify(item.const);
+			}
+			else if (item.type === 'array') {
+				if (Array.isArray(item.items)) {
+					return `[${item.items.map((item: any) => parseSchema(schema, item, indentLevel)).join(', ')}]`;
+				}
+				if (item.items) {
+					return `(${parseSchema(schema, item.items, indentLevel)})[]`;
+				}
+				return `any[]`;
+			}
+			else if (item.enum) {
+				return item.enum.map((v: any) => JSON.stringify(v)).join(' | ');
+			}
+			else if (item.type) {
+				return parseSchema(schema, item.type, indentLevel);
+			}
+			else if (item.anyOf) {
+				return item.anyOf.map((item: any) => parseSchema(schema, item, indentLevel)).join(' | ');
+			}
+			else if (item.oneOf) {
+				return item.oneOf.map((item: any) => parseSchema(schema, item, indentLevel)).join(' | ');
+			}
+		}
+		else if (item === 'string' || item === 'boolean' || item === 'null' || item === 'number') {
+			return item;
+		}
+		else if (item === 'object') {
+			if (item.additionalProperties) {
+				return parseAdditionalProperties(schema, item.additionalProperties, indentLevel);
+			}
+			else {
+				return `{ [key: string]: unknown }`;
+			}
+		}
+		else if (item === 'integer') {
+			return 'number';
+		}
+		else if (item === 'array') {
+			return 'any[]';
+		}
+		return 'unknown';
+	}
+
 	function indent(indentLevel: number) {
 		return '\t'.repeat(indentLevel);
+	}
+
+	function parseAdditionalProperties(schema: any, item: any, indentLevel: number) {
+		if (item === true) {
+			return `{ [key: string]: unknown }`;
+		}
+		else {
+			return `{ [key: string]: ${parseSchema(schema, item, indentLevel)} }`;
+		}
 	}
 }
