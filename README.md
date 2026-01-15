@@ -132,7 +132,7 @@ export default defineConfig({
 
 ## Technical Notes
 
-*   **Node.js**: Requires 23.6.0+ (v3.0+).
+*   **Node.js**: Requires 22.6.0+ (v3.0+).
 *   **TypeScript**: Incompatible with `typescript-go` (v7) as it does not support Language Service Plugins.
 
 ## License

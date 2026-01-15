@@ -1,2 +1,2 @@
-#!/usr/bin/env node --no-warnings
+#!/usr/bin/env node --experimental-strip-types --no-warnings
 require('../index');
