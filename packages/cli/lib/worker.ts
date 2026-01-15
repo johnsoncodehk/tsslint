@@ -22,11 +22,8 @@ let linterSyntaxOnlyLanguageService!: ts.LanguageService;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
-	const originalHost: ts.LanguageServiceHost & { getModifiedTime?(fileName: string): Date | undefined } = {
+const originalHost: ts.LanguageServiceHost = {
 	...ts.sys,
-	getModifiedTime(fileName: string) {
-		return ts.sys.getModifiedTime?.(fileName);
-	},
 	useCaseSensitiveFileNames() {
 		return ts.sys.useCaseSensitiveFileNames;
 	},

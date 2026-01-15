@@ -4,6 +4,7 @@ import type {
 	Reporter,
 	Rule,
 	RuleContext,
+	Rules,
 } from '@tsslint/types';
 import type * as ts from 'typescript';
 
@@ -83,7 +84,7 @@ export function createLinter(
 					report,
 				};
 			} else {
-				const file = getNonBoundSourceFile!(fileName);
+				const file = getNonBoundSourceFile(fileName);
 				rulesContext = {
 					typescript: ctx.typescript,
 					get program(): ts.Program {
@@ -265,21 +266,21 @@ export function createLinter(
 						fixes.push(({ title, getEdits }));
 						return this;
 					},
-					withRefactor(title, getEdits) {
-						refactors.push(({
-							diagnostic: error,
-							title,
-							getEdits,
-						}));
-						return this;
-					},
-					withoutCache() {
-						if (cache) {
-							delete cache[1][currentRuleId];
-						}
-						return this;
-					},
-				};
+						withRefactor(title, getEdits) {
+							refactors.push(({
+								diagnostic: error,
+								title,
+								getEdits,
+							}));
+							return this;
+						},
+						withoutCache() {
+							if (cache) {
+								delete cache[1][currentRuleId];
+							}
+							return this;
+						},
+					};
 			}
 		},
 		hasCodeFixes(fileName: string) {
@@ -364,8 +365,9 @@ export function createLinter(
 					(end >= diagStart && end <= diagEnd)
 				) {
 					result.push({
-						name: `tsslint:${refactor.diagnostic.code}:${i}`,
+						name: `tsslint:${i}`,
 						description: refactor.title,
+						kind: 'quickfix',
 					});
 				}
 			}
@@ -373,18 +375,15 @@ export function createLinter(
 			return result;
 		},
 		getRefactorEdits(fileName: string, actionName: string) {
-			const lintResult = lintResults.get(fileName);
-			if (!lintResult) {
-				return;
-			}
-
 			if (actionName.startsWith('tsslint:')) {
-				const index = Number(actionName.split(':').pop());
-				const refactor = lintResult[2][index];
+				const lintResult = lintResults.get(fileName);
+				if (!lintResult) {
+					return [];
+				}
+				const index = actionName.slice('tsslint:'.length);
+				const refactor = lintResult[2][Number(index)];
 				if (refactor) {
-					return {
-						edits: refactor.getEdits(),
-					};
+					return refactor.getEdits();
 				}
 			}
 		},
@@ -392,97 +391,114 @@ export function createLinter(
 		getConfigs: getConfigsForFile,
 	};
 
-	function getRulesForFile(fileName: string, minimatchCache?: FileLintCache[2]) {
-		if (!fileRules.has(fileName)) {
-			const rules: Record<string, Rule> = {};
-			for (const config of getConfigsForFile(fileName, minimatchCache)) {
-				for (const [ruleId, rule] of Object.entries(config.rules)) {
-					if (typeof rule === 'function') {
-						rules[ruleId] = rule;
-					}
-				}
-				for (const plugin of config.plugins) {
-					if (plugin.resolveRules) {
-						Object.assign(rules, plugin.resolveRules(fileName, rules));
+	function getRulesForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+		let rules = fileRules.get(fileName);
+		if (!rules) {
+			rules = {};
+			const configs = getConfigsForFile(fileName, minimatchCache);
+			for (const config of configs) {
+				collectRules(rules, config.rules, []);
+			}
+			for (const { plugins } of configs) {
+				for (const { resolveRules } of plugins) {
+					if (resolveRules) {
+						rules = resolveRules(fileName, rules);
 					}
 				}
 			}
 			fileRules.set(fileName, rules);
 		}
-		return fileRules.get(fileName)!;
+		return rules;
 	}
 
-	function getConfigsForFile(fileName: string, minimatchCache?: FileLintCache[2]) {
-		if (!fileConfigs.has(fileName)) {
-			fileConfigs.set(fileName, configs.filter(config => {
-				if (minimatchCache && minimatchCache[JSON.stringify(config.include) + JSON.stringify(config.exclude)] !== undefined) {
-					return minimatchCache[JSON.stringify(config.include) + JSON.stringify(config.exclude)];
+	function getConfigsForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+		let result = fileConfigs.get(fileName);
+		if (!result) {
+			result = configs.filter(({ include, exclude }) => {
+				if (exclude?.some(_minimatch)) {
+					return false;
 				}
-				let included = false;
-				if (!config.include) {
-					included = true;
-				} else {
-					for (const pattern of config.include) {
-						if (minimatch.minimatch(getNormalizedPath(fileName), getNormalizedPath(path.resolve(rootDir, pattern)), { dot: true })) {
-							included = true;
-							break;
-						}
-					}
+				if (include && !include.some(_minimatch)) {
+					return false;
 				}
-				if (included && config.exclude) {
-					for (const pattern of config.exclude) {
-						if (minimatch.minimatch(getNormalizedPath(fileName), getNormalizedPath(path.resolve(rootDir, pattern)), { dot: true })) {
-							included = false;
-							break;
-						}
-					}
-				}
-				if (minimatchCache) {
-					minimatchCache[JSON.stringify(config.include) + JSON.stringify(config.exclude)] = included;
-				}
-				return included;
-			}));
+				return true;
+			});
+			fileConfigs.set(fileName, result);
 		}
-		return fileConfigs.get(fileName)!;
+		return result;
+
+		function _minimatch(pattern: string) {
+			if (minimatchCache) {
+				if (pattern in minimatchCache) {
+					return minimatchCache[pattern];
+				}
+			}
+			let normalized = normalizedPath.get(pattern);
+			if (!normalized) {
+				normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
+				normalizedPath.set(pattern, normalized);
+			}
+			const res = minimatch.minimatch(fileName, normalized, { dot: true });
+			if (minimatchCache) {
+				minimatchCache[pattern] = res;
+			}
+			return res;
+		}
 	}
 
-	function getNormalizedPath(fileName: string) {
-		if (!normalizedPath.has(fileName)) {
-			normalizedPath.set(fileName, ts.server.toNormalizedPath(fileName));
+	function collectRules(record: Record<string, Rule>, rules: Rules, paths: string[]) {
+		for (const [path, rule] of Object.entries(rules)) {
+			if (typeof rule === 'object') {
+				collectRules(record, rule, [...paths, path]);
+				continue;
+			}
+			record[[...paths, path].join('/')] = rule;
 		}
-		return normalizedPath.get(fileName)!;
 	}
 }
 
 export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
-	const changes: ts.FileTextChanges[] = [];
-	for (const fix of fixes) {
-		for (const change of fix.changes) {
-			if (change.fileName === fileName) {
-				changes.push(change);
-			}
+
+	const changes = fixes
+		.map(fix => fix.changes)
+		.flat()
+		.filter(change => change.fileName === fileName && change.textChanges.length)
+		.sort((a, b) => b.textChanges[0].span.start - a.textChanges[0].span.start);
+
+	let lastChangeAt = Number.MAX_VALUE;
+	let finalTextChanges: ts.TextChange[] = [];
+
+	for (const change of changes) {
+		const textChanges = [...change.textChanges].sort((a, b) => a.span.start - b.span.start);
+		const firstChange = textChanges[0];
+		const lastChange = textChanges[textChanges.length - 1];
+		if (lastChangeAt >= lastChange.span.start + lastChange.span.length) {
+			lastChangeAt = firstChange.span.start;
+			finalTextChanges = finalTextChanges.concat(textChanges);
 		}
 	}
-	changes.sort((a, b) => a.textChanges[0].span.start - b.textChanges[0].span.start);
-	for (let i = changes.length - 1; i > 0; i--) {
-		const a = changes[i - 1];
-		const b = changes[i];
-		if (a.textChanges[0].span.start + a.textChanges[0].span.length > b.textChanges[0].span.start) {
-			changes.splice(i, 1);
-		}
-	}
-	return changes.map(change => change.textChanges).flat();
+
+	return finalTextChanges;
 }
 
-export function applyTextChanges(snapshot: ts.IScriptSnapshot, changes: ts.TextChange[]) {
-	let text = snapshot.getText(0, snapshot.getLength());
-	for (let i = changes.length - 1; i >= 0; i--) {
-		const change = changes[i];
+export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: ts.TextChange[]): ts.IScriptSnapshot {
+	textChanges = [...textChanges].sort((a, b) => b.span.start - a.span.start);
+	let text = baseSnapshot.getText(0, baseSnapshot.getLength());
+	for (const change of textChanges) {
 		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
 	}
 	return {
-		getText: (start: number, end: number) => text.slice(start, end),
-		getLength: () => text.length,
-		getChangeRange: () => undefined,
+		getText(start, end) {
+			return text.substring(start, end);
+		},
+		getLength() {
+			return text.length;
+		},
+		getChangeRange(oldSnapshot) {
+			if (oldSnapshot === baseSnapshot) {
+				// TODO
+			}
+			return undefined;
+		},
 	};
 }
