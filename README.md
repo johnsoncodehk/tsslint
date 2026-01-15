@@ -28,6 +28,7 @@ TSSLint solves this by running directly as a `tsserver` plugin. By sharing the e
 *   **Zero Rules**: Comes with no built-in rules, giving full control to the developer.
 *   **Direct AST Access**: Rule authoring uses native TypeScript APIs directly.
 *   **Low Noise**: Violations are reported as "Message" diagnostics, avoiding interference with compiler errors.
+*   **Built-in Rule Traceability**: Diagnostics automatically carry a source trace. In your editor, you can jump from a reported error directly to the exact line in your **rule's source code** that generated it.
 
 ## How It Works
 
@@ -107,6 +108,7 @@ export default defineRule(({ typescript: ts, file, report }) => {
 
 ### Rule Caching Mechanism
 
+
 TSSLint's high performance comes from its intelligent caching strategy, which automatically distinguishes between **Syntax-Aware** and **Type-Aware** rules.
 
 All rule diagnostics are cached by default. The cache is automatically disabled for a rule in two scenarios:
@@ -115,6 +117,21 @@ All rule diagnostics are cached by default. The cache is automatically disabled 
 2.  **Manual Exclusion**: A rule can explicitly prevent a specific diagnostic from being cached by calling `report().withoutCache()`.
 
 This automatic differentiation maximizes performance for simple syntax rules while maintaining correctness for complex type-aware rules.
+
+### Rule Debugging & Traceability (The `.at()` Magic)
+
+TSSLint is designed to make rule debugging trivial. Every time you call `report()`, TSSLint automatically captures the current JavaScript stack trace and attaches it to the diagnostic as **Related Information**.
+
+This means: **You can click on the diagnostic in your editor and jump directly to the line in your rule's source code that triggered the report.**
+
+The `.at()` method is generally not needed, but is provided for advanced scenarios where you wrap `report()` in a helper function and need to adjust the stack depth to point to the correct logic:
+
+```ts
+// Example of advanced usage to adjust stack depth
+report('message', start, end)
+  .at(new Error(), 2) // Adjusts the stack index to skip the helper function's frame
+  .withFix(...);
+```
 
 ## CLI Usage
 
