@@ -25,7 +25,9 @@ if (fs.existsSync(dtsGeneratePath)) {
 }
 
 try {
-	const { generateESlintTypes, generateTSLintTypes } = require('../lib/eslint-gen');
+	const { generateESlintTypes } = require('../lib/eslint-gen');
+	const { generateTSLintTypes } = require('../lib/tslint-gen');
+
 	generateESlintTypes(nodeModulesDirs).then(({ dts, stats }) => {
 		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'eslint-types.d.ts'), dts);
 
