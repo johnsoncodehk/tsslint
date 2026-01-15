@@ -22,6 +22,7 @@ export async function generate(
 
 	const visited = new Set<string>();
 	const defs = new Map<any, [string, string]>();
+	const stats: Record<string, number> = {};
 
 	for (const nodeModulesDir of nodeModulesDirs) {
 		const pkgs = readdirDirSync(nodeModulesDir);
@@ -37,12 +38,17 @@ export async function generate(
 							plugin = plugin.default;
 						}
 						if (plugin.rules) {
+							stats[pluginName] = 0;
 							for (const ruleName in plugin.rules) {
 								const rule = plugin.rules[ruleName];
 								if (subPkg === 'eslint-plugin') {
-									addRule(pkg, ruleName, rule);
+									if (addRule(pkg, ruleName, rule)) {
+										stats[pluginName]++;
+									}
 								} else {
-									addRule(pkg, `${subPkg.slice('eslint-plugin-'.length)}/${ruleName}`, rule);
+									if (addRule(pkg, `${subPkg.slice('eslint-plugin-'.length)}/${ruleName}`, rule)) {
+										stats[pluginName]++;
+									}
 								}
 							}
 						}
@@ -56,20 +62,26 @@ export async function generate(
 				}
 				if (plugin.rules) {
 					const scope = pkg.replace('eslint-plugin-', '');
+					stats[pkg] = 0;
 					for (const ruleName in plugin.rules) {
 						const rule = plugin.rules[ruleName];
-						addRule(scope, ruleName, rule);
+						if (addRule(scope, ruleName, rule)) {
+							stats[pkg]++;
+						}
 					}
 				}
 			}
 			else if (pkg === 'eslint') {
 				const rulesDir = path.join(nodeModulesDir, pkg, 'lib', 'rules');
 				const ruleFiles = fs.readdirSync(rulesDir);
+				stats['eslint'] = 0;
 				for (const ruleFile of ruleFiles) {
 					if (ruleFile.endsWith('.js')) {
 						const ruleName = ruleFile.replace('.js', '');
 						const rule = await loader(path.join(rulesDir, ruleFile));
-						addRule(undefined, ruleName, rule);
+						if (addRule(undefined, ruleName, rule)) {
+							stats['eslint']++;
+						}
 					}
 				}
 			}
@@ -84,7 +96,7 @@ export async function generate(
 		line(`type ${typeName} = ${typeString};`);
 	}
 
-	return dts;
+	return { dts, stats };
 
 	function addRule(scope: string | undefined, ruleName: string, rule: any) {
 		let ruleKey: string;
@@ -95,7 +107,7 @@ export async function generate(
 		}
 
 		if (visited.has(ruleKey)) {
-			return;
+			return false;
 		}
 		visited.add(ruleKey);
 
@@ -138,6 +150,7 @@ export async function generate(
 		} else {
 			line(`'${ruleKey}'?: any[],`);
 		}
+		return true;
 	}
 
 	function line(line: string) {

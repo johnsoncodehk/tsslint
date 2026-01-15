@@ -4,15 +4,19 @@
 	"license": "MIT",
 	"files": [
 		"**/*.js",
-		"**/*.d.ts"
+		"**/*.d.ts",
+		"bin"
 	],
+	"bin": {
+		"tsslint-eslint-update": "bin/tsslint-eslint-update.js"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/eslint"
 	},
 	"scripts": {
-		"postinstall": "node scripts/generateDts.js"
+		"postinstall": "node bin/tsslint-eslint-update.js"
 	},
 	"devDependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
