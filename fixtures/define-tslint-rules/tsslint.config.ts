@@ -1,8 +1,7 @@
-import { defineConfig } from '@tsslint/config';
-import { convertRule } from '@tsslint/tslint';
+import { defineConfig, importTSLintRules } from '@tsslint/config';
 
 export default defineConfig({
-	rules: {
-		'strict-boolean-expressions': convertRule((await import('tslint/lib/rules/strictBooleanExpressionsRule.js')).Rule),
-	},
+	rules: await importTSLintRules({
+		'strict-boolean-expressions': true,
+	}),
 });

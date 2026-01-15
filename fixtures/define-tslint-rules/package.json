@@ -4,7 +4,7 @@
 	"version": "3.0.0-alpha.0",
 	"devDependencies": {
 		"@tsslint/config": "3.0.0-alpha.0",
-		"@tsslint/tslint": "3.0.0-alpha.0",
+		"@tsslint/compat-tslint": "3.0.0-alpha.0",
 		"tslint": "^6.1.3"
 	}
 }

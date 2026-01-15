@@ -36,3 +36,17 @@ export async function importESLintWarningRules(
 	const { defineRules } = await import('@tsslint/compat-eslint');
 	return defineRules(config, context, 0);
 }
+
+export async function importTSLintRules(
+	config: any
+) {
+	const { importTSLintRules } = await import('@tsslint/compat-tslint');
+	return importTSLintRules(config, 1);
+}
+
+export async function importTSLintWarningRules(
+	config: any
+) {
+	const { importTSLintRules } = await import('@tsslint/compat-tslint');
+	return importTSLintRules(config, 0);
+}

@@ -1,0 +1,1539 @@
+diff --git a/README.md b/README.md
+index 641fa89..887cf3f 100644
+--- a/README.md
++++ b/README.md
+@@ -175,21 +175,16 @@ export default defineConfig({
+ 
+ ### Ecosystem Integration
+ 
+-TSSLint provides compatibility layers for existing linter ecosystems. These are available via `@tsslint/config` but require the corresponding compatibility package to be installed.
+-
+ #### ESLint
+-Convert ESLint rules via `@tsslint/compat-eslint`.
+-
+-```bash
+-npm install @tsslint/compat-eslint --save-dev
+-```
++Convert ESLint rules via `@tsslint/eslint`.
+ 
+ ```ts
+-import { defineConfig, importESLintRules } from '@tsslint/config';
++import { defineConfig } from '@tsslint/config';
++import { defineRules } from '@tsslint/eslint';
+ 
+ export default defineConfig({
+   rules: {
+-    ...await importESLintRules({
++    ...defineRules({
+       'no-unused-vars': 'error',
+       '@typescript-eslint/no-explicit-any': 'warn',
+     }),
+@@ -198,10 +193,7 @@ export default defineConfig({
+ ```
+ 
+ #### TSLint
+-Convert TSLint rules via `@tsslint/compat-tslint`.
+-
+-#### TSL
+-Convert TSL rules via `@tsslint/compat-tsl`.
++Convert TSLint rules via `@tsslint/tslint`.
+ 
+ ## Technical Notes
+ 
+diff --git a/cli-demo.gif b/cli-demo.gif
+deleted file mode 100644
+index 3cfbaa4..0000000
+Binary files a/cli-demo.gif and /dev/null differ
+diff --git a/cli-demo.mp4 b/cli-demo.mp4
+deleted file mode 100644
+index 49f6387..0000000
+Binary files a/cli-demo.mp4 and /dev/null differ
+diff --git a/fixtures/define-tslint-rules/package.json b/fixtures/define-tslint-rules/package.json
+index 3d0de48..5d1fab7 100644
+--- a/fixtures/define-tslint-rules/package.json
++++ b/fixtures/define-tslint-rules/package.json
+@@ -4,7 +4,7 @@
+ 	"version": "3.0.0-alpha.0",
+ 	"devDependencies": {
+ 		"@tsslint/config": "3.0.0-alpha.0",
+-		"@tsslint/tslint": "3.0.0-alpha.0",
++		"@tsslint/compat-tslint": "3.0.0-alpha.0",
+ 		"tslint": "^6.1.3"
+ 	}
+ }
+diff --git a/fixtures/define-tslint-rules/tsslint.config.ts b/fixtures/define-tslint-rules/tsslint.config.ts
+index ef3ed7e..7735a7b 100644
+--- a/fixtures/define-tslint-rules/tsslint.config.ts
++++ b/fixtures/define-tslint-rules/tsslint.config.ts
+@@ -1,5 +1,5 @@
+ import { defineConfig } from '@tsslint/config';
+-import { convertRule } from '@tsslint/tslint';
++import { convertRule } from '@tsslint/compat-tslint';
+ 
+ export default defineConfig({
+ 	rules: {
+diff --git a/packages/compat-eslint/index.ts b/packages/compat-eslint/index.ts
+index 76a8606..8915c56 100644
+--- a/packages/compat-eslint/index.ts
++++ b/packages/compat-eslint/index.ts
+@@ -1,126 +1,407 @@
+ import type * as TSSLint from '@tsslint/types';
+ import type * as ESLint from 'eslint';
+ import type * as ts from 'typescript';
+-import type { ESLintRulesConfig } from './lib/types.js';
+-import { convertRule } from './lib/convertRule.js';
+ 
+-export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
++const estrees = new WeakMap<ts.SourceFile, {
++	estree: ESLint.AST.Program;
++	sourceCode: ESLint.SourceCode;
++	eventQueue: any[];
++}>();
+ 
+-const noop = () => { };
+-const plugins: Record<string, Promise<{
+-	rules: Record<string, ESLint.Rule.RuleModule>;
+-} | undefined>> = {};
+-const loader = async (moduleName: string) => {
+-	let mod: {} | undefined;
+-	try {
+-		mod ??= require(moduleName);
+-	} catch { }
+-	try {
+-		mod ??= await import(moduleName);
+-	} catch { }
+-	if (mod && 'default' in mod) {
+-		return mod.default;
+-	}
+-	return mod as any;
+-};
+-
+-/**
+- * Converts an ESLint rules configuration to TSSLint rules.
+- *
+- * ---
+- * ⚠️ **Type definitions not generated**
+- *
+- * Please add `@tsslint/compat-eslint` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
+- *
+- * ```json
+- * {
+- *   "pnpm": {
+- *     "onlyBuiltDependencies": ["@tsslint/compat-eslint"]
+- *   }
+- * }
+- * ```
+- *
+- * After that, run `pnpm install` again to generate type definitions.
+- *
+- * If the type definitions become outdated, please run `npx tsslint-eslint-update` to update them.
+- */
+-export async function defineRules(
+-	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
++export function convertRule(
++	eslintRule: ESLint.Rule.RuleModule,
++	options: any[] = [],
+ 	context: Partial<ESLint.Rule.RuleContext> = {},
+ 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
+-) {
+-	const rules: TSSLint.Rules = {};
+-	for (const [rule, severityOrOptions] of Object.entries(config)) {
+-		let severity: boolean;
+-		let options: any[];
+-		if (Array.isArray(severityOrOptions)) {
+-			severity = true;
+-			options = severityOrOptions;
++): TSSLint.Rule {
++	// ESLint internal scripts
++	let createEmitter;
++	let NodeEventGenerator;
++	let Traverser;
++	try {
++		createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
++		NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
++		Traverser = require('../../eslint/lib/shared/traverser.js');
++	} catch {
++		createEmitter = require(require.resolve('./node_modules/eslint/lib/linter/safe-emitter.js'));
++		NodeEventGenerator = require(require.resolve('./node_modules/eslint/lib/linter/node-event-generator.js'));
++		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
++	}
++
++	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
++		const { sourceCode, eventQueue } = getEstree(file, () => ctx.program);
++		const emitter = createEmitter();
++
++		if (eslintRule.meta?.defaultOptions) {
++			for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
++				options[i] ??= eslintRule.meta.defaultOptions[i];
++			}
+ 		}
+-		else {
+-			severity = severityOrOptions;
+-			options = [];
++
++		let currentNode: any;
++
++		const ruleListeners = eslintRule.create({
++			get cwd() {
++				return ctx.program.getCurrentDirectory();
++			},
++			getCwd() {
++				return ctx.program.getCurrentDirectory();
++			},
++			filename: file.fileName,
++			getFilename() {
++				return file.fileName;
++			},
++			physicalFilename: file.fileName,
++			getPhysicalFilename() {
++				return file.fileName;
++			},
++			sourceCode,
++			getSourceCode() {
++				return sourceCode;
++			},
++			settings: {},
++			parserOptions: {},
++			languageOptions: {},
++			parserPath: undefined,
++			id: 'unknown',
++			options,
++			report(descriptor) {
++				let message = 'message' in descriptor
++					? descriptor.message
++					: getMessage(descriptor.messageId);
++				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
++					return descriptor.data?.[key.slice(2, -2).trim()] ?? key;
++				});
++				let start = 0;
++				let end = 0;
++				try {
++					if ('loc' in descriptor) {
++						if ('line' in descriptor.loc) {
++							start = file.getPositionOfLineAndCharacter(descriptor.loc.line - 1, descriptor.loc.column);
++							end = start;
++						}
++						else {
++							start = file.getPositionOfLineAndCharacter(descriptor.loc.start.line - 1, descriptor.loc.start.column);
++							end = file.getPositionOfLineAndCharacter(descriptor.loc.end.line - 1, descriptor.loc.end.column);
++						}
++					}
++					else if ('node' in descriptor) {
++						if (descriptor.node.range) {
++							start = descriptor.node.range[0];
++							end = descriptor.node.range[1];
++						}
++						else if (descriptor.node.loc) {
++							start = file.getPositionOfLineAndCharacter(descriptor.node.loc.start.line - 1, descriptor.node.loc.start.column);
++							end = file.getPositionOfLineAndCharacter(descriptor.node.loc.end.line - 1, descriptor.node.loc.end.column);
++						}
++					}
++				} catch { }
++				const reporter = report(message, start, end).at(new Error(), 1);
++
++				if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
++					reporter.asWarning();
++				}
++				else if (category === 1 satisfies ts.DiagnosticCategory.Error) {
++					reporter.asError();
++				}
++				else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
++					reporter.asSuggestion();
++				}
++
++				if (descriptor.fix) {
++					// @ts-expect-error
++					const textChanges = getTextChanges(descriptor.fix);
++					reporter.withFix(
++						getTextChangeMessage(textChanges),
++						() => [{
++							fileName: file.fileName,
++							textChanges,
++						}]
++					);
++				}
++				for (const suggest of descriptor.suggest ?? []) {
++					if ('messageId' in suggest) {
++						let message = getMessage(suggest.messageId);
++						message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
++							return suggest.data?.[key.slice(2, -2).trim()] ?? key;
++						});
++						reporter.withRefactor(
++							message,
++							() => [{
++								fileName: file.fileName,
++								// @ts-expect-error
++								textChanges: getTextChanges(suggest.fix),
++							}]
++						);
++					}
++					else {
++						// @ts-expect-error
++						const textChanges = getTextChanges(suggest.fix);
++						reporter.withRefactor(
++							getTextChangeMessage(textChanges),
++							() => [{
++								fileName: file.fileName,
++								textChanges,
++							}]
++						);
++					}
++				}
++			},
++			getAncestors() {
++				return sourceCode.getAncestors(currentNode);
++			},
++			getDeclaredVariables(node) {
++				return sourceCode.getDeclaredVariables(node);
++			},
++			getScope() {
++				return sourceCode.getScope(currentNode);
++			},
++			markVariableAsUsed(name) {
++				return sourceCode.markVariableAsUsed(name, currentNode);
++			},
++			...context,
++		});
++
++		for (const selector in ruleListeners) {
++			emitter.on(selector, ruleListeners[selector]);
++		}
++
++		const eventGenerator = new NodeEventGenerator(emitter, { visitorKeys: sourceCode.visitorKeys, fallback: Traverser.getKeys });
++
++		for (const step of eventQueue) {
++			switch (step.kind) {
++				case 1: {
++					try {
++						if (step.phase === 1) {
++							currentNode = step.target;
++							eventGenerator.enterNode(step.target);
++						} else {
++							eventGenerator.leaveNode(step.target);
++						}
++					} catch (err) {
++						throw err;
++					}
++					break;
++				}
++
++				case 2: {
++					emitter.emit(step.target, ...step.args);
++					break;
++				}
++
++				default:
++					throw new Error(`Invalid traversal step found: "${step.type}".`);
++			}
+ 		}
+-		if (!severity) {
+-			rules[rule] = noop;
+-			continue;
++
++		function getTextChangeMessage(textChanges: ts.TextChange[]) {
++			if (textChanges.length === 1) {
++				const change = textChanges[0];
++				const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
++				if (change.newText.length === 0) {
++					return `Remove \`${originalText}\`.`;
++				}
++				else if (change.span.length === 0) {
++					const line = file.getLineAndCharacterOfPosition(change.span.start).line;
++					const lineStart = file.getPositionOfLineAndCharacter(line, 0);
++					const lineText = file.text.substring(lineStart, change.span.start).trimStart();
++					return `Insert \`${change.newText}\` after \`${lineText}\`.`;
++				}
++			}
++			const changes = [...textChanges].sort((a, b) => a.span.start - b.span.start);
++			let text = '';
++			let newText = '';
++			for (let i = 0; i < changes.length; i++) {
++				const change = changes[i];
++				text += file.text.substring(change.span.start, change.span.start + change.span.length);
++				newText += change.newText;
++				if (i !== changes.length - 1) {
++					text += '…';
++					newText += '…';
++				}
++			}
++			if (text.length + newText.length <= 50) {
++				return `Replace \`${text}\` with \`${newText}\`.`;
++			}
++			let removeLeft = 0;
++			let removeRight = 0;
++			let removedLeft = false;
++			let removedRight = false;
++			for (let i = 0; i < text.length && i < newText.length; i++) {
++				if (text[i] !== newText[i]) {
++					break;
++				}
++				removeLeft++;
++			}
++			for (let i = 0; i < text.length && i < newText.length; i++) {
++				if (text[text.length - 1 - i] !== newText[newText.length - 1 - i]) {
++					break;
++				}
++				removeRight++;
++			}
++			if (removeLeft > removeRight) {
++				removedLeft = true;
++				text = text.slice(removeLeft);
++				newText = newText.slice(removeLeft);
++				if (text.length + newText.length > 50) {
++					removedRight = true;
++					text = text.slice(0, -removeRight);
++					newText = newText.slice(0, -removeRight);
++				}
++			}
++			else {
++				removedRight = true;
++				text = text.slice(0, -removeRight);
++				newText = newText.slice(0, -removeRight);
++				if (text.length + newText.length > 50) {
++					removedLeft = true;
++					text = text.slice(removeLeft);
++					newText = newText.slice(removeLeft);
++				}
++			}
++			if (removedLeft) {
++				text = '…' + text;
++				newText = '…' + newText;
++			}
++			if (removedRight) {
++				text += '…';
++				newText += '…';
++			}
++			return `Replace \`${text}\` with \`${newText}\`.`;
+ 		}
+-		const ruleModule = await loadRuleByKey(rule);
+-		if (!ruleModule) {
+-			throw new Error(`Failed to resolve rule "${rule}".`);
++
++		function getTextChanges(fix: ESLint.Rule.ReportFixer | null | undefined) {
++			const fixes = fix?.({
++				insertTextAfter(nodeOrToken, text) {
++					if (!nodeOrToken.loc?.end) {
++						throw new Error('Cannot insert text after a node without a location.');
++					}
++					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
++					return this.insertTextAfterRange([start, start], text);
++				},
++				insertTextAfterRange(range, text) {
++					return {
++						text,
++						range: [range[1], range[1]],
++					};
++				},
++				insertTextBefore(nodeOrToken, text) {
++					if (!nodeOrToken.loc?.start) {
++						throw new Error('Cannot insert text before a node without a location.');
++					}
++					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
++					return this.insertTextBeforeRange([start, start], text);
++				},
++				insertTextBeforeRange(range, text) {
++					return {
++						text,
++						range: [range[0], range[0]],
++					};
++				},
++				remove(nodeOrToken) {
++					if (!nodeOrToken.loc) {
++						throw new Error('Cannot remove a node without a location.');
++					}
++					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
++					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
++					return this.removeRange([start, end]);
++				},
++				removeRange(range) {
++					return {
++						text: '',
++						range,
++					};
++				},
++				replaceText(nodeOrToken, text) {
++					if (!nodeOrToken.loc) {
++						throw new Error('Cannot replace text of a node without a location.');
++					}
++					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
++					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
++					return this.replaceTextRange([start, end], text);
++				},
++				replaceTextRange(range, text) {
++					return {
++						text,
++						range,
++					};
++				},
++			});
++			const textChanges: ts.TextChange[] = [];
++			if (fixes && 'text' in fixes) {
++				textChanges.push({
++					newText: fixes.text,
++					span: {
++						start: fixes.range[0],
++						length: fixes.range[1] - fixes.range[0],
++					},
++				});
++			}
++			else if (fixes) {
++				for (const fix of fixes) {
++					textChanges.push({
++						newText: fix.text,
++						span: {
++							start: fix.range[0],
++							length: fix.range[1] - fix.range[0],
++						},
++					});
++				}
++			}
++			return textChanges;
+ 		}
+-		rules[rule] = convertRule(
+-			ruleModule,
+-			options,
+-			{ id: rule, ...context },
+-			category,
+-		);
+-	}
+-	return rules;
+-}
+ 
+-function* resolveRuleKey(rule: string): Generator<[
+-	pluginName: string | undefined,
+-	ruleName: string,
+-]> {
+-	const slashIndex = rule.indexOf('/');
+-	if (slashIndex !== -1) {
+-		let pluginName = rule.startsWith('@')
+-			? `${rule.slice(0, slashIndex)}/eslint-plugin`
+-			: `eslint-plugin-${rule.slice(0, slashIndex)}`;
+-		let ruleName = rule.slice(slashIndex + 1);
+-
+-		yield [pluginName, ruleName];
+-
+-		if (ruleName.indexOf('/') >= 0) {
+-			pluginName += `-${ruleName.slice(0, ruleName.indexOf('/'))}`;
+-			ruleName = ruleName.slice(ruleName.indexOf('/') + 1);
+-			yield [pluginName, ruleName];
++		function getMessage(messageId: string) {
++			return eslintRule.meta?.messages?.[messageId] ?? '';
+ 		}
+-	}
+-	else {
+-		yield [undefined, rule];
+-	}
++	};
++	(tsslintRule as any).meta = eslintRule.meta;
++	return tsslintRule;
+ }
+ 
+-async function loadRuleByKey(rule: string): Promise<ESLint.Rule.RuleModule | undefined> {
+-	for (const resolved of resolveRuleKey(rule)) {
+-		const ruleModule = await loadRule(...resolved);
+-		if (ruleModule) {
+-			return ruleModule;
++function getEstree(
++	file: ts.SourceFile,
++	getProgram: () => ts.Program,
++) {
++	if (!estrees.has(file)) {
++		let program: ts.Program | undefined;
++		let SourceCode;
++
++		const Parser = require('@typescript-eslint/parser');
++		try {
++			SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
++		} catch {
++			SourceCode = require(require.resolve('./node_modules/eslint/lib/languages/js/source-code/source-code.js'));
+ 		}
+-	}
+-}
+ 
+-async function loadRule(pluginName: string | undefined, ruleName: string): Promise<ESLint.Rule.RuleModule | undefined> {
+-	if (pluginName) {
+-		plugins[pluginName] ??= loader(pluginName);
+-		const plugin = await plugins[pluginName];
+-		return plugin?.rules[ruleName];
+-	}
+-	try {
+-		return require(`../../eslint/lib/rules/${ruleName}.js`);
+-	} catch {
+-		return require(`./node_modules/eslint/lib/rules/${ruleName}.js`);
++		const programProxy = new Proxy({} as ts.Program, {
++			get(_target, p, receiver) {
++				program ??= getProgram();
++				return Reflect.get(program, p, receiver);
++			},
++		});
++		const { ast, scopeManager, visitorKeys, services } = Parser.parseForESLint(file, {
++			tokens: true,
++			comment: true,
++			loc: true,
++			range: true,
++			preserveNodeMaps: true,
++			filePath: file.fileName,
++		});
++		const sourceCode = new SourceCode({
++			text: file.text,
++			ast,
++			scopeManager,
++			visitorKeys,
++			parserServices: {
++				...services,
++				program: programProxy,
++				getSymbolAtLocation: (node: any) => programProxy.getTypeChecker().getSymbolAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
++				getTypeAtLocation: (node: any) => programProxy.getTypeChecker().getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
++			},
++		});
++		const eventQueue = sourceCode.traverse();
++		estrees.set(file, { estree: ast, sourceCode, eventQueue });
+ 	}
++	return estrees.get(file)!;
+ }
+diff --git a/packages/compat-eslint/lib/convertRule.ts b/packages/compat-eslint/lib/convertRule.ts
+deleted file mode 100644
+index 8915c56..0000000
+--- a/packages/compat-eslint/lib/convertRule.ts
++++ /dev/null
+@@ -1,407 +0,0 @@
+-import type * as TSSLint from '@tsslint/types';
+-import type * as ESLint from 'eslint';
+-import type * as ts from 'typescript';
+-
+-const estrees = new WeakMap<ts.SourceFile, {
+-	estree: ESLint.AST.Program;
+-	sourceCode: ESLint.SourceCode;
+-	eventQueue: any[];
+-}>();
+-
+-export function convertRule(
+-	eslintRule: ESLint.Rule.RuleModule,
+-	options: any[] = [],
+-	context: Partial<ESLint.Rule.RuleContext> = {},
+-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
+-): TSSLint.Rule {
+-	// ESLint internal scripts
+-	let createEmitter;
+-	let NodeEventGenerator;
+-	let Traverser;
+-	try {
+-		createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
+-		NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
+-		Traverser = require('../../eslint/lib/shared/traverser.js');
+-	} catch {
+-		createEmitter = require(require.resolve('./node_modules/eslint/lib/linter/safe-emitter.js'));
+-		NodeEventGenerator = require(require.resolve('./node_modules/eslint/lib/linter/node-event-generator.js'));
+-		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
+-	}
+-
+-	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
+-		const { sourceCode, eventQueue } = getEstree(file, () => ctx.program);
+-		const emitter = createEmitter();
+-
+-		if (eslintRule.meta?.defaultOptions) {
+-			for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
+-				options[i] ??= eslintRule.meta.defaultOptions[i];
+-			}
+-		}
+-
+-		let currentNode: any;
+-
+-		const ruleListeners = eslintRule.create({
+-			get cwd() {
+-				return ctx.program.getCurrentDirectory();
+-			},
+-			getCwd() {
+-				return ctx.program.getCurrentDirectory();
+-			},
+-			filename: file.fileName,
+-			getFilename() {
+-				return file.fileName;
+-			},
+-			physicalFilename: file.fileName,
+-			getPhysicalFilename() {
+-				return file.fileName;
+-			},
+-			sourceCode,
+-			getSourceCode() {
+-				return sourceCode;
+-			},
+-			settings: {},
+-			parserOptions: {},
+-			languageOptions: {},
+-			parserPath: undefined,
+-			id: 'unknown',
+-			options,
+-			report(descriptor) {
+-				let message = 'message' in descriptor
+-					? descriptor.message
+-					: getMessage(descriptor.messageId);
+-				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
+-					return descriptor.data?.[key.slice(2, -2).trim()] ?? key;
+-				});
+-				let start = 0;
+-				let end = 0;
+-				try {
+-					if ('loc' in descriptor) {
+-						if ('line' in descriptor.loc) {
+-							start = file.getPositionOfLineAndCharacter(descriptor.loc.line - 1, descriptor.loc.column);
+-							end = start;
+-						}
+-						else {
+-							start = file.getPositionOfLineAndCharacter(descriptor.loc.start.line - 1, descriptor.loc.start.column);
+-							end = file.getPositionOfLineAndCharacter(descriptor.loc.end.line - 1, descriptor.loc.end.column);
+-						}
+-					}
+-					else if ('node' in descriptor) {
+-						if (descriptor.node.range) {
+-							start = descriptor.node.range[0];
+-							end = descriptor.node.range[1];
+-						}
+-						else if (descriptor.node.loc) {
+-							start = file.getPositionOfLineAndCharacter(descriptor.node.loc.start.line - 1, descriptor.node.loc.start.column);
+-							end = file.getPositionOfLineAndCharacter(descriptor.node.loc.end.line - 1, descriptor.node.loc.end.column);
+-						}
+-					}
+-				} catch { }
+-				const reporter = report(message, start, end).at(new Error(), 1);
+-
+-				if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
+-					reporter.asWarning();
+-				}
+-				else if (category === 1 satisfies ts.DiagnosticCategory.Error) {
+-					reporter.asError();
+-				}
+-				else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
+-					reporter.asSuggestion();
+-				}
+-
+-				if (descriptor.fix) {
+-					// @ts-expect-error
+-					const textChanges = getTextChanges(descriptor.fix);
+-					reporter.withFix(
+-						getTextChangeMessage(textChanges),
+-						() => [{
+-							fileName: file.fileName,
+-							textChanges,
+-						}]
+-					);
+-				}
+-				for (const suggest of descriptor.suggest ?? []) {
+-					if ('messageId' in suggest) {
+-						let message = getMessage(suggest.messageId);
+-						message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
+-							return suggest.data?.[key.slice(2, -2).trim()] ?? key;
+-						});
+-						reporter.withRefactor(
+-							message,
+-							() => [{
+-								fileName: file.fileName,
+-								// @ts-expect-error
+-								textChanges: getTextChanges(suggest.fix),
+-							}]
+-						);
+-					}
+-					else {
+-						// @ts-expect-error
+-						const textChanges = getTextChanges(suggest.fix);
+-						reporter.withRefactor(
+-							getTextChangeMessage(textChanges),
+-							() => [{
+-								fileName: file.fileName,
+-								textChanges,
+-							}]
+-						);
+-					}
+-				}
+-			},
+-			getAncestors() {
+-				return sourceCode.getAncestors(currentNode);
+-			},
+-			getDeclaredVariables(node) {
+-				return sourceCode.getDeclaredVariables(node);
+-			},
+-			getScope() {
+-				return sourceCode.getScope(currentNode);
+-			},
+-			markVariableAsUsed(name) {
+-				return sourceCode.markVariableAsUsed(name, currentNode);
+-			},
+-			...context,
+-		});
+-
+-		for (const selector in ruleListeners) {
+-			emitter.on(selector, ruleListeners[selector]);
+-		}
+-
+-		const eventGenerator = new NodeEventGenerator(emitter, { visitorKeys: sourceCode.visitorKeys, fallback: Traverser.getKeys });
+-
+-		for (const step of eventQueue) {
+-			switch (step.kind) {
+-				case 1: {
+-					try {
+-						if (step.phase === 1) {
+-							currentNode = step.target;
+-							eventGenerator.enterNode(step.target);
+-						} else {
+-							eventGenerator.leaveNode(step.target);
+-						}
+-					} catch (err) {
+-						throw err;
+-					}
+-					break;
+-				}
+-
+-				case 2: {
+-					emitter.emit(step.target, ...step.args);
+-					break;
+-				}
+-
+-				default:
+-					throw new Error(`Invalid traversal step found: "${step.type}".`);
+-			}
+-		}
+-
+-		function getTextChangeMessage(textChanges: ts.TextChange[]) {
+-			if (textChanges.length === 1) {
+-				const change = textChanges[0];
+-				const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
+-				if (change.newText.length === 0) {
+-					return `Remove \`${originalText}\`.`;
+-				}
+-				else if (change.span.length === 0) {
+-					const line = file.getLineAndCharacterOfPosition(change.span.start).line;
+-					const lineStart = file.getPositionOfLineAndCharacter(line, 0);
+-					const lineText = file.text.substring(lineStart, change.span.start).trimStart();
+-					return `Insert \`${change.newText}\` after \`${lineText}\`.`;
+-				}
+-			}
+-			const changes = [...textChanges].sort((a, b) => a.span.start - b.span.start);
+-			let text = '';
+-			let newText = '';
+-			for (let i = 0; i < changes.length; i++) {
+-				const change = changes[i];
+-				text += file.text.substring(change.span.start, change.span.start + change.span.length);
+-				newText += change.newText;
+-				if (i !== changes.length - 1) {
+-					text += '…';
+-					newText += '…';
+-				}
+-			}
+-			if (text.length + newText.length <= 50) {
+-				return `Replace \`${text}\` with \`${newText}\`.`;
+-			}
+-			let removeLeft = 0;
+-			let removeRight = 0;
+-			let removedLeft = false;
+-			let removedRight = false;
+-			for (let i = 0; i < text.length && i < newText.length; i++) {
+-				if (text[i] !== newText[i]) {
+-					break;
+-				}
+-				removeLeft++;
+-			}
+-			for (let i = 0; i < text.length && i < newText.length; i++) {
+-				if (text[text.length - 1 - i] !== newText[newText.length - 1 - i]) {
+-					break;
+-				}
+-				removeRight++;
+-			}
+-			if (removeLeft > removeRight) {
+-				removedLeft = true;
+-				text = text.slice(removeLeft);
+-				newText = newText.slice(removeLeft);
+-				if (text.length + newText.length > 50) {
+-					removedRight = true;
+-					text = text.slice(0, -removeRight);
+-					newText = newText.slice(0, -removeRight);
+-				}
+-			}
+-			else {
+-				removedRight = true;
+-				text = text.slice(0, -removeRight);
+-				newText = newText.slice(0, -removeRight);
+-				if (text.length + newText.length > 50) {
+-					removedLeft = true;
+-					text = text.slice(removeLeft);
+-					newText = newText.slice(removeLeft);
+-				}
+-			}
+-			if (removedLeft) {
+-				text = '…' + text;
+-				newText = '…' + newText;
+-			}
+-			if (removedRight) {
+-				text += '…';
+-				newText += '…';
+-			}
+-			return `Replace \`${text}\` with \`${newText}\`.`;
+-		}
+-
+-		function getTextChanges(fix: ESLint.Rule.ReportFixer | null | undefined) {
+-			const fixes = fix?.({
+-				insertTextAfter(nodeOrToken, text) {
+-					if (!nodeOrToken.loc?.end) {
+-						throw new Error('Cannot insert text after a node without a location.');
+-					}
+-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+-					return this.insertTextAfterRange([start, start], text);
+-				},
+-				insertTextAfterRange(range, text) {
+-					return {
+-						text,
+-						range: [range[1], range[1]],
+-					};
+-				},
+-				insertTextBefore(nodeOrToken, text) {
+-					if (!nodeOrToken.loc?.start) {
+-						throw new Error('Cannot insert text before a node without a location.');
+-					}
+-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+-					return this.insertTextBeforeRange([start, start], text);
+-				},
+-				insertTextBeforeRange(range, text) {
+-					return {
+-						text,
+-						range: [range[0], range[0]],
+-					};
+-				},
+-				remove(nodeOrToken) {
+-					if (!nodeOrToken.loc) {
+-						throw new Error('Cannot remove a node without a location.');
+-					}
+-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+-					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+-					return this.removeRange([start, end]);
+-				},
+-				removeRange(range) {
+-					return {
+-						text: '',
+-						range,
+-					};
+-				},
+-				replaceText(nodeOrToken, text) {
+-					if (!nodeOrToken.loc) {
+-						throw new Error('Cannot replace text of a node without a location.');
+-					}
+-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+-					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+-					return this.replaceTextRange([start, end], text);
+-				},
+-				replaceTextRange(range, text) {
+-					return {
+-						text,
+-						range,
+-					};
+-				},
+-			});
+-			const textChanges: ts.TextChange[] = [];
+-			if (fixes && 'text' in fixes) {
+-				textChanges.push({
+-					newText: fixes.text,
+-					span: {
+-						start: fixes.range[0],
+-						length: fixes.range[1] - fixes.range[0],
+-					},
+-				});
+-			}
+-			else if (fixes) {
+-				for (const fix of fixes) {
+-					textChanges.push({
+-						newText: fix.text,
+-						span: {
+-							start: fix.range[0],
+-							length: fix.range[1] - fix.range[0],
+-						},
+-					});
+-				}
+-			}
+-			return textChanges;
+-		}
+-
+-		function getMessage(messageId: string) {
+-			return eslintRule.meta?.messages?.[messageId] ?? '';
+-		}
+-	};
+-	(tsslintRule as any).meta = eslintRule.meta;
+-	return tsslintRule;
+-}
+-
+-function getEstree(
+-	file: ts.SourceFile,
+-	getProgram: () => ts.Program,
+-) {
+-	if (!estrees.has(file)) {
+-		let program: ts.Program | undefined;
+-		let SourceCode;
+-
+-		const Parser = require('@typescript-eslint/parser');
+-		try {
+-			SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
+-		} catch {
+-			SourceCode = require(require.resolve('./node_modules/eslint/lib/languages/js/source-code/source-code.js'));
+-		}
+-
+-		const programProxy = new Proxy({} as ts.Program, {
+-			get(_target, p, receiver) {
+-				program ??= getProgram();
+-				return Reflect.get(program, p, receiver);
+-			},
+-		});
+-		const { ast, scopeManager, visitorKeys, services } = Parser.parseForESLint(file, {
+-			tokens: true,
+-			comment: true,
+-			loc: true,
+-			range: true,
+-			preserveNodeMaps: true,
+-			filePath: file.fileName,
+-		});
+-		const sourceCode = new SourceCode({
+-			text: file.text,
+-			ast,
+-			scopeManager,
+-			visitorKeys,
+-			parserServices: {
+-				...services,
+-				program: programProxy,
+-				getSymbolAtLocation: (node: any) => programProxy.getTypeChecker().getSymbolAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+-				getTypeAtLocation: (node: any) => programProxy.getTypeChecker().getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+-			},
+-		});
+-		const eventQueue = sourceCode.traverse();
+-		estrees.set(file, { estree: ast, sourceCode, eventQueue });
+-	}
+-	return estrees.get(file)!;
+-}
+diff --git a/packages/compat-eslint/lib/plugins/showDocsAction.ts b/packages/compat-eslint/lib/plugins/showDocsAction.ts
+deleted file mode 100644
+index 3d1f60d..0000000
+--- a/packages/compat-eslint/lib/plugins/showDocsAction.ts
++++ /dev/null
+@@ -1,71 +0,0 @@
+-import type { Plugin, Rules } from '@tsslint/types';
+-import { exec } from 'node:child_process';
+-import type * as ts from 'typescript';
+-
+-interface Cmd {
+-	command: typeof cmd;
+-	file: string;
+-	url: string;
+-}
+-
+-const cmd = 'eslint:open-eslint-rule-docs';
+-const decorated = new WeakSet<ts.LanguageService>();
+-
+-export function create(): Plugin {
+-	return ({ languageService }) => {
+-		const ruleId2Meta = new Map<string, { docs?: { url: string; }; }>();
+-
+-		if (!decorated.has(languageService)) {
+-			decorated.add(languageService);
+-			const { applyCodeActionCommand } = languageService;
+-			languageService.applyCodeActionCommand = async (command, ...rest: any) => {
+-				if (typeof command === 'object' && (command as Cmd)?.command === cmd) {
+-					const start = process.platform == 'darwin' ? 'open' : process.platform == 'win32' ? 'start' : 'xdg-open';
+-					exec(`${start} ${(command as Cmd).url}`);
+-					return {};
+-				}
+-				return await applyCodeActionCommand(command, ...rest) as any;
+-			};
+-		}
+-
+-		return {
+-			resolveRules(_fileName, rules) {
+-				collectMetadata(rules);
+-				return rules;
+-			},
+-			resolveCodeFixes(file, diagnostic, codeFixes) {
+-				const ruleMeta = ruleId2Meta.get(diagnostic.code as any);
+-				if (!ruleMeta?.docs?.url) {
+-					return codeFixes;
+-				}
+-				return [
+-					...codeFixes,
+-					{
+-						changes: [],
+-						description: `Show documentation for ${diagnostic.code}`,
+-						fixName: 'Show documentation',
+-						commands: [{
+-							command: cmd,
+-							file: file.fileName,
+-							url: ruleMeta.docs.url,
+-						} satisfies Cmd],
+-					},
+-				];
+-			},
+-		};
+-
+-		function collectMetadata(rules: Rules, paths: string[] = []) {
+-			for (const [path, rule] of Object.entries(rules)) {
+-				if (typeof rule === 'object') {
+-					collectMetadata(rule, [...paths, path]);
+-					continue;
+-				}
+-				const meta = (rule as any).meta;
+-				if (typeof meta === 'object' && meta) {
+-					const ruleId = [...paths, path].join('/');
+-					ruleId2Meta.set(ruleId, meta);
+-				}
+-			}
+-		};
+-	};
+-}
+\ No newline at end of file
+diff --git a/packages/compat-eslint/package.json b/packages/compat-eslint/package.json
+index 9625fec..851d68d 100644
+--- a/packages/compat-eslint/package.json
++++ b/packages/compat-eslint/package.json
+@@ -7,17 +7,11 @@
+ 		"**/*.d.ts",
+ 		"bin"
+ 	],
+-	"bin": {
+-		"tsslint-eslint-update": "bin/tsslint-eslint-update.js"
+-	},
+ 	"repository": {
+ 		"type": "git",
+ 		"url": "https://github.com/johnsoncodehk/tsslint.git",
+ 		"directory": "packages/compat-eslint"
+ 	},
+-	"scripts": {
+-		"postinstall": "node bin/tsslint-eslint-update.js"
+-	},
+ 	"devDependencies": {
+ 		"@tsslint/types": "3.0.0-alpha.0",
+ 		"@types/eslint": "^8.56.10",
+@@ -27,4 +21,4 @@
+ 		"@typescript-eslint/parser": "^8.16.0",
+ 		"eslint": ">=9.0.0 <9.28.0"
+ 	}
+-}
++}
+\ No newline at end of file
+diff --git a/packages/tslint/LICENSE b/packages/compat-tslint/LICENSE
+similarity index 100%
+rename from packages/tslint/LICENSE
+rename to packages/compat-tslint/LICENSE
+diff --git a/packages/tslint/index.ts b/packages/compat-tslint/index.ts
+similarity index 100%
+rename from packages/tslint/index.ts
+rename to packages/compat-tslint/index.ts
+diff --git a/packages/tslint/package.json b/packages/compat-tslint/package.json
+similarity index 79%
+rename from packages/tslint/package.json
+rename to packages/compat-tslint/package.json
+index 188f175..e53a4be 100644
+--- a/packages/tslint/package.json
++++ b/packages/compat-tslint/package.json
+@@ -1,5 +1,5 @@
+ {
+-	"name": "@tsslint/tslint",
++	"name": "@tsslint/compat-tslint",
+ 	"version": "3.0.0-alpha.0",
+ 	"license": "MIT",
+ 	"files": [
+@@ -9,7 +9,7 @@
+ 	"repository": {
+ 		"type": "git",
+ 		"url": "https://github.com/johnsoncodehk/tsslint.git",
+-		"directory": "packages/tslint"
++		"directory": "packages/compat-tslint"
+ 	},
+ 	"devDependencies": {
+ 		"@tsslint/types": "3.0.0-alpha.0",
+diff --git a/packages/tslint/tsconfig.json b/packages/compat-tslint/tsconfig.json
+similarity index 100%
+rename from packages/tslint/tsconfig.json
+rename to packages/compat-tslint/tsconfig.json
+diff --git a/packages/compat-eslint/bin/tsslint-eslint-update.js b/packages/config/bin/tsslint-config-update.js
+similarity index 72%
+rename from packages/compat-eslint/bin/tsslint-eslint-update.js
+rename to packages/config/bin/tsslint-config-update.js
+index 86c4c80..82ca18c 100755
+--- a/packages/compat-eslint/bin/tsslint-eslint-update.js
++++ b/packages/config/bin/tsslint-config-update.js
+@@ -25,18 +25,18 @@ if (fs.existsSync(dtsGeneratePath)) {
+ }
+ 
+ try {
+-	const { generate } = require('../lib/dtsGenerate.js');
+-	generate(nodeModulesDirs).then(({ dts, stats }) => {
+-		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'types.d.ts'), dts);
++	const { generateESlintTypes } = require('../lib/eslint-gen');
++	generateESlintTypes(nodeModulesDirs).then(({ dts, stats }) => {
++		fs.writeFileSync(path.resolve(__dirname, '..', 'lib', 'eslint-types.d.ts'), dts);
+ 
+-		const indexPath = path.resolve(__dirname, '..', 'index.d.ts');
++		const indexPath = path.resolve(__dirname, '..', 'lib', 'eslint.d.ts');
+ 		if (fs.existsSync(indexPath)) {
+ 			let indexContent = fs.readFileSync(indexPath, 'utf8');
+-			const defineRulesIndex = indexContent.indexOf('export declare function defineRules');
+-			const jsDocEnd = indexContent.lastIndexOf('*/', defineRulesIndex) + 2;
++			const fnIndex = indexContent.indexOf('export declare function importESLintRules');
++			const jsDocEnd = indexContent.lastIndexOf('*/', fnIndex) + 2;
+ 			const jsDocStart = indexContent.lastIndexOf('/**', jsDocEnd);
+ 
+-			if (jsDocStart !== -1 && jsDocEnd !== -1 && jsDocStart < defineRulesIndex) {
++			if (jsDocStart !== -1 && jsDocEnd !== -1 && jsDocStart < fnIndex) {
+ 				const statsTable = [
+ 					'| Plugin | Rules |',
+ 					'| :--- | :--- |',
+@@ -52,7 +52,7 @@ try {
+  * ${statsTable}
+  *
+  * ---
+- * If you have added new ESLint plugins, please run \`npx tsslint-eslint-update\` to update this list.
++ * If you have added new ESLint plugins, please run \`npx tsslint-config-update\` to update this list.
+  */`;
+ 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
+ 				fs.writeFileSync(indexPath, indexContent);
+diff --git a/packages/config/index.ts b/packages/config/index.ts
+index 51648aa..e13d21c 100644
+--- a/packages/config/index.ts
++++ b/packages/config/index.ts
+@@ -1,4 +1,5 @@
+ export * from '@tsslint/types';
++export * from './lib/eslint.js';
+ export { create as createCategoryPlugin } from './lib/plugins/category.js';
+ export { create as createDiagnosticsPlugin } from './lib/plugins/diagnostics.js';
+ export { create as createIgnorePlugin } from './lib/plugins/ignore.js';
+@@ -20,19 +21,3 @@ export function defineConfig(config: Config | Config[]) {
+ export function isCLI() {
+ 	return !!process.env.TSSLINT_CLI;
+ }
+-
+-export async function importESLintRules(
+-	config: any,
+-	context?: any
+-) {
+-	const { defineRules } = await import('@tsslint/compat-eslint');
+-	return defineRules(config, context, 1);
+-}
+-
+-export async function importESLintWarningRules(
+-	config: any,
+-	context?: any
+-) {
+-	const { defineRules } = await import('@tsslint/compat-eslint');
+-	return defineRules(config, context, 0);
+-}
+diff --git a/packages/compat-eslint/lib/dtsGenerate.ts b/packages/config/lib/eslint-gen.ts
+similarity index 99%
+rename from packages/compat-eslint/lib/dtsGenerate.ts
+rename to packages/config/lib/eslint-gen.ts
+index f3d5ac5..c76ddb2 100644
+--- a/packages/compat-eslint/lib/dtsGenerate.ts
++++ b/packages/config/lib/eslint-gen.ts
+@@ -3,7 +3,7 @@ import * as path from 'path';
+ 
+ const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
+ 
+-export async function generate(
++export async function generateESlintTypes(
+ 	nodeModulesDirs: string[],
+ 	loader = async (mod: string) => {
+ 		try {
+diff --git a/packages/compat-eslint/lib/types.ts b/packages/config/lib/eslint-types.ts
+similarity index 100%
+rename from packages/compat-eslint/lib/types.ts
+rename to packages/config/lib/eslint-types.ts
+diff --git a/packages/config/lib/eslint.ts b/packages/config/lib/eslint.ts
+new file mode 100644
+index 0000000..1a25f9a
+--- /dev/null
++++ b/packages/config/lib/eslint.ts
+@@ -0,0 +1,139 @@
++import type * as TSSLint from '@tsslint/types';
++import type * as ESLint from 'eslint';
++import type * as ts from 'typescript';
++import type { ESLintRulesConfig } from './eslint-types.js';
++import * as path from 'path';
++import * as fs from 'fs';
++
++const noop = () => { };
++const plugins: Record<string, Promise<{
++	rules: Record<string, ESLint.Rule.RuleModule>;
++} | undefined>> = {};
++const loader = async (moduleName: string) => {
++	let mod: {} | undefined;
++	try {
++		mod ??= require(moduleName);
++	} catch { }
++	try {
++		mod ??= await import(moduleName);
++	} catch { }
++	if (mod && 'default' in mod) {
++		return mod.default;
++	}
++	return mod as any;
++};
++
++/**
++ * Converts an ESLint rules configuration to TSSLint rules.
++ *
++ * ---
++ * ⚠️ **Type definitions not generated**
++ *
++ * Please add `@tsslint/config` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
++ *
++ * ```json
++ * {
++ *   "pnpm": {
++ *     "onlyBuiltDependencies": ["@tsslint/config"]
++ *   }
++ * }
++ * ```
++ *
++ * After that, run `pnpm install` again to generate type definitions.
++ *
++ * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
++ */
++export async function importESLintRules(
++	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
++	context: Partial<ESLint.Rule.RuleContext> = {},
++	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
++) {
++	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
++	try {
++		({ convertRule } = await import('@tsslint/compat-eslint'));
++	} catch {
++		throw new Error('Please install @tsslint/compat-eslint to use importESLintRules().');
++	}
++
++	const rules: TSSLint.Rules = {};
++	for (const [rule, severityOrOptions] of Object.entries(config)) {
++		let severity: boolean;
++		let options: any[];
++		if (Array.isArray(severityOrOptions)) {
++			severity = true;
++			options = severityOrOptions;
++		}
++		else {
++			severity = severityOrOptions;
++			options = [];
++		}
++		if (!severity) {
++			rules[rule] = noop;
++			continue;
++		}
++		const ruleModule = await loadRuleByKey(rule);
++		if (!ruleModule) {
++			throw new Error(`Failed to resolve rule "${rule}".`);
++		}
++		rules[rule] = convertRule(
++			ruleModule,
++			options,
++			{ id: rule, ...context },
++			category,
++		);
++	}
++	return rules;
++}
++
++function* resolveRuleKey(rule: string): Generator<[
++	pluginName: string | undefined,
++	ruleName: string,
++]> {
++	const slashIndex = rule.indexOf('/');
++	if (slashIndex !== -1) {
++		let pluginName = rule.startsWith('@')
++			? `${rule.slice(0, slashIndex)}/eslint-plugin`
++			: `eslint-plugin-${rule.slice(0, slashIndex)}`;
++		let ruleName = rule.slice(slashIndex + 1);
++
++		yield [pluginName, ruleName];
++
++		if (ruleName.indexOf('/') >= 0) {
++			pluginName += `-${ruleName.slice(0, ruleName.indexOf('/'))}`;
++			ruleName = ruleName.slice(ruleName.indexOf('/') + 1);
++			yield [pluginName, ruleName];
++		}
++	}
++	else {
++		yield [undefined, rule];
++	}
++}
++
++async function loadRuleByKey(rule: string): Promise<ESLint.Rule.RuleModule | undefined> {
++	for (const resolved of resolveRuleKey(rule)) {
++		const ruleModule = await loadRule(...resolved);
++		if (ruleModule) {
++			return ruleModule;
++		}
++	}
++}
++
++async function loadRule(pluginName: string | undefined, ruleName: string): Promise<ESLint.Rule.RuleModule | undefined> {
++	if (pluginName) {
++		plugins[pluginName] ??= loader(pluginName);
++		const plugin = await plugins[pluginName];
++		return plugin?.rules[ruleName];
++	}
++	let dir = __dirname;
++	while (true) {
++		const rulePath = path.join(dir, 'node_modules', 'eslint', 'lib', 'rules', `${ruleName}.js`);
++		if (fs.existsSync(rulePath)) {
++			return loader(rulePath);
++		}
++		const parentDir = path.resolve(dir, '..');
++		if (parentDir === dir) {
++			break;
++		}
++		dir = parentDir;
++	}
++}
+diff --git a/packages/config/package.json b/packages/config/package.json
+index 287ddf5..2664c02 100644
+--- a/packages/config/package.json
++++ b/packages/config/package.json
+@@ -11,9 +11,24 @@
+ 		"url": "https://github.com/johnsoncodehk/tsslint.git",
+ 		"directory": "packages/config"
+ 	},
++	"scripts": {
++		"postinstall": "node bin/tsslint-config-update.js"
++	},
+ 	"dependencies": {
+ 		"@tsslint/types": "3.0.0-alpha.0",
+ 		"minimatch": "^10.0.1",
+ 		"ts-api-utils": "^2.0.0"
++	},
++	"peerDependencies": {
++		"@tsslint/compat-eslint": "3.0.0-alpha.0",
++		"@tsslint/compat-tslint": "3.0.0-alpha.0"
++	},
++	"peerDependenciesMeta": {
++		"@tsslint/compat-eslint": {
++			"optional": true
++		},
++		"@tsslint/compat-tslint": {
++			"optional": true
++		}
+ 	}
+ }
+\ No newline at end of file
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index e66a459..3c2ad49 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -29,24 +29,24 @@ importers:
+ 
+   fixtures/define-eslint-rules:
+     devDependencies:
++      '@tsslint/compat-eslint':
++        specifier: 3.0.0-alpha.0
++        version: link:../../packages/compat-eslint
+       '@tsslint/config':
+         specifier: 3.0.0-alpha.0
+         version: link:../../packages/config
+-      '@tsslint/eslint':
+-        specifier: 3.0.0-alpha.0
+-        version: link:../../packages/eslint
+       eslint-plugin-expect-type:
+         specifier: ^0.4.0
+         version: 0.4.3(@typescript-eslint/parser@8.53.0(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3))(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3)
+ 
+   fixtures/define-tslint-rules:
+     devDependencies:
++      '@tsslint/compat-tslint':
++        specifier: 3.0.0-alpha.0
++        version: link:../../packages/compat-tslint
+       '@tsslint/config':
+         specifier: 3.0.0-alpha.0
+         version: link:../../packages/config
+-      '@tsslint/tslint':
+-        specifier: 3.0.0-alpha.0
+-        version: link:../../packages/tslint
+       tslint:
+         specifier: ^6.1.3
+         version: 6.1.3(typescript@5.9.3)
+@@ -105,28 +105,7 @@ importers:
+         specifier: '*'
+         version: 5.9.3
+ 
+-  packages/config:
+-    dependencies:
+-      '@tsslint/types':
+-        specifier: 3.0.0-alpha.0
+-        version: link:../types
+-      minimatch:
+-        specifier: ^10.0.1
+-        version: 10.1.1
+-      ts-api-utils:
+-        specifier: ^2.0.0
+-        version: 2.4.0(typescript@5.9.3)
+-
+-  packages/core:
+-    dependencies:
+-      '@tsslint/types':
+-        specifier: 3.0.0-alpha.0
+-        version: link:../types
+-      minimatch:
+-        specifier: ^10.0.1
+-        version: 10.1.1
+-
+-  packages/eslint:
++  packages/compat-eslint:
+     dependencies:
+       '@typescript-eslint/parser':
+         specifier: ^8.16.0
+@@ -145,7 +124,7 @@ importers:
+         specifier: latest
+         version: 5.9.3
+ 
+-  packages/tslint:
++  packages/compat-tslint:
+     devDependencies:
+       '@tsslint/types':
+         specifier: 3.0.0-alpha.0
+@@ -157,6 +136,33 @@ importers:
+         specifier: latest
+         version: 5.9.3
+ 
++  packages/config:
++    dependencies:
++      '@tsslint/compat-eslint':
++        specifier: 3.0.0-alpha.0
++        version: link:../compat-eslint
++      '@tsslint/compat-tslint':
++        specifier: 3.0.0-alpha.0
++        version: link:../compat-tslint
++      '@tsslint/types':
++        specifier: 3.0.0-alpha.0
++        version: link:../types
++      minimatch:
++        specifier: ^10.0.1
++        version: 10.1.1
++      ts-api-utils:
++        specifier: ^2.0.0
++        version: 2.4.0(typescript@5.9.3)
++
++  packages/core:
++    dependencies:
++      '@tsslint/types':
++        specifier: 3.0.0-alpha.0
++        version: link:../types
++      minimatch:
++        specifier: ^10.0.1
++        version: 10.1.1
++
+   packages/types: {}
+ 
+   packages/typescript-plugin:
+diff --git a/tsconfig.json b/tsconfig.json
+index 94cf54d..5616cb0 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -6,8 +6,8 @@
+ 	"include": [ "tsslint.config.ts" ],
+ 	"references": [
+ 		{ "path": "./packages/cli/tsconfig.json" },
+-		{ "path": "./packages/tslint/tsconfig.json" },
+-		{ "path": "./packages/eslint/tsconfig.json" },
++		{ "path": "./packages/compat-tslint/tsconfig.json" },
++		{ "path": "./packages/compat-eslint/tsconfig.json" },
+ 		{ "path": "./packages/typescript-plugin/tsconfig.json" },
+ 	],
+ }
+\ No newline at end of file

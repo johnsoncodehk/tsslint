@@ -1,15 +1,22 @@
 {
-	"name": "@tsslint/tslint",
+	"name": "@tsslint/compat-tslint",
 	"version": "3.0.0-alpha.0",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
-		"**/*.d.ts"
+		"**/*.d.ts",
+		"bin"
 	],
+	"bin": {
+		"tsslint-tslint-update": "bin/tsslint-tslint-update.js"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
-		"directory": "packages/tslint"
+		"directory": "packages/compat-tslint"
+	},
+	"scripts": {
+		"postinstall": "node bin/tsslint-tslint-update.js"
 	},
 	"devDependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
