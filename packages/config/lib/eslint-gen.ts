@@ -8,10 +8,11 @@ export async function generateTSLintTypes(
 	loader = async (mod: string) => {
 		try {
 			return require(mod);
-		} catch {
+		}
+		catch {
 			return await import(mod);
 		}
-	}
+	},
 ) {
 	let indentLevel = 0;
 	let dts = '';
@@ -30,7 +31,10 @@ export async function generateTSLintTypes(
 			for (const ruleFile of ruleFiles) {
 				if (ruleFile.endsWith('Rule.js')) {
 					const camelCaseName = ruleFile.replace('Rule.js', '');
-					const ruleName = camelCaseName.replace(/[A-Z]/g, (c, i) => (i === 0 ? c.toLowerCase() : '-' + c.toLowerCase()));
+					const ruleName = camelCaseName.replace(
+						/[A-Z]/g,
+						(c, i) => (i === 0 ? c.toLowerCase() : '-' + c.toLowerCase()),
+					);
 					if (visited.has(ruleName)) {
 						continue;
 					}
