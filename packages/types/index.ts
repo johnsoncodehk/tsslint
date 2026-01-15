@@ -56,5 +56,5 @@ export interface Reporter {
 	withUnnecessary(): Reporter;
 	withFix(title: string, getChanges: () => FileTextChanges[]): Reporter;
 	withRefactor(title: string, getChanges: () => FileTextChanges[]): Reporter;
-	disableCache(): Reporter;
+	withoutCache(): Reporter;
 }

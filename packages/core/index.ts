@@ -273,7 +273,7 @@ export function createLinter(
 						}));
 						return this;
 					},
-					disableCache() {
+					withoutCache() {
 						if (cache) {
 							delete cache[1][currentRuleId];
 						}
