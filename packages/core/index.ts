@@ -215,17 +215,19 @@ export function createLinter(
 					},
 				};
 				let location: [Error, number] = [new Error(), 1];
+				let cachedObj: ts.DiagnosticWithLocation | undefined;
 
 				if (cache && !rule2Mode.get(currentRuleId)) {
-					cache[1][currentRuleId] ??= [false, []];
-					cache[1][currentRuleId][1].push({
+					cachedObj = {
 						...error,
 						file: undefined as any,
 						relatedInformation: error.relatedInformation?.map(info => ({
 							...info,
 							file: info.file ? { fileName: info.file.fileName } as any : undefined,
 						})),
-					});
+					};
+					cache[1][currentRuleId] ??= [false, []];
+					cache[1][currentRuleId][1].push(cachedObj);
 				}
 
 				let lintResult = lintResults.get(fileName);
@@ -275,8 +277,14 @@ export function createLinter(
 						return this;
 					},
 					withoutCache() {
-						if (cache) {
-							delete cache[1][currentRuleId];
+						if (cachedObj) {
+							const ruleCache = cache?.[1][currentRuleId];
+							if (ruleCache) {
+								const index = ruleCache[1].indexOf(cachedObj);
+								if (index >= 0) {
+									ruleCache[1].splice(index, 1);
+								}
+							}
 						}
 						return this;
 					},
