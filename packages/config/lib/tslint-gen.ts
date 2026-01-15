@@ -29,7 +29,10 @@ export async function generateTSLintTypes(
 		const tslintJsonPath = path.join(dir, 'tslint.json');
 		if (fs.existsSync(tslintJsonPath)) {
 			try {
-				const tslintJson = JSON.parse(fs.readFileSync(tslintJsonPath, 'utf8'));
+				let content = fs.readFileSync(tslintJsonPath, 'utf8');
+				// Simple comment removal
+				content = content.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+				const tslintJson = JSON.parse(content);
 				if (tslintJson.rulesDirectory) {
 					const dirs = Array.isArray(tslintJson.rulesDirectory)
 						? tslintJson.rulesDirectory
@@ -39,7 +42,7 @@ export async function generateTSLintTypes(
 					}
 				}
 			}
-			catch { }
+			catch {}
 			break;
 		}
 		const parentDir = path.resolve(dir, '..');
@@ -61,7 +64,8 @@ export async function generateTSLintTypes(
 					);
 					if (!visited.has(ruleName)) {
 						visited.add(ruleName);
-						line(`'${ruleName}'?: any[],`);
+						const rule: RuleConstructor = (await loader(path.join(rulesDir, ruleFile))).Rule;
+						addRule(ruleName, rule);
 						stats[dirName]++;
 					}
 				}
@@ -82,15 +86,10 @@ export async function generateTSLintTypes(
 						/[A-Z]/g,
 						(c, i) => (i === 0 ? c.toLowerCase() : '-' + c.toLowerCase()),
 					);
-					const rule: RuleConstructor = (await loader(path.join(tslintDir, ruleFile))).Rule;
-					if (!visited.has(ruleName) && rule) {
+					if (!visited.has(ruleName)) {
 						visited.add(ruleName);
-						line(`/**`);
-						if (rule.metadata?.description) {
-							line(` * ${rule.metadata.description}`);
-						}
-						line(` */`);
-						line(`'${ruleName}'?: any[],`);
+						const rule: RuleConstructor = (await loader(path.join(tslintDir, ruleFile))).Rule;
+						addRule(ruleName, rule);
 						stats['tslint']++;
 					}
 				}
@@ -102,6 +101,22 @@ export async function generateTSLintTypes(
 	line(`}`);
 
 	return { dts, stats };
+
+	function addRule(ruleName: string, rule: any) {
+		const metadata = rule?.metadata;
+		if (metadata) {
+			line(`/**`);
+			if (metadata.description) {
+				line(` * ${metadata.description.replace(/\*\//g, '* /')}`);
+			}
+			if (metadata.rationale) {
+				line(` *`);
+				line(` * ${metadata.rationale.replace(/\*\//g, '* /')}`);
+			}
+			line(` */`);
+		}
+		line(`'${ruleName}'?: any[],`);
+	}
 
 	function line(line: string) {
 		dts += indent(indentLevel) + line + '\n';
