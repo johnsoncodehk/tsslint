@@ -5,6 +5,7 @@ const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
 
 export async function generateTSLintTypes(
 	nodeModulesDirs: string[],
+	// @ts-expect-error
 	loader = async (mod: string) => {
 		try {
 			return require(mod);
