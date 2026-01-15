@@ -34,6 +34,12 @@ TSSLint integrates into `tsserver` via the TypeScript plugin system, leveraging 
   <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
 </p>
 
+### Framework Support (Vue, MDX, Astro, etc.)
+
+Since TSSLint operates directly within `tsserver`, it naturally supports any framework that integrates with the TypeScript plugin system.
+
+In editors like VSCode, when using extensions like **Vue Official (Volar)**, **MDX**, or **Astro**, these tools virtualize non-TypeScript files (like `.vue`, `.mdx`, or `.astro`) into virtual TypeScript source files for `tsserver`. Because TSSLint is a `tsserver` plugin, it can seamlessly access and lint the TypeScript code within these virtual files without any additional configuration.
+
 ## Getting Started
 
 ### 1. Install
