@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      tslint:
+        specifier: ^6.1.3
+        version: 6.1.3(typescript@5.9.3)
     devDependencies:
       '@lerna-lite/cli':
         specifier: latest
