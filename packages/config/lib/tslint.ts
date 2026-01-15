@@ -76,7 +76,10 @@ function getTSLintRulesDirectories(): string[] {
 		const tslintJsonPath = path.join(dir, 'tslint.json');
 		if (fs.existsSync(tslintJsonPath)) {
 			try {
-				const tslintJson = JSON.parse(fs.readFileSync(tslintJsonPath, 'utf8'));
+				let content = fs.readFileSync(tslintJsonPath, 'utf8');
+				// Remove comments
+				content = content.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+				const tslintJson = JSON.parse(content);
 				if (tslintJson.rulesDirectory) {
 					const rulesDirs = Array.isArray(tslintJson.rulesDirectory)
 						? tslintJson.rulesDirectory
@@ -86,7 +89,7 @@ function getTSLintRulesDirectories(): string[] {
 					}
 				}
 			}
-			catch {
+			catch (e) {
 				// Ignore parse errors
 			}
 			break;
@@ -102,9 +105,8 @@ function getTSLintRulesDirectories(): string[] {
 
 async function loadTSLintRule(ruleName: string, rulesDirectories: string[]): Promise<any | undefined> {
 	const camelCaseName = ruleName.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-	const ruleFileName = `${camelCaseName}Rule.js`;
+	const ruleFileName = `${camelCaseName.charAt(0).toUpperCase() + camelCaseName.slice(1)}Rule.js`;
 
-	// 1. Try directories from tslint.json
 	for (const rulesDir of rulesDirectories) {
 		const rulePath = path.resolve(rulesDir, ruleFileName);
 		if (fs.existsSync(rulePath)) {
@@ -113,7 +115,6 @@ async function loadTSLintRule(ruleName: string, rulesDirectories: string[]): Pro
 		}
 	}
 
-	// 2. Try TSLint core rules
 	let dir = __dirname;
 	while (true) {
 		const nodeModulesDir = path.join(dir, 'node_modules');
