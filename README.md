@@ -121,6 +121,13 @@ npx tsslint --project packages/*/tsconfig.json --vue-project apps/web/tsconfig.j
 
 # Using brace expansion for multiple patterns
 npx tsslint --project {tsconfig.json,packages/*/tsconfig.json,extensions/*/tsconfig.json}
+
+> [!NOTE]
+> The brace expansion pattern (`{a,b}`) is handled by your shell (e.g., bash, zsh) before the command is executed. The CLI receives a list of arguments.
+> 
+> For glob patterns (`*`), TSSLint uses an internal `glob` library to ensure cross-platform compatibility (especially on Windows) and to support advanced features like file watching, where the original pattern is needed.
+> 
+> **CLI Caching**: The CLI uses a file system cache to speed up subsequent runs. The cache files are stored in your operating system's temporary directory (`os.tmpdir()`) to avoid polluting your project's file system. The cache is automatically invalidated when the project's `tsslint.config.ts` or the CLI arguments change.
 ```
 
 > [!TIP]
