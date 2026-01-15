@@ -211,10 +211,14 @@ export function createLinter(
 					length: end - start,
 					source: 'tsslint',
 					get relatedInformation() {
-						return getRelatedInformations(location[0], location[1]);
+						return relatedInformation ??= getRelatedInformations(location[0], location[1]);
+					},
+					set relatedInformation(value) {
+						relatedInformation = value;
 					},
 				};
 				let location: [Error, number] = [new Error(), 1];
+				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
 				let cachedObj: ts.DiagnosticWithLocation | undefined;
 
 				if (cache && !rule2Mode.get(currentRuleId)) {
