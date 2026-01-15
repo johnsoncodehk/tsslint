@@ -18,7 +18,9 @@ function createIngorePlugin(pattern: RegExp) {
 		resolveDiagnostics(file, results) {
 			const comments = [...file.text.matchAll(pattern)];
 			const lines = new Set(comments.map(comment => file.getLineAndCharacterOfPosition(comment.index).line));
-			return results.filter(error => error.source !== 'tsslint' || !lines.has(file.getLineAndCharacterOfPosition(error.start).line - 1));
+			return results.filter(error =>
+				error.source !== 'tsslint' || !lines.has(file.getLineAndCharacterOfPosition(error.start).line - 1)
+			);
 		},
 	}));
 }

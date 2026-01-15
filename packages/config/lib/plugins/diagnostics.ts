@@ -11,10 +11,10 @@ export function create(mode: CheckMode | CheckMode[] = 'semantic'): Plugin {
 				const diags = mode === 'syntactic'
 					? program.getSyntacticDiagnostics(file)
 					: mode === 'semantic'
-						? program.getSemanticDiagnostics(file)
-						: mode === 'declaration'
-							? program.getDeclarationDiagnostics(file)
-							: [];
+					? program.getSemanticDiagnostics(file)
+					: mode === 'declaration'
+					? program.getDeclarationDiagnostics(file)
+					: [];
 				for (const diag of diags) {
 					diag.start ??= 0;
 					diag.length ??= 0;

@@ -138,17 +138,19 @@ async function setup(
 	languages: string[],
 	configFile: string,
 	_fileNames: string[],
-	_options: ts.CompilerOptions
+	_options: ts.CompilerOptions,
 ) {
 	const clack = await import('@clack/prompts');
 
 	let config: config.Config | config.Config[];
 	try {
 		config = (await import(url.pathToFileURL(configFile).toString())).default;
-	} catch (err) {
+	}
+	catch (err) {
 		if (err instanceof Error) {
 			clack.log.error(err.stack ?? err.message);
-		} else {
+		}
+		else {
 			clack.log.error(String(err));
 		}
 		return false;
@@ -158,7 +160,8 @@ async function setup(
 		if (!(key in originalHost)) {
 			// @ts-ignore
 			delete linterHost[key];
-		} else {
+		}
+		else {
 			// @ts-ignore
 			linterHost[key] = originalHost[key];
 		}
@@ -181,7 +184,7 @@ async function setup(
 				if (snapshot) {
 					language!.scripts.set(fileName, snapshot);
 				}
-			}
+			},
 		);
 		decorateLanguageServiceHost(ts, language, linterHost);
 
@@ -212,7 +215,7 @@ async function setup(
 		path.dirname(configFile),
 		config,
 		() => [],
-		linterSyntaxOnlyLanguageService
+		linterSyntaxOnlyLanguageService,
 	);
 
 	return true;
@@ -282,13 +285,16 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 			} as any,
 			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
 				...info,
-				file: info.file ? {
-					fileName: info.file.fileName,
-					text: getFileText(info.file.fileName),
-				} as any : undefined,
+				file: info.file
+					? {
+						fileName: info.file.fileName,
+						text: getFileText(info.file.fileName),
+					} as any
+					: undefined,
 			})),
 		}));
-	} else {
+	}
+	else {
 		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
 			...diagnostic,
 			file: {
@@ -297,10 +303,12 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 			} as any,
 			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
 				...info,
-				file: info.file ? {
-					fileName: info.file.fileName,
-					text: info.file.text,
-				} as any : undefined,
+				file: info.file
+					? {
+						fileName: info.file.fileName,
+						text: info.file.text,
+					} as any
+					: undefined,
 			})),
 		}));
 	}

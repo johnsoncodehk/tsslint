@@ -1,7 +1,7 @@
 {
-	"include": [ "fixture.*" ],
+	"include": ["fixture.*"],
 	"compilerOptions": {
 		"noEmit": true,
-		"allowImportingTsExtensions": true,
-	},
+		"allowImportingTsExtensions": true
+	}
 }

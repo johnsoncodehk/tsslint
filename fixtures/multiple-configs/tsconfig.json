@@ -1,7 +1,7 @@
 {
-	"include": [ "**/*" ],
+	"include": ["**/*"],
 	"compilerOptions": {
 		"noEmit": true,
-		"allowImportingTsExtensions": true,
-	},
+		"allowImportingTsExtensions": true
+	}
 }

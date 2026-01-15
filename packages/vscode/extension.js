@@ -1,22 +1,27 @@
-module.exports.activate = () => { };
-module.exports.deactivate = () => { };
+module.exports.activate = () => {};
+module.exports.deactivate = () => {};
 
 const vscode = require('vscode');
 const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
 if (tsExtension.isActive) {
 	vscode.window.showInformationMessage(
-		'TSSLint may not work properly if the TypeScript Language Features extension is activated first.' +
-		' Try restarting the Extension Host in VSCode, or let us know if you keep seeing this issue.',
+		'TSSLint may not work properly if the TypeScript Language Features extension is activated first.'
+			+ ' Try restarting the Extension Host in VSCode, or let us know if you keep seeing this issue.',
 		'Restart Extension Host',
-		'Report Issue'
+		'Report Issue',
 	).then(selection => {
 		if (selection === 'Restart Extension Host') {
 			vscode.commands.executeCommand('workbench.action.restartExtensionHost');
-		} else if (selection === 'Report Issue') {
-			vscode.commands.executeCommand('vscode.open', vscode.Uri.parse('https://github.com/johnsoncodehk/tsslint/issues/new'));
+		}
+		else if (selection === 'Report Issue') {
+			vscode.commands.executeCommand(
+				'vscode.open',
+				vscode.Uri.parse('https://github.com/johnsoncodehk/tsslint/issues/new'),
+			);
 		}
 	});
-} else {
+}
+else {
 	const extensionJsPath = require.resolve('./dist/extension.js', { paths: [tsExtension.extensionPath] });
 	const readFileSync = require('fs').readFileSync;
 
@@ -26,21 +31,24 @@ if (tsExtension.isActive) {
 			let text = readFileSync(...args);
 
 			// Fix DiagnosticCategory.Message display
-			text = text.replace('.category){case', '.category){case "message":return 2;case')
+			text = text.replace('.category){case', '.category){case "message":return 2;case');
 
 			// Patch getFixableDiagnosticsForContext
 			text = text.replace('t.has(e.code+"")', s => `(${s}||e.source==="tsslint")`);
 
 			// Support "Fix all"
-			for (const replaceText of [
-				'const i=new y(t,n,r);',
-				// VSCode 1.93.1 (#36)
-				'const i=new v(t,n,r)',
-			]) {
+			for (
+				const replaceText of [
+					'const i=new y(t,n,r);',
+					// VSCode 1.93.1 (#36)
+					'const i=new v(t,n,r)',
+				]
+			) {
 				if (!text.includes(replaceText)) {
 					continue;
 				}
-				text = text.replace(replaceText, s => s + `
+				text = text.replace(replaceText, s =>
+					s + `
 const vscode = require('vscode');
 vscode.languages.registerCodeActionsProvider(
 	e.semantic,
@@ -111,12 +119,15 @@ vscode.languages.registerCodeActionsProvider(
 	{
 		providedCodeActionKinds: [vscode.CodeActionKind.SourceFixAll.append('tsslint')],
 	}
-				);`)
+				);`);
 			}
 
 			// Ensure tsslint is the first plugin to be loaded, which fixes compatibility with "astro-build.astro-vscode"
 			const pluginName = require('./package.json').contributes.typescriptServerPlugins[0].name;
-			text = text.replace('"--globalPlugins",i.plugins', `"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="${pluginName}"?1:0)-(a.name==="${pluginName}"?1:0))`);
+			text = text.replace(
+				'"--globalPlugins",i.plugins',
+				`"--globalPlugins",i.plugins.sort((a,b)=>(b.name==="${pluginName}"?1:0)-(a.name==="${pluginName}"?1:0))`,
+			);
 
 			return text;
 		}

@@ -15,7 +15,8 @@ const plugin: ts.server.PluginModuleFactory = modules => {
 				if (info.project.projectKind === ts.server.ProjectKind.Configured) {
 					const tsconfig = info.project.getProjectName();
 					decorator = decorateLanguageService(ts, path.dirname(tsconfig), info);
-				} else {
+				}
+				else {
 					decorator = decorateLanguageService(ts, info.project.getCurrentDirectory(), info);
 				}
 				languageServiceDecorators.set(info.project, decorator);
@@ -33,7 +34,7 @@ export = plugin;
 function decorateLanguageService(
 	ts: typeof import('typescript'),
 	projectRoot: string,
-	info: ts.server.PluginCreateInfo
+	info: ts.server.PluginCreateInfo,
 ) {
 	const {
 		getSemanticDiagnostics,
@@ -90,7 +91,14 @@ function decorateLanguageService(
 		}
 		return getCombinedCodeFix(scope, fixId, formatOptions, preferences);
 	};
-	info.languageService.getApplicableRefactors = (fileName, positionOrRange, preferences, triggerReason, kind, includeInteractiveActions) => {
+	info.languageService.getApplicableRefactors = (
+		fileName,
+		positionOrRange,
+		preferences,
+		triggerReason,
+		kind,
+		includeInteractiveActions,
+	) => {
 		const start = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.pos;
 		const end = typeof positionOrRange === 'number' ? positionOrRange : positionOrRange.end;
 		const refactors = linter?.getRefactors(fileName, start, end) ?? [];
@@ -103,12 +111,28 @@ function decorateLanguageService(
 			},
 		];
 	};
-	info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments) => {
+	info.languageService.getEditsForRefactor = (
+		fileName,
+		formatOptions,
+		positionOrRange,
+		refactorName,
+		actionName,
+		preferences,
+		interactiveRefactorArguments,
+	) => {
 		const tsslintEdits = linter?.getRefactorEdits(fileName, actionName);
 		if (tsslintEdits) {
 			return { edits: tsslintEdits };
 		}
-		return getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments);
+		return getEditsForRefactor(
+			fileName,
+			formatOptions,
+			positionOrRange,
+			refactorName,
+			actionName,
+			preferences,
+			interactiveRefactorArguments,
+		);
 	};
 
 	return { update };
@@ -130,7 +154,6 @@ function decorateLanguageService(
 	}
 
 	async function update() {
-
 		const newConfigFile = ts.findConfigFile(projectRoot, ts.sys.fileExists, 'tsslint.config.ts');
 
 		if (newConfigFile !== configFile) {
@@ -161,7 +184,8 @@ function decorateLanguageService(
 					}
 					return [];
 				});
-			} catch (err) {
+			}
+			catch (err) {
 				config = undefined;
 				linter = undefined;
 				const prevLength = configFileDiagnostics.length;
@@ -188,7 +212,10 @@ function decorateLanguageService(
 	}
 }
 
-function createRelatedInformation(ts: typeof import('typescript'), stack: ErrorStackParser.StackFrame): ts.DiagnosticRelatedInformation | undefined {
+function createRelatedInformation(
+	ts: typeof import('typescript'),
+	stack: ErrorStackParser.StackFrame,
+): ts.DiagnosticRelatedInformation | undefined {
 	if (stack.fileName && stack.lineNumber !== undefined && stack.columnNumber !== undefined) {
 		let fileName = stack.fileName.replace(/\\/g, '/');
 		if (fileName.startsWith('file://')) {
@@ -206,8 +233,8 @@ function createRelatedInformation(ts: typeof import('typescript'), stack: ErrorS
 				[
 					text !== undefined,
 					mtime,
-					ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true)
-				]
+					ts.createSourceFile(fileName, text ?? '', ts.ScriptTarget.Latest, true),
+				],
 			);
 		}
 		const [exist, _mtime, relatedFile] = fsFiles.get(fileName)!;
@@ -215,7 +242,8 @@ function createRelatedInformation(ts: typeof import('typescript'), stack: ErrorS
 		if (exist) {
 			try {
 				pos = relatedFile.getPositionOfLineAndCharacter(stack.lineNumber - 1, stack.columnNumber - 1) ?? 0;
-			} catch { }
+			}
+			catch {}
 		}
 		return {
 			category: ts.DiagnosticCategory.Message,
