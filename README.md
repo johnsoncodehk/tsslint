@@ -15,20 +15,23 @@ TSSLint is a minimalist diagnostic extension interface built on the TypeScript L
 
 ## Motivation
 
-TSSLint was created to solve a specific pain point: **editor lag during "Auto Fix on Save"**.
+TSSLint is the **spiritual successor to TSLint**. We believe that **direct integration with native TypeScript APIs** is the most efficient way to lint TypeScript code.
 
-In large-scale TypeScript projects, traditional linters (like ESLint) often cause noticeable delays when performing auto-fixes on save, as they frequently need to re-initialize type-checking or run in separate processes. By running directly as a `tsserver` plugin and sharing the existing type-checking context, TSSLint provides near-instant diagnostics and fixes, ensuring a smooth and uninterrupted development experience.
+General-purpose linters like ESLint, while powerful, operate as separate processes and often need to re-initialize type-checking context. This leads to a significant pain point in large-scale projects: **editor lag during "Auto Fix on Save"**.
+
+TSSLint solves this by running directly as a `tsserver` plugin. By sharing the existing `TypeChecker` and operating on the native TypeScript AST (without ESTree/ES parser conversion), TSSLint provides **near-instant diagnostics and fixes**.
 
 ## Key Features
 
-*   **Zero Assumptions**: Comes with no built-in rules. It does not enforce any specific coding style or patterns, leaving full control to the developer.
-*   **High Performance**: Runs as a `tsserver` plugin, sharing the existing `TypeChecker` instance to avoid redundant parsing and type-checking.
-*   **Low Noise**: Violations are reported as "Message" diagnostics, ensuring they don't interfere with actual compiler errors or warnings.
-*   **Direct AST Access**: Rule authoring uses native TypeScript APIs directly, without unnecessary abstraction layers.
+*   **Project-Centric**: Treats the **Project (tsconfig)** as a first-class citizen, aligning with TypeScript's internal architecture for efficient cross-file type analysis and Monorepo support.
+*   **High Performance**: Runs as a `tsserver` plugin, sharing the existing `TypeChecker` to avoid redundant parsing and type-checking.
+*   **Zero Rules**: Comes with no built-in rules, giving full control to the developer.
+*   **Direct AST Access**: Rule authoring uses native TypeScript APIs directly.
+*   **Low Noise**: Violations are reported as "Message" diagnostics, avoiding interference with compiler errors.
 
 ## How It Works
 
-TSSLint integrates into `tsserver` via the TypeScript plugin system, leveraging the semantic information already computed by your editor.
+TSSLint integrates into `tsserver` via the TypeScript plugin system, leveraging the semantic information already computed by your editor. Operating at the project level ensures accurate and performant diagnostics.
 
 <p align="center">
   <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
@@ -36,9 +39,9 @@ TSSLint integrates into `tsserver` via the TypeScript plugin system, leveraging 
 
 ### Framework Support (Vue, MDX, Astro, etc.)
 
-Since TSSLint operates directly within `tsserver`, it naturally supports any framework that integrates with the TypeScript plugin system.
+Since TSSLint operates directly within `tsserver`, it supports any framework that integrates with the TypeScript plugin system.
 
-In editors like VSCode, when using extensions like **Vue Official (Volar)**, **MDX**, or **Astro**, these tools virtualize non-TypeScript files (like `.vue`, `.mdx`, or `.astro`) into virtual TypeScript source files for `tsserver`. Because TSSLint is a `tsserver` plugin, it can seamlessly access and lint the TypeScript code within these virtual files without any additional configuration.
+Tools like **Vue Official (Volar)**, **MDX**, or **Astro** virtualize non-TypeScript files into virtual TypeScript source files for `tsserver`. TSSLint seamlessly accesses and lints the TypeScript code within these virtual files without any additional configuration.
 
 <p align="center">
   <img src="architecture_v2.png" alt="TSSLint Framework Support Diagram" width="700">
@@ -54,7 +57,7 @@ npm install @tsslint/config --save-dev
 
 ### 2. Configure `tsslint.config.ts`
 
-A minimal configuration looks like this. For a complete, real-world example, see the [vuejs/language-tools tsslint.config.ts](https://github.com/vuejs/language-tools/blob/master/tsslint.config.ts).
+A minimal configuration looks like this. For a complete example, see the [vuejs/language-tools tsslint.config.ts](https://github.com/vuejs/language-tools/blob/master/tsslint.config.ts).
 
 ```ts
 import { defineConfig } from '@tsslint/config';
@@ -70,12 +73,7 @@ export default defineConfig({
 
 *   **VSCode**: 
     1. Install the [TSSLint extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
-    2. (Optional) If you encounter issues importing `tsslint.config.ts` due to Node.js version mismatches, you can configure `typescript.tsserver.nodePath` to point to a Node.js 23.6.0+ executable:
-       ```json
-       {
-         "typescript.tsserver.nodePath": "/path/to/node-23.6.0"
-       }
-       ```
+    2. (Optional) If you encounter issues importing `tsslint.config.ts` due to Node.js version mismatches, you can configure `typescript.tsserver.nodePath` to point to a Node.js 23.6.0+ executable.
 *   **Other Editors**: Configure TSSLint as a plugin in your `tsconfig.json`:
     ```json
     {
@@ -85,7 +83,9 @@ export default defineConfig({
     }
     ```
 
-## Rule Example
+## Rule Authoring
+
+### Rule Example
 
 ```ts
 // rules/no-debugger.ts
@@ -105,16 +105,16 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
-## Rule Caching Mechanism
+### Rule Caching Mechanism
 
-TSSLint's high performance is partly due to its intelligent caching strategy, which automatically distinguishes between **Syntax-Aware** and **Type-Aware** rules.
+TSSLint's high performance comes from its intelligent caching strategy, which automatically distinguishes between **Syntax-Aware** and **Type-Aware** rules.
 
-By default, all rule diagnostics are cached. However, the cache is automatically disabled for a rule in two specific scenarios:
+All rule diagnostics are cached by default. The cache is automatically disabled for a rule in two scenarios:
 
-1.  **Type-Aware Detection**: If a rule accesses the type-checking context via `RuleContext.program` (e.g., to check types, inheritance, or signatures), TSSLint automatically detects it as a Type-Aware rule. Since type information can change globally, the cache for this rule is automatically managed and potentially invalidated to ensure accuracy.
-2.  **Manual Exclusion**: A rule can explicitly prevent a specific diagnostic from being cached by calling `report().withoutCache()`. This is useful for diagnostics that rely on external factors (like file system checks or network status) that TSSLint cannot track.
+1.  **Type-Aware Detection**: If a rule accesses `RuleContext.program` (e.g., to check types), TSSLint detects it as Type-Aware. The cache for this rule is then automatically managed and invalidated to ensure accuracy.
+2.  **Manual Exclusion**: A rule can explicitly prevent a specific diagnostic from being cached by calling `report().withoutCache()`.
 
-This automatic differentiation allows TSSLint to maximize performance for simple syntax rules while maintaining correctness for complex type-aware rules.
+This automatic differentiation maximizes performance for simple syntax rules while maintaining correctness for complex type-aware rules.
 
 ## CLI Usage
 
@@ -132,19 +132,12 @@ npx tsslint --project packages/*/tsconfig.json --vue-project apps/web/tsconfig.j
 
 # Using brace expansion for multiple patterns
 npx tsslint --project {tsconfig.json,packages/*/tsconfig.json,extensions/*/tsconfig.json}
-
-> [!NOTE]
-> The brace expansion pattern (`{a,b}`) is handled by your shell (e.g., bash, zsh) before the command is executed. The CLI receives a list of arguments.
-> 
-> For glob patterns (`*`), TSSLint uses an internal `glob` library to ensure cross-platform compatibility (especially on Windows) and to support advanced features like file watching, where the original pattern is needed.
-> 
-> **CLI Caching**: The CLI uses a file system cache to speed up subsequent runs. The cache files are stored in your operating system's temporary directory (`os.tmpdir()`) to avoid polluting your project's file system. The cache is automatically invalidated when the project's `tsslint.config.ts`, the CLI arguments, or the TSSLint version changes.
 ```
 
 > [!TIP]
 > TSSLint focuses on diagnostic fixes and does not include a built-in formatter. It is recommended to run a dedicated formatter like **Prettier**, **dprint**, or **oxfmt** after running TSSLint with `--fix`.
 
-## Extensions
+## Extensions & Ecosystem
 
 ### Ignoring Rules
 ```ts
