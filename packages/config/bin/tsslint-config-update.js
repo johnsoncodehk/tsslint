@@ -72,7 +72,7 @@ try {
 
 			if (jsDocStart !== -1 && jsDocEnd !== -1 && jsDocStart < fnIndex) {
 				const statsTable = [
-					'| Plugin | Rules |',
+					'| Dir | Rules |',
 					'| :--- | :--- |',
 					...Object.entries(stats)
 						.filter(([_, count]) => count > 0)
