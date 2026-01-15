@@ -2,5 +2,7 @@
 	"include": [ "fixture.ts" ],
 	"compilerOptions": {
 		"plugins": [{ "name": "@tsslint/typescript-plugin" }],
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
 	},
 }
