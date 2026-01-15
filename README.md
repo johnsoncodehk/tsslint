@@ -190,15 +190,36 @@ import { defineConfig, importESLintRules } from '@tsslint/config';
 export default defineConfig({
   rules: {
     ...await importESLintRules({
-      'no-unused-vars': 'error',
-      '@typescript-eslint/no-explicit-any': 'warn',
+      'no-unused-vars': true,
+      '@typescript-eslint/no-explicit-any': true,
     }),
   },
 });
 ```
 
+`importESLintRules` will automatically resolve and load rules from ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`) by searching your `node_modules`. Plugin rules are identified by their prefix (e.g., `@typescript-eslint/`).
+
 #### TSLint
 Convert TSLint rules via `@tsslint/compat-tslint`.
+
+```bash
+npm install @tsslint/compat-tslint --save-dev
+```
+
+```ts
+import { defineConfig, importTSLintRules } from '@tsslint/config';
+
+export default defineConfig({
+  rules: {
+    ...await importTSLintRules({
+      'no-console': true,
+      'member-ordering': [true, { order: 'fields-first' }],
+    }),
+  },
+});
+```
+
+`importTSLintRules` will automatically read `rulesDirectory` from your `tslint.json` to support third-party TSLint plugins.
 
 #### TSL
 Convert TSL rules via `@tsslint/compat-tsl`.

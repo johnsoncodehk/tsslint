@@ -30,10 +30,11 @@ const loader = async (moduleName: string) => {
 	return mod as any;
 };
 
+type Severity = boolean | 'error' | 'warn';
+
 /**
  * Converts an ESLint rules configuration to TSSLint rules.
  *
- * ---
  * ⚠️ **Type definitions not generated**
  *
  * Please add `@tsslint/config` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
@@ -51,9 +52,8 @@ const loader = async (moduleName: string) => {
  * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
  */
 export async function importESLintRules(
-	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
+	config: { [K in keyof ESLintRulesConfig]: Severity | [Severity, ESLintRulesConfig[K]] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ) {
 	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
 	try {
@@ -65,11 +65,10 @@ export async function importESLintRules(
 
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(config)) {
-		let severity: boolean;
+		let severity: Severity;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
-			severity = true;
-			options = severityOrOptions;
+			[severity, ...options] = severityOrOptions;
 		}
 		else {
 			severity = severityOrOptions;
@@ -87,7 +86,11 @@ export async function importESLintRules(
 			ruleModule,
 			options,
 			{ id: rule, ...context },
-			category,
+			severity === 'error'
+				? 1 satisfies ts.DiagnosticCategory.Error
+				: severity === 'warn'
+				? 0 satisfies ts.DiagnosticCategory.Warning
+				: 3 satisfies ts.DiagnosticCategory.Message,
 		);
 	}
 	return rules;
