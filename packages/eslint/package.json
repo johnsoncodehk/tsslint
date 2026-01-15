@@ -16,7 +16,7 @@
 		"directory": "packages/eslint"
 	},
 	"scripts": {
-		"postinstall": "node scripts/generateDts.js"
+		"postinstall": "node bin/tsslint-eslint-update.js"
 	},
 	"devDependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
