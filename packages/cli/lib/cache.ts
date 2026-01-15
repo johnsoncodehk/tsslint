@@ -5,6 +5,8 @@ import os = require('os');
 
 export type CacheData = Record<string /* fileName */, core.FileLintCache>;
 
+const pkg = require('../package.json');
+
 export function loadCache(
 	tsconfig: string,
 	configFilePath: string,
@@ -41,5 +43,5 @@ export function saveCache(
 function getTsslintCachePath(configFilePath: string, createHash: (path: string) => string): string {
 	const projectRoot = path.resolve(configFilePath, '..');
 	const projectHash = createHash(projectRoot);
-	return path.join(os.tmpdir(), 'tsslint-cache-' + projectHash);
+	return path.join(os.tmpdir(), 'tsslint-cache-' + pkg.version + '-' + projectHash);
 }

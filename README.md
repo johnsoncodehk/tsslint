@@ -138,7 +138,7 @@ npx tsslint --project {tsconfig.json,packages/*/tsconfig.json,extensions/*/tscon
 > 
 > For glob patterns (`*`), TSSLint uses an internal `glob` library to ensure cross-platform compatibility (especially on Windows) and to support advanced features like file watching, where the original pattern is needed.
 > 
-> **CLI Caching**: The CLI uses a file system cache to speed up subsequent runs. The cache files are stored in your operating system's temporary directory (`os.tmpdir()`) to avoid polluting your project's file system. The cache is automatically invalidated when the project's `tsslint.config.ts` or the CLI arguments change.
+> **CLI Caching**: The CLI uses a file system cache to speed up subsequent runs. The cache files are stored in your operating system's temporary directory (`os.tmpdir()`) to avoid polluting your project's file system. The cache is automatically invalidated when the project's `tsslint.config.ts`, the CLI arguments, or the TSSLint version changes.
 ```
 
 > [!TIP]
