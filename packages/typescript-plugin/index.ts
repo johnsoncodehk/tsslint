@@ -144,11 +144,9 @@ function decorateLanguageService(
 			}
 
 			const projectContext: LinterContext = {
-				languageServiceHost: info.languageServiceHost,
-				languageService: info.languageService,
+				...info,
 				typescript: ts,
 			};
-
 
 			try {
 				config = (await import(configFile)).default;
