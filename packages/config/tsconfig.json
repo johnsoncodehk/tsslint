@@ -2,6 +2,9 @@
 	"extends": "../../tsconfig.base.json",
 	"include": ["*", "lib/**/*"],
 	"references": [
-		{ "path": "../types" }
+		{ "path": "../compat-eslint" },
+		{ "path": "../compat-tslint" },
+		{ "path": "../compat-tsl" },
+		{ "path": "../types" },
 	]
 }

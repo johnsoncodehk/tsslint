@@ -127,6 +127,15 @@ importers:
         specifier: latest
         version: 5.9.3
 
+  packages/compat-tsl:
+    devDependencies:
+      '@tsslint/types':
+        specifier: 3.0.0-alpha.0
+        version: link:../types
+      typescript:
+        specifier: latest
+        version: 5.9.3
+
   packages/compat-tslint:
     devDependencies:
       '@tsslint/types':
@@ -144,6 +153,9 @@ importers:
       '@tsslint/compat-eslint':
         specifier: 3.0.0-alpha.0
         version: link:../compat-eslint
+      '@tsslint/compat-tsl':
+        specifier: 3.0.0-alpha.0
+        version: link:../compat-tsl
       '@tsslint/compat-tslint':
         specifier: 3.0.0-alpha.0
         version: link:../compat-tslint
