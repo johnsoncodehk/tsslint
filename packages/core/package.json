@@ -17,8 +17,5 @@
 	"dependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
 		"minimatch": "^10.0.1"
-	},
-	"scripts": {
-		"postinstall": "node scripts/cleanCache.js"
 	}
 }
