@@ -20,3 +20,19 @@ export function defineConfig(config: Config | Config[]) {
 export function isCLI() {
 	return !!process.env.TSSLINT_CLI;
 }
+
+export async function importESLintRules(
+	config: any,
+	context?: any
+) {
+	const { defineRules } = await import('@tsslint/compat-eslint');
+	return defineRules(config, context, 1);
+}
+
+export async function importESLintWarningRules(
+	config: any,
+	context?: any
+) {
+	const { defineRules } = await import('@tsslint/compat-eslint');
+	return defineRules(config, context, 0);
+}

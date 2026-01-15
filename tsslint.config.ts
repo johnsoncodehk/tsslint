@@ -1,8 +1,7 @@
-import { defineConfig } from '@tsslint/config';
-import { defineRules } from '@tsslint/eslint';
+import { defineConfig, importESLintRules } from '@tsslint/config';
 
 export default defineConfig({
-	rules: await defineRules({
+	rules: await importESLintRules({
 		'@typescript-eslint/consistent-type-imports': [{
 			disallowTypeAnnotations: false,
 			fixStyle: 'inline-type-imports',
