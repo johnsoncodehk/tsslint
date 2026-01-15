@@ -10,6 +10,7 @@
 	"sponsor": {
 		"url": "https://github.com/sponsors/johnsoncodehk"
 	},
+	"icon": "icon.png",
 	"main": "./extension.js",
 	"displayName": "TSSLint",
 	"description": "The TSSLint VSCode Extension",
@@ -28,6 +29,11 @@
 				"enableForWorkspaceTypeScriptVersions": true
 			}
 		]
+	},
+	"scripts": {
+		"vscode:prepublish": "rm -rf node_modules && npm install --no-package-lock",
+		"pack": "vsce package && rm -rf node_modules && pnpm install",
+		"publish": "vsce publish && rm -rf node_modules && pnpm install"
 	},
 	"dependencies": {
 		"@tsslint/typescript-plugin": "3.0.0-alpha.0"
