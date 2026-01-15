@@ -105,6 +105,17 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
+## Rule Caching Mechanism
+
+TSSLint's high performance is partly due to its intelligent caching strategy, which automatically distinguishes between **Syntax-Aware** and **Type-Aware** rules.
+
+By default, all rule diagnostics are cached. However, the cache is automatically disabled for a rule in two specific scenarios:
+
+1.  **Type-Aware Detection**: If a rule accesses the type-checking context via `RuleContext.program` (e.g., to check types, inheritance, or signatures), TSSLint automatically detects it as a Type-Aware rule. Since type information can change globally, the cache for this rule is automatically managed and potentially invalidated to ensure accuracy.
+2.  **Manual Exclusion**: A rule can explicitly prevent a specific diagnostic from being cached by calling `report().withoutCache()`. This is useful for diagnostics that rely on external factors (like file system checks or network status) that TSSLint cannot track.
+
+This automatic differentiation allows TSSLint to maximize performance for simple syntax rules while maintaining correctness for complex type-aware rules.
+
 ## CLI Usage
 
 The `@tsslint/cli` package provides a command-line tool for CI/CD and build processes.
