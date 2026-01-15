@@ -57,8 +57,7 @@ export async function generateTSLintTypes(
 	for (const [rawDir, rulesDir] of rulesDirectories) {
 		if (fs.existsSync(rulesDir)) {
 			const ruleFiles = fs.readdirSync(rulesDir);
-			const dirName = path.basename(rulesDir);
-			stats[dirName] = 0;
+			stats[rawDir] = 0;
 			for (const ruleFile of ruleFiles) {
 				if (ruleFile.endsWith('Rule.js') || ruleFile.endsWith('Rule.ts')) {
 					const camelCaseName = ruleFile.slice(0, -'Rule.js'.length);
@@ -71,11 +70,11 @@ export async function generateTSLintTypes(
 						try {
 							const rule: RuleConstructor = (await loader(path.join(rulesDir, ruleFile))).Rule;
 							addRule(ruleName, rule.metadata, rawDir);
-							stats[dirName]++;
+							stats[rawDir]++;
 						}
 						catch (e) {
 							addRule(ruleName, undefined, rawDir, e);
-							stats[dirName]++;
+							stats[rawDir]++;
 						}
 					}
 				}

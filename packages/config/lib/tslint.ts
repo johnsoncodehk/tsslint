@@ -9,7 +9,6 @@ const noop = () => {};
 /**
  * Converts a TSLint rules configuration to TSSLint rules.
  *
- * ---
  * ⚠️ **Type definitions not generated**
  *
  * Please add `@tsslint/config` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.

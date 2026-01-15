@@ -53,7 +53,6 @@ try {
  *
  * ${statsTable}
  *
- * ---
  * If you have added new ESLint plugins, please run \`npx tsslint-config-update\` to update this list.
  */`;
 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
@@ -86,7 +85,6 @@ try {
  *
  * ${statsTable}
  *
- * ---
  * If you have added new TSLint plugins, please run \`npx tsslint-config-update\` to update this list.
  */`;
 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
