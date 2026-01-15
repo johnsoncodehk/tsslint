@@ -44,10 +44,11 @@ export interface RuleContext {
 	typescript: typeof import('typescript');
 	program: Program;
 	file: SourceFile;
-	report(message: string, start: number, end: number, reportAt?: [Error, number]): Reporter;
+	report(message: string, start: number, end: number): Reporter;
 }
 
 export interface Reporter {
+	at(err: Error, stackIndex: number): Reporter;
 	asWarning(): Reporter;
 	asError(): Reporter;
 	asSuggestion(): Reporter;

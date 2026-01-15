@@ -25,8 +25,8 @@ export function convertRule(
 				failure.getFailure(),
 				failure.getStartPosition().getPosition(),
 				failure.getEndPosition().getPosition(),
-				[new Error(), Number.MAX_VALUE]
-			);
+			).at(new Error(), Number.MAX_VALUE);
+
 			if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
 				reporter.asWarning();
 			}
@@ -36,6 +36,7 @@ export function convertRule(
 			else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
 				reporter.asSuggestion();
 			}
+
 			if (failure.hasFix()) {
 				const ruleName = Rule.metadata?.ruleName;
 				reporter.withFix(

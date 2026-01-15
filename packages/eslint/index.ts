@@ -249,7 +249,8 @@ export function convertRule(
 						}
 					}
 				} catch { }
-				const reporter = report(message, start, end, [new Error(), 1]);
+				const reporter = report(message, start, end).at(new Error(), 1);
+
 				if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
 					reporter.asWarning();
 				}
@@ -259,6 +260,7 @@ export function convertRule(
 				else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
 					reporter.asSuggestion();
 				}
+
 				if (descriptor.fix) {
 					// @ts-expect-error
 					const textChanges = getTextChanges(descriptor.fix);
