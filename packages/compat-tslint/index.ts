@@ -16,7 +16,14 @@ export function convertRule(
 		ruleSeverity: 'warning',
 		disabledIntervals: [],
 	}) as IRule | ITypedRule;
-	return ({ file, report, ...ctx }) => {
+	return ({ typescript: ts, file, report, ...ctx }) => {
+		if (Rule.metadata?.typescriptOnly) {
+			const scriptKind = (file as any).scriptKind;
+			if (scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX) {
+				return;
+			}
+		}
+
 		const failures = 'applyWithProgram' in rule
 			? rule.applyWithProgram(file, ctx.program)
 			: rule.apply(file);

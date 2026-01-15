@@ -23,8 +23,5 @@
 		"@typescript-eslint/eslint-plugin": "latest",
 		"dprint": "latest",
 		"typescript": "latest"
-	},
-	"dependencies": {
-		"tslint": "^6.1.3"
 	}
 }

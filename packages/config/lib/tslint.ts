@@ -59,7 +59,7 @@ export async function importTSLintRules(
 		if (!ruleModule) {
 			throw new Error(`Failed to resolve TSLint rule "${ruleName}".`);
 		}
-		const tsslintRule = convertRule(
+		rules[ruleName] = convertRule(
 			ruleModule,
 			options,
 			severity === 'error'
@@ -68,21 +68,6 @@ export async function importTSLintRules(
 				? 0 satisfies ts.DiagnosticCategory.Warning
 				: 3 satisfies ts.DiagnosticCategory.Message,
 		);
-		if (ruleModule.metadata?.typescriptOnly) {
-			rules[ruleName] = context => {
-				const scriptKind = context.file.scriptKind;
-				if (
-					scriptKind === context.typescript.ScriptKind.JS
-					|| scriptKind === context.typescript.ScriptKind.JSX
-				) {
-					return;
-				}
-				return tsslintRule(context);
-			};
-		}
-		else {
-			rules[ruleName] = tsslintRule;
-		}
 	}
 	return rules;
 }
