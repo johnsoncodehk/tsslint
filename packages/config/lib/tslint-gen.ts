@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { RuleConstructor } from 'tslint';
+import type { IRuleMetadata, RuleConstructor } from 'tslint';
 
 const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
 
@@ -28,7 +28,7 @@ export async function generateTSLintTypes(
 
 	// 1. Scan directories from tslint.json
 	let dir = process.cwd();
-	const rulesDirectories: string[] = [];
+	const rulesDirectories: [string, string][] = [];
 	while (true) {
 		const tslintJsonPath = path.join(dir, 'tslint.json');
 		if (fs.existsSync(tslintJsonPath)) {
@@ -42,7 +42,7 @@ export async function generateTSLintTypes(
 						? tslintJson.rulesDirectory
 						: [tslintJson.rulesDirectory];
 					for (const d of dirs) {
-						rulesDirectories.push(path.resolve(dir, d));
+						rulesDirectories.push([d, path.resolve(dir, d)]);
 					}
 				}
 			}
@@ -54,23 +54,29 @@ export async function generateTSLintTypes(
 		dir = parentDir;
 	}
 
-	for (const rulesDir of rulesDirectories) {
+	for (const [rawDir, rulesDir] of rulesDirectories) {
 		if (fs.existsSync(rulesDir)) {
 			const ruleFiles = fs.readdirSync(rulesDir);
 			const dirName = path.basename(rulesDir);
 			stats[dirName] = 0;
 			for (const ruleFile of ruleFiles) {
-				if (ruleFile.endsWith('Rule.js')) {
-					const camelCaseName = ruleFile.replace('Rule.js', '');
+				if (ruleFile.endsWith('Rule.js') || ruleFile.endsWith('Rule.ts')) {
+					const camelCaseName = ruleFile.slice(0, -'Rule.js'.length);
 					const ruleName = camelCaseName.replace(
 						/[A-Z]/g,
 						(c, i) => (i === 0 ? c.toLowerCase() : '-' + c.toLowerCase()),
 					);
 					if (!visited.has(ruleName)) {
 						visited.add(ruleName);
-						const rule: RuleConstructor = (await loader(path.join(rulesDir, ruleFile))).Rule;
-						addRule(ruleName, rule);
-						stats[dirName]++;
+						try {
+							const rule: RuleConstructor = (await loader(path.join(rulesDir, ruleFile))).Rule;
+							addRule(ruleName, rule.metadata, rawDir);
+							stats[dirName]++;
+						}
+						catch (e) {
+							addRule(ruleName, undefined, rawDir, e);
+							stats[dirName]++;
+						}
 					}
 				}
 			}
@@ -93,7 +99,7 @@ export async function generateTSLintTypes(
 					if (!visited.has(ruleName)) {
 						visited.add(ruleName);
 						const rule: RuleConstructor = (await loader(path.join(tslintDir, ruleFile))).Rule;
-						addRule(ruleName, rule);
+						addRule(ruleName, rule.metadata);
 						stats['tslint']++;
 					}
 				}
@@ -111,38 +117,59 @@ export async function generateTSLintTypes(
 
 	return { dts, stats };
 
-	function addRule(ruleName: string, rule: any) {
-		const metadata = rule?.metadata;
-		if (metadata) {
+	function addRule(ruleName: string, metadata: IRuleMetadata | undefined, rulesDir?: string, error?: any) {
+		if (metadata || rulesDir || error) {
 			line(`/**`);
-			if (metadata.description) {
-				line(` * ${metadata.description.replace(/\*\//g, '* /')}`);
+			if (rulesDir) {
+				line(` * @rulesDirectory ${rulesDir}`);
 			}
-			if (metadata.rationale) {
-				line(` *`);
-				line(` * ${metadata.rationale.replace(/\*\//g, '* /')}`);
+			if (error) {
+				line(` * @error ${error.message || error.toString()}`);
 			}
-			if (metadata.optionsDescription) {
-				line(` *`);
-				line(` * @description ${metadata.optionsDescription.replace(/\*\//g, '* /')}`);
-			}
-			if (metadata.options) {
-				line(` *`);
-				line(` * @options ${JSON.stringify(metadata.options).replace(/\*\//g, '* /')}`);
-			}
-			if (metadata.optionExamples) {
-				line(` *`);
-				line(` * @example`);
-				const examples = Array.isArray(metadata.optionExamples) ? metadata.optionExamples : [metadata.optionExamples];
-				for (const example of examples) {
-					line(` * ${JSON.stringify(example).replace(/\*\//g, '* /')}`);
+			if (metadata?.description) {
+				for (const lineText of metadata.description.trim().split('\n')) {
+					line(` * ${lineText.replace(/\*\//g, '* /')}`);
 				}
 			}
-			if (metadata.type) {
+			if (metadata?.descriptionDetails) {
+				line(` *`);
+				for (const lineText of metadata.descriptionDetails.trim().split('\n')) {
+					line(` * ${lineText.replace(/\*\//g, '* /')}`);
+				}
+			}
+			if (metadata?.rationale) {
+				line(` *`);
+				line(` * @rationale`);
+				for (const lineText of metadata.rationale.trim().split('\n')) {
+					line(` * ${lineText.replace(/\*\//g, '* /')}`);
+				}
+			}
+			if (metadata?.optionsDescription) {
+				line(` *`);
+				line(` * @options`);
+				for (const lineText of metadata.optionsDescription.trim().split('\n')) {
+					line(` * ${lineText.replace(/\*\//g, '* /')}`);
+				}
+			}
+			if (metadata?.optionExamples) {
+				line(` *`);
+				line(` * @example`);
+				for (const example of metadata.optionExamples) {
+					if (typeof example === 'string') {
+						for (const lineText of example.trim().split('\n')) {
+							line(` * ${lineText.replace(/\*\//g, '* /')}`);
+						}
+					}
+					else {
+						line(` * ${JSON.stringify(ruleName)}: ${JSON.stringify(example)}`);
+					}
+				}
+			}
+			if (metadata?.type) {
 				line(` *`);
 				line(` * @type ${metadata.type}`);
 			}
-			if (metadata.typescriptOnly) {
+			if (metadata?.typescriptOnly) {
 				line(` *`);
 				line(` * @typescriptOnly`);
 			}
