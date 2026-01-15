@@ -224,6 +224,22 @@ export default defineConfig({
 #### TSL
 Convert TSL rules via `@tsslint/compat-tsl`.
 
+```bash
+npm install @tsslint/compat-tsl --save-dev
+```
+
+```ts
+import { defineConfig, importTSLRules } from '@tsslint/config';
+
+export default defineConfig({
+  rules: {
+    ...await importTSLRules({
+      'tsl/no-console': 'error',
+    }),
+  },
+});
+```
+
 ## Technical Notes
 
 *   **Node.js**: Requires 22.6.0+ (v3.0+).
