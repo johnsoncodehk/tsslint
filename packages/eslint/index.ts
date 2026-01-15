@@ -261,7 +261,18 @@ export function convertRule(
 						}
 					}
 				} catch { }
-				const reporter = report(message, start, end, category, [new Error(), 1]);
+				const reporter = report(message, start, end).at(new Error(), 1);
+
+				if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
+					reporter.asWarning();
+				}
+				else if (category === 1 satisfies ts.DiagnosticCategory.Error) {
+					reporter.asError();
+				}
+				else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
+					reporter.asSuggestion();
+				}
+
 				if (descriptor.fix) {
 					// @ts-expect-error
 					const textChanges = getTextChanges(descriptor.fix);

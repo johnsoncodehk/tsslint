@@ -152,15 +152,16 @@ function decorateLanguageService(
 
 			try {
 				config = (await import(configFile)).default;
-				linter = core.createLinter(projectContext, path.dirname(configFile), config!, (diag, reportAt) => {
-					const stacks = ErrorStackParser.parse(reportAt[0]);
-					if (stacks.length <= reportAt[1]) {
-						return;
+				linter = core.createLinter(projectContext, path.dirname(configFile), config!, (err, stackIndex) => {
+					const stacks = ErrorStackParser.parse(err);
+					if (stacks.length <= stackIndex) {
+						return [];
 					}
-					const relatedInfo = createRelatedInformation(ts, stacks[reportAt[1]]);
+					const relatedInfo = createRelatedInformation(ts, stacks[stackIndex]);
 					if (relatedInfo) {
-						diag.relatedInformation!.push(relatedInfo);
+						return [relatedInfo];
 					}
+					return [];
 				});
 			} catch (err) {
 				config = undefined;

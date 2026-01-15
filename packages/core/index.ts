@@ -26,7 +26,7 @@ export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
-	handleError: (diag: ts.DiagnosticWithLocation, reportAt: [Error, number]) => void,
+	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
 	syntaxOnlyLanguageService?: ts.LanguageService & {
 		getNonBoundSourceFile?(fileName: string): ts.SourceFile;
 	}
@@ -139,9 +139,9 @@ export function createLinter(
 						rule2Mode.set(currentRuleId, true);
 						shouldRetry = true;
 					} else if (err instanceof Error) {
-						report(err.stack ?? err.message, 0, 0, ts.DiagnosticCategory.Message, [err, 0]);
+						report(err.stack ?? err.message, 0, 0).at(err, 0);
 					} else {
-						report(String(err), 0, 0, ts.DiagnosticCategory.Message, [new Error(), Number.MAX_VALUE]);
+						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
 					}
 				}
 
@@ -201,17 +201,20 @@ export function createLinter(
 
 			return diagnostics;
 
-			function report(message: string, start: number, end: number, category: ts.DiagnosticCategory = ts.DiagnosticCategory.Message, reportAt: [Error, number] = [new Error(), 1]): Reporter {
+			function report(message: string, start: number, end: number): Reporter {
 				const error: ts.DiagnosticWithLocation = {
-					category,
+					category: ts.DiagnosticCategory.Message,
 					code: currentRuleId as any,
 					messageText: message,
 					file: rulesContext.file,
 					start,
 					length: end - start,
 					source: 'tsslint',
-					relatedInformation: [],
+					get relatedInformation() {
+						return getRelatedInformations(location[0], location[1]);
+					},
 				};
+				let location: [Error, number] = [new Error(), 1];
 
 				if (cache && !rule2Mode.get(currentRuleId)) {
 					cache[1][currentRuleId] ??= [false, []];
@@ -225,8 +228,6 @@ export function createLinter(
 					});
 				}
 
-				handleError(error, reportAt);
-
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
 					lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
@@ -237,6 +238,22 @@ export function createLinter(
 				const fixes = diagnostic2Fixes.get(error)!;
 
 				return {
+					at(err, stack) {
+						location = [err, stack];
+						return this;
+					},
+					asWarning() {
+						error.category = ts.DiagnosticCategory.Warning;
+						return this;
+					},
+					asError() {
+						error.category = ts.DiagnosticCategory.Error;
+						return this;
+					},
+					asSuggestion() {
+						error.category = ts.DiagnosticCategory.Suggestion;
+						return this;
+					},
 					withDeprecated() {
 						error.reportsDeprecated = true;
 						return this;

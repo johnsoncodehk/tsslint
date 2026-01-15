@@ -211,7 +211,7 @@ async function setup(
 		},
 		path.dirname(configFile),
 		config,
-		() => { },
+		() => [],
 		linterSyntaxOnlyLanguageService
 	);
 
