@@ -23,13 +23,10 @@ TSSLint solves this by running directly as a `tsserver` plugin. By sharing the e
 
 ## Key Features
 
-*   **Project-Centric**: Treats the **Project (tsconfig)** as a first-class citizen, aligning with TypeScript's internal architecture for efficient cross-file type analysis and Monorepo support.
-*   **High Performance**: Runs as a `tsserver` plugin, sharing the existing `TypeChecker` to avoid redundant parsing and type-checking.
-*   **Zero Rules**: Comes with no built-in rules, giving full control to the developer.
-*   **Minimalist Implementation**: Extremely small codebase by leveraging existing TypeScript infrastructure.
-*   **Direct AST Access**: Rule authoring uses native TypeScript APIs directly.
-*   **Low Noise**: Violations are reported as "Message" diagnostics, avoiding interference with compiler errors.
-*   **Built-in Rule Traceability**: Diagnostics automatically carry a source trace. In your editor, you can jump from a reported error directly to the exact line in your **rule's source code** that generated it.
+*   **Project-Centric**: Treats the **Project (tsconfig)** as a first-class citizen, enabling efficient cross-file type analysis and superior Monorepo support.
+*   **High Performance**: Runs as a `tsserver` plugin, sharing the existing `TypeChecker` to provide near-instant diagnostics without redundant parsing.
+*   **Minimalist Implementation**: Probably the smallest linter ever. Zero built-in rules and minimal code overhead by leveraging native TypeScript infrastructure.
+*   **Rule Traceability**: Built-in debugging support. Jump from a reported error directly to the exact line in your **rule's source code** that triggered it.
 
 ## How It Works
 
@@ -166,6 +163,9 @@ npx tsslint --project {tsconfig.json,packages/*/tsconfig.json,extensions/*/tscon
 import { defineConfig, createIgnorePlugin } from '@tsslint/config';
 
 export default defineConfig({
+  rules: {
+    ...
+  },
   plugins: [
     createIgnorePlugin('tsslint-ignore', true)
   ],
@@ -174,8 +174,26 @@ export default defineConfig({
 *Usage: Use `// tsslint-ignore` comments in your code.*
 
 ### Ecosystem Integration
-*   **ESLint**: Convert rules via `@tsslint/eslint`.
-*   **TSLint**: Convert rules via `@tsslint/tslint`.
+
+#### ESLint
+Convert ESLint rules via `@tsslint/eslint`.
+
+```ts
+import { defineConfig } from '@tsslint/config';
+import { defineRules } from '@tsslint/eslint';
+
+export default defineConfig({
+  rules: {
+    ...defineRules({
+      'no-unused-vars': 'error',
+      '@typescript-eslint/no-explicit-any': 'warn',
+    }),
+  },
+});
+```
+
+#### TSLint
+Convert TSLint rules via `@tsslint/tslint`.
 
 ## Technical Notes
 
