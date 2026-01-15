@@ -266,21 +266,21 @@ export function createLinter(
 						fixes.push(({ title, getEdits }));
 						return this;
 					},
-						withRefactor(title, getEdits) {
-							refactors.push(({
-								diagnostic: error,
-								title,
-								getEdits,
-							}));
-							return this;
-						},
-						withoutCache() {
-							if (cache) {
-								delete cache[1][currentRuleId];
-							}
-							return this;
-						},
-					};
+					withRefactor(title, getEdits) {
+						refactors.push(({
+							diagnostic: error,
+							title,
+							getEdits,
+						}));
+						return this;
+					},
+					withoutCache() {
+						if (cache) {
+							delete cache[1][currentRuleId];
+						}
+						return this;
+					},
+				};
 			}
 		},
 		hasCodeFixes(fileName: string) {
