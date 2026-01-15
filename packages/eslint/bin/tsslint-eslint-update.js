@@ -18,6 +18,12 @@ while (true) {
 	dir = parentDir;
 }
 
+const dtsGeneratePath = path.resolve(__dirname, '..', 'lib', 'dtsGenerate.ts');
+if (fs.existsSync(dtsGeneratePath)) {
+	console.log('Skip dts generation: lib/dtsGenerate.ts exists.');
+	process.exit(0);
+}
+
 try {
 	const { generate } = require('../lib/dtsGenerate.js');
 	generate(nodeModulesDirs).then(({ dts, stats }) => {
@@ -47,8 +53,6 @@ try {
  *
  * ---
  * If you have added new ESLint plugins, please run \`npx tsslint-eslint-update\` to update this list.
- * 
- * ---
  */`;
 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
 				fs.writeFileSync(indexPath, indexContent);
