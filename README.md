@@ -197,6 +197,8 @@ export default defineConfig({
 });
 ```
 
+`importESLintRules` will automatically resolve and load rules from ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`) by searching your `node_modules`. Plugin rules are identified by their prefix (e.g., `@typescript-eslint/`).
+
 #### TSLint
 Convert TSLint rules via `@tsslint/compat-tslint`.
 
