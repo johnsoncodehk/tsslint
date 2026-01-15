@@ -1,6 +1,6 @@
+import type { IRuleMetadata, RuleConstructor } from '@tsslint/compat-tslint';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { IRuleMetadata, RuleConstructor } from '@tsslint/compat-tslint';
 import { getTSLintRulesDirectories } from './tslint';
 
 const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
