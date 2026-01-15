@@ -175,16 +175,21 @@ export default defineConfig({
 
 ### Ecosystem Integration
 
+TSSLint provides compatibility layers for existing linter ecosystems. These are available via `@tsslint/config` but require the corresponding compatibility package to be installed.
+
 #### ESLint
-Convert ESLint rules via `@tsslint/eslint`.
+Convert ESLint rules via `@tsslint/compat-eslint`.
+
+```bash
+npm install @tsslint/compat-eslint --save-dev
+```
 
 ```ts
-import { defineConfig } from '@tsslint/config';
-import { defineRules } from '@tsslint/eslint';
+import { defineConfig, importESLintRules } from '@tsslint/config';
 
 export default defineConfig({
   rules: {
-    ...defineRules({
+    ...await importESLintRules({
       'no-unused-vars': 'error',
       '@typescript-eslint/no-explicit-any': 'warn',
     }),
@@ -193,7 +198,10 @@ export default defineConfig({
 ```
 
 #### TSLint
-Convert TSLint rules via `@tsslint/tslint`.
+Convert TSLint rules via `@tsslint/compat-tslint`.
+
+#### TSL
+Convert TSL rules via `@tsslint/compat-tsl`.
 
 ## Technical Notes
 
