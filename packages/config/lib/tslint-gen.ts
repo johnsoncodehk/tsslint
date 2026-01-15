@@ -104,15 +104,9 @@ export async function generateTSLintTypes(
 
 	function addRule(ruleName: string, rule: any) {
 		const metadata = rule?.metadata;
-		if (metadata) {
+		if (metadata?.description) {
 			line(`/**`);
-			if (metadata.description) {
-				line(` * ${metadata.description.replace(/\*\//g, '* /')}`);
-			}
-			if (metadata.rationale) {
-				line(` *`);
-				line(` * ${metadata.rationale.replace(/\*\//g, '* /')}`);
-			}
+			line(` * ${metadata.description.replace(/\*\//g, '* /')}`);
 			line(` */`);
 		}
 		line(`'${ruleName}'?: any[],`);
