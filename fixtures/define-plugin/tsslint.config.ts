@@ -1,11 +1,11 @@
 import { defineConfig, definePlugin } from '@tsslint/config';
-import { create as createNoConsoleRule } from '../noConsoleRule.ts';
+import NoConsoleRule from '../noConsoleRule.ts';
 
 export default defineConfig({
 	plugins: [
 		() => ({
 			resolveRules(fileName, rules) {
-				rules['no-console'] = createNoConsoleRule();
+				rules['no-console'] = NoConsoleRule;
 				return rules;
 			},
 		}),
