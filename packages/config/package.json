@@ -11,9 +11,24 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/config"
 	},
+	"scripts": {
+		"postinstall": "node bin/tsslint-config-update.js"
+	},
 	"dependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
 		"minimatch": "^10.0.1",
 		"ts-api-utils": "^2.0.0"
+	},
+	"peerDependencies": {
+		"@tsslint/compat-eslint": "3.0.0-alpha.0",
+		"@tsslint/compat-tslint": "3.0.0-alpha.0"
+	},
+	"peerDependenciesMeta": {
+		"@tsslint/compat-eslint": {
+			"optional": true
+		},
+		"@tsslint/compat-tslint": {
+			"optional": true
+		}
 	}
 }

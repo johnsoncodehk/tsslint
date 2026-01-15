@@ -1,10 +1,9 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
-import type { ESLintRulesConfig } from './lib/types.js';
-import { convertRule } from './lib/convertRule.js';
-
-export { create as createShowDocsActionPlugin } from './lib/plugins/showDocsAction.js';
+import type { ESLintRulesConfig } from './eslint-types.js';
+import * as path from 'path';
+import * as fs from 'fs';
 
 const noop = () => { };
 const plugins: Record<string, Promise<{
@@ -30,25 +29,32 @@ const loader = async (moduleName: string) => {
  * ---
  * ⚠️ **Type definitions not generated**
  *
- * Please add `@tsslint/eslint` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
+ * Please add `@tsslint/config` to `pnpm.onlyBuiltDependencies` in your `package.json` to allow the postinstall script to run.
  *
  * ```json
  * {
  *   "pnpm": {
- *     "onlyBuiltDependencies": ["@tsslint/eslint"]
+ *     "onlyBuiltDependencies": ["@tsslint/config"]
  *   }
  * }
  * ```
  *
  * After that, run `pnpm install` again to generate type definitions.
  *
- * If the type definitions become outdated, please run `npx tsslint-eslint-update` to update them.
+ * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
  */
-export async function defineRules(
+export async function importESLintRules(
 	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
 ) {
+	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
+	try {
+		({ convertRule } = await import('@tsslint/compat-eslint'));
+	} catch {
+		throw new Error('Please install @tsslint/compat-eslint to use importESLintRules().');
+	}
+
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(config)) {
 		let severity: boolean;
@@ -118,9 +124,16 @@ async function loadRule(pluginName: string | undefined, ruleName: string): Promi
 		const plugin = await plugins[pluginName];
 		return plugin?.rules[ruleName];
 	}
-	try {
-		return require(`../../eslint/lib/rules/${ruleName}.js`);
-	} catch {
-		return require(`./node_modules/eslint/lib/rules/${ruleName}.js`);
+	let dir = __dirname;
+	while (true) {
+		const rulePath = path.join(dir, 'node_modules', 'eslint', 'lib', 'rules', `${ruleName}.js`);
+		if (fs.existsSync(rulePath)) {
+			return loader(rulePath);
+		}
+		const parentDir = path.resolve(dir, '..');
+		if (parentDir === dir) {
+			break;
+		}
+		dir = parentDir;
 	}
 }

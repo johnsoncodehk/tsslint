@@ -3,7 +3,7 @@ import * as path from 'path';
 
 const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
 
-export async function generate(
+export async function generateESlintTypes(
 	nodeModulesDirs: string[],
 	loader = async (mod: string) => {
 		try {

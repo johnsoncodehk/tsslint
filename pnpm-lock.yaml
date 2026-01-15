@@ -29,24 +29,24 @@ importers:
 
   fixtures/define-eslint-rules:
     devDependencies:
+      '@tsslint/compat-eslint':
+        specifier: 3.0.0-alpha.0
+        version: link:../../packages/compat-eslint
       '@tsslint/config':
         specifier: 3.0.0-alpha.0
         version: link:../../packages/config
-      '@tsslint/eslint':
-        specifier: 3.0.0-alpha.0
-        version: link:../../packages/eslint
       eslint-plugin-expect-type:
         specifier: ^0.4.0
         version: 0.4.3(@typescript-eslint/parser@8.53.0(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3))(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3)
 
   fixtures/define-tslint-rules:
     devDependencies:
+      '@tsslint/compat-tslint':
+        specifier: 3.0.0-alpha.0
+        version: link:../../packages/compat-tslint
       '@tsslint/config':
         specifier: 3.0.0-alpha.0
         version: link:../../packages/config
-      '@tsslint/tslint':
-        specifier: 3.0.0-alpha.0
-        version: link:../../packages/tslint
       tslint:
         specifier: ^6.1.3
         version: 6.1.3(typescript@5.9.3)
@@ -105,28 +105,7 @@ importers:
         specifier: '*'
         version: 5.9.3
 
-  packages/config:
-    dependencies:
-      '@tsslint/types':
-        specifier: 3.0.0-alpha.0
-        version: link:../types
-      minimatch:
-        specifier: ^10.0.1
-        version: 10.1.1
-      ts-api-utils:
-        specifier: ^2.0.0
-        version: 2.4.0(typescript@5.9.3)
-
-  packages/core:
-    dependencies:
-      '@tsslint/types':
-        specifier: 3.0.0-alpha.0
-        version: link:../types
-      minimatch:
-        specifier: ^10.0.1
-        version: 10.1.1
-
-  packages/eslint:
+  packages/compat-eslint:
     dependencies:
       '@typescript-eslint/parser':
         specifier: ^8.16.0
@@ -145,7 +124,7 @@ importers:
         specifier: latest
         version: 5.9.3
 
-  packages/tslint:
+  packages/compat-tslint:
     devDependencies:
       '@tsslint/types':
         specifier: 3.0.0-alpha.0
@@ -156,6 +135,33 @@ importers:
       typescript:
         specifier: latest
         version: 5.9.3
+
+  packages/config:
+    dependencies:
+      '@tsslint/compat-eslint':
+        specifier: 3.0.0-alpha.0
+        version: link:../compat-eslint
+      '@tsslint/compat-tslint':
+        specifier: 3.0.0-alpha.0
+        version: link:../compat-tslint
+      '@tsslint/types':
+        specifier: 3.0.0-alpha.0
+        version: link:../types
+      minimatch:
+        specifier: ^10.0.1
+        version: 10.1.1
+      ts-api-utils:
+        specifier: ^2.0.0
+        version: 2.4.0(typescript@5.9.3)
+
+  packages/core:
+    dependencies:
+      '@tsslint/types':
+        specifier: 3.0.0-alpha.0
+        version: link:../types
+      minimatch:
+        specifier: ^10.0.1
+        version: 10.1.1
 
   packages/types: {}
 

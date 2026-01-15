@@ -1,8 +1,7 @@
-import { defineConfig } from '@tsslint/config';
-import { defineRules } from '@tsslint/eslint';
+import { defineConfig, importESLintRules } from '@tsslint/config';
 
 export default defineConfig({
-	rules: await defineRules({
+	rules: await importESLintRules({
 		'expect-type/expect': true,
 	}),
 });

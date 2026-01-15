@@ -6,8 +6,8 @@
 	"include": [ "tsslint.config.ts" ],
 	"references": [
 		{ "path": "./packages/cli/tsconfig.json" },
-		{ "path": "./packages/tslint/tsconfig.json" },
-		{ "path": "./packages/eslint/tsconfig.json" },
+		{ "path": "./packages/compat-tslint/tsconfig.json" },
+		{ "path": "./packages/compat-eslint/tsconfig.json" },
 		{ "path": "./packages/typescript-plugin/tsconfig.json" },
 	],
 }
