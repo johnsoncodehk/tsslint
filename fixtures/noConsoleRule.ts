@@ -3,14 +3,14 @@ import { defineRule } from '@tsslint/config';
 export default defineRule(({ typescript: ts, file, report }) => {
 	ts.forEachChild(file, function cb(node) {
 		if (
-			ts.isPropertyAccessExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === 'console'
+			ts.isPropertyAccessExpression(node)
+			&& ts.isIdentifier(node.expression)
+			&& node.expression.text === 'console'
 		) {
 			report(
 				`Calls to 'console.x' are not allowed.`,
 				node.parent.getStart(file),
-				node.parent.getEnd()
+				node.parent.getEnd(),
 			).withFix(
 				`Remove 'console.${node.name.text}'`,
 				() => [{
@@ -22,7 +22,7 @@ export default defineRule(({ typescript: ts, file, report }) => {
 							length: node.parent.getWidth(file),
 						},
 					}],
-				}]
+				}],
 			);
 		}
 		ts.forEachChild(node, cb);

@@ -12,7 +12,7 @@ export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
 	context: Partial<ESLint.Rule.RuleContext> = {},
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
 	// ESLint internal scripts
 	let createEmitter;
@@ -22,7 +22,8 @@ export function convertRule(
 		createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
 		NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
 		Traverser = require('../../eslint/lib/shared/traverser.js');
-	} catch {
+	}
+	catch {
 		createEmitter = require(require.resolve('./node_modules/eslint/lib/linter/safe-emitter.js'));
 		NodeEventGenerator = require(require.resolve('./node_modules/eslint/lib/linter/node-event-generator.js'));
 		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
@@ -91,11 +92,18 @@ export function convertRule(
 							end = descriptor.node.range[1];
 						}
 						else if (descriptor.node.loc) {
-							start = file.getPositionOfLineAndCharacter(descriptor.node.loc.start.line - 1, descriptor.node.loc.start.column);
-							end = file.getPositionOfLineAndCharacter(descriptor.node.loc.end.line - 1, descriptor.node.loc.end.column);
+							start = file.getPositionOfLineAndCharacter(
+								descriptor.node.loc.start.line - 1,
+								descriptor.node.loc.start.column,
+							);
+							end = file.getPositionOfLineAndCharacter(
+								descriptor.node.loc.end.line - 1,
+								descriptor.node.loc.end.column,
+							);
 						}
 					}
-				} catch { }
+				}
+				catch {}
 				const reporter = report(message, start, end).at(new Error(), 1);
 
 				if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
@@ -116,7 +124,7 @@ export function convertRule(
 						() => [{
 							fileName: file.fileName,
 							textChanges,
-						}]
+						}],
 					);
 				}
 				for (const suggest of descriptor.suggest ?? []) {
@@ -131,7 +139,7 @@ export function convertRule(
 								fileName: file.fileName,
 								// @ts-expect-error
 								textChanges: getTextChanges(suggest.fix),
-							}]
+							}],
 						);
 					}
 					else {
@@ -142,7 +150,7 @@ export function convertRule(
 							() => [{
 								fileName: file.fileName,
 								textChanges,
-							}]
+							}],
 						);
 					}
 				}
@@ -166,7 +174,10 @@ export function convertRule(
 			emitter.on(selector, ruleListeners[selector]);
 		}
 
-		const eventGenerator = new NodeEventGenerator(emitter, { visitorKeys: sourceCode.visitorKeys, fallback: Traverser.getKeys });
+		const eventGenerator = new NodeEventGenerator(emitter, {
+			visitorKeys: sourceCode.visitorKeys,
+			fallback: Traverser.getKeys,
+		});
 
 		for (const step of eventQueue) {
 			switch (step.kind) {
@@ -175,10 +186,12 @@ export function convertRule(
 						if (step.phase === 1) {
 							currentNode = step.target;
 							eventGenerator.enterNode(step.target);
-						} else {
+						}
+						else {
 							eventGenerator.leaveNode(step.target);
 						}
-					} catch (err) {
+					}
+					catch (err) {
 						throw err;
 					}
 					break;
@@ -289,7 +302,10 @@ export function convertRule(
 					if (!nodeOrToken.loc?.start) {
 						throw new Error('Cannot insert text before a node without a location.');
 					}
-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+					const start = file.getPositionOfLineAndCharacter(
+						nodeOrToken.loc.start.line - 1,
+						nodeOrToken.loc.start.column,
+					);
 					return this.insertTextBeforeRange([start, start], text);
 				},
 				insertTextBeforeRange(range, text) {
@@ -302,7 +318,10 @@ export function convertRule(
 					if (!nodeOrToken.loc) {
 						throw new Error('Cannot remove a node without a location.');
 					}
-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+					const start = file.getPositionOfLineAndCharacter(
+						nodeOrToken.loc.start.line - 1,
+						nodeOrToken.loc.start.column,
+					);
 					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
 					return this.removeRange([start, end]);
 				},
@@ -316,7 +335,10 @@ export function convertRule(
 					if (!nodeOrToken.loc) {
 						throw new Error('Cannot replace text of a node without a location.');
 					}
-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.start.line - 1, nodeOrToken.loc.start.column);
+					const start = file.getPositionOfLineAndCharacter(
+						nodeOrToken.loc.start.line - 1,
+						nodeOrToken.loc.start.column,
+					);
 					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
 					return this.replaceTextRange([start, end], text);
 				},
@@ -370,7 +392,8 @@ function getEstree(
 		const Parser = require('@typescript-eslint/parser');
 		try {
 			SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
-		} catch {
+		}
+		catch {
 			SourceCode = require(require.resolve('./node_modules/eslint/lib/languages/js/source-code/source-code.js'));
 		}
 
@@ -396,8 +419,10 @@ function getEstree(
 			parserServices: {
 				...services,
 				program: programProxy,
-				getSymbolAtLocation: (node: any) => programProxy.getTypeChecker().getSymbolAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
-				getTypeAtLocation: (node: any) => programProxy.getTypeChecker().getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+				getSymbolAtLocation: (node: any) =>
+					programProxy.getTypeChecker().getSymbolAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+				getTypeAtLocation: (node: any) =>
+					programProxy.getTypeChecker().getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
 			},
 		});
 		const eventQueue = sourceCode.traverse();

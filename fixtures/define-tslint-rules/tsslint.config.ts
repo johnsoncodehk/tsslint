@@ -1,5 +1,5 @@
-import { defineConfig } from '@tsslint/config';
 import { convertRule } from '@tsslint/compat-tslint';
+import { defineConfig } from '@tsslint/config';
 
 export default defineConfig({
 	rules: {

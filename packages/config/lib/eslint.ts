@@ -1,22 +1,29 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
+import * as fs from 'fs';
+import * as path from 'path';
 import type * as ts from 'typescript';
 import type { ESLintRulesConfig } from './eslint-types.js';
-import * as path from 'path';
-import * as fs from 'fs';
 
-const noop = () => { };
-const plugins: Record<string, Promise<{
-	rules: Record<string, ESLint.Rule.RuleModule>;
-} | undefined>> = {};
+const noop = () => {};
+const plugins: Record<
+	string,
+	Promise<
+		{
+			rules: Record<string, ESLint.Rule.RuleModule>;
+		} | undefined
+	>
+> = {};
 const loader = async (moduleName: string) => {
 	let mod: {} | undefined;
 	try {
 		mod ??= require(moduleName);
-	} catch { }
+	}
+	catch {}
 	try {
 		mod ??= await import(moduleName);
-	} catch { }
+	}
+	catch {}
 	if (mod && 'default' in mod) {
 		return mod.default;
 	}
@@ -46,12 +53,13 @@ const loader = async (moduleName: string) => {
 export async function importESLintRules(
 	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ) {
 	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
 	try {
 		({ convertRule } = await import('@tsslint/compat-eslint'));
-	} catch {
+	}
+	catch {
 		throw new Error('Please install @tsslint/compat-eslint to use importESLintRules().');
 	}
 

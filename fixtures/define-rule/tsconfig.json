@@ -1,7 +1,7 @@
 {
-	"include": [ "fixture.ts", "exclude.ts" ],
+	"include": ["fixture.ts", "exclude.ts"],
 	"compilerOptions": {
 		"noEmit": true,
-		"allowImportingTsExtensions": true,
-	},
+		"allowImportingTsExtensions": true
+	}
 }

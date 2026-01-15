@@ -61,10 +61,11 @@ export async function generateESlintTypes(
 	loader = async (mod: string) => {
 		try {
 			return require(mod);
-		} catch {
+		}
+		catch {
 			return await import(mod);
 		}
-	}
+	},
 ) {
 	let indentLevel = 0;
 	let dts = '';
@@ -98,7 +99,8 @@ export async function generateESlintTypes(
 									if (addRule(pkg, ruleName, rule)) {
 										stats[pluginName]++;
 									}
-								} else {
+								}
+								else {
 									if (addRule(pkg, `${subPkg.slice('eslint-plugin-'.length)}/${ruleName}`, rule)) {
 										stats[pluginName]++;
 									}
@@ -155,7 +157,8 @@ export async function generateESlintTypes(
 		let ruleKey: string;
 		if (scope) {
 			ruleKey = `${scope}/${ruleName}`;
-		} else {
+		}
+		else {
 			ruleKey = `${ruleName}`;
 		}
 
@@ -193,14 +196,16 @@ export async function generateESlintTypes(
 					.map(type => `(${type})?`)
 					.join(', ');
 				optionsType += `]`;
-			} else {
+			}
+			else {
 				optionsType = parseSchema(schema, schema, indentLevel);
 			}
 		}
 
 		if (optionsType) {
 			line(`'${ruleKey}'?: ${optionsType},`);
-		} else {
+		}
+		else {
 			line(`'${ruleKey}'?: any[],`);
 		}
 		return true;
@@ -220,7 +225,8 @@ export async function generateESlintTypes(
 				for (const path of paths) {
 					try {
 						current = current[path];
-					} catch {
+					}
+					catch {
 						current = undefined;
 						break;
 					}
@@ -232,7 +238,8 @@ export async function generateESlintTypes(
 						defs.set(current, resolved);
 					}
 					return resolved[0];
-				} else {
+				}
+				else {
 					console.error(`Failed to resolve schema path: ${item.$ref}`);
 					return 'unknown';
 				}
@@ -259,7 +266,8 @@ export async function generateESlintTypes(
 					const isRequired = requiredArr.includes(key);
 					if (!variableNameRegex.test(key)) {
 						res += indent(indentLevel) + `'${key}'${isRequired ? '' : '?'}: ${propertyType},\n`;
-					} else {
+					}
+					else {
 						res += indent(indentLevel) + `${key}${isRequired ? '' : '?'}: ${propertyType},\n`;
 					}
 				}
@@ -278,7 +286,8 @@ export async function generateESlintTypes(
 					const propertyType = `any`;
 					if (!variableNameRegex.test(key)) {
 						propertiesType.push(`'${key}': ${propertyType}`);
-					} else {
+					}
+					else {
 						propertiesType.push(`${key}: ${propertyType}`);
 					}
 				}
@@ -317,7 +326,8 @@ export async function generateESlintTypes(
 		else if (item === 'object') {
 			if (item.additionalProperties) {
 				return parseAdditionalProperties(schema, item.additionalProperties, indentLevel);
-			} else {
+			}
+			else {
 				return `{ [key: string]: unknown }`;
 			}
 		}
@@ -337,7 +347,8 @@ export async function generateESlintTypes(
 	function parseAdditionalProperties(schema: any, item: any, indentLevel: number) {
 		if (item === true) {
 			return `{ [key: string]: unknown }`;
-		} else {
+		}
+		else {
 			return `{ [key: string]: ${parseSchema(schema, item, indentLevel)} }`;
 		}
 	}
@@ -352,7 +363,8 @@ export async function generateESlintTypes(
 					const fullPath = path.join(_path, dirent.name);
 					try {
 						return fs.statSync(fullPath).isDirectory();
-					} catch {
+					}
+					catch {
 						return false;
 					}
 				}

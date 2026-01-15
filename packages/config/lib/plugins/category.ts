@@ -17,7 +17,7 @@ export function create(config: Record<string, ts.DiagnosticCategory>, source = '
 				}
 			}
 			return diagnostics;
-		}
+		},
 	});
 	function match(code: string) {
 		if (matchCache.has(code)) {

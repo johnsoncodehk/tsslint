@@ -1,11 +1,4 @@
-import type {
-	Config,
-	LinterContext,
-	Reporter,
-	Rule,
-	RuleContext,
-	Rules,
-} from '@tsslint/types';
+import type { Config, LinterContext, Reporter, Rule, RuleContext, Rules } from '@tsslint/types';
 import type * as ts from 'typescript';
 
 import path = require('path');
@@ -29,7 +22,7 @@ export function createLinter(
 	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
 	syntaxOnlyLanguageService?: ts.LanguageService & {
 		getNonBoundSourceFile?(fileName: string): ts.SourceFile;
-	}
+	},
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
@@ -83,7 +76,8 @@ export function createLinter(
 					program,
 					report,
 				};
-			} else {
+			}
+			else {
 				const file = getNonBoundSourceFile(fileName);
 				rulesContext = {
 					typescript: ctx.typescript,
@@ -133,14 +127,17 @@ export function createLinter(
 					if (!typeAwareMode) {
 						rule2Mode.set(currentRuleId, false);
 					}
-				} catch (err) {
+				}
+				catch (err) {
 					if (!typeAwareMode) {
 						// console.log(`Rule "${currentRuleId}" is type aware.`);
 						rule2Mode.set(currentRuleId, true);
 						shouldRetry = true;
-					} else if (err instanceof Error) {
+					}
+					else if (err instanceof Error) {
 						report(err.stack ?? err.message, 0, 0).at(err, 0);
-					} else {
+					}
+					else {
 						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
 					}
 				}
@@ -177,7 +174,8 @@ export function createLinter(
 						}
 					}
 				}
-			} catch (error) {
+			}
+			catch (error) {
 				if (!typeAwareMode) {
 					// Retry
 					shouldEnableTypeAware = true;
@@ -269,15 +267,15 @@ export function createLinter(
 						return this;
 					},
 					withFix(title, getEdits) {
-						fixes.push(({ title, getEdits }));
+						fixes.push({ title, getEdits });
 						return this;
 					},
 					withRefactor(title, getEdits) {
-						refactors.push(({
+						refactors.push({
 							diagnostic: error,
 							title,
 							getEdits,
-						}));
+						});
 						return this;
 					},
 					withoutCache() {
@@ -312,7 +310,7 @@ export function createLinter(
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			minimatchCache?: FileLintCache[2]
+			minimatchCache?: FileLintCache[2],
 		) {
 			const lintResult = lintResults.get(fileName);
 			if (!lintResult) {
@@ -330,10 +328,10 @@ export function createLinter(
 				const diagStart = diagnostic.start;
 				const diagEnd = diagStart + diagnostic.length;
 				if (
-					(diagStart >= start && diagStart <= end) ||
-					(diagEnd >= start && diagEnd <= end) ||
-					(start >= diagStart && start <= diagEnd) ||
-					(end >= diagStart && end <= diagEnd)
+					(diagStart >= start && diagStart <= end)
+					|| (diagEnd >= start && diagEnd <= end)
+					|| (start >= diagStart && start <= diagEnd)
+					|| (end >= diagStart && end <= diagEnd)
 				) {
 					let codeFixes: ts.CodeFixAction[] = [];
 					for (const action of actions) {
@@ -342,7 +340,7 @@ export function createLinter(
 							description: action.title,
 							changes: action.getEdits(),
 							fixId: 'tsslint',
-							fixAllDescription: 'Fix all TSSLint errors'
+							fixAllDescription: 'Fix all TSSLint errors',
 						});
 					}
 					for (const { plugins } of configs) {
@@ -371,10 +369,10 @@ export function createLinter(
 				const diagStart = refactor.diagnostic.start;
 				const diagEnd = diagStart + refactor.diagnostic.length;
 				if (
-					(diagStart >= start && diagStart <= end) ||
-					(diagEnd >= start && diagEnd <= end) ||
-					(start >= diagStart && start <= diagEnd) ||
-					(end >= diagStart && end <= diagEnd)
+					(diagStart >= start && diagStart <= end)
+					|| (diagEnd >= start && diagEnd <= end)
+					|| (start >= diagStart && start <= diagEnd)
+					|| (end >= diagStart && end <= diagEnd)
 				) {
 					result.push({
 						name: `tsslint:${i}`,
@@ -470,7 +468,6 @@ export function createLinter(
 }
 
 export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
-
 	const changes = fixes
 		.map(fix => fix.changes)
 		.flat()

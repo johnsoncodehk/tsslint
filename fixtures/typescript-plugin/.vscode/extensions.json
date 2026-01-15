@@ -1,5 +1,5 @@
 {
-    "unwantedRecommendations": [
-        "johnsoncodehk.vscode-tsslint"
-    ]
+	"unwantedRecommendations": [
+		"johnsoncodehk.vscode-tsslint"
+	]
 }

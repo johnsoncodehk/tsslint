@@ -11,7 +11,7 @@ interface CommentState {
 
 export function create(
 	cmdOption: string | [string, string],
-	reportsUnusedComments: boolean
+	reportsUnusedComments: boolean,
 ): Plugin {
 	const mode = typeof cmdOption === 'string' ? 'singleLine' : 'multiLine';
 	const [cmd, endCmd] = Array.isArray(cmdOption) ? cmdOption : [cmdOption, undefined];
@@ -61,13 +61,14 @@ export function create(
 						description: nextLineRules.length >= 2
 							? `Ignore ${nextLineRules.length} issues in next line`
 							: nextLineRules.length
-								? 'Ignore 1 issue in next line'
-								: undefined,
-					}
+							? 'Ignore 1 issue in next line'
+							: undefined,
+					},
 				};
 				if (result) {
 					result.entries.push(item);
-				} else {
+				}
+				else {
 					result = {
 						isGlobalCompletion: false,
 						isMemberCompletion: false,
@@ -75,7 +76,8 @@ export function create(
 						entries: [item],
 					};
 				}
-			} else if (reportedRules?.length) {
+			}
+			else if (reportedRules?.length) {
 				const matchRule = completeReg2
 					? prefix.match(completeReg2)
 					: undefined;
@@ -106,7 +108,8 @@ export function create(
 						};
 						if (result) {
 							result.entries.push(item);
-						} else {
+						}
+						else {
 							result = {
 								isGlobalCompletion: false,
 								isMemberCompletion: false,
@@ -124,8 +127,8 @@ export function create(
 		return {
 			resolveDiagnostics(file, results) {
 				if (
-					!reportsUnusedComments &&
-					!results.some(error => error.source === 'tsslint')
+					!reportsUnusedComments
+					&& !results.some(error => error.source === 'tsslint')
 				) {
 					return results;
 				}
@@ -153,7 +156,7 @@ export function create(
 						if (mode === 'singleLine') {
 							const startWithComment = file.text.slice(
 								file.getPositionOfLineAndCharacter(line, 0),
-								index - 2
+								index - 2,
 							).trim() === '';
 							if (startWithComment) {
 								startLine = line + 1; // If the comment is at the start of the line, the error is in the next line
@@ -211,7 +214,8 @@ export function create(
 									return false;
 								}
 							}
-						} else {
+						}
+						else {
 							for (const state of states) {
 								if (line >= state.startLine && line <= (state.endLine ?? Number.MAX_VALUE)) {
 									state.used = true;
