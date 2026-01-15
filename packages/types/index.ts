@@ -1,7 +1,6 @@
 import type {
 	CodeFixAction,
 	Diagnostic,
-	DiagnosticCategory,
 	DiagnosticWithLocation,
 	FileTextChanges,
 	LanguageService,
@@ -45,10 +44,13 @@ export interface RuleContext {
 	typescript: typeof import('typescript');
 	program: Program;
 	file: SourceFile;
-	report(message: string, start: number, end: number, category?: DiagnosticCategory, reportAt?: [Error, number]): Reporter;
+	report(message: string, start: number, end: number, reportAt?: [Error, number]): Reporter;
 }
 
 export interface Reporter {
+	asWarning(): Reporter;
+	asError(): Reporter;
+	asSuggestion(): Reporter;
 	withDeprecated(): Reporter;
 	withUnnecessary(): Reporter;
 	withFix(title: string, getChanges: () => FileTextChanges[]): Reporter;

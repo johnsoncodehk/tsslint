@@ -139,9 +139,9 @@ export function createLinter(
 						rule2Mode.set(currentRuleId, true);
 						shouldRetry = true;
 					} else if (err instanceof Error) {
-						report(err.stack ?? err.message, 0, 0, ts.DiagnosticCategory.Message, [err, 0]);
+						report(err.stack ?? err.message, 0, 0, [err, 0]);
 					} else {
-						report(String(err), 0, 0, ts.DiagnosticCategory.Message, [new Error(), Number.MAX_VALUE]);
+						report(String(err), 0, 0, [new Error(), Number.MAX_VALUE]);
 					}
 				}
 
@@ -201,9 +201,9 @@ export function createLinter(
 
 			return diagnostics;
 
-			function report(message: string, start: number, end: number, category: ts.DiagnosticCategory = ts.DiagnosticCategory.Message, reportAt: [Error, number] = [new Error(), 1]): Reporter {
+			function report(message: string, start: number, end: number, reportAt: [Error, number] = [new Error(), 1]): Reporter {
 				const error: ts.DiagnosticWithLocation = {
-					category,
+					category: ts.DiagnosticCategory.Message,
 					code: currentRuleId as any,
 					messageText: message,
 					file: rulesContext.file,
@@ -237,6 +237,18 @@ export function createLinter(
 				const fixes = diagnostic2Fixes.get(error)!;
 
 				return {
+					asWarning() {
+						error.category = ts.DiagnosticCategory.Warning;
+						return this;
+					},
+					asError() {
+						error.category = ts.DiagnosticCategory.Error;
+						return this;
+					},
+					asSuggestion() {
+						error.category = ts.DiagnosticCategory.Suggestion;
+						return this;
+					},
 					withDeprecated() {
 						error.reportsDeprecated = true;
 						return this;
