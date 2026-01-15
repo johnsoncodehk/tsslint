@@ -31,7 +31,7 @@ In large-scale TypeScript projects, traditional linters (like ESLint) often caus
 TSSLint integrates into `tsserver` via the TypeScript plugin system, leveraging the semantic information already computed by your editor.
 
 <p align="center">
-  <img src="architecture.png" alt="TSSLint Architecture Diagram" width="700">
+  <img src="architecture_v2.png" alt="TSSLint Architecture Diagram" width="700">
 </p>
 
 ### Framework Support (Vue, MDX, Astro, etc.)
