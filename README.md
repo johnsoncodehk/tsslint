@@ -124,6 +124,10 @@ TSSLint is designed to make rule debugging trivial. Every time you call `report(
 
 This means: **You can click on the diagnostic in your editor and jump directly to the line in your rule's source code that triggered the report.**
 
+<p align="center">
+  <img src="traceability.png" alt="TSSLint Rule Traceability Demo" width="700">
+</p>
+
 The `.at()` method is generally not needed, but is provided for advanced scenarios where you wrap `report()` in a helper function and need to adjust the stack depth to point to the correct logic:
 
 ```ts
