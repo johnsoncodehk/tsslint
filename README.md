@@ -115,12 +115,14 @@ npx tsslint --project path/to/tsconfig.json
 npx tsslint --project path/to/tsconfig.json --fix
 
 # Lint multiple projects
-npx tsslint --project 'packages/*/tsconfig.json' --vue-project 'apps/web/tsconfig.json'
+npx tsslint --project packages/*/tsconfig.json --vue-project apps/web/tsconfig.json
+
+# Using brace expansion for multiple patterns
+npx tsslint --project {tsconfig.json,packages/*/tsconfig.json,extensions/*/tsconfig.json}
 ```
 
 > [!TIP]
 > TSSLint focuses on diagnostic fixes and does not include a built-in formatter. It is recommended to run a dedicated formatter like **Prettier**, **dprint**, or **oxfmt** after running TSSLint with `--fix`.
-
 
 ## Extensions
 
