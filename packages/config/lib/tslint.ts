@@ -26,7 +26,7 @@ const noop = () => {};
  * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
  */
 export async function importTSLintRules(
-	config: { [K in keyof TSLintRulesConfig]: boolean | TSLintRulesConfig[K] },
+	config: { [K in keyof TSLintRulesConfig]: boolean | [boolean, TSLintRulesConfig[K]] },
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ) {
 	let convertRule: typeof import('@tsslint/compat-tslint').convertRule;
@@ -44,8 +44,7 @@ export async function importTSLintRules(
 		let severity: boolean;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
-			severity = true;
-			options = severityOrOptions;
+			[severity, ...options] = severityOrOptions;
 		}
 		else {
 			severity = !!severityOrOptions;
