@@ -104,9 +104,39 @@ export async function generateTSLintTypes(
 
 	function addRule(ruleName: string, rule: any) {
 		const metadata = rule?.metadata;
-		if (metadata?.description) {
+		if (metadata) {
 			line(`/**`);
-			line(` * ${metadata.description.replace(/\*\//g, '* /')}`);
+			if (metadata.description) {
+				line(` * ${metadata.description.replace(/\*\//g, '* /')}`);
+			}
+			if (metadata.rationale) {
+				line(` *`);
+				line(` * ${metadata.rationale.replace(/\*\//g, '* /')}`);
+			}
+			if (metadata.optionsDescription) {
+				line(` *`);
+				line(` * @description ${metadata.optionsDescription.replace(/\*\//g, '* /')}`);
+			}
+			if (metadata.options) {
+				line(` *`);
+				line(` * @options ${JSON.stringify(metadata.options).replace(/\*\//g, '* /')}`);
+			}
+			if (metadata.optionExamples) {
+				line(` *`);
+				line(` * @example`);
+				const examples = Array.isArray(metadata.optionExamples) ? metadata.optionExamples : [metadata.optionExamples];
+				for (const example of examples) {
+					line(` * ${JSON.stringify(example).replace(/\*\//g, '* /')}`);
+				}
+			}
+			if (metadata.type) {
+				line(` *`);
+				line(` * @type ${metadata.type}`);
+			}
+			if (metadata.typescriptOnly) {
+				line(` *`);
+				line(` * @typescriptOnly`);
+			}
 			line(` */`);
 		}
 		line(`'${ruleName}'?: any[],`);
