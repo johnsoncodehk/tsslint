@@ -2,6 +2,8 @@ import type * as TSSLint from '@tsslint/types';
 import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
 import type * as ts from 'typescript';
 
+export type * from 'tslint';
+
 export function convertRule(
 	Rule: {
 		metadata?: IRuleMetadata;

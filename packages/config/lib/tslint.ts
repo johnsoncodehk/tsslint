@@ -28,7 +28,7 @@ type Severity = boolean | 'error' | 'warn';
  * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
  */
 export async function importTSLintRules(
-	config: { [K in keyof TSLintRulesConfig]: Severity | [Severity, TSLintRulesConfig[K]] },
+	config: { [K in keyof TSLintRulesConfig]: Severity | [Severity, ...TSLintRulesConfig[K]] },
 ) {
 	let convertRule: typeof import('@tsslint/compat-tslint').convertRule;
 	try {
