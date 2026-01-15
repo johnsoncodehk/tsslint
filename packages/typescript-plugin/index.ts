@@ -103,13 +103,13 @@ function decorateLanguageService(
 			},
 		];
 	};
-	info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments) => {
-		const tsslintEdits = linter?.getRefactorEdits(fileName, actionName);
-		if (tsslintEdits) {
-			return { edits: tsslintEdits };
-		}
-		return getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments);
-	};
+		info.languageService.getEditsForRefactor = (fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments) => {
+			const tsslintEdits = linter?.getRefactorEdits(fileName, actionName);
+			if (tsslintEdits) {
+				return tsslintEdits;
+			}
+			return getEditsForRefactor(fileName, formatOptions, positionOrRange, refactorName, actionName, preferences, interactiveRefactorArguments);
+		};
 
 	return { update };
 
