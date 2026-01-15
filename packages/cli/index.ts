@@ -3,7 +3,6 @@ import path = require('path');
 import cache = require('./lib/cache.js');
 import worker = require('./lib/worker.js');
 import fs = require('fs');
-import os = require('os');
 import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
 
@@ -28,15 +27,15 @@ const astroColor = (s: string) => '\x1b[38;5;209m' + s + _reset;
 
 let threads = 1;
 
-if (process.argv.includes('--threads')) {
-	const threadsIndex = process.argv.indexOf('--threads');
-	const threadsArg = process.argv[threadsIndex + 1];
-	if (!threadsArg || threadsArg.startsWith('-')) {
-		console.error(red(`Missing argument for --threads.`));
-		process.exit(1);
-	}
-	threads = Math.min(os.availableParallelism(), Number(threadsArg));
-}
+// if (process.argv.includes('--threads')) {
+// 	const threadsIndex = process.argv.indexOf('--threads');
+// 	const threadsArg = process.argv[threadsIndex + 1];
+// 	if (!threadsArg || threadsArg.startsWith('-')) {
+// 		console.error(red(`Missing argument for --threads.`));
+// 		process.exit(1);
+// 	}
+// 	threads = Math.min(os.availableParallelism(), Number(threadsArg));
+// }
 
 class Project {
 	worker: ReturnType<typeof worker.create> | undefined;
