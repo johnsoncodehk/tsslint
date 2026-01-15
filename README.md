@@ -190,8 +190,8 @@ import { defineConfig, importESLintRules } from '@tsslint/config';
 export default defineConfig({
   rules: {
     ...await importESLintRules({
-      'no-unused-vars': 'error',
-      '@typescript-eslint/no-explicit-any': 'warn',
+      'no-unused-vars': true,
+      '@typescript-eslint/no-explicit-any': true,
     }),
   },
 });

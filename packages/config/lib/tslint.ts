@@ -6,6 +6,8 @@ import type { TSLintRulesConfig } from './tslint-types.js';
 
 const noop = () => {};
 
+type Severity = boolean | 'error' | 'warn';
+
 /**
  * Converts a TSLint rules configuration to TSSLint rules.
  *
@@ -26,8 +28,7 @@ const noop = () => {};
  * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
  */
 export async function importTSLintRules(
-	config: { [K in keyof TSLintRulesConfig]: boolean | [boolean, TSLintRulesConfig[K]] },
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
+	config: { [K in keyof TSLintRulesConfig]: Severity | [Severity, TSLintRulesConfig[K]] },
 ) {
 	let convertRule: typeof import('@tsslint/compat-tslint').convertRule;
 	try {
@@ -41,13 +42,13 @@ export async function importTSLintRules(
 	const rulesDirectories = getTSLintRulesDirectories();
 
 	for (const [ruleName, severityOrOptions] of Object.entries(config)) {
-		let severity: boolean;
+		let severity: Severity;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
 			[severity, ...options] = severityOrOptions;
 		}
 		else {
-			severity = !!severityOrOptions;
+			severity = severityOrOptions;
 			options = [];
 		}
 		if (!severity) {
@@ -61,15 +62,19 @@ export async function importTSLintRules(
 		rules[ruleName] = convertRule(
 			ruleModule,
 			options,
-			category,
+			severity === 'error'
+				? 1 satisfies ts.DiagnosticCategory.Error
+				: severity === 'warn'
+				? 0 satisfies ts.DiagnosticCategory.Warning
+				: 3 satisfies ts.DiagnosticCategory.Message,
 		);
 	}
 	return rules;
 }
 
-function getTSLintRulesDirectories(): string[] {
-	const directories: string[] = [];
-	let dir = process.cwd();
+export function getTSLintRulesDirectories(): [string, string][] {
+	const directories: [string, string][] = [];
+	let dir = __dirname;
 	while (true) {
 		const tslintJsonPath = path.join(dir, 'tslint.json');
 		if (fs.existsSync(tslintJsonPath)) {
@@ -83,7 +88,7 @@ function getTSLintRulesDirectories(): string[] {
 						? tslintJson.rulesDirectory
 						: [tslintJson.rulesDirectory];
 					for (const rulesDir of rulesDirs) {
-						directories.push(path.resolve(dir, rulesDir));
+						directories.push([rulesDir, path.resolve(dir, rulesDir)]);
 					}
 				}
 			}
@@ -101,11 +106,11 @@ function getTSLintRulesDirectories(): string[] {
 	return directories;
 }
 
-async function loadTSLintRule(ruleName: string, rulesDirectories: string[]): Promise<any | undefined> {
+async function loadTSLintRule(ruleName: string, rulesDirectories: [string, string][]): Promise<any | undefined> {
 	const camelCaseName = ruleName.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 	const ruleFileName = `${camelCaseName.charAt(0).toUpperCase() + camelCaseName.slice(1)}Rule.js`;
 
-	for (const rulesDir of rulesDirectories) {
+	for (const [, rulesDir] of rulesDirectories) {
 		const rulePath = path.resolve(rulesDir, ruleFileName);
 		if (fs.existsSync(rulePath)) {
 			const mod = require(rulePath);

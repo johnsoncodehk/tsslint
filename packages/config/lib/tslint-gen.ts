@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { IRuleMetadata, RuleConstructor } from 'tslint';
+import { getTSLintRulesDirectories } from './tslint';
 
 const variableNameRegex = /^[a-zA-Z_$][0-9a-zA-Z_$]*$/;
 
@@ -25,34 +26,7 @@ export async function generateTSLintTypes(
 	const visited = new Set<string>();
 	const defs = new Map<any, [string, string]>();
 	const stats: Record<string, number> = {};
-
-	// 1. Scan directories from tslint.json
-	let dir = process.cwd();
-	const rulesDirectories: [string, string][] = [];
-	while (true) {
-		const tslintJsonPath = path.join(dir, 'tslint.json');
-		if (fs.existsSync(tslintJsonPath)) {
-			try {
-				let content = fs.readFileSync(tslintJsonPath, 'utf8');
-				// Simple comment removal
-				content = content.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
-				const tslintJson = JSON.parse(content);
-				if (tslintJson.rulesDirectory) {
-					const dirs = Array.isArray(tslintJson.rulesDirectory)
-						? tslintJson.rulesDirectory
-						: [tslintJson.rulesDirectory];
-					for (const d of dirs) {
-						rulesDirectories.push([d, path.resolve(dir, d)]);
-					}
-				}
-			}
-			catch {}
-			break;
-		}
-		const parentDir = path.resolve(dir, '..');
-		if (parentDir === dir) break;
-		dir = parentDir;
-	}
+	const rulesDirectories = getTSLintRulesDirectories();
 
 	for (const [rawDir, rulesDir] of rulesDirectories) {
 		if (fs.existsSync(rulesDir)) {
