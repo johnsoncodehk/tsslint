@@ -11,7 +11,7 @@ import type {
 
 export interface LinterContext {
 	typescript: typeof import('typescript');
-	languageServiceHost: LanguageServiceHost & { getModifiedTime?(fileName: string): Date | undefined };
+	languageServiceHost: LanguageServiceHost;
 	languageService: LanguageService;
 }
 
@@ -45,7 +45,6 @@ export interface RuleContext {
 	program: Program;
 	file: SourceFile;
 	report(message: string, start: number, end: number): Reporter;
-	readFileSync?(fileName: string, encoding?: string): string | undefined;
 }
 
 export interface Reporter {
@@ -57,4 +56,5 @@ export interface Reporter {
 	withUnnecessary(): Reporter;
 	withFix(title: string, getChanges: () => FileTextChanges[]): Reporter;
 	withRefactor(title: string, getChanges: () => FileTextChanges[]): Reporter;
+	disableCache(): Reporter;
 }

@@ -17,7 +17,6 @@ export type FileLintCache = [
 		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
 	>,
 	minimatchResult: Record<string, boolean>,
-	dependencies?: Record<string, number>,
 ];
 
 export type Linter = ReturnType<typeof createLinter>;
@@ -82,7 +81,6 @@ export function createLinter(
 					file,
 					program,
 					report,
-					readFileSync,
 				};
 			} else {
 				const file = getNonBoundSourceFile!(fileName);
@@ -93,22 +91,7 @@ export function createLinter(
 					},
 					file,
 					report,
-					readFileSync,
 				};
-			}
-
-			function readFileSync(fileName: string, encoding?: string) {
-				if (cache) {
-					cache[3] ??= {};
-					try {
-						cache[3][fileName] = ctx.languageServiceHost.getModifiedTime?.(fileName)?.getTime()
-							?? ts.sys.getModifiedTime?.(fileName)?.getTime()
-							?? 0;
-					} catch {
-						cache[3][fileName] = 0;
-					}
-				}
-				return ctx.languageServiceHost.readFile(fileName, encoding);
 			}
 
 			lintResults.set(fileName, [rulesContext.file, new Map(), []]);
@@ -169,20 +152,6 @@ export function createLinter(
 							cache[1][currentRuleId][0] = true;
 							break;
 						}
-					}
-				}
-			}
-
-			if (cache?.[3]) {
-				for (const [fileName, mtime] of Object.entries(cache[3])) {
-					const currentMtime = ctx.languageServiceHost.getModifiedTime?.(fileName)?.getTime()
-						?? ts.sys.getModifiedTime?.(fileName)?.getTime()
-						?? 0;
-					if (currentMtime !== mtime) {
-						cache[1] = {};
-						cache[2] = {};
-						cache[3] = {};
-						return this.lint(rulesContext.file.fileName, cache);
 					}
 				}
 			}
@@ -304,6 +273,12 @@ export function createLinter(
 						}));
 						return this;
 					},
+					disableCache() {
+						if (cache) {
+							delete cache[1][currentRuleId];
+						}
+						return this;
+					},
 				};
 			}
 		},
@@ -388,10 +363,10 @@ export function createLinter(
 					(start >= diagStart && start <= diagEnd) ||
 					(end >= diagStart && end <= diagEnd)
 				) {
-				result.push({
-					name: `tsslint:${refactor.diagnostic.code}:${i}`,
-					description: refactor.title,
-				});
+					result.push({
+						name: `tsslint:${refactor.diagnostic.code}:${i}`,
+						description: refactor.title,
+					});
 				}
 			}
 
