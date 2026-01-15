@@ -1,7 +1,7 @@
 {
 	"extends": "../../tsconfig.base.json",
-	"include": [ "*", "lib/**/*" ],
+	"include": ["*", "lib/**/*"],
 	"references": [
-		{ "path": "../types" },
-	],
+		{ "path": "../types" }
+	]
 }

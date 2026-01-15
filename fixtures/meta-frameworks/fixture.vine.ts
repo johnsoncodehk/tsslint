@@ -3,4 +3,4 @@ function MyComponent() {
 }
 
 // This is also valid
-const AnotherComponent = () => vine`<div>Hello World</div>`
+const AnotherComponent = () => vine`<div>Hello World</div>`;

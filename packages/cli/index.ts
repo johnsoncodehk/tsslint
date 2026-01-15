@@ -54,13 +54,13 @@ class Project {
 
 	constructor(
 		public tsconfig: string,
-		public languages: string[]
-	) { }
+		public languages: string[],
+	) {}
 
 	async init(
 		// @ts-expect-error
 		clack: typeof import('@clack/prompts'),
-		filesFilter: string[]
+		filesFilter: string[],
 	) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
@@ -68,7 +68,8 @@ class Project {
 
 		if (this.languages.length === 0) {
 			labels.push(tsColor('TS'));
-		} else {
+		}
+		else {
 			if (this.languages.includes('ts-macro')) {
 				labels.push(tsMacroColor('TS Macro'));
 			}
@@ -89,7 +90,9 @@ class Project {
 		const label = labels.join(gray(' | '));
 
 		if (!this.configFile) {
-			clack.log.error(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No tsslint.config.ts found)')}`);
+			clack.log.error(
+				`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No tsslint.config.ts found)')}`,
+			);
 			return this;
 		}
 
@@ -105,20 +108,28 @@ class Project {
 
 		if (filesFilter.length) {
 			this.fileNames = this.rawFileNames.filter(
-				fileName => filesFilter.some(
-					filter => minimatch.minimatch(fileName, filter, { dot: true })
-				)
+				fileName =>
+					filesFilter.some(
+						filter => minimatch.minimatch(fileName, filter, { dot: true }),
+					),
 			);
 			if (!this.fileNames.length) {
-				clack.log.message(`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(No files left after filter)')}`);
+				clack.log.message(
+					`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(No files left after filter)')}`,
+				);
 				return this;
 			}
-		} else {
+		}
+		else {
 			this.fileNames = this.rawFileNames;
 		}
 
 		const filteredLengthDiff = this.rawFileNames.length - this.fileNames.length;
-		clack.log.info(`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)}`);
+		clack.log.info(
+			`${label} ${path.relative(process.cwd(), this.tsconfig)} ${
+				gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
+			}`,
+		);
 
 		if (!process.argv.includes('--force')) {
 			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
@@ -203,7 +214,7 @@ class Project {
 			tsconfigOptions.map(async tsconfigOption => {
 				const tsconfig = require.resolve(
 					tsconfigOption.startsWith('.') ? tsconfigOption : `./${tsconfigOption}`,
-					{ paths: [process.cwd()] }
+					{ paths: [process.cwd()] },
 				);
 				try {
 					const commonLine = await parseCommonLine(tsconfig, language ? [language] : []);
@@ -211,10 +222,11 @@ class Project {
 						label: path.relative(process.cwd(), tsconfig) + ` (${commonLine.fileNames.length})`,
 						value: tsconfigOption,
 					};
-				} catch {
+				}
+				catch {
 					return undefined;
 				}
-			})
+			}),
 		);
 
 		options = options.filter(option => !!option);
@@ -243,7 +255,8 @@ class Project {
 
 		if (!language) {
 			command += ' --project ' + selectedTsconfigs.join(' ');
-		} else {
+		}
+		else {
 			command += ` --${language}-project ` + selectedTsconfigs.join(' ');
 		}
 
@@ -253,7 +266,8 @@ class Project {
 			tsconfig = resolvePath(tsconfig);
 			tsconfigAndLanguages.set(tsconfig, language ? [language] : []);
 		}
-	} else {
+	}
+	else {
 		const options = [
 			{
 				projectFlag: '--project',
@@ -360,26 +374,29 @@ class Project {
 	}
 
 	if (isTTY || threads >= 2) {
-		await Promise.all(new Array(threads).fill(0).map(() => {
-			return startWorker(worker.create());
-		}));
-	} else {
+		await Promise.all(
+			new Array(threads).fill(0).map(() => {
+				return startWorker(worker.create());
+			}),
+		);
+	}
+	else {
 		await startWorker(worker.createLocal() as any);
 	}
 
 	(spinner?.stop ?? clack.log.message)(
 		cached
 			? gray(`Processed ${processed} files with cache. (Use `) + cyan(`--force`) + gray(` to ignore cache.)`)
-			: gray(`Processed ${processed} files.`)
+			: gray(`Processed ${processed} files.`),
 	);
 
 	const deprecatedFlag = process.argv.find(arg => arg.endsWith('-projects'));
 	if (deprecatedFlag) {
 		clack.log.error(
 			gray(`Use `)
-			+ cyan(`${deprecatedFlag.slice(0, -1)}`)
-			+ gray(` instead of `)
-			+ cyan(`${deprecatedFlag}.`)
+				+ cyan(`${deprecatedFlag.slice(0, -1)}`)
+				+ gray(` instead of `)
+				+ cyan(`${deprecatedFlag}.`),
 		);
 	}
 
@@ -399,7 +416,8 @@ class Project {
 
 	if (hasFix) {
 		summary += gray(` (Use `) + cyan(`--fix`) + gray(` to apply automatic fixes.)`);
-	} else if (errors || warnings || messages) {
+	}
+	else if (errors || warnings || messages) {
 		summary += gray(` (No fixes available.)`);
 	}
 
@@ -458,7 +476,7 @@ class Project {
 			const diagnostics = await linterWorker.lint(
 				fileName,
 				process.argv.includes('--fix'),
-				fileCache
+				fileCache,
 			);
 			const formatHost: ts.FormatDiagnosticsHost = {
 				getCurrentDirectory: ts.sys.getCurrentDirectory,
@@ -481,7 +499,8 @@ class Project {
 						}], formatHost);
 						output = output.replace(/\[94mmessage/, '[90msuggestion');
 						output = output.replace(/\[94m/g, '[90m');
-					} else {
+					}
+					else {
 						output = ts.formatDiagnosticsWithColorAndContext([diagnostic], formatHost);
 					}
 
@@ -508,9 +527,11 @@ class Project {
 						log(output);
 					}
 				}
-			} else if (!(await linterWorker.hasRules(fileName, fileCache[2]))) {
+			}
+			else if (!(await linterWorker.hasRules(fileName, fileCache[2]))) {
 				excluded++;
-			} else {
+			}
+			else {
 				passed++;
 			}
 			processed++;
@@ -519,7 +540,7 @@ class Project {
 				fileName,
 				project.currentFileIndex < project.fileNames.length
 					? project.fileNames[project.currentFileIndex]
-					: undefined
+					: undefined,
 			);
 		}
 
@@ -546,14 +567,18 @@ class Project {
 			}
 		}
 		else if (processFiles.size === 1) {
-			msg = gray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`);
-		} else {
+			msg = gray(
+				`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`,
+			);
+		}
+		else {
 			msg = gray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
 		}
 		if (!spinner && isTTY) {
 			spinner = clack.spinner();
 			spinner.start(msg);
-		} else {
+		}
+		else {
 			spinner?.message(msg);
 		}
 	}
@@ -564,14 +589,18 @@ class Project {
 			spinner.stop(msg, code);
 			spinnerStopingWarn = false;
 			spinner = undefined;
-		} else {
+		}
+		else {
 			if (code === 1) {
 				clack.log.error(msg);
-			} else if (code === 2) {
+			}
+			else if (code === 2) {
 				clack.log.warn(msg);
-			} else if (code === 3) {
+			}
+			else if (code === 3) {
 				clack.log.message(msg);
-			} else {
+			}
+			else {
 				clack.log.step(msg);
 			}
 		}
@@ -587,7 +616,8 @@ class Project {
 		}
 		try {
 			return require.resolve(p, { paths: [process.cwd()] });
-		} catch {
+		}
+		catch {
 			clack.log.error(red(`No such file: ${p}`));
 			process.exit(1);
 		}
@@ -598,5 +628,13 @@ async function parseCommonLine(tsconfig: string, languages: string[]) {
 	const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
 	const plugins = await languagePlugins.load(tsconfig, languages);
 	const extraFileExtensions = plugins.flatMap(plugin => plugin.typescript?.extraFileExtensions ?? []).flat();
-	return ts.parseJsonSourceFileConfigFileContent(jsonConfigFile, ts.sys, path.dirname(tsconfig), {}, tsconfig, undefined, extraFileExtensions);
+	return ts.parseJsonSourceFileConfigFileContent(
+		jsonConfigFile,
+		ts.sys,
+		path.dirname(tsconfig),
+		{},
+		tsconfig,
+		undefined,
+		extraFileExtensions,
+	);
 }

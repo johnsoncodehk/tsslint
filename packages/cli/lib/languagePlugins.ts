@@ -1,5 +1,11 @@
 import type { LanguagePlugin } from '@volar/language-core';
-import { createAstroPlugin, createMdxPlugin, createTsMacroPlugins, createVuePlugin, createVueVinePlugins } from '@volar/language-hub';
+import {
+	createAstroPlugin,
+	createMdxPlugin,
+	createTsMacroPlugins,
+	createVuePlugin,
+	createVueVinePlugins,
+} from '@volar/language-hub';
 import ts = require('typescript');
 
 const cache = new Map<string, LanguagePlugin<string>[]>();
