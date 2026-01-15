@@ -52,7 +52,7 @@ type Severity = boolean | 'error' | 'warn';
  * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
  */
 export async function importESLintRules(
-	config: { [K in keyof ESLintRulesConfig]: Severity | [Severity, ESLintRulesConfig[K]] },
+	config: { [K in keyof ESLintRulesConfig]: Severity | [Severity, ...ESLintRulesConfig[K]] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
 ) {
 	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
