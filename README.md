@@ -11,7 +11,7 @@
   <a href="https://deepwiki.com/johnsoncodehk/tsslint"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
-TSSLint is a minimalist diagnostic extension interface built on the TypeScript Language Server (`tsserver`). It provides zero default rules, allowing developers to implement custom rules that complement TypeScript's native checks with minimal overhead.
+TSSLint is probably the smallest linter implementation ever. Built on the TypeScript Language Server (`tsserver`), it provides a minimalist diagnostic extension interface with zero default rules, allowing developers to implement custom rules with minimal overhead.
 
 ## Motivation
 
@@ -26,6 +26,7 @@ TSSLint solves this by running directly as a `tsserver` plugin. By sharing the e
 *   **Project-Centric**: Treats the **Project (tsconfig)** as a first-class citizen, aligning with TypeScript's internal architecture for efficient cross-file type analysis and Monorepo support.
 *   **High Performance**: Runs as a `tsserver` plugin, sharing the existing `TypeChecker` to avoid redundant parsing and type-checking.
 *   **Zero Rules**: Comes with no built-in rules, giving full control to the developer.
+*   **Minimalist Implementation**: Extremely small codebase by leveraging existing TypeScript infrastructure.
 *   **Direct AST Access**: Rule authoring uses native TypeScript APIs directly.
 *   **Low Noise**: Violations are reported as "Message" diagnostics, avoiding interference with compiler errors.
 *   **Built-in Rule Traceability**: Diagnostics automatically carry a source trace. In your editor, you can jump from a reported error directly to the exact line in your **rule's source code** that generated it.
