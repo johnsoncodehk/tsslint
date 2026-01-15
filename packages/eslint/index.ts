@@ -89,11 +89,11 @@ export async function convertRules(
  * }
  * ```
  *
- 	 * After that, run `pnpm install` again to generate type definitions.
-	 *
-	 * If the type definitions become outdated, please run `npx tsslint-eslint-update` to update them.
-	 * ---
-	 */
+ * After that, run `pnpm install` again to generate type definitions.
+ *
+ * If the type definitions become outdated, please run `npx tsslint-eslint-update` to update them.
+ * ---
+ */
 export async function defineRules(
 	config: { [K in keyof ESLintRulesConfig]: boolean | ESLintRulesConfig[K] },
 	context: Partial<ESLint.Rule.RuleContext> = {},

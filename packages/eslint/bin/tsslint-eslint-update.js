@@ -38,18 +38,18 @@ try {
 						.filter(([_, count]) => count > 0)
 						.sort((a, b) => b[1] - a[1])
 						.map(([name, count]) => `| <span>${name}</span> | ${count} |`),
-				].join('\n	 * ');
+				].join('\n * ');
 
 				const newJsDoc = `/**
-	 * Converts an ESLint rules configuration to TSSLint rules.
-	 *
-	 * ${statsTable}
-	 *
-	 * ---
-	 * If you have added new ESLint plugins, please run \`npx tsslint-eslint-update\` to update this list.
-	 * 
-	 * ---
-	 */`;
+ * Converts an ESLint rules configuration to TSSLint rules.
+ *
+ * ${statsTable}
+ *
+ * ---
+ * If you have added new ESLint plugins, please run \`npx tsslint-eslint-update\` to update this list.
+ * 
+ * ---
+ */`;
 				indexContent = indexContent.slice(0, jsDocStart) + newJsDoc + indexContent.slice(jsDocEnd);
 				fs.writeFileSync(indexPath, indexContent);
 			}
