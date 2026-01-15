@@ -4,8 +4,12 @@
 	"license": "MIT",
 	"files": [
 		"**/*.js",
-		"**/*.d.ts"
+		"**/*.d.ts",
+		"bin"
 	],
+	"bin": {
+		"tsslint-eslint-generate": "bin/tsslint-eslint-generate.js"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
