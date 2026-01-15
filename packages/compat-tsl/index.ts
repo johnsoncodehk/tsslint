@@ -2,11 +2,13 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ts from 'typescript';
 
 export function convertRule(
-	rule: any, // TSL.Rule
+	ruleOrFactory: any, // TSL.Rule | TSL.RuleFactory
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
 	return ctx => {
 		const { typescript: ts, file, report, program } = ctx;
+
+		const rule = typeof ruleOrFactory === 'function' ? ruleOrFactory() : ruleOrFactory;
 
 		if (rule.metadata?.typescriptOnly) {
 			const scriptKind = (file as any).scriptKind;
@@ -20,6 +22,7 @@ export function convertRule(
 			sourceFile: file,
 			program,
 			checker: createTSLChecker(ts, checker),
+			utils: createTSLUtils(ts, checker),
 			compilerOptions: program.getCompilerOptions(),
 			report: (descriptor: any) => {
 				const start = 'node' in descriptor ? descriptor.node.getStart() : descriptor.start;
@@ -80,7 +83,7 @@ export function convertRule(
 
 		const visitor = rule.visitor;
 		const walk = (node: ts.Node) => {
-			const nodeKindName = ts.SyntaxKind[node.kind];
+			const nodeKindName = (ts.SyntaxKind as any)[node.kind];
 			if (visitor[nodeKindName]) {
 				visitor[nodeKindName](tslContext, node);
 			}
@@ -90,19 +93,19 @@ export function convertRule(
 	};
 }
 
-function createTSLChecker(ts: any, checker: ts.TypeChecker) {
-	// TSL provides a wrapper around TypeChecker with extra utilities.
-	// For compatibility, we proxy the checker and add common TSL utilities.
-	return new Proxy(checker, {
-		get(target, prop, receiver) {
-			if (prop === 'typeHasFlag') {
-				return (type: ts.Type, flag: ts.TypeFlags) => (type.flags & flag) !== 0;
+function createTSLChecker(_ts: any, checker: ts.TypeChecker) {
+	return checker;
+}
+
+function createTSLUtils(_ts: any, _checker: ts.TypeChecker) {
+	return {
+		typeHasFlag: (type: ts.Type, flag: ts.TypeFlags) => (type.flags & flag) !== 0,
+		typeOrUnionHasFlag: (type: ts.Type, flag: ts.TypeFlags) => {
+			if (type.isUnion()) {
+				return type.types.some(t => (t.flags & flag) !== 0);
 			}
-			if (prop === 'typeHasSymbolFlag') {
-				return (type: ts.Type, flag: ts.SymbolFlags) => (type.getSymbol()?.flags ?? 0 & flag) !== 0;
-			}
-			// Add more TSL utilities as needed based on common rule usage
-			return Reflect.get(target, prop, receiver);
+			return (type.flags & flag) !== 0;
 		},
-	});
+		typeHasSymbolFlag: (type: ts.Type, flag: ts.SymbolFlags) => (type.getSymbol()?.flags ?? 0 & flag) !== 0,
+	};
 }

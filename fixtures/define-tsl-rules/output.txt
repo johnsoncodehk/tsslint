@@ -1,0 +1,61 @@
+(node:12904) ExperimentalWarning: Type Stripping is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+│
+●  [34mTS[0m tsconfig.json [90m(1)[0m
+Total projects: 1
+Project: /home/ubuntu/tsslint/fixtures/define-tsl-rules/tsconfig.json configFile: /home/ubuntu/tsslint/fixtures/define-tsl-rules/tsslint.config.ts fileNames: 1
+(node:12904) ExperimentalWarning: globSync is an experimental feature and might change at any time
+(node:12904) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/ubuntu/tsslint/fixtures/define-tsl-rules/tsslint.config.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /home/ubuntu/tsslint/fixtures/define-tsl-rules/package.json.
+Checking tslDir: /home/ubuntu/tsslint/fixtures/define-tsl-rules/node_modules/tsl exists: true
+TSL module keys: [ 'core', 'createRulesSet', 'defineConfig', 'defineRule' ]
+TSL core exists: true
+Looking for TSL rule: noUnnecessaryTypeAssertion in [
+  'awaitThenable',
+  'dotNotation',
+  'noArrayDelete',
+  'noBaseToString',
+  'noConfusingVoidExpression',
+  'noFloatingPromises',
+  'noForInArray',
+  'noImpliedEval',
+  'noMeaninglessVoidOperator',
+  'noMisusedPromises',
+  'noMisusedSpread',
+  'nonNullableTypeAssertionStyle',
+  'noRedundantTypeConstituents',
+  'noUnnecessaryBooleanLiteralCompare',
+  'noUnnecessaryCondition',
+  'noUnnecessaryTemplateExpression',
+  'noUnnecessaryTypeArguments',
+  'noUnnecessaryTypeAssertion',
+  'noUnnecessaryTypeConversion',
+  'noUnsafeUnaryMinus',
+  'noUselessDefaultAssignment',
+  'onlyThrowError',
+  'preferFind',
+  'preferIncludes',
+  'preferNullishCoalescing',
+  'preferOptionalChain',
+  'preferReduceTypeParameter',
+  'preferReturnThisType',
+  'preferStringStartsEndsWith',
+  'restrictPlusOperands',
+  'restrictTemplateExpressions',
+  'returnAwait',
+  'strictBooleanExpressions',
+  'switchExhaustivenessCheck',
+  'all'
+]
+Resolved rule: noUnnecessaryTypeAssertion keys: []
+│
+■  [96mtest.ts[0m:[93m3[0m:[93m11[0m - [91merror[0m[90m tsl/no-unnecessary-type-assertion: [0mThis assertion is unnecessary since it does not change the type of the expression.
+│  
+│  [7m3[0m const c = b as any;
+│  [7m [0m [91m          ~~~~~~~~[0m
+│
+│  [90mProcessed 1 files.[0m
+│
+└  [91m1 errors[0m[90m (Use [0m[96m--fix[0m[90m to apply automatic fixes.)[0m
+
