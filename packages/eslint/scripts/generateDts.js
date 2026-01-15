@@ -44,7 +44,7 @@ try {
 	 * ${statsTable}
 	 *
 	 * ---
-	 * If you have added new ESLint plugins, please run \\\`npx tsslint-eslint-generate\\\` to update this list.
+	 * If you have added new ESLint plugins, please run \\\`npx tsslint-eslint-update\\\` to update this list.
 	 * 
 	 * ---
 	 */`;

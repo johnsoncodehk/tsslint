@@ -8,7 +8,7 @@
 		"bin"
 	],
 	"bin": {
-		"tsslint-eslint-generate": "bin/tsslint-eslint-generate.js"
+		"tsslint-eslint-update": "bin/tsslint-eslint-update.js"
 	},
 	"repository": {
 		"type": "git",
