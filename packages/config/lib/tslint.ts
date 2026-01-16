@@ -3,8 +3,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as ts from 'typescript';
 import type { TSLintRulesConfig } from './tslint-types.js';
+import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
 
-const noop = () => {};
+const noop = () => { };
 
 type Severity = boolean | 'error' | 'warn';
 
@@ -30,14 +31,6 @@ type Severity = boolean | 'error' | 'warn';
 export async function importTSLintRules(
 	config: { [K in keyof TSLintRulesConfig]: Severity | [Severity, ...TSLintRulesConfig[K]] },
 ) {
-	let convertRule: typeof import('@tsslint/compat-tslint').convertRule;
-	try {
-		({ convertRule } = await import('@tsslint/compat-tslint'));
-	}
-	catch {
-		throw new Error('Please install @tsslint/compat-tslint to use importTSLintRules().');
-	}
-
 	const rules: TSSLint.Rules = {};
 	const rulesDirectories = getTSLintRulesDirectories();
 
@@ -65,8 +58,8 @@ export async function importTSLintRules(
 			severity === 'error'
 				? 1 satisfies ts.DiagnosticCategory.Error
 				: severity === 'warn'
-				? 0 satisfies ts.DiagnosticCategory.Warning
-				: 3 satisfies ts.DiagnosticCategory.Message,
+					? 0 satisfies ts.DiagnosticCategory.Warning
+					: 3 satisfies ts.DiagnosticCategory.Message,
 		);
 	}
 	return rules;
@@ -137,4 +130,70 @@ async function loadTSLintRule(ruleName: string, rulesDirectories: [string, strin
 		}
 		dir = parentDir;
 	}
+}
+
+function convertRule(
+	Rule: {
+		metadata?: IRuleMetadata;
+		new(options: IOptions): IRule;
+	},
+	ruleArguments: any[] = [],
+	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
+): TSSLint.Rule {
+	const rule = new Rule({
+		ruleName: Rule.metadata?.ruleName ?? 'unknown',
+		ruleArguments,
+		ruleSeverity: 'warning',
+		disabledIntervals: [],
+	}) as IRule | ITypedRule;
+	return ({ typescript: ts, file, report, ...ctx }) => {
+		if (Rule.metadata?.typescriptOnly) {
+			const scriptKind = (file as any).scriptKind;
+			if (scriptKind === ts.ScriptKind.JS || scriptKind === ts.ScriptKind.JSX) {
+				return;
+			}
+		}
+
+		const failures = 'applyWithProgram' in rule
+			? rule.applyWithProgram(file, ctx.program)
+			: rule.apply(file);
+		for (const failure of failures) {
+			const reporter = report(
+				failure.getFailure(),
+				failure.getStartPosition().getPosition(),
+				failure.getEndPosition().getPosition(),
+			).at(new Error(), Number.MAX_VALUE);
+
+			if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
+				reporter.asWarning();
+			}
+			else if (category === 1 satisfies ts.DiagnosticCategory.Error) {
+				reporter.asError();
+			}
+			else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
+				reporter.asSuggestion();
+			}
+
+			if (failure.hasFix()) {
+				const ruleName = Rule.metadata?.ruleName;
+				reporter.withFix(
+					ruleName ? `Fix with ${ruleName}` : 'Fix',
+					() => {
+						const fix = failure.getFix();
+						const replaces = Array.isArray(fix) ? fix : fix ? [fix] : [];
+						return [{
+							fileName: file.fileName,
+							textChanges: replaces.map(replace => ({
+								newText: replace.text,
+								span: {
+									start: replace.start,
+									length: replace.length,
+								},
+							})),
+						}];
+					},
+				);
+			}
+		}
+	};
 }

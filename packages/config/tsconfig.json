@@ -3,8 +3,6 @@
 	"include": ["*", "lib/**/*"],
 	"references": [
 		{ "path": "../compat-eslint" },
-		{ "path": "../compat-tslint" },
-		{ "path": "../compat-tsl" },
 		{ "path": "../types" },
 	]
 }

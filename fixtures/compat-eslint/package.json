@@ -1,6 +1,6 @@
 {
 	"private": true,
-	"name": "@tsslint-fixtures/convert-eslint-config",
+	"name": "@tsslint-fixtures/compat-eslint",
 	"version": "3.0.0-alpha.0",
 	"devDependencies": {
 		"@tsslint/config": "3.0.0-alpha.0",

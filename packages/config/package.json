@@ -19,19 +19,18 @@
 		"minimatch": "^10.0.1",
 		"ts-api-utils": "^2.0.0"
 	},
+	"devDependencies": {
+		"tslint": "^6.1.3"
+	},
 	"peerDependencies": {
 		"@tsslint/compat-eslint": "3.0.0-alpha.0",
-		"@tsslint/compat-tslint": "3.0.0-alpha.0",
-		"@tsslint/compat-tsl": "3.0.0-alpha.0"
+		"tsl": "^1.0.28"
 	},
 	"peerDependenciesMeta": {
 		"@tsslint/compat-eslint": {
 			"optional": true
 		},
-		"@tsslint/compat-tslint": {
-			"optional": true
-		},
-		"@tsslint/compat-tsl": {
+		"tsl": {
 			"optional": true
 		}
 	}
