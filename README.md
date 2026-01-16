@@ -180,7 +180,7 @@ TSSLint provides compatibility layers for existing linter ecosystems. The integr
 #### ESLint
 
 ```bash
-npm install eslint@9.27.0 --save-dev
+npm install eslint@9.27.0 @typescript-eslint/parser --save-dev
 ```
 
 ```ts
