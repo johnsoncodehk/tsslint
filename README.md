@@ -175,13 +175,12 @@ export default defineConfig({
 
 ### Ecosystem Integration
 
-TSSLint provides compatibility layers for existing linter ecosystems. These are available via `@tsslint/config` but require the corresponding compatibility package to be installed.
+TSSLint provides compatibility layers for existing linter ecosystems. The integration functions are available via `@tsslint/config`, and you only need to install the original linter package to use them.
 
 #### ESLint
-Convert ESLint rules via `@tsslint/compat-eslint`.
 
 ```bash
-npm install @tsslint/compat-eslint --save-dev
+npm install eslint@9.27.0 @typescript-eslint/parser --save-dev
 ```
 
 ```ts
@@ -200,10 +199,9 @@ export default defineConfig({
 `importESLintRules` will automatically resolve and load rules from ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`) by searching your `node_modules`. Plugin rules are identified by their prefix (e.g., `@typescript-eslint/`).
 
 #### TSLint
-Convert TSLint rules via `@tsslint/compat-tslint`.
 
 ```bash
-npm install @tsslint/compat-tslint --save-dev
+npm install tslint --save-dev
 ```
 
 ```ts
@@ -222,7 +220,19 @@ export default defineConfig({
 `importTSLintRules` will automatically read `rulesDirectory` from your `tslint.json` to support third-party TSLint plugins.
 
 #### TSL
-Convert TSL rules via `@tsslint/compat-tsl`.
+
+```bash
+npm install tsl --save-dev
+```
+
+```ts
+import { defineConfig, fromTSLRules } from '@tsslint/config';
+import { core } from 'tsl';
+
+export default defineConfig({
+	rules: fromTSLRules(core.all()),
+});
+```
 
 ## Technical Notes
 
