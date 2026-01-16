@@ -23,11 +23,15 @@
 		"tslint": "^6.1.3"
 	},
 	"peerDependencies": {
-		"@tsslint/compat-eslint": "3.0.0-alpha.0",
+		"@typescript-eslint/parser": "^8.16.0",
+		"eslint": ">=9.0.0 <9.28.0",
 		"tsl": "^1.0.28"
 	},
 	"peerDependenciesMeta": {
-		"@tsslint/compat-eslint": {
+		"@typescript-eslint/parser": {
+			"optional": true
+		},
+		"eslint": {
 			"optional": true
 		},
 		"tsl": {

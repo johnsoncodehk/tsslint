@@ -38,7 +38,7 @@ export function fromTSLRules(tslRules: TSL.Rule<unknown>[]) {
 				checker: program.getTypeChecker() as unknown as TSL.Checker,
 				rawChecker: program.getTypeChecker(),
 				sourceFile: file as any,
-				report: (descriptor) => {
+				report: descriptor => {
 					if ('node' in descriptor) {
 						report(descriptor.message, descriptor.node.getStart(file), descriptor.node.getEnd())
 							.at(new Error(), 1);
@@ -54,7 +54,7 @@ export function fromTSLRules(tslRules: TSL.Rule<unknown>[]) {
 			};
 			const context2 = { ...context1, data: rule.createData?.(context1) };
 			ts.forEachChild(file, function cb(node) {
-				const nodeType = visitorEntries.find((e) => e[0] === node.kind)?.[1];
+				const nodeType = visitorEntries.find(e => e[0] === node.kind)?.[1];
 				if (nodeType) {
 					// @ts-expect-error
 					rule.visitor[nodeType]?.(context2, node as any);

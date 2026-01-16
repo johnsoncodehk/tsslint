@@ -1,11 +1,11 @@
 import type * as TSSLint from '@tsslint/types';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
 import type * as ts from 'typescript';
 import type { TSLintRulesConfig } from './tslint-types.js';
-import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
 
-const noop = () => { };
+const noop = () => {};
 
 type Severity = boolean | 'error' | 'warn';
 
@@ -58,8 +58,8 @@ export async function importTSLintRules(
 			severity === 'error'
 				? 1 satisfies ts.DiagnosticCategory.Error
 				: severity === 'warn'
-					? 0 satisfies ts.DiagnosticCategory.Warning
-					: 3 satisfies ts.DiagnosticCategory.Message,
+				? 0 satisfies ts.DiagnosticCategory.Warning
+				: 3 satisfies ts.DiagnosticCategory.Message,
 		);
 	}
 	return rules;

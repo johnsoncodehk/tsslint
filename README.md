@@ -178,10 +178,9 @@ export default defineConfig({
 TSSLint provides compatibility layers for existing linter ecosystems. These are available via `@tsslint/config` but require the corresponding compatibility package to be installed.
 
 #### ESLint
-Convert ESLint rules via `@tsslint/compat-eslint`.
 
 ```bash
-npm install @tsslint/compat-eslint --save-dev
+npm install eslint@9.27.0 @typescript-eslint/parser --save-dev
 ```
 
 ```ts
