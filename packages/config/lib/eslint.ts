@@ -157,14 +157,14 @@ function convertRule(
 	let NodeEventGenerator;
 	let Traverser;
 	try {
-		createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
-		NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
-		Traverser = require('../../eslint/lib/shared/traverser.js');
+		createEmitter = require('../../../eslint/lib/linter/safe-emitter.js');
+		NodeEventGenerator = require('../../../eslint/lib/linter/node-event-generator.js');
+		Traverser = require('../../../eslint/lib/shared/traverser.js');
 	}
 	catch {
-		createEmitter = require(require.resolve('./node_modules/eslint/lib/linter/safe-emitter.js'));
-		NodeEventGenerator = require(require.resolve('./node_modules/eslint/lib/linter/node-event-generator.js'));
-		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
+		createEmitter = require(require.resolve('../node_modules/eslint/lib/linter/safe-emitter.js'));
+		NodeEventGenerator = require(require.resolve('../node_modules/eslint/lib/linter/node-event-generator.js'));
+		Traverser = require(require.resolve('../node_modules/eslint/lib/shared/traverser.js'));
 	}
 
 	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
@@ -225,11 +225,7 @@ function convertRule(
 						}
 					}
 					else if ('node' in descriptor) {
-						if (descriptor.node.range) {
-							start = descriptor.node.range[0];
-							end = descriptor.node.range[1];
-						}
-						else if (descriptor.node.loc) {
+						if (descriptor.node.loc) {
 							start = file.getPositionOfLineAndCharacter(
 								descriptor.node.loc.start.line - 1,
 								descriptor.node.loc.start.column,
@@ -529,10 +525,10 @@ function getEstree(
 
 		const Parser = require('@typescript-eslint/parser');
 		try {
-			SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
+			SourceCode = require('../../../eslint/lib/languages/js/source-code/source-code.js');
 		}
 		catch {
-			SourceCode = require(require.resolve('./node_modules/eslint/lib/languages/js/source-code/source-code.js'));
+			SourceCode = require(require.resolve('../node_modules/eslint/lib/languages/js/source-code/source-code.js'));
 		}
 
 		const programProxy = new Proxy({} as ts.Program, {
