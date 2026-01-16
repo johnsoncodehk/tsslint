@@ -200,6 +200,10 @@ export default defineConfig({
 
 #### TSLint
 
+```bash
+npm install tslint --save-dev
+```
+
 ```ts
 import { defineConfig, importTSLintRules } from '@tsslint/config';
 
@@ -216,6 +220,10 @@ export default defineConfig({
 `importTSLintRules` will automatically read `rulesDirectory` from your `tslint.json` to support third-party TSLint plugins.
 
 #### TSL
+
+```bash
+npm install tsl --save-dev
+```
 
 ```ts
 import { defineConfig, fromTSLRules } from '@tsslint/config';
