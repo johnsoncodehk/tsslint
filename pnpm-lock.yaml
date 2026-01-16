@@ -32,9 +32,6 @@ importers:
 
   fixtures/compat-eslint:
     devDependencies:
-      '@tsslint/compat-eslint':
-        specifier: 3.0.0-alpha.0
-        version: link:../../packages/compat-eslint
       '@tsslint/config':
         specifier: 3.0.0-alpha.0
         version: link:../../packages/config
@@ -112,25 +109,6 @@ importers:
         version: 10.1.1
       typescript:
         specifier: '*'
-        version: 5.9.3
-
-  packages/compat-eslint:
-    dependencies:
-      '@typescript-eslint/parser':
-        specifier: ^8.16.0
-        version: 8.53.0(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3)
-      eslint:
-        specifier: '>=9.0.0 <9.28.0'
-        version: 9.27.0(jiti@2.6.1)
-    devDependencies:
-      '@tsslint/types':
-        specifier: 3.0.0-alpha.0
-        version: link:../types
-      '@types/eslint':
-        specifier: ^8.56.10
-        version: 8.56.12
-      typescript:
-        specifier: latest
         version: 5.9.3
 
   packages/config:
@@ -931,9 +909,6 @@ packages:
 
   '@types/debug@4.1.12':
     resolution: {integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==}
-
-  '@types/eslint@8.56.12':
-    resolution: {integrity: sha512-03ruubjWyOHlmljCVoxSuNDdmfZDzsrrz0P2LeJsOXr+ZwFQ+0yQIwNCwt/GYhV7Z31fgtXJTAEs+FYlEL851g==}
 
   '@types/estree-jsx@1.0.5':
     resolution: {integrity: sha512-52CcUVNFyfb1A2ALocQw/Dd1BQFNmSdkuC3BkZ6iqhdMfQz7JWOFRuJFloOzjk+6WijU56m9oKXFAXc7o3Towg==}
@@ -4389,11 +4364,6 @@ snapshots:
   '@types/debug@4.1.12':
     dependencies:
       '@types/ms': 2.1.0
-
-  '@types/eslint@8.56.12':
-    dependencies:
-      '@types/estree': 1.0.8
-      '@types/json-schema': 7.0.15
 
   '@types/estree-jsx@1.0.5':
     dependencies:
