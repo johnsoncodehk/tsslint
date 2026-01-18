@@ -26,7 +26,7 @@ type Severity = boolean | 'error' | 'warn';
  *
  * After that, run `pnpm install` again to generate type definitions.
  *
- * If the type definitions become outdated, please run `npx tsslint-config-update` to update them.
+ * If the type definitions become outdated, please run `npx tsslint-docgen` to update them.
  */
 export async function importTSLintRules(
 	config: { [K in keyof TSLintRulesConfig]: Severity | [Severity, ...TSLintRulesConfig[K]] },

@@ -200,7 +200,7 @@ npm install eslint --save-dev
 After installing the original linter package, run the following command to update JSDoc for built-in rules, enabling better IDE support:
 
 ```bash
-npx tsslint-config-update
+npx tsslint-docgen
 ```
 
 **Usage in `tsslint.config.ts`:**
@@ -235,7 +235,7 @@ npm install tslint --save-dev
 After installing `tslint`, run the following command to update JSDoc for built-in rules:
 
 ```bash
-npx tsslint-config-update
+npx tsslint-docgen
 ```
 
 **Usage in `tsslint.config.ts`:**
