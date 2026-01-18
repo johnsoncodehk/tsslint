@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/cli",
-	"version": "3.0.0-alpha.0",
+	"version": "3.0.0",
 	"license": "MIT",
 	"engines": {
 		"node": ">=22.6.0"
@@ -19,8 +19,8 @@
 	},
 	"dependencies": {
 		"@clack/prompts": "^0.8.2",
-		"@tsslint/config": "3.0.0-alpha.0",
-		"@tsslint/core": "3.0.0-alpha.0",
+		"@tsslint/config": "3.0.0",
+		"@tsslint/core": "3.0.0",
 		"@volar/language-core": "~2.4.0",
 		"@volar/language-hub": "0.0.1",
 		"@volar/typescript": "~2.4.0",

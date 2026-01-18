@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/config",
-	"version": "3.0.0-alpha.0",
+	"version": "3.0.0",
 	"license": "MIT",
 	"engines": {
 		"node": ">=22.6.0"
@@ -18,12 +18,12 @@
 		"directory": "packages/config"
 	},
 	"dependencies": {
-		"@tsslint/types": "3.0.0-alpha.0",
+		"@tsslint/types": "3.0.0",
 		"minimatch": "^10.0.1",
 		"ts-api-utils": "^2.0.0"
 	},
 	"devDependencies": {
-		"@tsslint/compat-eslint": "3.0.0-alpha.0",
+		"@tsslint/compat-eslint": "3.0.0",
 		"tslint": "^6.1.3"
 	},
 	"peerDependencies": {
