@@ -18,12 +18,6 @@ while (true) {
 	dir = parentDir;
 }
 
-const dtsGeneratePath = path.resolve(__dirname, '..', 'index.ts');
-if (fs.existsSync(dtsGeneratePath)) {
-	console.log('Skip dts docgen in development environment.');
-	process.exit(0);
-}
-
 try {
 	const { generateESlintTypes } = require('../lib/eslint-gen');
 	const { generateTSLintTypes } = require('../lib/tslint-gen');
