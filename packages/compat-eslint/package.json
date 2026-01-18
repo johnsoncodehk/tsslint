@@ -13,11 +13,11 @@
 		"directory": "packages/compat-eslint"
 	},
 	"devDependencies": {
-		"@tsslint/types": "3.0.0-alpha.0",
 		"@types/eslint": "^8.56.10",
 		"typescript": "latest"
 	},
 	"dependencies": {
+		"@tsslint/types": "3.0.0-alpha.0",
 		"@typescript-eslint/parser": "^8.16.0",
 		"eslint": ">=9.0.0 <9.28.0"
 	}
