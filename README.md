@@ -212,8 +212,16 @@ export default defineConfig({
 
 #### TSLint
 
+If you want to use TSLint's built-in rules, you need to install `tslint` (optional):
+
 ```bash
 npm install tslint --save-dev
+```
+
+Finally, run the following command to update JSDoc for built-in rules:
+
+```bash
+npx tsslint-config-update
 ```
 
 ```ts
