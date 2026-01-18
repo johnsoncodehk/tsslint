@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --experimental-strip-types --no-warnings
 
 const path = require('path');
 const fs = require('fs');
@@ -18,9 +18,9 @@ while (true) {
 	dir = parentDir;
 }
 
-const dtsGeneratePath = path.resolve(__dirname, '..', 'lib', 'dtsGenerate.ts');
+const dtsGeneratePath = path.resolve(__dirname, '..', 'index.ts');
 if (fs.existsSync(dtsGeneratePath)) {
-	console.log('Skip dts generation: lib/dtsGenerate.ts exists.');
+	console.log('Skip dts docgen in development environment.');
 	process.exit(0);
 }
 

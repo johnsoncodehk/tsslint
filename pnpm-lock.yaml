@@ -147,10 +147,10 @@ importers:
       ts-api-utils:
         specifier: ^2.0.0
         version: 2.4.0(typescript@5.9.3)
-    devDependencies:
       tsl:
         specifier: ^1.0.28
         version: 1.0.28(typescript@5.9.3)
+    devDependencies:
       tslint:
         specifier: ^6.1.3
         version: 6.1.3(typescript@5.9.3)
