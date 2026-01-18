@@ -17,9 +17,6 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/config"
 	},
-	"scripts": {
-		"postinstall": "tsslint-docgen"
-	},
 	"dependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
 		"minimatch": "^10.0.1",
