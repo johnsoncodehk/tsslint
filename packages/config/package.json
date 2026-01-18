@@ -2,6 +2,12 @@
 	"name": "@tsslint/config",
 	"version": "3.0.0-alpha.0",
 	"license": "MIT",
+	"engines": {
+		"node": ">=22.6.0"
+	},
+	"bin": {
+		"tsslint-docgen": "./bin/tsslint-docgen.js"
+	},
 	"files": [
 		"**/*.js",
 		"**/*.d.ts"
@@ -11,27 +17,21 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/config"
 	},
-	"scripts": {
-		"postinstall": "node bin/tsslint-config-update.js"
-	},
 	"dependencies": {
 		"@tsslint/types": "3.0.0-alpha.0",
 		"minimatch": "^10.0.1",
 		"ts-api-utils": "^2.0.0"
 	},
 	"devDependencies": {
+		"@tsslint/compat-eslint": "3.0.0-alpha.0",
 		"tslint": "^6.1.3"
 	},
 	"peerDependencies": {
-		"@typescript-eslint/parser": "^8.16.0",
-		"eslint": ">=9.0.0 <9.28.0",
+		"@tsslint/compat-eslint": "3.0.0-alpha.0",
 		"tsl": "^1.0.28"
 	},
 	"peerDependenciesMeta": {
-		"@typescript-eslint/parser": {
-			"optional": true
-		},
-		"eslint": {
+		"@tsslint/compat-eslint": {
 			"optional": true
 		},
 		"tsl": {

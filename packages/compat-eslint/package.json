@@ -1,0 +1,24 @@
+{
+	"name": "@tsslint/compat-eslint",
+	"version": "3.0.0-alpha.0",
+	"license": "MIT",
+	"files": [
+		"**/*.js",
+		"**/*.d.ts",
+		"bin"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/johnsoncodehk/tsslint.git",
+		"directory": "packages/compat-eslint"
+	},
+	"devDependencies": {
+		"@types/eslint": "^8.56.10",
+		"typescript": "latest"
+	},
+	"dependencies": {
+		"@tsslint/types": "3.0.0-alpha.0",
+		"@typescript-eslint/parser": "^8.16.0",
+		"eslint": ">=9.0.0 <9.28.0"
+	}
+}
