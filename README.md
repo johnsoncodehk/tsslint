@@ -180,7 +180,13 @@ TSSLint provides compatibility layers for existing linter ecosystems. These are 
 #### ESLint
 
 ```bash
-npm install @tsslint/compat-eslint --save-dev
+npm install @tsslint/compat-eslint @typescript-eslint/parser --save-dev
+```
+
+If you want to use ESLint's built-in rules, you also need to install `eslint` (optional):
+
+```bash
+npm install eslint --save-dev
 ```
 
 ```ts
