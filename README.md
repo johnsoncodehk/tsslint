@@ -175,25 +175,37 @@ export default defineConfig({
 
 ### Ecosystem Integration
 
-TSSLint provides compatibility layers for existing linter ecosystems. These are available via `@tsslint/config` but require the corresponding compatibility package to be installed.
+TSSLint provides compatibility layers for existing linter ecosystems (ESLint, TSLint, and TSL). These integrations are coordinated through `@tsslint/config`, which acts as a bridge to load rules from other linters.
 
-#### ESLint
+To use a compatibility layer, you must install the corresponding TSSLint compatibility package. If you wish to use the original linter's built-in rules, you must also install the original linter package itself.
+
+#### 1. ESLint
+
+**Installation:**
+
+First, install the TSSLint compatibility package for ESLint.
 
 ```bash
 npm install @tsslint/compat-eslint --save-dev
 ```
 
-If you want to use ESLint's built-in rules, you also need to install `eslint` (optional):
+If you want to use ESLint's built-in rules (e.g., `no-unused-vars`), you must also install `eslint` (optional):
 
 ```bash
 npm install eslint --save-dev
 ```
 
-Finally, run the following command to update JSDoc for built-in rules:
+**Type Definition Update:**
+
+After installing the original linter package, run the following command to update JSDoc for built-in rules, enabling better IDE support:
 
 ```bash
 npx tsslint-config-update
 ```
+
+**Usage in `tsslint.config.ts`:**
+
+Use `importESLintRules` to load rules. This function automatically resolves and loads rules from ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`) by searching your `node_modules`. Plugin rules are identified by their prefix (e.g., `@typescript-eslint/`).
 
 ```ts
 import { defineConfig, importESLintRules } from '@tsslint/config';
@@ -208,9 +220,9 @@ export default defineConfig({
 });
 ```
 
-`importESLintRules` will automatically resolve and load rules from ESLint plugins (e.g., `@typescript-eslint/eslint-plugin`) by searching your `node_modules`. Plugin rules are identified by their prefix (e.g., `@typescript-eslint/`).
+#### 2. TSLint
 
-#### TSLint
+**Installation:**
 
 If you want to use TSLint's built-in rules, you need to install `tslint` (optional):
 
@@ -218,11 +230,17 @@ If you want to use TSLint's built-in rules, you need to install `tslint` (option
 npm install tslint --save-dev
 ```
 
-Finally, run the following command to update JSDoc for built-in rules:
+**Type Definition Update:**
+
+After installing `tslint`, run the following command to update JSDoc for built-in rules:
 
 ```bash
 npx tsslint-config-update
 ```
+
+**Usage in `tsslint.config.ts`:**
+
+Use `importTSLintRules` to load rules. This function automatically reads `rulesDirectory` from your `tslint.json` to support third-party TSLint plugins.
 
 ```ts
 import { defineConfig, importTSLintRules } from '@tsslint/config';
@@ -237,13 +255,19 @@ export default defineConfig({
 });
 ```
 
-`importTSLintRules` will automatically read `rulesDirectory` from your `tslint.json` to support third-party TSLint plugins.
+#### 3. TSL
 
-#### TSL
+**Installation:**
+
+TSL rules are imported directly from the `tsl` package.
 
 ```bash
 npm install tsl --save-dev
 ```
+
+**Usage in `tsslint.config.ts`:**
+
+Use `fromTSLRules` to load TSL rules.
 
 ```ts
 import { defineConfig, fromTSLRules } from '@tsslint/config';
