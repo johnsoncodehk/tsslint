@@ -116,6 +116,9 @@ importers:
 
   packages/compat-eslint:
     dependencies:
+      '@tsslint/types':
+        specifier: 3.0.0-alpha.0
+        version: link:../types
       '@typescript-eslint/parser':
         specifier: ^8.16.0
         version: 8.53.0(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3)
@@ -123,9 +126,6 @@ importers:
         specifier: '>=9.0.0 <9.28.0'
         version: 9.27.0(jiti@2.6.1)
     devDependencies:
-      '@tsslint/types':
-        specifier: 3.0.0-alpha.0
-        version: link:../types
       '@types/eslint':
         specifier: ^8.56.10
         version: 8.56.12
