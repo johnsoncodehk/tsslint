@@ -1,9 +1,9 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/compat-tsl",
-	"version": "3.0.0-alpha.0",
+	"version": "3.0.0-alpha.1",
 	"devDependencies": {
-		"@tsslint/config": "3.0.0-alpha.0",
+		"@tsslint/config": "3.0.0-alpha.1",
 		"tsl": "^1.0.28"
 	}
 }
