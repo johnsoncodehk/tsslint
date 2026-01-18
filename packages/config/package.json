@@ -26,6 +26,7 @@
 		"ts-api-utils": "^2.0.0"
 	},
 	"devDependencies": {
+		"@tsslint/compat-eslint": "3.0.0-alpha.0",
 		"tslint": "^6.1.3"
 	},
 	"peerDependencies": {
