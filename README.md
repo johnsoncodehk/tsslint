@@ -189,6 +189,12 @@ If you want to use ESLint's built-in rules, you also need to install `eslint` (o
 npm install eslint --save-dev
 ```
 
+Finally, run the following command to update JSDoc for built-in rules:
+
+```bash
+npx tsslint-config-update
+```
+
 ```ts
 import { defineConfig, importESLintRules } from '@tsslint/config';
 
