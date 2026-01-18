@@ -4,8 +4,7 @@
 	"version": "3.0.0-alpha.0",
 	"devDependencies": {
 		"@tsslint/config": "3.0.0-alpha.0",
-		"@typescript-eslint/parser": "^8.16.0",
-		"eslint": "9.27.0",
+		"@tsslint/compat-eslint": "3.0.0-alpha.0",
 		"eslint-plugin-expect-type": "^0.4.0"
 	}
 }
