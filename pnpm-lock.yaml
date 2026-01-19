@@ -15,7 +15,7 @@ importers:
         specifier: latest
         version: 4.11.1(@types/node@25.0.9)(conventional-commits-filter@5.0.0)
       '@tsslint/config':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:packages/config
       '@types/node':
         specifier: latest
@@ -33,10 +33,10 @@ importers:
   fixtures/compat-eslint:
     devDependencies:
       '@tsslint/compat-eslint':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../../packages/compat-eslint
       '@tsslint/config':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../../packages/config
       eslint-plugin-expect-type:
         specifier: ^0.4.0
@@ -45,7 +45,7 @@ importers:
   fixtures/compat-tsl:
     devDependencies:
       '@tsslint/config':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../../packages/config
       tsl:
         specifier: ^1.0.28
@@ -54,7 +54,7 @@ importers:
   fixtures/compat-tslint:
     devDependencies:
       '@tsslint/config':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../../packages/config
       tslint:
         specifier: ^6.1.3
@@ -81,7 +81,7 @@ importers:
   fixtures/typescript-plugin:
     devDependencies:
       '@tsslint/typescript-plugin':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../../packages/typescript-plugin
       typescript:
         specifier: latest
@@ -93,10 +93,10 @@ importers:
         specifier: ^0.8.2
         version: 0.8.2
       '@tsslint/config':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../config
       '@tsslint/core':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../core
       '@volar/language-core':
         specifier: ~2.4.0
@@ -117,7 +117,7 @@ importers:
   packages/compat-eslint:
     dependencies:
       '@tsslint/types':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../types
       '@typescript-eslint/parser':
         specifier: ^8.16.0
@@ -136,7 +136,7 @@ importers:
   packages/config:
     dependencies:
       '@tsslint/types':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../types
       minimatch:
         specifier: ^10.0.1
@@ -150,7 +150,7 @@ importers:
     devDependencies:
       '@tsslint/compat-eslint':
         specifier: 3.0.0
-        version: link:../compat-eslint
+        version: 3.0.0(jiti@2.6.1)(typescript@5.9.3)
       tslint:
         specifier: ^6.1.3
         version: 6.1.3(typescript@5.9.3)
@@ -158,7 +158,7 @@ importers:
   packages/core:
     dependencies:
       '@tsslint/types':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../types
       minimatch:
         specifier: ^10.0.1
@@ -169,20 +169,20 @@ importers:
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../core
       error-stack-parser:
         specifier: ^2.1.4
         version: 2.1.4
     devDependencies:
       '@tsslint/config':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../config
 
   packages/vscode:
     dependencies:
       '@tsslint/typescript-plugin':
-        specifier: 3.0.0
+        specifier: 3.0.1
         version: link:../typescript-plugin
     devDependencies:
       '@types/vscode':
@@ -917,6 +917,12 @@ packages:
 
   '@ts-morph/common@0.27.0':
     resolution: {integrity: sha512-Wf29UqxWDpc+i61k3oIOzcUfQt79PIT9y/MWfAGlrkjg6lBC1hwDECLXPVJAhWjiGbfBCxZd65F/LIZF3+jeJQ==}
+
+  '@tsslint/compat-eslint@3.0.0':
+    resolution: {integrity: sha512-AdTLqqo6BQ323GJ1BBaLTNh1T+mmMP7V1BAr+lCezoFol5xWHew/7kpvldg4yNjP3xHthxWWpgvig0ghYYKJyg==}
+
+  '@tsslint/types@3.0.0':
+    resolution: {integrity: sha512-7S/SWZ3eJfereZjgYap1nTWeVoBvYIzcaG2VbE6cx9PEDsGW/A7a0tfoqVmaNMz1WGAqhwkTQVHSgePyDn1wbg==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -4379,6 +4385,18 @@ snapshots:
       fast-glob: 3.3.3
       minimatch: 10.1.1
       path-browserify: 1.0.1
+
+  '@tsslint/compat-eslint@3.0.0(jiti@2.6.1)(typescript@5.9.3)':
+    dependencies:
+      '@tsslint/types': 3.0.0
+      '@typescript-eslint/parser': 8.53.0(eslint@9.27.0(jiti@2.6.1))(typescript@5.9.3)
+      eslint: 9.27.0(jiti@2.6.1)
+    transitivePeerDependencies:
+      - jiti
+      - supports-color
+      - typescript
+
+  '@tsslint/types@3.0.0': {}
 
   '@tufjs/canonical-json@2.0.0': {}
 

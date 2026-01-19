@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/core",
-	"version": "3.0.0",
+	"version": "3.0.1",
 	"license": "MIT",
 	"engines": {
 		"node": ">=22.6.0"
@@ -15,7 +15,7 @@
 		"directory": "packages/core"
 	},
 	"dependencies": {
-		"@tsslint/types": "3.0.0",
+		"@tsslint/types": "3.0.1",
 		"minimatch": "^10.0.1"
 	}
 }
