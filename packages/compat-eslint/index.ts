@@ -2,11 +2,7 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
-const estrees = new WeakMap<ts.SourceFile, {
-	estree: ESLint.AST.Program;
-	sourceCode: ESLint.SourceCode;
-	eventQueue: any[];
-}>();
+let cachedEstree: [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[]] | undefined;
 
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
@@ -381,7 +377,7 @@ function getEstree(
 	file: ts.SourceFile,
 	getProgram: () => ts.Program,
 ) {
-	if (!estrees.has(file)) {
+	if (cachedEstree?.[0] !== file) {
 		let program: ts.Program | undefined;
 		let SourceCode;
 
@@ -422,7 +418,10 @@ function getEstree(
 			},
 		});
 		const eventQueue = sourceCode.traverse();
-		estrees.set(file, { estree: ast, sourceCode, eventQueue });
+		cachedEstree = [file, sourceCode, eventQueue];
 	}
-	return estrees.get(file)!;
+	return {
+		sourceCode: cachedEstree[1],
+		eventQueue: cachedEstree[2],
+	};
 }
