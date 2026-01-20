@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as ts from 'typescript';
 import type { ESLintRulesConfig } from './eslint-types.js';
+import { normalizeRuleSeverity, type RuleSeverity } from './utils.js';
 
 const noop = () => {};
 const plugins: Record<
@@ -30,8 +31,6 @@ const loader = async (moduleName: string) => {
 	return mod as any;
 };
 
-type Severity = boolean | 'error' | 'warn';
-
 /**
  * Converts an ESLint rules configuration to TSSLint rules.
  *
@@ -40,7 +39,7 @@ type Severity = boolean | 'error' | 'warn';
  * Please run `npx tsslint-docgen` to update them.
  */
 export async function importESLintRules(
-	config: { [K in keyof ESLintRulesConfig]: Severity | [Severity, ...ESLintRulesConfig[K]] },
+	config: { [K in keyof ESLintRulesConfig]: RuleSeverity | [RuleSeverity, ...ESLintRulesConfig[K]] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
 ) {
 	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
@@ -53,7 +52,7 @@ export async function importESLintRules(
 
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(config)) {
-		let severity: Severity;
+		let severity: RuleSeverity;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
 			[severity, ...options] = severityOrOptions;
@@ -62,6 +61,7 @@ export async function importESLintRules(
 			severity = severityOrOptions;
 			options = [];
 		}
+		severity = normalizeRuleSeverity(severity);
 		if (!severity) {
 			rules[rule] = noop;
 			continue;

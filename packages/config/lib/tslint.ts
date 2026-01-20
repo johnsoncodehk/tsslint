@@ -4,10 +4,9 @@ import * as path from 'path';
 import type { IOptions, IRule, IRuleMetadata, ITypedRule } from 'tslint';
 import type * as ts from 'typescript';
 import type { TSLintRulesConfig } from './tslint-types.js';
+import { normalizeRuleSeverity, type RuleSeverity } from './utils.js';
 
 const noop = () => {};
-
-type Severity = boolean | 'error' | 'warn';
 
 /**
  * Converts a TSLint rules configuration to TSSLint rules.
@@ -17,13 +16,13 @@ type Severity = boolean | 'error' | 'warn';
  * Please run `npx tsslint-docgen` to update them.
  */
 export async function importTSLintRules(
-	config: { [K in keyof TSLintRulesConfig]: Severity | [Severity, ...TSLintRulesConfig[K]] },
+	config: { [K in keyof TSLintRulesConfig]: RuleSeverity | [RuleSeverity, ...TSLintRulesConfig[K]] },
 ) {
 	const rules: TSSLint.Rules = {};
 	const rulesDirectories = getTSLintRulesDirectories();
 
 	for (const [ruleName, severityOrOptions] of Object.entries(config)) {
-		let severity: Severity;
+		let severity: RuleSeverity;
 		let options: any[];
 		if (Array.isArray(severityOrOptions)) {
 			[severity, ...options] = severityOrOptions;
@@ -32,6 +31,7 @@ export async function importTSLintRules(
 			severity = severityOrOptions;
 			options = [];
 		}
+		severity = normalizeRuleSeverity(severity);
 		if (!severity) {
 			rules[ruleName] = noop;
 			continue;
