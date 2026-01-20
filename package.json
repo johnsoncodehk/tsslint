@@ -1,6 +1,6 @@
 {
 	"private": true,
-	"version": "3.0.1",
+	"version": "3.0.2",
 	"packageManager": "pnpm@9.3.0",
 	"scripts": {
 		"build": "tsc -b",
@@ -18,7 +18,7 @@
 	"devDependencies": {
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
-		"@tsslint/config": "3.0.1",
+		"@tsslint/config": "3.0.2",
 		"@types/node": "latest",
 		"@typescript-eslint/eslint-plugin": "latest",
 		"dprint": "latest",
