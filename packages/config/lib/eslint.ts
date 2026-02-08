@@ -41,15 +41,16 @@ const loader = async (moduleName: string) => {
 export async function importESLintRules(
 	config: { [K in keyof ESLintRulesConfig]: RuleSeverity | [RuleSeverity, ...ESLintRulesConfig[K]] },
 	context: Partial<ESLint.Rule.RuleContext> = {},
+	getConvertRule = async () => {
+		try {
+			return (await import('@tsslint/compat-eslint')).convertRule;
+		}
+		catch {
+			throw new Error('Please install @tsslint/compat-eslint to use importESLintRules().');
+		}
+	},
 ) {
-	let convertRule: typeof import('@tsslint/compat-eslint').convertRule;
-	try {
-		({ convertRule } = await import('@tsslint/compat-eslint'));
-	}
-	catch {
-		throw new Error('Please install @tsslint/compat-eslint to use importESLintRules().');
-	}
-
+	const convertRule = await getConvertRule();
 	const rules: TSSLint.Rules = {};
 	for (const [rule, severityOrOptions] of Object.entries(config)) {
 		let severity: RuleSeverity;

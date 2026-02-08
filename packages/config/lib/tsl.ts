@@ -1,4 +1,4 @@
-import type { Rule } from '@tsslint/config';
+import type { Rule } from '@tsslint/types';
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as TSL from 'tsl' with { 'resolution-mode': 'import' };

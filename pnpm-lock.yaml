@@ -14,9 +14,6 @@ importers:
       '@lerna-lite/publish':
         specifier: latest
         version: 4.11.1(@types/node@25.0.9)(conventional-commits-filter@5.0.0)
-      '@tsslint/config':
-        specifier: 3.0.2
-        version: link:packages/config
       '@types/node':
         specifier: latest
         version: 25.0.9
