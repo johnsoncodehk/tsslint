@@ -10,7 +10,6 @@ export function convertRule(
 	context: Partial<ESLint.Rule.RuleContext> = {},
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
-	// ESLint internal scripts
 	let createEmitter;
 	let NodeEventGenerator;
 	let Traverser;
@@ -65,7 +64,7 @@ export function convertRule(
 			report(descriptor) {
 				let message = 'message' in descriptor
 					? descriptor.message
-					: getMessage(descriptor.messageId);
+					: eslintRule.meta?.messages?.[descriptor.messageId] ?? '';
 				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
 					return descriptor.data?.[key.slice(2, -2).trim()] ?? key;
 				});
@@ -109,10 +108,9 @@ export function convertRule(
 				}
 
 				if (descriptor.fix) {
-					// @ts-expect-error
-					const textChanges = getTextChanges(descriptor.fix);
+					const textChanges = getTextChanges(file, descriptor.fix as ESLint.Rule.ReportFixer | null | undefined);
 					reporter.withFix(
-						getTextChangeMessage(textChanges),
+						getTextChangeMessage(file, textChanges),
 						() => [{
 							fileName: file.fileName,
 							textChanges,
@@ -121,7 +119,7 @@ export function convertRule(
 				}
 				for (const suggest of descriptor.suggest ?? []) {
 					if ('messageId' in suggest) {
-						let message = getMessage(suggest.messageId);
+						let message = eslintRule.meta?.messages?.[suggest.messageId] ?? '';
 						message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
 							return suggest.data?.[key.slice(2, -2).trim()] ?? key;
 						});
@@ -129,16 +127,14 @@ export function convertRule(
 							message,
 							() => [{
 								fileName: file.fileName,
-								// @ts-expect-error
-								textChanges: getTextChanges(suggest.fix),
+								textChanges: getTextChanges(file, suggest.fix as ESLint.Rule.ReportFixer | null | undefined),
 							}],
 						);
 					}
 					else {
-						// @ts-expect-error
-						const textChanges = getTextChanges(suggest.fix);
+						const textChanges = getTextChanges(file, suggest.fix as ESLint.Rule.ReportFixer | null | undefined);
 						reporter.withRefactor(
-							getTextChangeMessage(textChanges),
+							getTextChangeMessage(file, textChanges),
 							() => [{
 								fileName: file.fileName,
 								textChanges,
@@ -174,203 +170,192 @@ export function convertRule(
 		for (const step of eventQueue) {
 			switch (step.kind) {
 				case 1: {
-					try {
-						if (step.phase === 1) {
-							currentNode = step.target;
-							eventGenerator.enterNode(step.target);
-						}
-						else {
-							eventGenerator.leaveNode(step.target);
-						}
+					if (step.phase === 1) {
+						currentNode = step.target;
+						eventGenerator.enterNode(step.target);
 					}
-					catch (err) {
-						throw err;
+					else {
+						eventGenerator.leaveNode(step.target);
 					}
 					break;
 				}
-
 				case 2: {
 					emitter.emit(step.target, ...step.args);
 					break;
 				}
-
 				default:
 					throw new Error(`Invalid traversal step found: "${step.type}".`);
 			}
 		}
-
-		function getTextChangeMessage(textChanges: ts.TextChange[]) {
-			if (textChanges.length === 1) {
-				const change = textChanges[0];
-				const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
-				if (change.newText.length === 0) {
-					return `Remove \`${originalText}\`.`;
-				}
-				else if (change.span.length === 0) {
-					const line = file.getLineAndCharacterOfPosition(change.span.start).line;
-					const lineStart = file.getPositionOfLineAndCharacter(line, 0);
-					const lineText = file.text.substring(lineStart, change.span.start).trimStart();
-					return `Insert \`${change.newText}\` after \`${lineText}\`.`;
-				}
-			}
-			const changes = [...textChanges].sort((a, b) => a.span.start - b.span.start);
-			let text = '';
-			let newText = '';
-			for (let i = 0; i < changes.length; i++) {
-				const change = changes[i];
-				text += file.text.substring(change.span.start, change.span.start + change.span.length);
-				newText += change.newText;
-				if (i !== changes.length - 1) {
-					text += '…';
-					newText += '…';
-				}
-			}
-			if (text.length + newText.length <= 50) {
-				return `Replace \`${text}\` with \`${newText}\`.`;
-			}
-			let removeLeft = 0;
-			let removeRight = 0;
-			let removedLeft = false;
-			let removedRight = false;
-			for (let i = 0; i < text.length && i < newText.length; i++) {
-				if (text[i] !== newText[i]) {
-					break;
-				}
-				removeLeft++;
-			}
-			for (let i = 0; i < text.length && i < newText.length; i++) {
-				if (text[text.length - 1 - i] !== newText[newText.length - 1 - i]) {
-					break;
-				}
-				removeRight++;
-			}
-			if (removeLeft > removeRight) {
-				removedLeft = true;
-				text = text.slice(removeLeft);
-				newText = newText.slice(removeLeft);
-				if (text.length + newText.length > 50) {
-					removedRight = true;
-					text = text.slice(0, -removeRight);
-					newText = newText.slice(0, -removeRight);
-				}
-			}
-			else {
-				removedRight = true;
-				text = text.slice(0, -removeRight);
-				newText = newText.slice(0, -removeRight);
-				if (text.length + newText.length > 50) {
-					removedLeft = true;
-					text = text.slice(removeLeft);
-					newText = newText.slice(removeLeft);
-				}
-			}
-			if (removedLeft) {
-				text = '…' + text;
-				newText = '…' + newText;
-			}
-			if (removedRight) {
-				text += '…';
-				newText += '…';
-			}
-			return `Replace \`${text}\` with \`${newText}\`.`;
-		}
-
-		function getTextChanges(fix: ESLint.Rule.ReportFixer | null | undefined) {
-			const fixes = fix?.({
-				insertTextAfter(nodeOrToken, text) {
-					if (!nodeOrToken.loc?.end) {
-						throw new Error('Cannot insert text after a node without a location.');
-					}
-					const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-					return this.insertTextAfterRange([start, start], text);
-				},
-				insertTextAfterRange(range, text) {
-					return {
-						text,
-						range: [range[1], range[1]],
-					};
-				},
-				insertTextBefore(nodeOrToken, text) {
-					if (!nodeOrToken.loc?.start) {
-						throw new Error('Cannot insert text before a node without a location.');
-					}
-					const start = file.getPositionOfLineAndCharacter(
-						nodeOrToken.loc.start.line - 1,
-						nodeOrToken.loc.start.column,
-					);
-					return this.insertTextBeforeRange([start, start], text);
-				},
-				insertTextBeforeRange(range, text) {
-					return {
-						text,
-						range: [range[0], range[0]],
-					};
-				},
-				remove(nodeOrToken) {
-					if (!nodeOrToken.loc) {
-						throw new Error('Cannot remove a node without a location.');
-					}
-					const start = file.getPositionOfLineAndCharacter(
-						nodeOrToken.loc.start.line - 1,
-						nodeOrToken.loc.start.column,
-					);
-					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-					return this.removeRange([start, end]);
-				},
-				removeRange(range) {
-					return {
-						text: '',
-						range,
-					};
-				},
-				replaceText(nodeOrToken, text) {
-					if (!nodeOrToken.loc) {
-						throw new Error('Cannot replace text of a node without a location.');
-					}
-					const start = file.getPositionOfLineAndCharacter(
-						nodeOrToken.loc.start.line - 1,
-						nodeOrToken.loc.start.column,
-					);
-					const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-					return this.replaceTextRange([start, end], text);
-				},
-				replaceTextRange(range, text) {
-					return {
-						text,
-						range,
-					};
-				},
-			});
-			const textChanges: ts.TextChange[] = [];
-			if (fixes && 'text' in fixes) {
-				textChanges.push({
-					newText: fixes.text,
-					span: {
-						start: fixes.range[0],
-						length: fixes.range[1] - fixes.range[0],
-					},
-				});
-			}
-			else if (fixes) {
-				for (const fix of fixes) {
-					textChanges.push({
-						newText: fix.text,
-						span: {
-							start: fix.range[0],
-							length: fix.range[1] - fix.range[0],
-						},
-					});
-				}
-			}
-			return textChanges;
-		}
-
-		function getMessage(messageId: string) {
-			return eslintRule.meta?.messages?.[messageId] ?? '';
-		}
 	};
 	(tsslintRule as any).meta = eslintRule.meta;
 	return tsslintRule;
+}
+
+function getTextChangeMessage(file: ts.SourceFile, textChanges: ts.TextChange[]) {
+	if (textChanges.length === 1) {
+		const change = textChanges[0];
+		const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
+		if (change.newText.length === 0) {
+			return `Remove \`${originalText}\`.`;
+		}
+		else if (change.span.length === 0) {
+			const line = file.getLineAndCharacterOfPosition(change.span.start).line;
+			const lineStart = file.getPositionOfLineAndCharacter(line, 0);
+			const lineText = file.text.substring(lineStart, change.span.start).trimStart();
+			return `Insert \`${change.newText}\` after \`${lineText}\`.`;
+		}
+	}
+	const changes = [...textChanges].sort((a, b) => a.span.start - b.span.start);
+	let text = '';
+	let newText = '';
+	for (let i = 0; i < changes.length; i++) {
+		const change = changes[i];
+		text += file.text.substring(change.span.start, change.span.start + change.span.length);
+		newText += change.newText;
+		if (i !== changes.length - 1) {
+			text += '…';
+			newText += '…';
+		}
+	}
+	if (text.length + newText.length <= 50) {
+		return `Replace \`${text}\` with \`${newText}\`.`;
+	}
+	let removeLeft = 0;
+	let removeRight = 0;
+	let removedLeft = false;
+	let removedRight = false;
+	for (let i = 0; i < text.length && i < newText.length; i++) {
+		if (text[i] !== newText[i]) {
+			break;
+		}
+		removeLeft++;
+	}
+	for (let i = 0; i < text.length && i < newText.length; i++) {
+		if (text[text.length - 1 - i] !== newText[newText.length - 1 - i]) {
+			break;
+		}
+		removeRight++;
+	}
+	if (removeLeft > removeRight) {
+		removedLeft = true;
+		text = text.slice(removeLeft);
+		newText = newText.slice(removeLeft);
+		if (text.length + newText.length > 50) {
+			removedRight = true;
+			text = text.slice(0, -removeRight);
+			newText = newText.slice(0, -removeRight);
+		}
+	}
+	else {
+		removedRight = true;
+		text = text.slice(0, -removeRight);
+		newText = newText.slice(0, -removeRight);
+		if (text.length + newText.length > 50) {
+			removedLeft = true;
+			text = text.slice(removeLeft);
+			newText = newText.slice(removeLeft);
+		}
+	}
+	if (removedLeft) {
+		text = '…' + text;
+		newText = '…' + newText;
+	}
+	if (removedRight) {
+		text += '…';
+		newText += '…';
+	}
+	return `Replace \`${text}\` with \`${newText}\`.`;
+}
+
+function getTextChanges(file: ts.SourceFile, fix: ESLint.Rule.ReportFixer | null | undefined) {
+	const fixes = fix?.({
+		insertTextAfter(nodeOrToken, text) {
+			if (!nodeOrToken.loc?.end) {
+				throw new Error('Cannot insert text after a node without a location.');
+			}
+			const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+			return this.insertTextAfterRange([start, start], text);
+		},
+		insertTextAfterRange(range, text) {
+			return {
+				text,
+				range: [range[1], range[1]],
+			};
+		},
+		insertTextBefore(nodeOrToken, text) {
+			if (!nodeOrToken.loc?.start) {
+				throw new Error('Cannot insert text before a node without a location.');
+			}
+			const start = file.getPositionOfLineAndCharacter(
+				nodeOrToken.loc.start.line - 1,
+				nodeOrToken.loc.start.column,
+			);
+			return this.insertTextBeforeRange([start, start], text);
+		},
+		insertTextBeforeRange(range, text) {
+			return {
+				text,
+				range: [range[0], range[0]],
+			};
+		},
+		remove(nodeOrToken) {
+			if (!nodeOrToken.loc) {
+				throw new Error('Cannot remove a node without a location.');
+			}
+			const start = file.getPositionOfLineAndCharacter(
+				nodeOrToken.loc.start.line - 1,
+				nodeOrToken.loc.start.column,
+			);
+			const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+			return this.removeRange([start, end]);
+		},
+		removeRange(range) {
+			return {
+				text: '',
+				range,
+			};
+		},
+		replaceText(nodeOrToken, text) {
+			if (!nodeOrToken.loc) {
+				throw new Error('Cannot replace text of a node without a location.');
+			}
+			const start = file.getPositionOfLineAndCharacter(
+				nodeOrToken.loc.start.line - 1,
+				nodeOrToken.loc.start.column,
+			);
+			const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
+			return this.replaceTextRange([start, end], text);
+		},
+		replaceTextRange(range, text) {
+			return {
+				text,
+				range,
+			};
+		},
+	});
+	const textChanges: ts.TextChange[] = [];
+	if (fixes && 'text' in fixes) {
+		textChanges.push({
+			newText: fixes.text,
+			span: {
+				start: fixes.range[0],
+				length: fixes.range[1] - fixes.range[0],
+			},
+		});
+	}
+	else if (fixes) {
+		for (const fix of fixes) {
+			textChanges.push({
+				newText: fix.text,
+				span: {
+					start: fix.range[0],
+					length: fix.range[1] - fix.range[0],
+				},
+			});
+		}
+	}
+	return textChanges;
 }
 
 function getEstree(
