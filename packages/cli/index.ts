@@ -22,6 +22,7 @@ Options:
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
   --force                       Ignore cache
+  --failures-only               Only print diagnostics that cause exit code 1 (errors and messages)
   -h, --help                    Show this help message
 
 Examples:
@@ -193,6 +194,7 @@ class Project {
 	let messages = 0;
 	let suggestions = 0;
 	let cached = 0;
+	const failuresOnly = process.argv.includes('--failures-only');
 
 	if (isTTY) {
 		const write = process.stdout.write.bind(process.stdout);
@@ -551,7 +553,9 @@ class Project {
 					}
 					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
 						warnings++;
-						log(output, 2);
+						if (!failuresOnly) {
+							log(output, 2);
+						}
 					}
 					else if (diagnostic.category === ts.DiagnosticCategory.Message) {
 						messages++;
@@ -559,7 +563,9 @@ class Project {
 					}
 					else {
 						suggestions++;
-						log(output);
+						if (!failuresOnly) {
+							log(output);
+						}
 					}
 				}
 			}
