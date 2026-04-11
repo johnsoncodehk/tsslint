@@ -8,6 +8,41 @@ import languagePlugins = require('./lib/languagePlugins.js');
 
 process.env.TSSLINT_CLI = '1';
 
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+	console.log(`
+Usage: tsslint [options]
+
+Options:
+  --project <glob...>           Lint TypeScript/JavaScript projects
+  --vue-project <glob...>       Lint Vue projects
+  --vue-vine-project <glob...>  Lint Vue Vine projects
+  --mdx-project <glob...>       Lint MDX projects
+  --astro-project <glob...>     Lint Astro projects
+  --ts-macro-project <glob...>  Lint TS Macro projects
+  --filter <glob...>            Filter files to lint
+  --fix                         Apply automatic fixes
+  --force                       Ignore cache
+  -h, --help                    Show this help message
+
+Examples:
+  # Single project
+  tsslint --project tsconfig.json
+
+  # Multiple projects with glob
+  tsslint --project packages/*/tsconfig.json
+
+  # Multiple projects with brace expansion
+  tsslint --project {tsconfig.json,packages/*/tsconfig.json}
+
+  # Mixed framework projects
+  tsslint --project packages/*/tsconfig.json --vue-project apps/web/tsconfig.json
+
+  # With filter and fix
+  tsslint --project tsconfig.json --filter "src/**/*.ts" --fix
+`);
+	process.exit(0);
+}
+
 const _reset = '\x1b[0m';
 const gray = (s: string) => '\x1b[90m' + s + _reset;
 const red = (s: string) => '\x1b[91m' + s + _reset;
