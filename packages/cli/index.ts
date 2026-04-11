@@ -168,7 +168,7 @@ class Project {
 		);
 
 		if (!process.argv.includes('--force')) {
-			this.cache = cache.loadCache(this.tsconfig, this.configFile, ts.sys.createHash);
+			this.cache = cache.loadCache(this.tsconfig, this.configFile, this.languages, ts.sys.createHash);
 		}
 
 		return this;
@@ -585,7 +585,7 @@ class Project {
 			);
 		}
 
-		cache.saveCache(project.tsconfig, project.configFile!, project.cache, ts.sys.createHash);
+		cache.saveCache(project.tsconfig, project.configFile!, project.languages, project.cache, ts.sys.createHash);
 
 		await startWorker(linterWorker);
 	}
