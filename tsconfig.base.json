@@ -11,8 +11,8 @@
 		"skipLibCheck": true,
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
-		"esModuleInterop": false,
-		"forceConsistentCasingInFileNames": true
+		"forceConsistentCasingInFileNames": true,
+		"types": ["node"]
 	},
 	"include": []
 }
