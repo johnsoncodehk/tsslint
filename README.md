@@ -11,19 +11,65 @@
   <a href="https://deepwiki.com/johnsoncodehk/tsslint"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
-A linter that runs inside `tsserver`. No separate process, no re-parsing, no ESTree conversion. It uses the TypeChecker your editor already has.
+A linter that runs as a `tsserver` plugin. It reuses the TypeChecker your editor already has — no second process, no AST conversion, no duplicated type-checking.
 
-Zero built-in rules. You write what you need with the full TypeScript compiler API.
+Zero built-in rules. Rules are plain functions over the TypeScript compiler API.
 
 ## Why?
 
-ESLint works, but it runs separately and sets up its own type-checking. On large projects, "Auto Fix on Save" gets laggy.
+ESLint runs in its own process and builds its own type information. On large projects this makes "Auto Fix on Save" slow.
 
-TSSLint avoids this by running as a `tsserver` plugin. It reuses the existing TypeChecker, works on native TypeScript AST, and skips the parser conversion layer.
+TSSLint piggybacks on `tsserver`. Diagnostics show up in the same path TypeScript errors do, using the same `Program` instance.
 
-<p align="center">
-  <img src="architecture.png" alt="TSSLint Architecture" width="700">
-</p>
+```
+   Traditional                       TSSLint
+   ───────────                       ───────
+
+      ┌─────┐                            ┌─────┐
+      │ IDE │                            │ IDE │
+      └──┬──┘                            └──┬──┘
+         │                                  │
+     ┌───┴────┐                             ▼
+     ▼        ▼                    ┌─────────────────┐
+  ┌──────┐ ┌──────┐                │    tsserver     │
+  │ ts-  │ │linter│                │  ┌───────────┐  │
+  │server│ │      │                │  │TypeChecker│  │
+  │      │ │      │                │  └─────┬─────┘  │
+  │ Type │ │ Type │                │        │        │
+  │ Chk. │ │ Chk. │                │  ┌─────▼─────┐  │
+  └──────┘ └──────┘                │  │  TSSLint  │  │
+                                   │  └───────────┘  │
+   ✗ two type-checkers             └─────────────────┘
+     two parses                     ✓ one shared pass
+```
+
+## How it compares
+
+TSLint (TS-AST, deprecated 2019) → ESLint took over via `typescript-eslint` → TSSLint revives the in-process TS-AST approach as a `tsserver` plugin (2023).
+
+```
+             2013        2019                2023
+              │            │                   │
+              │            │                   │
+  TSLint ─────●━━━━━━━━━━━✗ deprecated         │
+                             ╲                 │
+                              ╲                │
+  ESLint ─────●━━━━━━━━━━━━━━━━╲━━━━━━━━━━━━━━━━━━━▶ (active)
+                                ╲              │
+                                 ╲             │
+  TSSLint                         ╲────────────●━━▶  (tsserver plugin,
+                                                     revives TS-AST)
+```
+
+| | ESLint | TSLint | Oxlint | TSSLint |
+|---|---|---|---|---|
+| Runtime | Node, separate process | Node, separate process | Rust, separate process | Node, in `tsserver` |
+| AST | ESTree | TS AST | Native Rust AST | TS AST |
+| Type-aware rules | Yes (its own `Program`) | Yes (its own `Program`) | Yes (via `tsgolint`, alpha) | Yes (shared `TypeChecker`) |
+| Built-in rules | Many | Deprecated | Subset of ESLint (+ JS plugins, alpha) | Zero (imports ESLint / TSLint / TSL) |
+| Status | Active standard | Deprecated 2019 | Active | Active |
+
+**Pick by need.** Largest ecosystem → ESLint. Fastest standalone runtime → Oxlint. Type-aware without duplicate type-checking → TSSLint.
 
 ## Setup
 
@@ -31,21 +77,25 @@ TSSLint avoids this by running as a `tsserver` plugin. It reuses the existing Ty
 npm install @tsslint/config --save-dev
 ```
 
-Create `tsslint.config.ts`:
+`tsslint.config.ts`:
 
 ```ts
 import { defineConfig } from '@tsslint/config';
 
 export default defineConfig({
   rules: {
-    // your rules here
+    // your rules
   },
 });
 ```
 
-**VSCode**: Install the [TSSLint extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
+**VSCode**: install [the extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
 
-**Other editors**: Add the plugin to `tsconfig.json`:
+**Other editors**: install the plugin and register it in `tsconfig.json`:
+
+```bash
+npm install @tsslint/typescript-plugin --save-dev
+```
 
 ```json
 {
@@ -55,69 +105,147 @@ export default defineConfig({
 }
 ```
 
-## Writing Rules
+## Writing rules
+
+A rule is a function. It receives the TypeScript module, the current `Program`, the `SourceFile`, and a `report()` callback.
 
 ```ts
 import { defineRule } from '@tsslint/config';
 
 export default defineRule(({ typescript: ts, file, report }) => {
-  ts.forEachChild(file, function cb(node) {
+  ts.forEachChild(file, function visit(node) {
     if (node.kind === ts.SyntaxKind.DebuggerStatement) {
       report('Debugger statement is not allowed.', node.getStart(file), node.getEnd());
     }
-    ts.forEachChild(node, cb);
+    ts.forEachChild(node, visit);
   });
 });
 ```
 
-For a real-world example, see [vuejs/language-tools tsslint.config.ts](https://github.com/vuejs/language-tools/blob/master/tsslint.config.ts).
+Touch `program` only when you need type information — rules that don't are cached aggressively (see [Caching](#caching)).
+
+### Severity, fixes, refactors
+
+`report()` returns a chainable reporter:
+
+```ts
+report('No console.', node.getStart(file), node.getEnd())
+  .asError()                     // default is Message; also: asWarning(), asSuggestion()
+  .withDeprecated()              // strikethrough
+  .withUnnecessary()             // faded
+  .withFix('Remove call', () => [
+    { fileName: file.fileName, textChanges: [{ span: { start, length }, newText: '' }] },
+  ])
+  .withRefactor('Wrap in if (DEBUG)', () => [/* ... */]);
+```
+
+`withFix` runs automatically as a quick fix; `withRefactor` shows up under the editor's refactor menu (user-initiated).
+
+### Real-world example
+
+[vuejs/language-tools tsslint.config.ts](https://github.com/vuejs/language-tools/blob/master/tsslint.config.ts).
+
+### Organizing rules
+
+Rules can nest; the path becomes the rule id:
+
+```ts
+defineConfig({
+  rules: {
+    style: {
+      'no-debugger': debuggerRule,   // reported as "style/no-debugger"
+    },
+  },
+});
+```
+
+`defineConfig` also accepts an array — each entry can scope rules with `include` / `exclude` minimatch patterns.
 
 ### Caching
 
-Diagnostics are cached by default. The cache invalidates automatically when:
+By default, rules run in a syntax-only mode and their diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/`. Cache is keyed by file mtime.
 
-1. A rule accesses `RuleContext.program` (type-aware rules)
-2. A rule calls `report().withoutCache()`
+The moment a rule reads `ctx.program`, it switches to type-aware mode for that file and skips the cache (type information depends on more than one file's mtime). To opt a single diagnostic out of caching without going type-aware, call `.withoutCache()` on the reporter.
+
+Pass `--force` to the CLI to ignore the cache.
 
 ### Debugging
 
-Every `report()` captures a stack trace. Click the diagnostic in your editor to jump to the exact line in your rule that triggered it.
+Every `report()` captures a stack trace. The diagnostic carries a "Related Information" link back to the exact line in your rule that triggered it — ⌘-click in the editor to jump there:
 
-<p align="center">
-  <img src="traceability.png" alt="Rule Traceability" width="700">
-</p>
+```
+src/index.ts:3:1
+  3 │ debugger;
+    │ ~~~~~~~~~ Debugger statement is not allowed. (tsslint)
+    │             ↳ rules/no-debugger.ts:5:7   ⌘-click to open
+```
 
 ## CLI
 
 ```bash
-npx tsslint --project tsconfig.json
-npx tsslint --project tsconfig.json --fix
-npx tsslint --project packages/*/tsconfig.json
+npm install @tsslint/cli --save-dev
 ```
 
-Run `npx tsslint --help` for all options.
+```bash
+npx tsslint --project tsconfig.json
+npx tsslint --project tsconfig.json --fix
+npx tsslint --project 'packages/*/tsconfig.json' --filter 'src/**/*.ts'
+```
 
-TSSLint only does diagnostics and fixes. Run Prettier or dprint after `--fix`.
+Flags:
 
-## Framework Support
+| Flag | |
+|---|---|
+| `--project <glob...>` | TypeScript projects to lint |
+| `--vue-project <glob...>` | Vue projects |
+| `--vue-vine-project <glob...>` | Vue Vine projects |
+| `--mdx-project <glob...>` | MDX projects |
+| `--astro-project <glob...>` | Astro projects |
+| `--ts-macro-project <glob...>` | TS Macro projects |
+| `--filter <glob...>` | Restrict to matching files |
+| `--fix` | Apply fixes |
+| `--force` | Ignore cache |
+| `--failures-only` | Only print diagnostics that affect exit code |
+| `-h`, `--help` | |
 
-TSSLint works with Vue, MDX, Astro, and anything else that plugs into tsserver. These tools virtualize their files as TypeScript for tsserver. TSSLint just sees and lints that TypeScript.
+TSSLint produces diagnostics and edits — it does not format. Run dprint or Prettier after `--fix`.
 
-<p align="center">
-  <img src="architecture_v2.png" alt="Framework Support" width="700">
-</p>
+## Framework support
 
-## Using ESLint/TSLint Rules
+The `--*-project` flags wire in [Volar](https://volarjs.dev/) language plugins so framework files (Vue SFCs, MDX, Astro components, etc.) are virtualized as TypeScript before linting. Anything `tsserver` can see, TSSLint can lint.
 
-You can load rules from ESLint and TSLint through compatibility layers.
+```
+   .vue  ──┐
+   .mdx  ──┤    ┌──────────────┐    ┌──────────────────┐
+   .astro──┼───▶│  Framework   │───▶│     tsserver     │───▶  diagnostics
+   .ts   ──┘    │   adapters   │    │                  │      in editor
+                │              │    │  TypeChecker     │
+                │  ─▶ virtual  │    │       +          │
+                │     TS file  │    │  TSSLint plugin  │
+                └──────────────┘    └──────────────────┘
+```
+
+Each flag resolves the language plugin from your project's `node_modules`, so you must install the corresponding package:
+
+| Flag | Required package(s) |
+|---|---|
+| `--vue-project` | `@vue/language-core` or `vue-tsc` |
+| `--vue-vine-project` | `@vue-vine/language-service` or `vue-vine-tsc` |
+| `--mdx-project` | `@mdx-js/language-service` |
+| `--astro-project` | `@astrojs/ts-plugin` |
+| `--ts-macro-project` | `@ts-macro/language-plugin` or `@ts-macro/tsc` |
+
+## Importing ESLint, TSLint, or TSL rules
 
 ### ESLint
 
 ```bash
 npm install @tsslint/compat-eslint --save-dev
-npm install eslint --save-dev  # optional, for built-in rules
-npx tsslint-docgen              # generates JSDoc for IDE support
+npm install @typescript-eslint/eslint-plugin --save-dev   # for @typescript-eslint/* rules
+npx tsslint-docgen                                        # generates JSDoc for IDE autocomplete
 ```
+
+For each non-built-in rule (`<plugin>/<rule>`), install the matching ESLint plugin (`eslint-plugin-<plugin>` or `@scope/eslint-plugin`).
 
 ```ts
 import { defineConfig, importESLintRules } from '@tsslint/config';
@@ -126,7 +254,7 @@ export default defineConfig({
   rules: {
     ...await importESLintRules({
       'no-unused-vars': true,
-      '@typescript-eslint/no-explicit-any': true,
+      '@typescript-eslint/no-explicit-any': 'warn',
     }),
   },
 });
@@ -135,7 +263,7 @@ export default defineConfig({
 ### TSLint
 
 ```bash
-npm install tslint --save-dev  # optional, for built-in rules
+npm install tslint --save-dev      # required for built-in rules
 npx tsslint-docgen
 ```
 
@@ -143,11 +271,9 @@ npx tsslint-docgen
 import { defineConfig, importTSLintRules } from '@tsslint/config';
 
 export default defineConfig({
-  rules: {
-    ...await importTSLintRules({
-      'no-console': true,
-    }),
-  },
+  rules: await importTSLintRules({
+    'no-console': true,
+  }),
 });
 ```
 
@@ -166,23 +292,43 @@ export default defineConfig({
 });
 ```
 
-## Ignoring Rules
+## Plugins
+
+Plugins can rewrite rules per file, filter diagnostics, and inject code fixes. Three are bundled:
 
 ```ts
-import { defineConfig, createIgnorePlugin } from '@tsslint/config';
+import {
+  defineConfig,
+  createIgnorePlugin,
+  createCategoryPlugin,
+  createDiagnosticsPlugin,
+} from '@tsslint/config';
+import ts from 'typescript';
 
 export default defineConfig({
-  rules: { ... },
-  plugins: [createIgnorePlugin('tsslint-ignore', true)],
+  rules: { /* ... */ },
+  plugins: [
+    // // tsslint-ignore [rule-id]  — single-line, or *-start / *-end pairs
+    createIgnorePlugin('tsslint-ignore', /* report unused */ true),
+
+    // Override severity by rule-id pattern
+    createCategoryPlugin({
+      'style/*': ts.DiagnosticCategory.Warning,
+    }),
+
+    // Forward TypeScript's own diagnostics through the same pipeline
+    createDiagnosticsPlugin('semantic'),
+  ],
 });
 ```
 
-Then use `// tsslint-ignore` comments in your code.
+Build your own with the `Plugin` type from `@tsslint/types`.
 
-## Notes
+## Requirements
 
-- Requires Node.js 22.6.0+
-- Not compatible with typescript-go (v7) - it doesn't support Language Service Plugins
+- Node.js **22.6.0+** (uses `--experimental-strip-types` to load `tsslint.config.ts` directly — no transpile step)
+- Any TypeScript version with Language Service Plugin support
+- Not compatible with `typescript-go` (v7), which does not yet support Language Service Plugins
 
 ## License
 
