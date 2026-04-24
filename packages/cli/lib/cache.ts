@@ -13,19 +13,12 @@ export function loadCache(
 	languages: string[],
 	createHash: (path: string) => string = btoa,
 ): CacheData {
-	const outDir = getTsslintCachePath();
-	const cacheKey = configFilePath + '\0' + tsconfig + '\0' + languages.sort().join(',');
-	const cacheFileName = createHash(cacheKey) + '.cache.json';
-	const cacheFilePath = path.join(outDir, cacheFileName);
-	const cacheFileStat = fs.statSync(cacheFilePath, { throwIfNoEntry: false });
-	const configFileStat = fs.statSync(configFilePath, { throwIfNoEntry: false });
-	if (cacheFileStat?.isFile() && cacheFileStat.mtimeMs > (configFileStat?.mtimeMs ?? 0)) {
+	const cacheFilePath = getCacheFilePath(tsconfig, configFilePath, languages, createHash);
+	if (fs.statSync(cacheFilePath, { throwIfNoEntry: false })?.isFile()) {
 		try {
 			return JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
 		}
-		catch {
-			return {};
-		}
+		catch {}
 	}
 	return {};
 }
@@ -37,12 +30,26 @@ export function saveCache(
 	cache: CacheData,
 	createHash: (path: string) => string = btoa,
 ): void {
-	const outDir = getTsslintCachePath();
-	const cacheKey = configFilePath + '\0' + tsconfig + '\0' + languages.sort().join(',');
-	const cacheFileName = createHash(cacheKey) + '.cache.json';
-	const cacheFilePath = path.join(outDir, cacheFileName);
-	fs.mkdirSync(outDir, { recursive: true });
+	const cacheFilePath = getCacheFilePath(tsconfig, configFilePath, languages, createHash);
+	fs.mkdirSync(path.dirname(cacheFilePath), { recursive: true });
 	fs.writeFileSync(cacheFilePath, JSON.stringify(cache));
+}
+
+function getCacheFilePath(
+	tsconfig: string,
+	configFilePath: string,
+	languages: string[],
+	createHash: (path: string) => string,
+): string {
+	const configStat = fs.statSync(configFilePath, { throwIfNoEntry: false });
+	const cacheKey = [
+		configFilePath,
+		tsconfig,
+		languages.sort().join(','),
+		configStat?.mtimeMs ?? 0,
+		configStat?.size ?? 0,
+	].join('\0');
+	return path.join(getTsslintCachePath(), createHash(cacheKey) + '.cache.json');
 }
 
 function getTsslintCachePath(): string {
