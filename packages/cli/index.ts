@@ -65,8 +65,6 @@ const LANGUAGE_LABELS = [
 	{ key: 'astro', label: 'Astro', color: colors.astroColor },
 ] as const;
 
-let threads = 1;
-
 class Project {
 	worker: ReturnType<typeof worker.create> | undefined;
 	/**
@@ -264,12 +262,8 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		process.exit(1);
 	}
 
-	if (process.stdout.isTTY || threads >= 2) {
-		await Promise.all(
-			new Array(threads).fill(0).map(() => {
-				return startWorker(worker.create());
-			}),
-		);
+	if (process.stdout.isTTY) {
+		await startWorker(worker.create());
 	}
 	else {
 		await startWorker(worker.createLocal() as any);
