@@ -111,19 +111,57 @@ export function create() {
 	};
 
 	function sendRequest<T extends (...args: any) => void>(t: T, ...args: any[]) {
-		return new Promise<Awaited<ReturnType<T>>>(resolve => {
-			worker.once('message', json => {
-				resolve(JSON.parse(json));
-			});
+		return new Promise<Awaited<ReturnType<T>>>((resolve, reject) => {
+			const onMessage = (json: string) => {
+				cleanup();
+				const parsed = JSON.parse(json);
+				if (parsed && parsed.__error) {
+					reject(new Error(parsed.__error));
+				}
+				else {
+					resolve(parsed);
+				}
+			};
+			const onError = (err: Error) => {
+				cleanup();
+				reject(err);
+			};
+			const onExit = (code: number) => {
+				cleanup();
+				reject(new Error(`Worker exited with code ${code}`));
+			};
+			const cleanup = () => {
+				worker.off('message', onMessage);
+				worker.off('error', onError);
+				worker.off('messageerror', onError);
+				worker.off('exit', onExit);
+			};
+			worker.once('message', onMessage);
+			worker.once('error', onError);
+			worker.once('messageerror', onError);
+			worker.once('exit', onExit);
 			worker.postMessage(JSON.stringify([t.name, ...args]));
 		});
 	}
 }
 
 worker_threads.parentPort?.on('message', async json => {
-	const data: [cmd: keyof typeof handlers, ...args: any[]] = JSON.parse(json);
-	const result = await (handlers[data[0]] as any)(...data.slice(1));
-	worker_threads.parentPort!.postMessage(JSON.stringify(result));
+	let response: string;
+	try {
+		const data: [cmd: keyof typeof handlers, ...args: any[]] = JSON.parse(json);
+		const handler = handlers[data[0]] as ((...args: any[]) => unknown) | undefined;
+		if (!handler) {
+			throw new Error(`Unknown worker command: ${data[0]}`);
+		}
+		const result = await handler(...data.slice(1));
+		response = JSON.stringify(result);
+	}
+	catch (err) {
+		response = JSON.stringify({
+			__error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+		});
+	}
+	worker_threads.parentPort!.postMessage(response);
 });
 
 const handlers = {
