@@ -128,7 +128,7 @@ async function loadRule(pluginName: string | undefined, ruleName: string): Promi
 	while (true) {
 		const rulePath = path.join(dir, 'node_modules', 'eslint', 'lib', 'rules', `${ruleName}.js`);
 		if (fs.existsSync(rulePath)) {
-			return loader(rulePath);
+			return require(rulePath);
 		}
 		const parentDir = path.resolve(dir, '..');
 		if (parentDir === dir) {
