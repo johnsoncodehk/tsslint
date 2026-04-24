@@ -2,6 +2,8 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
+import path = require('path');
+
 let cachedEstree: [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[]] | undefined;
 
 export function convertRule(
@@ -10,19 +12,11 @@ export function convertRule(
 	context: Partial<ESLint.Rule.RuleContext> = {},
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
-	let createEmitter;
-	let NodeEventGenerator;
-	let Traverser;
-	try {
-		createEmitter = require('../../eslint/lib/linter/safe-emitter.js');
-		NodeEventGenerator = require('../../eslint/lib/linter/node-event-generator.js');
-		Traverser = require('../../eslint/lib/shared/traverser.js');
-	}
-	catch {
-		createEmitter = require(require.resolve('./node_modules/eslint/lib/linter/safe-emitter.js'));
-		NodeEventGenerator = require(require.resolve('./node_modules/eslint/lib/linter/node-event-generator.js'));
-		Traverser = require(require.resolve('./node_modules/eslint/lib/shared/traverser.js'));
-	}
+	// These paths reach into ESLint internals and may break on ESLint major upgrades.
+	const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
+	const createEmitter = require(path.join(eslintRoot, 'lib/linter/safe-emitter.js'));
+	const NodeEventGenerator = require(path.join(eslintRoot, 'lib/linter/node-event-generator.js'));
+	const Traverser = require(path.join(eslintRoot, 'lib/shared/traverser.js'));
 
 	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
 		const { sourceCode, eventQueue } = getEstree(file, () => ctx.program);
@@ -364,15 +358,11 @@ function getEstree(
 ) {
 	if (cachedEstree?.[0] !== file) {
 		let program: ts.Program | undefined;
-		let SourceCode;
 
 		const Parser = require('@typescript-eslint/parser');
-		try {
-			SourceCode = require('../../eslint/lib/languages/js/source-code/source-code.js');
-		}
-		catch {
-			SourceCode = require(require.resolve('./node_modules/eslint/lib/languages/js/source-code/source-code.js'));
-		}
+		// Reaches into ESLint internals; may break on ESLint major upgrades.
+		const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
+		const SourceCode = require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js'));
 
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
