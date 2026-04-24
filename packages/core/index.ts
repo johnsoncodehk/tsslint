@@ -503,10 +503,7 @@ export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: 
 		getLength() {
 			return text.length;
 		},
-		getChangeRange(oldSnapshot) {
-			if (oldSnapshot === baseSnapshot) {
-				// TODO
-			}
+		getChangeRange() {
 			return undefined;
 		},
 	};
