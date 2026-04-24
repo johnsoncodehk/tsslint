@@ -249,8 +249,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		projects.push(await new Project(tsconfig, languages).init(renderer, filters));
 	}
 
-	projects = projects.filter(project => !!project.configFile);
-	projects = projects.filter(project => !!project.fileNames.length);
+	projects = projects.filter(project => project.configFile && project.fileNames.length);
 
 	for (const project of projects) {
 		allFilesNum += project.fileNames.length;
