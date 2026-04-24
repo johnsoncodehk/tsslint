@@ -27,6 +27,10 @@ jobs:
       - name: Auto-fix
         run: pnpm run lint:fix
 
+      # verify fixes didn't break typecheck
+      - name: Typecheck after fix
+        run: pnpm run build
+
       # commit
       - name: Commit
         uses: EndBug/add-and-commit@v9
