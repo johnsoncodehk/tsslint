@@ -1,4 +1,4 @@
-import { defineConfig } from '@tsslint/config';
+import { defineConfig } from '../../packages/config/index.js';
 
 export default defineConfig([
 	{

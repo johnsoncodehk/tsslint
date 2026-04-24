@@ -5,11 +5,12 @@ import worker = require('./lib/worker.js');
 import fs = require('fs');
 import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
+import colors = require('./lib/colors.js');
+import render = require('./lib/render.js');
 
 process.env.TSSLINT_CLI = '1';
 
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
-	console.log(`
+const HELP = `
 Usage: tsslint [options]
 
 Options:
@@ -22,7 +23,7 @@ Options:
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
   --force                       Ignore cache
-  --failures-only               Only print diagnostics that cause exit code 1 (errors and messages)
+  --failures-only               Only print errors and messages (skip warnings and suggestions)
   -h, --help                    Show this help message
 
 Examples:
@@ -40,38 +41,31 @@ Examples:
 
   # With filter and fix
   tsslint --project tsconfig.json --filter "src/**/*.ts" --fix
-`);
+`;
+
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+	console.log(HELP);
 	process.exit(0);
 }
 
-const _reset = '\x1b[0m';
-const gray = (s: string) => '\x1b[90m' + s + _reset;
-const red = (s: string) => '\x1b[91m' + s + _reset;
-const green = (s: string) => '\x1b[92m' + s + _reset;
-const yellow = (s: string) => '\x1b[93m' + s + _reset;
-const blue = (s: string) => '\x1b[94m' + s + _reset;
-const purple = (s: string) => '\x1b[95m' + s + _reset;
-const cyan = (s: string) => '\x1b[96m' + s + _reset;
+const PROJECT_FLAGS = [
+	{ flag: '--project', language: undefined },
+	{ flag: '--vue-project', language: 'vue' },
+	{ flag: '--vue-vine-project', language: 'vue-vine' },
+	{ flag: '--mdx-project', language: 'mdx' },
+	{ flag: '--astro-project', language: 'astro' },
+	{ flag: '--ts-macro-project', language: 'ts-macro' },
+] as const;
 
-// https://talyian.github.io/ansicolors/
-const tsColor = (s: string) => '\x1b[34m' + s + _reset;
-const tsMacroColor = (s: string) => '\x1b[38;5;135m' + s + _reset;
-const vueColor = (s: string) => '\x1b[32m' + s + _reset;
-const vueVineColor = (s: string) => '\x1b[38;5;48m' + s + _reset;
-const mdxColor = (s: string) => '\x1b[33m' + s + _reset;
-const astroColor = (s: string) => '\x1b[38;5;209m' + s + _reset;
+const LANGUAGE_LABELS = [
+	{ key: 'ts-macro', label: 'TS Macro', color: colors.tsMacroColor },
+	{ key: 'vue', label: 'Vue', color: colors.vueColor },
+	{ key: 'vue-vine', label: 'Vue Vine', color: colors.vueVineColor },
+	{ key: 'mdx', label: 'MDX', color: colors.mdxColor },
+	{ key: 'astro', label: 'Astro', color: colors.astroColor },
+] as const;
 
 let threads = 1;
-
-// if (process.argv.includes('--threads')) {
-// 	const threadsIndex = process.argv.indexOf('--threads');
-// 	const threadsArg = process.argv[threadsIndex + 1];
-// 	if (!threadsArg || threadsArg.startsWith('-')) {
-// 		console.error(red(`Missing argument for --threads.`));
-// 		process.exit(1);
-// 	}
-// 	threads = Math.min(os.availableParallelism(), Number(threadsArg));
-// }
 
 class Project {
 	worker: ReturnType<typeof worker.create> | undefined;
@@ -87,47 +81,35 @@ class Project {
 	configFile: string | undefined;
 	currentFileIndex = 0;
 	cache: cache.CacheData = {};
+	pendingHeader: string | undefined;
 
 	constructor(
 		public tsconfig: string,
 		public languages: string[],
 	) {}
 
-	async init(
-		// @ts-expect-error
-		clack: typeof import('@clack/prompts'),
-		filesFilter: string[],
-	) {
+	async init(renderer: render.Renderer, filesFilter: string[]) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
 		const labels: string[] = [];
 
 		if (this.languages.length === 0) {
-			labels.push(tsColor('TS'));
+			labels.push(colors.tsColor('TS'));
 		}
 		else {
-			if (this.languages.includes('ts-macro')) {
-				labels.push(tsMacroColor('TS Macro'));
-			}
-			if (this.languages.includes('vue')) {
-				labels.push(vueColor('Vue'));
-			}
-			if (this.languages.includes('vue-vine')) {
-				labels.push(vueVineColor('Vue Vine'));
-			}
-			if (this.languages.includes('mdx')) {
-				labels.push(mdxColor('MDX'));
-			}
-			if (this.languages.includes('astro')) {
-				labels.push(astroColor('Astro'));
+			for (const { key, label, color } of LANGUAGE_LABELS) {
+				if (this.languages.includes(key)) {
+					labels.push(color(label));
+				}
 			}
 		}
 
-		const label = labels.join(gray(' | '));
+		const label = labels.join(colors.gray(' | '));
+		const relPath = path.relative(process.cwd(), this.tsconfig);
 
 		if (!this.configFile) {
-			clack.log.error(
-				`${label} ${path.relative(process.cwd(), this.tsconfig)} ${gray('(No tsslint.config.ts found)')}`,
+			renderer.info(
+				`${label} ${relPath} ${colors.gray('(no tsslint.config.ts)')}`,
 			);
 			return this;
 		}
@@ -138,7 +120,7 @@ class Project {
 		this.options = commonLine.options;
 
 		if (!this.rawFileNames.length) {
-			clack.log.message(`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(0)')}`);
+			renderer.info(`${label} ${colors.gray(relPath)} ${colors.gray('(0)')}`);
 			return this;
 		}
 
@@ -150,8 +132,8 @@ class Project {
 					),
 			);
 			if (!this.fileNames.length) {
-				clack.log.message(
-					`${label} ${gray(path.relative(process.cwd(), this.tsconfig))} ${gray('(No files left after filter)')}`,
+				renderer.info(
+					`${label} ${colors.gray(relPath)} ${colors.gray('(0 after filter)')}`,
 				);
 				return this;
 			}
@@ -161,11 +143,9 @@ class Project {
 		}
 
 		const filteredLengthDiff = this.rawFileNames.length - this.fileNames.length;
-		clack.log.info(
-			`${label} ${path.relative(process.cwd(), this.tsconfig)} ${
-				gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
-			}`,
-		);
+		this.pendingHeader = `${label} ${relPath} ${
+			colors.gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
+		}`;
 
 		if (!process.argv.includes('--force')) {
 			this.cache = cache.loadCache(this.tsconfig, this.configFile, this.languages, ts.sys.createHash);
@@ -175,199 +155,76 @@ class Project {
 	}
 }
 
+const formatHost: ts.FormatDiagnosticsHost = {
+	getCurrentDirectory: ts.sys.getCurrentDirectory,
+	getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
+	getNewLine: () => ts.sys.newLine,
+};
+
 (async () => {
-	const clack = await import('@clack/prompts');
+	const renderer = render.createRenderer();
 	const processFiles = new Set<string>();
 	const tsconfigAndLanguages = new Map<string, string[]>();
-	const isTTY = process.stdout.isTTY;
+
+	function fail(msg: string): never {
+		renderer.error(colors.red(msg));
+		renderer.dispose();
+		process.exit(1);
+	}
 
 	let projects: Project[] = [];
-	let spinner = isTTY ? clack.spinner() : undefined;
-	let spinnerStopingWarn = false;
 	let hasFix = false;
 	let allFilesNum = 0;
 	let processed = 0;
-	let excluded = 0;
 	let passed = 0;
 	let errors = 0;
 	let warnings = 0;
 	let messages = 0;
 	let suggestions = 0;
 	let cached = 0;
+	let configErrors = 0;
 	const failuresOnly = process.argv.includes('--failures-only');
 
-	if (isTTY) {
-		const write = process.stdout.write.bind(process.stdout);
-		process.stdout.write = (...args) => {
-			if (spinnerStopingWarn && typeof args[0] === 'string') {
-				args[0] = args[0].replace('▲', yellow('▲'));
-			}
-			// @ts-ignore
-			return write(...args);
-		};
+	if (!PROJECT_FLAGS.some(({ flag }) => process.argv.includes(flag))) {
+		renderer.dispose();
+		console.log(HELP);
+		process.exit(1);
 	}
 
-	if (
-		![
-			'--project',
-			'--vue-project',
-			'--vue-vine-project',
-			'--mdx-project',
-			'--astro-project',
-			'--ts-macro-project',
-		].some(flag => process.argv.includes(flag))
-	) {
-		const language = await clack.select({
-			message: 'Select framework',
-			initialValue: undefined,
-			options: [{
-				label: 'Vanilla JS/TS',
-				value: undefined,
-			}, {
-				label: 'TS Macro',
-				value: 'ts-macro',
-			}, {
-				label: 'Vue',
-				value: 'vue',
-			}, {
-				label: 'Vue Vine',
-				value: 'vue-vine',
-			}, {
-				label: 'MDX',
-				value: 'mdx',
-			}, {
-				label: 'Astro',
-				value: 'astro',
-			}],
-		});
-
-		if (clack.isCancel(language)) {
-			process.exit(1);
+	for (const { flag, language } of PROJECT_FLAGS) {
+		if (!process.argv.includes(flag)) {
+			continue;
 		}
-
-		const tsconfigOptions = fs.globSync('**/{tsconfig.json,tsconfig.*.json,jsconfig.json}');
-
-		let options = await Promise.all(
-			tsconfigOptions.map(async tsconfigOption => {
-				const tsconfig = require.resolve(
-					tsconfigOption.startsWith('.') ? tsconfigOption : `./${tsconfigOption}`,
-					{ paths: [process.cwd()] },
-				);
-				try {
-					const commonLine = await parseCommonLine(tsconfig, language ? [language] : []);
-					return {
-						label: path.relative(process.cwd(), tsconfig) + ` (${commonLine.fileNames.length})`,
-						value: tsconfigOption,
-					};
-				}
-				catch {
-					return undefined;
-				}
-			}),
-		);
-
-		options = options.filter(option => !!option);
-
-		if (options.some(option => !option!.label.endsWith('(0)'))) {
-			options = options.filter(option => !option!.label.endsWith('(0)'));
-		}
-
-		if (!options.length) {
-			clack.log.error(red('No projects found.'));
-			process.exit(1);
-		}
-
-		const selectedTsconfigs = await clack.multiselect({
-			message: 'Select one or multiple projects',
-			initialValues: [options[0]!.value],
-			// @ts-expect-error
-			options,
-		});
-
-		if (clack.isCancel(selectedTsconfigs)) {
-			process.exit(1);
-		}
-
-		let command = 'tsslint';
-
-		if (!language) {
-			command += ' --project ' + selectedTsconfigs.join(' ');
-		}
-		else {
-			command += ` --${language}-project ` + selectedTsconfigs.join(' ');
-		}
-
-		clack.log.info(`${gray('Command:')} ${purple(command)}`);
-
-		for (let tsconfig of selectedTsconfigs) {
-			tsconfig = resolvePath(tsconfig);
-			tsconfigAndLanguages.set(tsconfig, language ? [language] : []);
-		}
-	}
-	else {
-		const options = [
-			{
-				projectFlag: '--project',
-				language: undefined,
-			},
-			{
-				projectFlag: '--vue-project',
-				language: 'vue',
-			},
-			{
-				projectFlag: '--vue-vine-project',
-				language: 'vue-vine',
-			},
-			{
-				projectFlag: '--mdx-project',
-				language: 'mdx',
-			},
-			{
-				projectFlag: '--astro-project',
-				language: 'astro',
-			},
-			{
-				projectFlag: '--ts-macro-project',
-				language: 'ts-macro',
-			},
-		];
-		for (const { projectFlag, language } of options) {
-			if (!process.argv.includes(projectFlag)) {
-				continue;
+		let foundArg = false;
+		const projectsIndex = process.argv.indexOf(flag);
+		for (let i = projectsIndex + 1; i < process.argv.length; i++) {
+			if (process.argv[i].startsWith('-')) {
+				break;
 			}
-			let foundArg = false;
-			const projectsIndex = process.argv.indexOf(projectFlag);
-			for (let i = projectsIndex + 1; i < process.argv.length; i++) {
-				if (process.argv[i].startsWith('-')) {
-					break;
+			foundArg = true;
+			const searchGlob = process.argv[i];
+			const tsconfigs = fs.globSync(searchGlob);
+			if (!tsconfigs.length) {
+				fail(`No projects found for ${flag} ${searchGlob}.`);
+			}
+			for (let tsconfig of tsconfigs) {
+				tsconfig = resolvePath(tsconfig);
+				if (!tsconfigAndLanguages.has(tsconfig)) {
+					tsconfigAndLanguages.set(tsconfig, []);
 				}
-				foundArg = true;
-				const searchGlob = process.argv[i];
-				const tsconfigs = fs.globSync(searchGlob);
-				if (!tsconfigs.length) {
-					clack.log.error(red(`No projects found for ${projectFlag} ${searchGlob}.`));
-					process.exit(1);
-				}
-				for (let tsconfig of tsconfigs) {
-					tsconfig = resolvePath(tsconfig);
-					if (!tsconfigAndLanguages.has(tsconfig)) {
-						tsconfigAndLanguages.set(tsconfig, []);
-					}
-					if (language) {
-						tsconfigAndLanguages.get(tsconfig)!.push(language);
-					}
+				if (language) {
+					tsconfigAndLanguages.get(tsconfig)!.push(language);
 				}
 			}
-			if (!foundArg) {
-				clack.log.error(red(`Missing argument for ${projectFlag}.`));
-				process.exit(1);
-			}
+		}
+		if (!foundArg) {
+			fail(`Missing argument for ${flag}.`);
 		}
 	}
 
-	function normalizeFilterGlobPath(filterGlob: string, expandDirToGlob = true) {
+	function normalizeFilterGlobPath(filterGlob: string) {
 		let filterPath = path.resolve(process.cwd(), filterGlob);
-		if (expandDirToGlob && fs.existsSync(filterPath) && fs.statSync(filterPath).isDirectory()) {
+		if (fs.statSync(filterPath, { throwIfNoEntry: false })?.isDirectory()) {
 			filterPath = path.join(filterPath, '**/*');
 		}
 		return ts.server.toNormalizedPath(filterPath);
@@ -378,8 +235,7 @@ class Project {
 	if (filterArgIndex !== -1) {
 		const filterGlob = process.argv[filterArgIndex + 1];
 		if (!filterGlob || filterGlob.startsWith('-')) {
-			clack.log.error(red(`Missing argument for --filter.`));
-			process.exit(1);
+			fail(`Missing argument for --filter.`);
 		}
 		filters.push(normalizeFilterGlobPath(filterGlob));
 		for (let i = filterArgIndex + 2; i < process.argv.length; i++) {
@@ -392,25 +248,23 @@ class Project {
 	}
 
 	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(await new Project(tsconfig, languages).init(clack, filters));
+		projects.push(await new Project(tsconfig, languages).init(renderer, filters));
 	}
-
-	spinner?.start();
 
 	projects = projects.filter(project => !!project.configFile);
 	projects = projects.filter(project => !!project.fileNames.length);
-	projects = projects.filter(project => !!project.configFile);
 
 	for (const project of projects) {
 		allFilesNum += project.fileNames.length;
 	}
 
 	if (allFilesNum === 0) {
-		(spinner?.stop ?? clack.log.message)(yellow('No input files.'));
+		renderer.info(colors.yellow('No input files.'));
+		renderer.dispose();
 		process.exit(1);
 	}
 
-	if (isTTY || threads >= 2) {
+	if (process.stdout.isTTY || threads >= 2) {
 		await Promise.all(
 			new Array(threads).fill(0).map(() => {
 				return startWorker(worker.create());
@@ -421,68 +275,90 @@ class Project {
 		await startWorker(worker.createLocal() as any);
 	}
 
-	(spinner?.stop ?? clack.log.message)(
-		cached
-			? gray(`Processed ${processed} files with cache. (Use `) + cyan(`--force`) + gray(` to ignore cache.)`)
-			: gray(`Processed ${processed} files.`),
-	);
+	renderer.status();
 
+	const summaryLines: string[] = [];
+
+	const counters: string[] = [];
+	if (passed) {
+		counters.push(colors.green(`${passed} passed`));
+	}
+	if (errors) {
+		counters.push(colors.red(`${errors} ${plural(errors, 'error')}`));
+	}
+	if (warnings) {
+		counters.push(colors.yellow(`${warnings} ${plural(warnings, 'warning')}`));
+	}
+	if (messages) {
+		counters.push(colors.blue(`${messages} ${plural(messages, 'message')}`));
+	}
+	if (suggestions) {
+		counters.push(colors.gray(`${suggestions} ${plural(suggestions, 'suggestion')}`));
+	}
+	if (configErrors) {
+		counters.push(colors.red(`${configErrors} ${plural(configErrors, 'config error')}`));
+	}
+
+	const hints: string[] = [];
+	if (cached) {
+		hints.push(colors.cyan('--force') + colors.gray(' to ignore cache'));
+	}
+	if (hasFix) {
+		hints.push(colors.cyan('--fix') + colors.gray(' to apply fixes'));
+	}
 	const deprecatedFlag = process.argv.find(arg => arg.endsWith('-projects'));
 	if (deprecatedFlag) {
-		clack.log.error(
-			gray(`Use `)
-				+ cyan(`${deprecatedFlag.slice(0, -1)}`)
-				+ gray(` instead of `)
-				+ cyan(`${deprecatedFlag}.`),
+		hints.push(
+			colors.cyan(deprecatedFlag.slice(0, -1))
+				+ colors.gray(' instead of ')
+				+ colors.cyan(deprecatedFlag),
 		);
 	}
 
-	const data = [
-		[passed, 'passed', green] as const,
-		[errors, 'errors', red] as const,
-		[warnings, 'warnings', yellow] as const,
-		[messages, 'messages', blue] as const,
-		[suggestions, 'suggestions', gray] as const,
-		[excluded, 'excluded', gray] as const,
-	];
-
-	let summary = data
-		.filter(([count]) => count)
-		.map(([count, label, color]) => color(`${count} ${label}`))
-		.join(gray(' | '));
-
-	if (hasFix) {
-		summary += gray(` (Use `) + cyan(`--fix`) + gray(` to apply automatic fixes.)`);
+	let line = counters.join(colors.gray(' · '));
+	if (hints.length) {
+		const hintText = colors.gray('use ') + hints.join(colors.gray(', '));
+		line = line
+			? line + colors.gray(' (') + hintText + colors.gray(')')
+			: hintText;
 	}
-	else if (errors || warnings || messages) {
-		summary += gray(` (No fixes available.)`);
+	if (line) {
+		summaryLines.push(line);
 	}
 
-	clack.outro(summary);
-	process.exit((errors || messages) ? 1 : 0);
+	renderer.summary(summaryLines);
+	renderer.dispose();
+
+	process.exit((errors || messages || configErrors) ? 1 : 0);
 
 	async function startWorker(linterWorker: ReturnType<typeof worker.create>) {
 		const unfinishedProjects = projects.filter(project => project.currentFileIndex < project.fileNames.length);
 		if (!unfinishedProjects.length) {
 			return;
 		}
-		// Select a project that does not have a worker yet
 		const project = unfinishedProjects.find(project => !project.worker);
 		if (!project) {
 			return;
 		}
 		project.worker = linterWorker;
 
-		const setupSuccess = await linterWorker.setup(
+		if (project.pendingHeader) {
+			renderer.info(project.pendingHeader);
+			project.pendingHeader = undefined;
+		}
+
+		const setupResult = await linterWorker.setup(
 			project.tsconfig,
 			project.languages,
 			project.configFile!,
 			project.rawFileNames,
 			project.options,
 		);
-		if (!setupSuccess) {
+		if (setupResult !== true) {
+			renderer.diagnostic(formatConfigError(project.configFile!, setupResult));
+			configErrors++;
 			projects = projects.filter(p => p !== project);
-			startWorker(linterWorker);
+			await startWorker(linterWorker);
 			return;
 		}
 
@@ -515,11 +391,6 @@ class Project {
 				process.argv.includes('--fix'),
 				fileCache,
 			);
-			const formatHost: ts.FormatDiagnosticsHost = {
-				getCurrentDirectory: ts.sys.getCurrentDirectory,
-				getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
-				getNewLine: () => ts.sys.newLine,
-			};
 
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
@@ -549,30 +420,27 @@ class Project {
 
 					if (diagnostic.category === ts.DiagnosticCategory.Error) {
 						errors++;
-						log(output, 1);
+						renderer.diagnostic(output);
 					}
 					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
 						warnings++;
 						if (!failuresOnly) {
-							log(output, 2);
+							renderer.diagnostic(output);
 						}
 					}
 					else if (diagnostic.category === ts.DiagnosticCategory.Message) {
 						messages++;
-						log(output);
+						renderer.diagnostic(output);
 					}
 					else {
 						suggestions++;
 						if (!failuresOnly) {
-							log(output);
+							renderer.diagnostic(output);
 						}
 					}
 				}
 			}
-			else if (!(await linterWorker.hasRules(fileName, fileCache[2]))) {
-				excluded++;
-			}
-			else {
+			else if (await linterWorker.hasRules(fileName, fileCache[2])) {
 				passed++;
 			}
 			processed++;
@@ -592,59 +460,32 @@ class Project {
 
 	function addProcessFile(fileName: string) {
 		processFiles.add(fileName);
-		updateSpinner();
+		updateStatus();
 	}
 
 	function removeProcessFile(fileName: string, nextFileName?: string) {
 		processFiles.delete(fileName);
-		updateSpinner(nextFileName);
+		updateStatus(nextFileName);
 	}
 
-	function updateSpinner(nextFileName?: string) {
+	function updateStatus(nextFileName?: string) {
 		let msg: string | undefined;
 		if (processFiles.size === 0) {
 			if (nextFileName) {
-				msg = gray(`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), nextFileName)}`);
+				msg = colors.gray(
+					`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), nextFileName)}`,
+				);
 			}
 		}
 		else if (processFiles.size === 1) {
-			msg = gray(
+			msg = colors.gray(
 				`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`,
 			);
 		}
 		else {
-			msg = gray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
+			msg = colors.gray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
 		}
-		if (!spinner && isTTY) {
-			spinner = clack.spinner();
-			spinner.start(msg);
-		}
-		else {
-			spinner?.message(msg);
-		}
-	}
-
-	function log(msg: string, code?: number) {
-		if (spinner) {
-			spinnerStopingWarn = code === 2;
-			spinner.stop(msg, code);
-			spinnerStopingWarn = false;
-			spinner = undefined;
-		}
-		else {
-			if (code === 1) {
-				clack.log.error(msg);
-			}
-			else if (code === 2) {
-				clack.log.warn(msg);
-			}
-			else if (code === 3) {
-				clack.log.message(msg);
-			}
-			else {
-				clack.log.step(msg);
-			}
-		}
+		renderer.status(msg);
 	}
 
 	function resolvePath(p: string) {
@@ -659,11 +500,30 @@ class Project {
 			return require.resolve(p, { paths: [process.cwd()] });
 		}
 		catch {
-			clack.log.error(red(`No such file: ${p}`));
-			process.exit(1);
+			fail(`No such file: ${p}.`);
 		}
 	}
 })();
+
+function plural(n: number, word: string) {
+	return n === 1 ? word : word + 's';
+}
+
+function formatConfigError(configFile: string, errorText: string): string {
+	const relConfig = path.relative(process.cwd(), configFile);
+	const lines = errorText.split('\n').map(l => l.trimEnd()).filter(l => l);
+	const out: string[] = [];
+	out.push(colors.cyan(relConfig) + colors.gray(' — ') + colors.red('config failed to load'));
+	for (const line of lines) {
+		if (line.trimStart().startsWith('at ')) {
+			out.push('  ' + colors.gray(line.trim()));
+		}
+		else {
+			out.push(line);
+		}
+	}
+	return out.join('\n');
+}
 
 async function parseCommonLine(tsconfig: string, languages: string[]) {
 	const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);

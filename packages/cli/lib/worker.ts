@@ -139,21 +139,16 @@ async function setup(
 	configFile: string,
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
-) {
-	const clack = await import('@clack/prompts');
-
+): Promise<true | string> {
 	let config: config.Config | config.Config[];
 	try {
 		config = (await import(url.pathToFileURL(configFile).toString())).default;
 	}
 	catch (err) {
 		if (err instanceof Error) {
-			clack.log.error(err.stack ?? err.message);
+			return err.stack ?? err.message;
 		}
-		else {
-			clack.log.error(String(err));
-		}
-		return false;
+		return String(err);
 	}
 
 	for (let key in linterHost) {

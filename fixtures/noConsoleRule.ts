@@ -1,4 +1,4 @@
-import { defineRule } from '@tsslint/config';
+import { defineRule } from '../packages/config/index.js';
 
 export default defineRule(({ typescript: ts, file, report }) => {
 	ts.forEachChild(file, function cb(node) {

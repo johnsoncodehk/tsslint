@@ -1,4 +1,4 @@
-import { defineConfig, definePlugin } from '@tsslint/config';
+import { defineConfig, definePlugin } from '../../packages/config/index.js';
 import NoConsoleRule from '../noConsoleRule.ts';
 
 export default defineConfig({

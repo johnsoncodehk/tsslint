@@ -133,7 +133,7 @@ function convertRule(
 		ruleArguments,
 		ruleSeverity: 'warning',
 		disabledIntervals: [],
-	}) as IRule | ITypedRule;
+	});
 	return ({ typescript: ts, file, report, ...ctx }) => {
 		if (Rule.metadata?.typescriptOnly) {
 			const scriptKind = (file as any).scriptKind;
@@ -143,7 +143,7 @@ function convertRule(
 		}
 
 		const failures = 'applyWithProgram' in rule
-			? rule.applyWithProgram(file, ctx.program)
+			? (rule as ITypedRule).applyWithProgram(file, ctx.program)
 			: rule.apply(file);
 		for (const failure of failures) {
 			const reporter = report(

@@ -18,7 +18,6 @@
 		"directory": "packages/cli"
 	},
 	"dependencies": {
-		"@clack/prompts": "^0.8.2",
 		"@tsslint/config": "3.0.4",
 		"@tsslint/core": "3.0.4",
 		"@volar/language-core": "~2.4.0",
