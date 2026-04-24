@@ -130,18 +130,28 @@ function createTTYRenderer(): Renderer {
 }
 
 function createCIRenderer(): Renderer {
+	let lastWasContent = false;
 	return {
 		info(msg) {
-			process.stdout.write(msg + '\n\n');
+			if (lastWasContent) {
+				process.stdout.write('\n');
+			}
+			process.stdout.write(msg + '\n');
+			lastWasContent = false;
 		},
 		diagnostic(out) {
-			process.stdout.write(out + '\n\n');
+			process.stdout.write('\n' + out + '\n');
+			lastWasContent = true;
 		},
 		error(msg) {
 			process.stderr.write(msg + '\n');
 		},
 		status() {},
 		summary(lines) {
+			if (!lines.length) {
+				return;
+			}
+			process.stdout.write('\n');
 			for (const line of lines) {
 				process.stdout.write(line + '\n');
 			}
