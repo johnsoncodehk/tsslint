@@ -241,6 +241,7 @@ export const ScopeType = {
 	block: 'block',
 	'catch': 'catch',
 	'class': 'class',
+	classFieldInitializer: 'class-field-initializer',
 	conditionalType: 'conditional-type',
 	'for': 'for',
 	'function': 'function',

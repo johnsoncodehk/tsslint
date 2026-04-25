@@ -57,6 +57,7 @@ type ScopeType =
 	| 'catch'
 	| 'with'
 	| 'class'
+	| 'class-field-initializer'
 	| 'function-expression-name'
 	| 'tsEnum'
 	| 'tsModule'
@@ -161,6 +162,19 @@ export class TsScopeManager {
 	// scope created, so its descendants live in it.
 	_createScopesFor(n: ts.Node, parent: TsScope): TsScope | undefined {
 		const SK = ts.SyntaxKind;
+		// Class field initializer: `class C { f = expr }` — `expr` is in its
+		// own scope so `this` and (in the future) other class-field-only
+		// constructs resolve correctly. Detected before the kind-switch
+		// because the scope's boundary is the initializer node itself, which
+		// can be any expression kind.
+		const np = n.parent;
+		if (
+			np
+			&& np.kind === SK.PropertyDeclaration
+			&& (np as ts.PropertyDeclaration).initializer === n
+		) {
+			return new TsScope(this, n, 'class-field-initializer', parent, true);
+		}
 		switch (n.kind) {
 			case SK.FunctionDeclaration:
 			case SK.ArrowFunction:
@@ -403,6 +417,34 @@ export class TsScopeManager {
 			const freeRef = this._isFreeReference(node);
 			if (!refUsage && !freeRef) continue;
 
+			// `arguments` inside a non-arrow function resolves to the
+			// function's synthetic arguments TsVariable. TS's checker gives
+			// each function a separate `arguments` symbol; register the link
+			// the first time we see it.
+			if (node.text === 'arguments') {
+				for (let cur: ts.Node | undefined = node.parent; cur; cur = cur.parent) {
+					if (
+						cur.kind === SK.FunctionDeclaration
+						|| cur.kind === SK.FunctionExpression
+						|| cur.kind === SK.MethodDeclaration
+						|| cur.kind === SK.Constructor
+						|| cur.kind === SK.GetAccessor
+						|| cur.kind === SK.SetAccessor
+					) {
+						const arr = this.nodeToScope.get(cur);
+						const fnScope = arr?.find(s => s.type === 'function');
+						if (fnScope) {
+							const argsVar = fnScope._getOrCreateArgumentsVar();
+							const sym = checker.getSymbolAtLocation(node);
+							if (sym && !variableBySymbol.has(sym)) {
+								variableBySymbol.set(sym, argsVar);
+							}
+						}
+						break;
+					}
+				}
+			}
+
 			// Symbol resolution. For binding identifiers (the `x` in `let x = …`,
 			// destructured `{ x }`, `for (const x of …)`), the symbol is already
 			// on the parent declaration node (set by the TS binder) — read it
@@ -576,10 +618,22 @@ export class TsScopeManager {
 			case SK.JsxAttribute:
 				return (p as { name?: ts.Node }).name !== id;
 			case SK.ImportSpecifier:
-			case SK.ExportSpecifier:
 			case SK.BindingElement: {
-				const e = p as ts.ImportSpecifier | ts.ExportSpecifier | ts.BindingElement;
+				// Import binding / destructuring pattern — the names are
+				// declarations, not references.
+				const e = p as ts.ImportSpecifier | ts.BindingElement;
 				return e.name !== id && e.propertyName !== id;
+			}
+			case SK.ExportSpecifier: {
+				// `export {x} from "mod";` — re-export, no local reference.
+				const e = p as ts.ExportSpecifier;
+				const decl = e.parent.parent as ts.ExportDeclaration;
+				if (decl.moduleSpecifier) return false;
+				// `export {x}` — `x` references the local. `export {x as v}` —
+				// `x` (propertyName) references the local; `v` (name) is the
+				// public export name (not a local reference).
+				if (e.propertyName) return e.name !== id;
+				return true;
 			}
 			case SK.TypeReference:
 				// `expr as const` — `const` is a syntactic marker, not a reference.
@@ -668,10 +722,20 @@ export class TsScopeManager {
 			case SK.SetAccessor:
 			case SK.JsxAttribute:
 				return (p as { name?: ts.Node }).name !== id;
-			case SK.ImportSpecifier:
-			case SK.ExportSpecifier: {
-				const e = p as ts.ImportSpecifier | ts.ExportSpecifier;
+			case SK.ImportSpecifier: {
+				// Import binding — the names are declarations, not references.
+				const e = p as ts.ImportSpecifier;
 				return e.name !== id && e.propertyName !== id;
+			}
+			case SK.ExportSpecifier: {
+				// `export {x} from "mod";` — re-export, no local reference.
+				const e = p as ts.ExportSpecifier;
+				const decl = e.parent.parent as ts.ExportDeclaration;
+				if (decl.moduleSpecifier) return false;
+				// `export {x}` / `export {x as v}` — propertyName (or name when
+				// there is no propertyName) IS a reference to a local binding.
+				if (e.propertyName) return e.name !== id;
+				return true;
 			}
 			case SK.PropertyAccessExpression:
 				return (p as ts.PropertyAccessExpression).name !== id;
@@ -786,9 +850,17 @@ export class TsScope {
 	}
 
 	get variableScope(): TsScope {
-		// Nearest enclosing function/global/module/class scope.
+		// Nearest enclosing function / global / module / class /
+		// class-field-initializer scope.
 		let s: TsScope | null = this;
-		while (s && s.type !== 'function' && s.type !== 'global' && s.type !== 'module' && s.type !== 'class') {
+		while (
+			s
+			&& s.type !== 'function'
+			&& s.type !== 'global'
+			&& s.type !== 'module'
+			&& s.type !== 'class'
+			&& s.type !== 'class-field-initializer'
+		) {
 			s = s.upper;
 		}
 		return s ?? this.manager.globalScope;
@@ -1165,8 +1237,25 @@ export class TsScope {
 	_getOrCreateArgumentsVar(): TsVariable {
 		let v = this.manager._syntheticArguments.get(this);
 		if (!v) {
-			v = new TsVariable(this.manager, /* synthetic */ { name: 'arguments', declarations: [], flags: 0 } as any);
+			// Try to obtain TS's real `arguments` symbol so references to the
+			// identifier resolve to this same TsVariable. Fall back to a fake
+			// symbol for arrow functions and other edge cases (where the var
+			// won't actually be referenced anyway).
+			const fn = this.tsNode as ts.FunctionLikeDeclaration;
+			let sym: ts.Symbol | undefined;
+			const body = (fn as { body?: ts.Node }).body;
+			if (body) {
+				const found = this.manager.checker.getSymbolsInScope(
+					body,
+					ts.SymbolFlags.Variable,
+				).find(s => s.name === 'arguments');
+				if (found) sym = found;
+			}
+			sym ??= { name: 'arguments', declarations: [], flags: 0 } as unknown as ts.Symbol;
+			v = new TsVariable(this.manager, sym);
 			this.manager._syntheticArguments.set(this, v);
+			// Register so ref-index resolution finds it.
+			this.manager._variableBySymbol.set(sym, v);
 		}
 		return v;
 	}
@@ -1337,9 +1426,11 @@ export class TsReference {
 	}
 
 	get from(): TsScope {
-		const ts_ = ts;
-		const SK = ts_.SyntaxKind;
-		for (let cur: ts.Node | undefined = this.tsIdentifier.parent; cur; cur = cur.parent) {
+		const SK = ts.SyntaxKind;
+		// Inclusive: the identifier itself can be a scope-creating node
+		// (e.g. class-field-initializer where the scope's block IS the
+		// initializer expression — possibly the identifier being referenced).
+		for (let cur: ts.Node | undefined = this.tsIdentifier; cur; cur = cur.parent) {
 			const arr = this.manager.nodeToScope.get(cur);
 			if (arr && arr.length > 0) {
 				for (let i = arr.length - 1; i >= 0; --i) {
@@ -1365,7 +1456,13 @@ export class TsReference {
 	// of the symbol. Used internally by `init` / `isWrite`.
 	get _isBindingIdentifier(): boolean {
 		const decls = this.symbol?.declarations ?? [];
+		const SK = ts.SyntaxKind;
 		for (const d of decls) {
+			// TS adds ExportSpecifier / ImportSpecifier as "declarations" of the
+			// underlying symbol via aliasing. Those identifiers reference the
+			// declared variable; they aren't fresh bindings, so don't count
+			// them as init positions.
+			if (d.kind === SK.ExportSpecifier || d.kind === SK.ImportSpecifier) continue;
 			if ((d as { name?: ts.Node }).name === this.tsIdentifier) return true;
 		}
 		return false;
@@ -1520,6 +1617,17 @@ export class TsDefinition {
 	get type(): DefinitionType {
 		const ts_ = ts;
 		const d = this.tsDeclaration;
+		// BindingElement (destructured name): walk up to the enclosing
+		// declaration to decide whether this is a Parameter or Variable def.
+		if (ts_.isBindingElement(d)) {
+			for (let cur: ts.Node | undefined = d.parent; cur; cur = cur.parent) {
+				if (ts_.isParameter(cur)) return 'Parameter';
+				if (ts_.isVariableDeclaration(cur)) {
+					return cur.parent && ts_.isCatchClause(cur.parent) ? 'CatchClause' : 'Variable';
+				}
+			}
+			return 'Variable';
+		}
 		if (ts_.isVariableDeclaration(d)) {
 			// In TS, catch params are modeled as VariableDeclaration whose parent is
 			// CatchClause; ESLint treats those as CatchClauseDefinition.
