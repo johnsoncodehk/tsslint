@@ -607,14 +607,18 @@ class TSTypeParameterInstantiationNode extends LazyNode {
 	private _params?: (LazyNode | null)[];
 	private _typeArgs: ts.NodeArray<ts.TypeNode>;
 	constructor(typeArgs: ts.NodeArray<ts.TypeNode>, parent: LazyNode) {
-		// Synthetic — no single TS node, range covers the whole `<...>`.
-		// Use the first type node's parent (the actual host) as the
-		// underlying TS reference so cycles aren't introduced.
 		const host = typeArgs[0].parent;
 		super(host, parent, undefined, false);
 		this._typeArgs = typeArgs;
-		const start = typeArgs.pos - 1; // one before first type to cover `<`
-		const end = typeArgs.end + 1;   // one after last type to cover `>`
+		// Eager finds the actual `>` token to handle nested generics
+		// (`Foo<Bar<Baz>>` shares `>>`). We scan forward from the last
+		// type's end, skipping whitespace, to land on the `>`.
+		const text = this._ctx.ast.text;
+		let endCursor = typeArgs.end;
+		while (endCursor < text.length && /\s/.test(text[endCursor])) endCursor++;
+		const closingGt = text.indexOf('>', endCursor);
+		const end = closingGt >= 0 ? closingGt + 1 : typeArgs.end + 1;
+		const start = typeArgs.pos - 1;
 		this.range = [start, end];
 		this.loc = getLocFor(this._ctx.ast, start, end);
 	}
@@ -1135,8 +1139,14 @@ class MethodFunctionExpressionNode extends LazyNode {
 	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
 		super(tsNode, parent, undefined, false);
 		// Eager method range starts one before parameters' first paren.
-		const start = tsNode.parameters.pos - 1;
+		let start = tsNode.parameters.pos - 1;
 		const end = tsNode.end;
+		// If there are typeParameters (`foo<T>(x: T)`), eager extends the
+		// method range to include them via fixParentLocation (line 841).
+		const tps = (tsNode as ts.MethodDeclaration).typeParameters;
+		if (tps && tps.length > 0) {
+			start = Math.min(start, tps.pos - 1);
+		}
 		this.range = [start, end];
 		this.loc = getLocFor(this._ctx.ast, start, end);
 		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
