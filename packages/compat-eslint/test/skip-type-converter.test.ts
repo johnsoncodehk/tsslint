@@ -246,6 +246,23 @@ console.log('skip-type-converter selector-aware tests');
 	check(':has container: TSPropertySignature preserved', countNodes(estree, 'TSPropertySignature') === 1);
 }
 
+// --- Invalid selector should throw (no silent wildcard fallback) -------
+
+// A malformed selector means a buggy rule; ESLint's runtime would fail
+// the same way when applying the selector. Throwing at probe time gives
+// clear attribution (the bad selector text appears in the error) instead
+// of silently degrading perf.
+{
+	let threw = false;
+	try {
+		skip.configureSkipKindsForVisitors(['Foo[name=']);
+	}
+	catch {
+		threw = true;
+	}
+	check('invalid selector throws (no silent fallback)', threw);
+}
+
 // --- Real rule integration: probe a typescript-eslint plugin rule -------
 
 // The full selector-aware path: load a real rule, call its `create()`

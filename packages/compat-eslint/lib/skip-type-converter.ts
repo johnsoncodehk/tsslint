@@ -122,17 +122,14 @@ export function isSkippedKind(kind: ts.SyntaxKind): boolean {
 //
 // Returns true if the selector contains a wildcard (`*`) — caller uses
 // that to short-circuit to "exempt all skippable kinds".
+//
+// Throws on invalid selectors. ESLint's runtime would fail the same
+// rule when it tried to apply the selector, so failing here gives
+// clearer attribution (this rule, this selector) than silently
+// degrading by exempting everything.
 const esquery = require('esquery') as { parse(s: string): any; };
 function extractAstNodeTypes(selector: string, into: Set<string>): boolean {
-	let parsed;
-	try {
-		parsed = esquery.parse(selector);
-	}
-	catch {
-		// Bad selector — treat conservatively as wildcard so the rule's
-		// listener has every chance to fire.
-		return true;
-	}
+	const parsed = esquery.parse(selector);
 	let hasWildcard = false;
 	const walk = (n: any): void => {
 		if (!n || typeof n !== 'object') return;
