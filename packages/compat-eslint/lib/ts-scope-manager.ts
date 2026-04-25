@@ -225,8 +225,12 @@ export class TsScopeManager {
 				// outer scope rather than the switch scope.
 				return new TsScope(this, (n as ts.SwitchStatement).caseBlock, 'switch', parent, true);
 			}
-			case SK.WithStatement:
-				return new TsScope(this, n, 'with', parent, true);
+			case SK.WithStatement: {
+				// `with (obj) { stmt }` — `obj` resolves to the outer scope
+				// (visited before entering with scope). Use the body statement
+				// as the with scope boundary; `block` getter steps back out.
+				return new TsScope(this, (n as ts.WithStatement).statement, 'with', parent, true);
+			}
 			case SK.EnumDeclaration:
 				return new TsScope(this, n, 'tsEnum', parent, true);
 			case SK.ModuleDeclaration:
@@ -745,7 +749,11 @@ export class TsScope {
 		}
 		// Switch scope's tsNode is the CaseBlock (boundary for `from`). ESLint
 		// expects scope.block === SwitchStatement, so step out one level.
+		// Same trick for with scope (tsNode is the body statement).
 		if (k === SK.CaseBlock && this.tsNode.parent) {
+			return this.manager.tsToEstreeOrStub(this.tsNode.parent);
+		}
+		if (this.type === 'with' && this.tsNode.parent) {
 			return this.manager.tsToEstreeOrStub(this.tsNode.parent);
 		}
 		return this.manager.tsToEstreeOrStub(this.tsNode);
@@ -898,15 +906,19 @@ export class TsScope {
 				if (fn.parameters) {
 					for (const p of fn.parameters) pushBinding(p.name);
 				}
-				// Var-hoisted decls live in `fn.locals`; let/const/function in
-				// the body live in `body.locals`. ESLint collapses both into
-				// the function scope.
+				// Walk the body in source order to preserve declaration
+				// ordering (matches upstream's referencer). Body statements
+				// + var-hoisted decls collapse into the function scope.
+				if (fn.body && ts_.isBlock(fn.body)) {
+					for (const stmt of (fn.body as ts.Block).statements) {
+						this._collectStatementBindings(stmt, push, pushBinding);
+					}
+				}
+				// Pick up any var-hoisted decls TS recorded in fn.locals that
+				// the source-order walk missed (e.g. `var x` inside nested
+				// blocks of the function body).
 				const fnLocals = (fn as { locals?: ts.SymbolTable }).locals;
 				if (fnLocals) fnLocals.forEach(sym => push(sym));
-				if (fn.body && ts_.isBlock(fn.body)) {
-					const bodyLocals = (fn.body as { locals?: ts.SymbolTable }).locals;
-					if (bodyLocals) bodyLocals.forEach(sym => push(sym));
-				}
 				break;
 			}
 			case 'function-expression-name': {
@@ -1469,6 +1481,12 @@ export class TsDefinition {
 		readonly variable: TsVariable,
 		readonly tsDeclaration: ts.Node,
 	) {}
+
+	// True for `function(...rest)` rest parameter. Other defs return false.
+	get rest(): boolean {
+		const d = this.tsDeclaration;
+		return ts.isParameter(d) && d.dotDotDotToken !== undefined;
+	}
 
 	get type(): DefinitionType {
 		const ts_ = ts;
