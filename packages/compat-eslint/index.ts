@@ -7,7 +7,6 @@ import path = require('path');
 // ESLint internals — these reach into lib/ paths and may break on major ESLint upgrades.
 const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
 const SourceCode = require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js'));
-const createEmitter = require(path.join(eslintRoot, 'lib/linter/safe-emitter.js'));
 const NodeEventGenerator = require(path.join(eslintRoot, 'lib/linter/node-event-generator.js'));
 const Traverser = require(path.join(eslintRoot, 'lib/shared/traverser.js'));
 
@@ -109,6 +108,49 @@ export function convertRule(
 	return tsslintRule;
 }
 
+// A stripped-down replacement for ESLint's safe-emitter that knows which rule
+// each listener belongs to. The per-listener try/catch + "skip if this rule
+// already errored" guard runs inline at emit time, so we don't have to wrap
+// every (rule × selector × file) listener in its own closure.
+function makeRuleEmitter(errors: Map<ESLint.Rule.RuleModule, unknown>) {
+	// Flat `[rule, fn, rule, fn, ...]` per event keeps the dispatch loop tight.
+	const listeners = new Map<string, unknown[]>();
+	let currentRule: ESLint.Rule.RuleModule | undefined;
+	return {
+		setCurrentRule(rule: ESLint.Rule.RuleModule | undefined) {
+			currentRule = rule;
+		},
+		on(eventName: string, listener: (...args: unknown[]) => void) {
+			let arr = listeners.get(eventName);
+			if (!arr) {
+				listeners.set(eventName, arr = []);
+			}
+			arr.push(currentRule, listener);
+		},
+		eventNames() {
+			return [...listeners.keys()];
+		},
+		emit(eventName: string, ...args: unknown[]) {
+			const arr = listeners.get(eventName);
+			if (!arr) {
+				return;
+			}
+			for (let i = 0; i < arr.length; i += 2) {
+				const rule = arr[i] as ESLint.Rule.RuleModule;
+				if (errors.has(rule)) {
+					continue;
+				}
+				try {
+					(arr[i + 1] as (...a: unknown[]) => void)(...args);
+				}
+				catch (err) {
+					errors.set(rule, err);
+				}
+			}
+		},
+	};
+}
+
 function runSharedTraversal(
 	file: ts.SourceFile,
 	getProgram: () => ts.Program,
@@ -116,15 +158,15 @@ function runSharedTraversal(
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 ) {
 	const { sourceCode, eventQueue } = getEstree(file, getProgram);
-	const emitter = createEmitter();
+	const emitter = makeRuleEmitter(errors);
 
 	let currentNode: any;
 
 	for (const entry of ruleRegistry.values()) {
-		const myReports: DeferredReport[] = [];
-		reports.set(entry.eslintRule, myReports);
-
 		const eslintRule = entry.eslintRule;
+		emitter.setCurrentRule(eslintRule);
+		// Lazy: rules that don't fire on this file pay no array allocation.
+		let myReports: DeferredReport[] | undefined;
 		const ruleListeners = eslintRule.create({
 			get cwd() {
 				return getProgram().getCurrentDirectory();
@@ -220,6 +262,10 @@ function runSharedTraversal(
 					}
 				}
 
+				if (!myReports) {
+					myReports = [];
+					reports.set(eslintRule, myReports);
+				}
 				myReports.push(deferred);
 			},
 			getAncestors() {
@@ -239,18 +285,12 @@ function runSharedTraversal(
 
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
-			if (!listener) continue;
-			emitter.on(selector, (...args: unknown[]) => {
-				if (errors.has(eslintRule)) return;
-				try {
-					(listener as (...a: unknown[]) => void)(...args);
-				}
-				catch (err) {
-					errors.set(eslintRule, err);
-				}
-			});
+			if (listener) {
+				emitter.on(selector, listener as (...a: unknown[]) => void);
+			}
 		}
 	}
+	emitter.setCurrentRule(undefined);
 
 	const eventGenerator = new NodeEventGenerator(emitter, {
 		visitorKeys: sourceCode.visitorKeys,
