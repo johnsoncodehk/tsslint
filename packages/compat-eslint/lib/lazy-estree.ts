@@ -13,6 +13,24 @@
 // MVP scope: only the kinds needed to lint the smoke fixtures end-to-end. Add
 // more cases on demand. An unhandled kind throws a descriptive error so we
 // know which to add next.
+//
+// Bottom-up materialise (`materialize(tsNode, ctx)`): walks up TS parent chain
+// to find / build the ESTree parent, then constructs the requested node.
+// TS-node identity in the cache means siblings reuse a shared parent: if
+// child_a's walk-up registered tsParent → parentInstance, then child_b's
+// walk-up hits the cache and links to the same parentInstance.
+//
+// KNOWN LIMITATION: synthetic wrapper nodes break the symmetry between the
+// TS and ESTree parent chains. Today the only wrapper is TSTypeAnnotation
+// (sits between an Identifier-with-type and the underlying type subtree).
+// The TS parent chain skips it (`type` is just a field on VariableDeclaration);
+// a top-down build threads the wrapper in via `VariableDeclarator.id`'s
+// getter. A bottom-up materialise of a node inside the wrapper currently
+// lands on the wrapper-less parent instead. Fix when needed: detect "this
+// TS node sits in a `type`/`returnType`/etc. slot" at materialise time, and
+// route through the parent's getter that builds the wrapper. Tracked by a
+// test that asserts the top-down behaviour; bottom-up is unverified for
+// these positions.
 
 import * as ts from 'typescript';
 
@@ -23,7 +41,7 @@ export interface LazyAstMaps {
 	tsNodeToESTreeNodeMap: WeakMap<ts.Node, object>;
 }
 
-interface ConvertContext {
+export interface ConvertContext {
 	ast: ts.SourceFile;
 	maps: LazyAstMaps;
 }
@@ -75,6 +93,46 @@ abstract class LazyNode {
 		}
 		this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
 	}
+}
+
+// TS SyntaxKinds that don't map to an ESTree node — they're structural-only
+// in the TS AST and get folded away by typescript-estree's converter. When
+// walking up the TS parent chain in bottom-up materialisation, skip past
+// these to find the nearest ESTree ancestor.
+const TS_ONLY_KINDS = new Set<ts.SyntaxKind>([
+	SK.VariableDeclarationList,
+	SK.SyntaxList,
+]);
+
+// Bottom-up materialisation: given any TS node anywhere in the source, return
+// (creating if needed) its ESTree counterpart. Walks up via `tsNode.parent`
+// to find / build the ESTree parent chain — at each step the cache lookup
+// keyed on TS node identity is what enables sibling reuse: child_b walking
+// up hits the same tsParent in the cache that child_a's walk-up registered,
+// so both end up with the same parent ESTree instance.
+//
+// The lookup-on-cache property is what makes top-down (parent.children
+// getter calls convertChild per child) and bottom-up (this function) coherent:
+// both paths converge on the same instance when they meet at a shared TS node.
+export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
+	const cached = ctx.maps.tsNodeToESTreeNodeMap.get(tsNode);
+	if (cached) return cached as LazyNode;
+	// Find the nearest TS ancestor with an ESTree counterpart. Some TS-only
+	// shapes (VariableDeclarationList, SyntaxList) have no ESTree node and
+	// need to be skipped.
+	let walker: ts.Node | undefined = tsNode.parent;
+	while (walker && TS_ONLY_KINDS.has(walker.kind)) {
+		walker = walker.parent;
+	}
+	const parent: LazyNode | null = walker ? materialize(walker, ctx) : null;
+	if (!parent) {
+		throw new Error('lazy-estree: cannot materialise without an ESTree ancestor — did you call materialize() with the SourceFile? convertLazy() handles that.');
+	}
+	const node = convertChild(tsNode, parent);
+	if (!node) {
+		throw new Error(`lazy-estree: convertChild returned null for ${SK[tsNode.kind]}`);
+	}
+	return node;
 }
 
 // Dispatch: TS SyntaxKind → lazy ESTree class. Returns null for null/undefined
@@ -300,12 +358,12 @@ class LiteralNode extends LazyNode {
 
 // --- Entry point --------------------------------------------------------
 
-export function convertLazy(file: ts.SourceFile): { estree: ProgramNode; astMaps: LazyAstMaps; } {
+export function convertLazy(file: ts.SourceFile): { estree: ProgramNode; astMaps: LazyAstMaps; context: ConvertContext; } {
 	const maps: LazyAstMaps = {
 		esTreeNodeToTSNodeMap: new WeakMap(),
 		tsNodeToESTreeNodeMap: new WeakMap(),
 	};
 	const context: ConvertContext = { ast: file, maps };
 	const estree = new ProgramNode(file, null, context);
-	return { estree, astMaps: maps };
+	return { estree, astMaps: maps, context };
 }
