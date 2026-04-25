@@ -91,7 +91,6 @@ export class TsScopeManager {
 	_libVariableBySymbol = new Map<ts.Symbol, TsVariable>();
 	_libDecisionBySymbol = new Map<ts.Symbol, 0 | 1>();
 	_syntheticArguments = new Map<TsScope, TsVariable>();
-	_refIndex?: Map<ts.Symbol, ts.Identifier[]>;
 	readonly checker: ts.TypeChecker;
 
 	constructor(
@@ -200,8 +199,24 @@ export class TsScopeManager {
 			}
 			case SK.ForStatement:
 			case SK.ForInStatement:
-			case SK.ForOfStatement:
-				return new TsScope(this, n, 'for', parent, true);
+			case SK.ForOfStatement: {
+				// Upstream nests a 'for' scope only when the init clause is a
+				// let/const declaration (block-scoped binding). For
+				// `for (a in xs)` or `for (var x = …)` the loop binding lives
+				// in the enclosing scope.
+				const init = n.kind === SK.ForStatement
+					? (n as ts.ForStatement).initializer
+					: (n as ts.ForInStatement | ts.ForOfStatement).initializer;
+				if (
+					init
+					&& init.kind === SK.VariableDeclarationList
+					&& ((init as ts.VariableDeclarationList).flags
+						& (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0
+				) {
+					return new TsScope(this, n, 'for', parent, true);
+				}
+				return undefined;
+			}
 			case SK.CatchClause:
 				return new TsScope(this, n, 'catch', parent, true);
 			case SK.SwitchStatement:
@@ -352,10 +367,19 @@ export class TsScopeManager {
 	// reference (symbol declared in our scope tree) or an unresolved "through"
 	// reference (escapes the file). Both indexes share the walk.
 	_through?: TsReference[];
-	_ensureRefIndex(): Map<ts.Symbol, ts.Identifier[]> {
+	_refIndex?: Map<ts.Symbol, TsReference[]>;
+	_referencesByScope?: Map<TsScope, TsReference[]>;
+	_ensureRefIndex(): Map<ts.Symbol, TsReference[]> {
 		if (this._refIndex) return this._refIndex;
-		const refs = new Map<ts.Symbol, ts.Identifier[]>();
+		const refs = new Map<ts.Symbol, TsReference[]>();
 		const through: TsReference[] = [];
+		const byScope = new Map<TsScope, TsReference[]>();
+		const recordScope = (ref: TsReference) => {
+			const s = ref.from;
+			let arr = byScope.get(s);
+			if (!arr) byScope.set(s, arr = []);
+			arr.push(ref);
+		};
 		const checker = this.checker;
 		const SK = ts.SyntaxKind;
 		const variableBySymbol = this._variableBySymbol;
@@ -399,7 +423,11 @@ export class TsScopeManager {
 				if (refUsage) {
 					let arr = refs.get(sym);
 					if (!arr) refs.set(sym, arr = []);
-					arr.push(node);
+					{
+						const ref = new TsReference(this, node, sym);
+						arr.push(ref);
+						recordScope(ref);
+					}
 				}
 			}
 			else if (sym) {
@@ -424,35 +452,47 @@ export class TsScopeManager {
 						}
 						let arr = refs.get(sym);
 						if (!arr) refs.set(sym, arr = []);
-						arr.push(node);
+						{
+						const ref = new TsReference(this, node, sym);
+						arr.push(ref);
+						recordScope(ref);
+					}
 					}
 					else if (freeRef) {
 						// Value ref to a type-only lib global (e.g. Set, Map,
 						// Iterable in expression position) — upstream treats
 						// as undefined. Match.
-						through.push(new TsReference(this, node, sym));
+						{
+						const ref = new TsReference(this, node, sym);
+						through.push(ref);
+						recordScope(ref);
+					}
 					}
 				}
 				else if (freeRef) {
-					through.push(new TsReference(this, node, sym));
+					{
+						const ref = new TsReference(this, node, sym);
+						through.push(ref);
+						recordScope(ref);
+					}
 				}
 			}
 			else if (freeRef) {
 				// Unresolved (no symbol). Through-only (e.g. typo).
-				through.push(new TsReference(this, node, undefined as any));
+				const ref = new TsReference(this, node, undefined as any);
+				through.push(ref);
+				recordScope(ref);
 			}
 		}
 		// Free the identifier list — won't be needed again.
 		this._pendingIdentifiers = [];
 		this._through = through;
+		this._referencesByScope = byScope;
 		return this._refIndex = refs;
 	}
 
 	getReferencesFor(symbol: ts.Symbol): TsReference[] {
-		const idents = this._ensureRefIndex().get(symbol) ?? [];
-		const refs: TsReference[] = [];
-		for (const id of idents) refs.push(new TsReference(this, id, symbol));
-		return refs;
+		return this._ensureRefIndex().get(symbol) ?? [];
 	}
 
 	getThroughReferences(): TsReference[] {
@@ -699,7 +739,36 @@ export class TsScope {
 	}
 
 	get isStrict(): boolean {
-		return this.manager.isModule();
+		// Modules are implicitly strict.
+		if (this.manager.isModule()) return true;
+		// Class bodies are always strict.
+		if (this.type === 'class') return true;
+		const SK = ts.SyntaxKind;
+		const hasUseStrictDirective = (statements: ReadonlyArray<ts.Statement>): boolean => {
+			for (const stmt of statements) {
+				if (
+					stmt.kind === SK.ExpressionStatement
+					&& (stmt as ts.ExpressionStatement).expression.kind === SK.StringLiteral
+					&& ((stmt as ts.ExpressionStatement).expression as ts.StringLiteral).text === 'use strict'
+				) return true;
+				break; // directive prologue only — first non-directive stops the search.
+			}
+			return false;
+		};
+		// SourceFile (script with `'use strict'` at top): propagates.
+		if (this.type === 'global') {
+			if (hasUseStrictDirective((this.tsNode as ts.SourceFile).statements)) return true;
+		}
+		// Function with 'use strict' directive in body.
+		if (this.type === 'function') {
+			const fn = this.tsNode as ts.FunctionLikeDeclaration;
+			const body = (fn as { body?: ts.Node }).body;
+			if (body && body.kind === SK.Block && hasUseStrictDirective((body as ts.Block).statements)) {
+				return true;
+			}
+		}
+		// Inherit from upper scope.
+		return this.upper?.isStrict ?? false;
 	}
 
 	get variables(): TsVariable[] {
@@ -1028,17 +1097,29 @@ export class TsScope {
 	}
 
 	get references(): TsReference[] {
-		const out: TsReference[] = [];
-		for (const v of this.variables) {
-			for (const r of v.references) {
-				if (r.from === this) out.push(r);
-			}
-		}
-		return out;
+		this.manager._ensureRefIndex();
+		return this.manager._referencesByScope!.get(this) ?? [];
 	}
 
-	get implicit(): { variables: TsVariable[]; left: TsReference[]; set: Map<string, TsVariable> } {
-		return { variables: [], left: [], set: new Map() };
+	get implicit(): {
+		variables: TsVariable[];
+		left: TsReference[];
+		leftToBeResolved: TsReference[];
+		set: Map<string, TsVariable>;
+	} {
+		// Only globalScope has meaningful implicit globals — references that
+		// escaped resolution and become implicit globals at runtime. Other
+		// scopes return an empty shape for compatibility.
+		if (this.type === 'global') {
+			const through = this.manager.getThroughReferences();
+			return {
+				variables: [],
+				left: through,
+				leftToBeResolved: through,
+				set: new Map(),
+			};
+		}
+		return { variables: [], left: [], leftToBeResolved: [], set: new Map() };
 	}
 
 	get through(): TsReference[] {
@@ -1184,19 +1265,30 @@ export class TsReference {
 		return this.manager._getOrCreateVariable(this.symbol);
 	}
 
-	get init(): boolean {
-		const decls = this.symbol.declarations ?? [];
+	// Identifier IS the declaration name (binding position), not just a usage
+	// of the symbol. Used internally by `init` / `isWrite`.
+	get _isBindingIdentifier(): boolean {
+		const decls = this.symbol?.declarations ?? [];
 		for (const d of decls) {
 			if ((d as { name?: ts.Node }).name === this.tsIdentifier) return true;
 		}
 		return false;
 	}
 
+	get init(): boolean | undefined {
+		// ESLint's `init` tristate:
+		//   - true  → declaration-with-initializer (`let x = expr`)
+		//   - false → non-init write (`x = expr`)
+		//   - undefined → pure read.
+		if (this._isBindingIdentifier) return true;
+		return this.isWrite() ? false : undefined;
+	}
+
 	isWrite(): boolean {
 		const ts_ = ts;
 		const id = this.tsIdentifier;
 		const parent = id.parent;
-		if (this.init) return true;
+		if (this._isBindingIdentifier) return true;
 		if (parent && ts_.isBinaryExpression(parent) && parent.left === id) {
 			const op = parent.operatorToken.kind;
 			return op === ts_.SyntaxKind.EqualsToken
@@ -1210,7 +1302,7 @@ export class TsReference {
 	}
 
 	isRead(): boolean {
-		if (this.init) return false;
+		if (this._isBindingIdentifier) return false;
 		if (!this.isWrite()) return true;
 		const parent = this.tsIdentifier.parent;
 		const ts_ = ts;
@@ -1229,6 +1321,49 @@ export class TsReference {
 	isWriteOnly(): boolean { return this.isWrite() && !this.isRead(); }
 	isReadOnly(): boolean { return this.isRead() && !this.isWrite(); }
 	isReadWrite(): boolean { return this.isRead() && this.isWrite(); }
+
+	get writeExpr(): TSESTree.Node | null {
+		// For an init reference (`let x = expr`, `function f(b = expr)`, etc.),
+		// returns the initializer expression. For an assignment (`x = expr`,
+		// `x += expr`), returns the right-hand side. Else null.
+		const SK = ts.SyntaxKind;
+		const id = this.tsIdentifier;
+		const parent = id.parent;
+		if (!parent) return null;
+		// VariableDeclaration / Parameter init.
+		if (
+			(parent.kind === SK.VariableDeclaration && (parent as ts.VariableDeclaration).name === id)
+			|| (parent.kind === SK.Parameter && (parent as ts.ParameterDeclaration).name === id)
+		) {
+			const init = (parent as { initializer?: ts.Node }).initializer;
+			return init ? this.manager.tsToEstreeOrStub(init) ?? null : null;
+		}
+		// BindingElement (destructured init): use the enclosing VariableDeclaration's initializer.
+		if (parent.kind === SK.BindingElement && (parent as ts.BindingElement).name === id) {
+			for (let cur: ts.Node | undefined = parent; cur; cur = cur.parent) {
+				if (cur.kind === SK.VariableDeclaration) {
+					const init = (cur as ts.VariableDeclaration).initializer;
+					return init ? this.manager.tsToEstreeOrStub(init) ?? null : null;
+				}
+				if (cur.kind === SK.Parameter) {
+					const init = (cur as ts.ParameterDeclaration).initializer;
+					return init ? this.manager.tsToEstreeOrStub(init) ?? null : null;
+				}
+			}
+			return null;
+		}
+		// Assignment: x = rhs, x += rhs.
+		if (parent.kind === SK.BinaryExpression && (parent as ts.BinaryExpression).left === id) {
+			const op = (parent as ts.BinaryExpression).operatorToken.kind;
+			if (
+				op === SK.EqualsToken
+				|| (op >= SK.FirstCompoundAssignment && op <= SK.LastCompoundAssignment)
+			) {
+				return this.manager.tsToEstreeOrStub((parent as ts.BinaryExpression).right) ?? null;
+			}
+		}
+		return null;
+	}
 
 	get isValueReference(): boolean {
 		const ts_ = ts;

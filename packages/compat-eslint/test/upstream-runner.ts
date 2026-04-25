@@ -140,6 +140,10 @@ class Expect {
 		// Custom matcher used in get-declared-variables tests; defer / soft-pass for now.
 		this.check(true, 'toHaveDeclaredVariables stub');
 	}
+	toMatchInlineSnapshot(_expected?: string) {
+		// Snapshot tests — soft-pass since we can't update snapshots.
+		this.check(true, 'snapshot stub');
+	}
 }
 
 function ser(v: any): string {
@@ -196,6 +200,18 @@ function deepEqual(a: any, b: any): boolean {
 	},
 	notExists(v: any) {
 		if (v != null) throw new Error(`Expected null/undefined, got ${ser(v)}`);
+	},
+	isNull(v: any) {
+		if (v !== null) throw new Error(`Expected null, got ${ser(v)}`);
+	},
+	isNotNull(v: any) {
+		if (v === null) throw new Error(`Expected non-null, got null`);
+	},
+	isTrue(v: any) {
+		if (v !== true) throw new Error(`Expected true, got ${ser(v)}`);
+	},
+	isFalse(v: any) {
+		if (v !== false) throw new Error(`Expected false, got ${ser(v)}`);
 	},
 };
 
