@@ -421,6 +421,9 @@ export class TsScopeManager {
 			arr.push(ref);
 		}
 		this._through = remaining;
+		// Clear implicit-globals cache — added globals supersede the
+		// auto-synthesized ones for any matching names.
+		this._implicitGlobals = undefined;
 	}
 
 	// Lazy: a single AST walk classifies every Identifier as either a known
@@ -596,7 +599,7 @@ export class TsScopeManager {
 	_implicitGlobals?: TsVariable[];
 	getImplicitGlobals(): TsVariable[] {
 		if (this._implicitGlobals) return this._implicitGlobals;
-		const through = this.getThroughReferences();
+		const through = this.globalScope.through;
 		const byName = new Map<string, { v: TsVariable; firstWrite: TsReference; }>();
 		for (const ref of through) {
 			if (!ref.isWrite()) continue;
@@ -1354,7 +1357,7 @@ export class TsScope {
 		// escaped resolution and become implicit globals at runtime
 		// (e.g. `x = 300;` for undeclared `x`).
 		if (this.type === 'global') {
-			const through = this.manager.getThroughReferences();
+			const through = this.through;
 			const implicits = this.manager.getImplicitGlobals();
 			const set = new Map<string, TsVariable>();
 			for (const v of implicits) set.set(v.name, v);
@@ -1369,12 +1372,24 @@ export class TsScope {
 	}
 
 	get through(): TsReference[] {
-		// Only the globalScope holds the unresolved-reference list — other
-		// scopes inherit ESLint's "passes through to parent" model only at the
-		// top boundary in this implementation. (Most rules that touch through
-		// — e.g. no-undef — read it from the global scope anyway.)
-		if (this.type === 'global') return this.manager.getThroughReferences();
-		return [];
+		// References that escape THIS scope. Includes own refs that don't
+		// resolve to a local, plus child scopes' through refs that also don't
+		// resolve here. Computed lazily; not cached because scope.variables
+		// is mutable via addGlobals.
+		const out: TsReference[] = [];
+		const localSyms = new Set<ts.Symbol>();
+		for (const v of this.variables) localSyms.add(v.symbol);
+		for (const ref of this.references) {
+			if (!ref.symbol || !localSyms.has(ref.symbol)) out.push(ref);
+		}
+		for (const child of this.childScopes) {
+			// Skip function-expression-name (its lookup is the wrapped name's
+			// own scope and not really visible to ancestors).
+			for (const ref of child.through) {
+				if (!ref.symbol || !localSyms.has(ref.symbol)) out.push(ref);
+			}
+		}
+		return out;
 	}
 }
 
