@@ -508,6 +508,26 @@ export class TsScopeManager {
 		return this._through!;
 	}
 
+	// Implicit globals: synthesized variables for unresolved write references
+	// (e.g. `x = 1;` where `x` isn't declared) that ESLint's `no-undef`
+	// alternatives might want to model. One Variable per unique name.
+	_implicitGlobals?: TsVariable[];
+	getImplicitGlobals(): TsVariable[] {
+		if (this._implicitGlobals) return this._implicitGlobals;
+		const through = this.getThroughReferences();
+		const byName = new Map<string, TsVariable>();
+		for (const ref of through) {
+			if (!ref.isWrite()) continue;
+			const name = ref.identifier.name;
+			if (byName.has(name)) continue;
+			// Synthesize a TsVariable with no symbol declarations.
+			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
+			const v = new TsVariable(this, fakeSym);
+			byName.set(name, v);
+		}
+		return this._implicitGlobals = Array.from(byName.values());
+	}
+
 	// Identifier is a reference position (NOT a declaration name, property
 	// access RHS, type/property name, label, etc.). Helper for ref-index walk.
 	_isFreeReference(id: ts.Identifier): boolean {
@@ -526,6 +546,10 @@ export class TsScopeManager {
 			case SK.BreakStatement:
 			case SK.ContinueStatement:
 				return (p as ts.BreakStatement | ts.ContinueStatement).label !== id;
+			case SK.MetaProperty:
+				// `new.target` / `import.meta` — `target` / `meta` are syntactic
+				// markers, not real references.
+				return (p as ts.MetaProperty).name !== id;
 			case SK.PropertyDeclaration:
 			case SK.PropertySignature:
 			case SK.PropertyAssignment:
@@ -547,14 +571,14 @@ export class TsScopeManager {
 			case SK.TypeParameter:
 			case SK.ImportClause:
 			case SK.NamespaceImport:
-			case SK.ImportSpecifier:
 			case SK.ImportEqualsDeclaration:
 			case SK.NamedTupleMember:
 			case SK.JsxAttribute:
 				return (p as { name?: ts.Node }).name !== id;
+			case SK.ImportSpecifier:
 			case SK.ExportSpecifier:
 			case SK.BindingElement: {
-				const e = p as ts.ExportSpecifier | ts.BindingElement;
+				const e = p as ts.ImportSpecifier | ts.ExportSpecifier | ts.BindingElement;
 				return e.name !== id && e.propertyName !== id;
 			}
 			case SK.TypeReference:
@@ -658,6 +682,8 @@ export class TsScopeManager {
 			case SK.BreakStatement:
 			case SK.ContinueStatement:
 				return (p as ts.BreakStatement | ts.ContinueStatement).label !== id;
+			case SK.MetaProperty:
+				return (p as ts.MetaProperty).name !== id;
 			default:
 				return true;
 		}
@@ -1169,15 +1195,18 @@ export class TsScope {
 		set: Map<string, TsVariable>;
 	} {
 		// Only globalScope has meaningful implicit globals — references that
-		// escaped resolution and become implicit globals at runtime. Other
-		// scopes return an empty shape for compatibility.
+		// escaped resolution and become implicit globals at runtime
+		// (e.g. `x = 300;` for undeclared `x`).
 		if (this.type === 'global') {
 			const through = this.manager.getThroughReferences();
+			const implicits = this.manager.getImplicitGlobals();
+			const set = new Map<string, TsVariable>();
+			for (const v of implicits) set.set(v.name, v);
 			return {
-				variables: [],
+				variables: implicits,
 				left: through,
 				leftToBeResolved: through,
-				set: new Map(),
+				set,
 			};
 		}
 		return { variables: [], left: [], leftToBeResolved: [], set: new Map() };
