@@ -289,16 +289,22 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.Block: return new BlockStatementNode(child as ts.Block, parent);
 		case SK.IfStatement: return new IfStatementNode(child as ts.IfStatement, parent);
 		case SK.BinaryExpression: return new BinaryLikeExpressionNode(child as ts.BinaryExpression, parent);
-		case SK.PropertyAccessExpression: return new MemberExpressionNode(child as ts.PropertyAccessExpression, parent);
-		case SK.ElementAccessExpression: return new MemberExpressionNode(child as ts.ElementAccessExpression, parent);
+		case SK.PropertyAccessExpression: return wrapChainIfNeeded(
+			new MemberExpressionNode(child as ts.PropertyAccessExpression, parent),
+			child as ts.PropertyAccessExpression,
+			parent,
+		);
+		case SK.ElementAccessExpression: return wrapChainIfNeeded(
+			new MemberExpressionNode(child as ts.ElementAccessExpression, parent),
+			child as ts.ElementAccessExpression,
+			parent,
+		);
 		case SK.CallExpression: {
 			const ce = child as ts.CallExpression;
-			// Dynamic `import('...')` is a CallExpression with ImportKeyword
-			// callee; eager maps it to an ImportExpression.
 			if (ce.expression.kind === SK.ImportKeyword) {
 				return new ImportExpressionNode(ce, parent);
 			}
-			return new CallExpressionNode(ce, parent);
+			return wrapChainIfNeeded(new CallExpressionNode(ce, parent), ce, parent);
 		}
 		case SK.TrueKeyword: return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
 		case SK.FalseKeyword: return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
@@ -468,6 +474,69 @@ function convertTypeAnnotation(child: ts.Node, parent: LazyNode): TSTypeAnnotati
 	const start = child.getFullStart() - offset;
 	const end = child.getEnd();
 	return new TSTypeAnnotationNode(child, parent, [start, end]);
+}
+
+// Optional-chain wrapping (mirrors typescript-estree's `convertChainExpression`,
+// line 182). Each MemberExpression / CallExpression that's part of an
+// optional chain gets handled here:
+//   - If neither the current node is optional NOR its child is already a
+//     ChainExpression, return as-is (most common path).
+//   - If the child is a ChainExpression (and we're not parenthesized),
+//     UNWRAP it: take child.expression as our new object/callee, then wrap
+//     the result in a fresh ChainExpression. This collapses nested chain
+//     expressions to a single outer ChainExpression covering the whole.
+//   - Otherwise (we're optional, child isn't yet a chain), wrap us in a
+//     fresh ChainExpression.
+//
+// Side effect: forces `object`/`callee` materialisation so we can see
+// whether the child is a ChainExpression. The optional-chain code path
+// is rare enough that this eager step is cheap.
+function wrapChainIfNeeded(
+	result: MemberExpressionNode | CallExpressionNode,
+	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
+	parent: LazyNode,
+): LazyNode {
+	const isMember = result.type === 'MemberExpression';
+	const child = isMember
+		? (result as MemberExpressionNode).object
+		: (result as CallExpressionNode).callee;
+	const isOptional = result.optional;
+	const isChildChain = (child as { type?: string } | null)?.type === 'ChainExpression'
+		&& (tsNode as ts.PropertyAccessExpression).expression?.kind !== SK.ParenthesizedExpression;
+	if (!isChildChain && !isOptional) return result;
+	if (isChildChain) {
+		// Unwrap: pull out child.expression, point us at it instead.
+		const inner = (child as unknown as { expression: LazyNode }).expression;
+		// Re-point our object/callee. The cache was already populated with
+		// the ChainExpression for the TS child node; overwrite to inner.
+		const tsChildField = isMember
+			? (tsNode as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression
+			: (tsNode as ts.CallExpression).expression;
+		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsChildField, inner);
+		// Override our cached child slot.
+		if (isMember) (result as unknown as { _object: LazyNode })._object = inner;
+		else (result as unknown as { _callee: LazyNode })._callee = inner;
+		(inner as { parent: LazyNode }).parent = result;
+	}
+	return new ChainExpressionWrappingNode(tsNode, parent, result);
+}
+
+class ChainExpressionWrappingNode extends LazyNode {
+	readonly type = 'ChainExpression' as const;
+	readonly expression: LazyNode;
+	constructor(tsNode: ts.Node, parent: LazyNode, expression: LazyNode) {
+		super(tsNode, parent, undefined, false);
+		// Take the wrapped node's range/loc — eager createNode passes the same TS node.
+		this.range = expression.range.slice() as [number, number];
+		this.loc = expression.loc;
+		// Wrap the inner: its parent becomes us, and the TS-node map is
+		// re-pointed to us (eager comment: "registered as the canonical
+		// mapping for this TS node").
+		(expression as { parent: LazyNode }).parent = this;
+		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
+		this._ctx.maps.esTreeNodeToTSNodeMap.set(this, tsNode);
+		this.expression = expression;
+	}
 }
 
 // Wrap typeArguments (e.g. `<number, string>`) in TSTypeParameterInstantiation
