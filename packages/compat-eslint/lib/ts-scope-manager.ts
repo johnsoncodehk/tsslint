@@ -566,7 +566,13 @@ export class TsScopeManager {
 				}
 				return false;
 			}
-			case SK.Parameter:
+			case SK.Parameter: {
+				// `function f(a, b = 0)` — `b` has an initializer, which counts
+				// as an init Reference for the parameter binding.
+				const param = p as ts.ParameterDeclaration;
+				if (param.name === id && param.initializer !== undefined) return true;
+				return param.name !== id;
+			}
 			case SK.FunctionDeclaration:
 			case SK.FunctionExpression:
 			case SK.ClassDeclaration:
