@@ -242,7 +242,15 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		case SK.BinaryExpression: return new BinaryLikeExpressionNode(child as ts.BinaryExpression, parent);
 		case SK.PropertyAccessExpression: return new MemberExpressionNode(child as ts.PropertyAccessExpression, parent);
 		case SK.ElementAccessExpression: return new MemberExpressionNode(child as ts.ElementAccessExpression, parent);
-		case SK.CallExpression: return new CallExpressionNode(child as ts.CallExpression, parent);
+		case SK.CallExpression: {
+			const ce = child as ts.CallExpression;
+			// Dynamic `import('...')` is a CallExpression with ImportKeyword
+			// callee; eager maps it to an ImportExpression.
+			if (ce.expression.kind === SK.ImportKeyword) {
+				return new ImportExpressionNode(ce, parent);
+			}
+			return new CallExpressionNode(ce, parent);
+		}
 		case SK.TrueKeyword: return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
 		case SK.FalseKeyword: return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
 		case SK.FunctionDeclaration: return new FunctionDeclarationNode(child as ts.FunctionDeclaration, parent);
@@ -2430,6 +2438,21 @@ class CallExpressionNode extends LazyNode {
 
 	get arguments() {
 		return this._arguments ??= convertChildren((this._ts as ts.CallExpression).arguments, this);
+	}
+}
+
+class ImportExpressionNode extends LazyNode {
+	readonly type = 'ImportExpression' as const;
+	readonly attributes: never[] = [];
+	private _source?: LazyNode | null;
+	private _options?: LazyNode | null;
+	get source() {
+		const args = (this._ts as ts.CallExpression).arguments;
+		return this._source ??= convertChild(args[0], this);
+	}
+	get options() {
+		const args = (this._ts as ts.CallExpression).arguments;
+		return this._options ??= args[1] ? convertChild(args[1], this) : null;
 	}
 }
 

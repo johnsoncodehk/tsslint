@@ -691,15 +691,24 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const fs = require('fs') as typeof import('fs');
 	const path = require('path') as typeof import('path');
 	const { visitorKeys } = require('@typescript-eslint/visitor-keys') as { visitorKeys: Record<string, string[]> };
-	const targets = [
-		'../../types/index.ts',
-		'../../config/index.ts',
-		'../../core/index.ts',
-		'../../cli/index.ts',
-		'../../compat-eslint/index.ts',
-		'../../compat-eslint/lib/lazy-estree.ts',
-		'../../compat-eslint/lib/skip-type-converter.ts',
-	];
+	// Every TS source file under packages/ (excluding test artefacts and
+	// vendored upstream tests). The lazy converter must walk all of them
+	// without hitting an unsupported SyntaxKind.
+	const packagesRoot = path.resolve(__dirname, '../../');
+	const targets: string[] = [];
+	const walkDir = (dir: string) => {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name === 'node_modules' || entry.name === 'upstream' || entry.name === 'test') continue;
+				walkDir(full);
+			}
+			else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) {
+				targets.push(path.relative(packagesRoot, full));
+			}
+		}
+	};
+	walkDir(packagesRoot);
 	const walkAll = (estree: any) => {
 		const walk = (n: any) => {
 			if (!n || typeof n !== 'object') return;
@@ -713,23 +722,32 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		};
 		walk(estree);
 	};
+	const failed: { file: string; msg: string }[] = [];
+	let passed = 0;
 	for (const rel of targets) {
-		const realFile = path.resolve(__dirname, rel);
-		if (!fs.existsSync(realFile)) {
-			console.log(`  skip - real-source: ${rel} (file not found)`);
-			continue;
-		}
+		const realFile = path.resolve(packagesRoot, rel);
 		const source = fs.readFileSync(realFile, 'utf8');
 		const sf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		try {
 			const { estree } = lazy.convertLazy(sf);
 			walkAll(estree);
-			check(`real-source: convertLazy(${rel}) walks cleanly`, true);
+			passed++;
 		}
 		catch (err) {
-			const msg = (err as Error).message.split('\n')[0];
-			check(`real-source: convertLazy(${rel}) walks cleanly`, false, msg);
+			failed.push({ file: rel, msg: (err as Error).message.split('\n')[0] });
 		}
+	}
+	check(
+		`real-source: ${passed}/${targets.length} TS files under packages/ walk cleanly`,
+		failed.length === 0,
+		failed.length ? `first failure: ${failed[0].file} → ${failed[0].msg}` : '',
+	);
+	if (failed.length) {
+		// Show distinct error messages so we know what to add next, not
+		// per-file (one missing kind tends to fail many files).
+		const distinct = new Set(failed.map(f => f.msg));
+		console.log(`  info  - ${distinct.size} distinct failure(s):`);
+		for (const m of distinct) console.log(`    - ${m}`);
 	}
 }
 
