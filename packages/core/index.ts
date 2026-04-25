@@ -67,6 +67,45 @@ export function createLinter(
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName, cache?.[2]);
 
+			// Fast path for warm runs: every rule is cached and none cached a
+			// diagnostic for this file. We can skip the per-file parse entirely
+			// as long as no plugin's resolveDiagnostics actually reads the file.
+			// Hand plugins a Proxy that only triggers a parse on the first
+			// property access — if they short-circuit on an empty diagnostic
+			// list (the common case for createIgnorePlugin), they never touch
+			// it and we save the parse cost.
+			if (
+				cache && !typeAwareMode && getNonBoundSourceFile
+				&& Object.keys(rules).every(id => {
+					const c = cache[1][id];
+					return c && c[1].length === 0;
+				})
+			) {
+				let parsed: ts.SourceFile | undefined;
+				const lazyFile = new Proxy({} as ts.SourceFile, {
+					get(_, p) {
+						return Reflect.get(parsed ??= getNonBoundSourceFile!(fileName), p);
+					},
+				});
+				let diagnostics: ts.DiagnosticWithLocation[] = [];
+				try {
+					for (const { plugins } of configs) {
+						for (const { resolveDiagnostics } of plugins) {
+							if (resolveDiagnostics) {
+								diagnostics = resolveDiagnostics(lazyFile, diagnostics);
+							}
+						}
+					}
+				}
+				catch {
+					// Fall through to the regular path if a plugin barfs on the
+					// proxy / lazy parse — extremely unlikely but keeps semantics.
+					parsed = undefined;
+					return this.lint(fileName, undefined);
+				}
+				return diagnostics;
+			}
+
 			if (typeAwareMode) {
 				const program = ctx.languageService.getProgram()!;
 				const file = ctx.languageService.getProgram()!.getSourceFile(fileName)!;
