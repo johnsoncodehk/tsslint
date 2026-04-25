@@ -104,6 +104,44 @@ const TS_ONLY_KINDS = new Set<ts.SyntaxKind>([
 	SK.SyntaxList,
 ]);
 
+// If `tsNode` sits in a slot where the ESTree path goes through a synthetic
+// wrapper (e.g. `VariableDeclaration.type` is exposed as
+// `VariableDeclarator.id.typeAnnotation` — a TSTypeAnnotation wrapper that
+// has no TS counterpart), return a route describing how to trigger the
+// wrapper's construction. Bottom-up materialisation can't reach `tsNode`
+// directly via the TS parent chain because the wrapper isn't on it; the
+// only way to build the wrapper (and register `tsNode`'s ESTree counterpart
+// in the cache) is to access the parent's slot getter that creates it.
+//
+// Add a case here whenever a new lazy class introduces a synthetic-wrapper
+// slot. Without this, bottom-up of a node inside the wrapper produces a
+// `parent` reference pointing at the wrapper-less ESTree parent — a
+// silently-wrong shape.
+function findWrapperRoute(tsNode: ts.Node):
+	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void; }
+	| null
+{
+	const tsParent = tsNode.parent;
+	if (!tsParent) return null;
+	// `let x: T = ...` — VariableDeclaration.type goes through Identifier.typeAnnotation
+	if (tsParent.kind === SK.VariableDeclaration && (tsParent as ts.VariableDeclaration).type === tsNode) {
+		return {
+			ownerTsNode: tsParent,
+			trigger: (owner) => {
+				// Chain through `id` (builds Identifier + TSTypeAnnotation
+				// wrapper) then `typeAnnotation` (the wrapper's own getter,
+				// which finally calls convertChild on the inner type and
+				// registers it in the cache).
+				const id = (owner as unknown as { id: unknown }).id as { typeAnnotation: { typeAnnotation: unknown } } | null;
+				if (id?.typeAnnotation) {
+					void id.typeAnnotation.typeAnnotation;
+				}
+			},
+		};
+	}
+	return null;
+}
+
 // Bottom-up materialisation: given any TS node anywhere in the source, return
 // (creating if needed) its ESTree counterpart. Walks up via `tsNode.parent`
 // to find / build the ESTree parent chain — at each step the cache lookup
@@ -114,9 +152,26 @@ const TS_ONLY_KINDS = new Set<ts.SyntaxKind>([
 // The lookup-on-cache property is what makes top-down (parent.children
 // getter calls convertChild per child) and bottom-up (this function) coherent:
 // both paths converge on the same instance when they meet at a shared TS node.
+//
+// Wrapper-routed slots: see `findWrapperRoute`.
 export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	const cached = ctx.maps.tsNodeToESTreeNodeMap.get(tsNode);
 	if (cached) return cached as LazyNode;
+	// If our TS parent reaches us through a synthetic wrapper, route via the
+	// parent's slot getter rather than constructing directly. The getter
+	// builds the wrapper AND registers our inner ESTree counterpart in the
+	// cache as a side-effect, so we can then return it through the cache
+	// path on the next line.
+	const route = findWrapperRoute(tsNode);
+	if (route) {
+		const owner = materialize(route.ownerTsNode, ctx);
+		route.trigger(owner);
+		const result = ctx.maps.tsNodeToESTreeNodeMap.get(tsNode);
+		if (!result) {
+			throw new Error(`lazy-estree: wrapper route for ${SK[tsNode.kind]} did not register the inner node`);
+		}
+		return result as LazyNode;
+	}
 	// Find the nearest TS ancestor with an ESTree counterpart. Some TS-only
 	// shapes (VariableDeclarationList, SyntaxList) have no ESTree node and
 	// need to be skipped.

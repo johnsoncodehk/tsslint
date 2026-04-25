@@ -593,6 +593,63 @@ runFixture('TSTypeReference simple', 'let x: Foo = 1;');
 		estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1]);
 }
 
+// --- Bottom-up through TSTypeAnnotation wrapper -----------------------
+
+// Bottom-up materialise of a node sitting inside a `type` slot. The TS
+// parent chain doesn't go through the synthetic TSTypeAnnotation wrapper;
+// a naive walk-up lands on VariableDeclarator and produces a node whose
+// `.parent` points at the wrong shape. The fix routes through the
+// wrapper-creating getter on the parent.
+{
+	const sf = parseTs('let x: number = 1;');
+	const { context } = lazy.convertLazy(sf);
+	const tsType = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].type!;
+	const innerEstree = lazy.materialize(tsType, context);
+	check(
+		'wrapper bottom-up: inner type is TSNumberKeyword',
+		(innerEstree as any).type === 'TSNumberKeyword',
+	);
+	check(
+		'wrapper bottom-up: inner.parent is TSTypeAnnotation wrapper',
+		(innerEstree as any).parent?.type === 'TSTypeAnnotation',
+	);
+	check(
+		'wrapper bottom-up: wrapper.parent is Identifier',
+		(innerEstree as any).parent?.parent?.type === 'Identifier',
+	);
+}
+
+// Bottom-up of a TSTypeReference (named type) inside a typeAnnotation —
+// same wrapper case, different inner kind. Confirms the route works
+// for any kind sitting in a `type` slot.
+{
+	const sf = parseTs('let x: Foo = 1;');
+	const { context } = lazy.convertLazy(sf);
+	const tsType = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].type!;
+	const innerEstree = lazy.materialize(tsType, context);
+	check(
+		'wrapper bottom-up: TSTypeReference inner type',
+		(innerEstree as any).type === 'TSTypeReference',
+	);
+	check(
+		'wrapper bottom-up: TSTypeReference parent is wrapper',
+		(innerEstree as any).parent?.type === 'TSTypeAnnotation',
+	);
+}
+
+// Convergence: top-down access to the wrapper's inner type, then
+// bottom-up materialise of the same TS node — must return the same
+// instance. This proves bottom-up routes through the wrapper-creating
+// getter cleanly (cache hit, not a fresh build with a different parent).
+{
+	const sf = parseTs('let x: number = 1;');
+	const { estree, context } = lazy.convertLazy(sf);
+	const tsType = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].type!;
+	const topDown = ((estree.body as any)[0]).declarations[0].id.typeAnnotation.typeAnnotation;
+	const bottomUp = lazy.materialize(tsType, context);
+	check('wrapper bottom-up: converges with top-down (same instance)', topDown === bottomUp);
+}
+
 // --- Future / blocked --------------------------------------------------
 //
 // Edge cases NOT exercisable in current MVP scope. Each is annotated with
