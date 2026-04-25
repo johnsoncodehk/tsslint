@@ -682,6 +682,44 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	check('wrapper bottom-up: converges with top-down (same instance)', topDown === bottomUp);
 }
 
+// --- Real-source coverage: drives SyntaxKind additions ---------------
+
+// Pull a real TSSLint source file through convertLazy + force-walk via
+// visitorKeys so every getter materialises. Whatever kind throws first
+// dictates the next batch of LazyNode classes to add.
+{
+	const fs = require('fs') as typeof import('fs');
+	const path = require('path') as typeof import('path');
+	const { visitorKeys } = require('@typescript-eslint/visitor-keys') as { visitorKeys: Record<string, string[]> };
+	const realFile = path.resolve(__dirname, '../../types/index.ts');
+	if (fs.existsSync(realFile)) {
+		const source = fs.readFileSync(realFile, 'utf8');
+		const sf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		try {
+			const { estree } = lazy.convertLazy(sf);
+			const walk = (n: any) => {
+				if (!n || typeof n !== 'object') return;
+				const keys = visitorKeys[n.type];
+				if (!keys) return;
+				for (const k of keys) {
+					const c = n[k];
+					if (Array.isArray(c)) c.forEach(walk);
+					else if (c) walk(c);
+				}
+			};
+			walk(estree);
+			check(`real-source: convertLazy(packages/types/index.ts) walks cleanly`, true);
+		}
+		catch (err) {
+			const msg = (err as Error).message.split('\n')[0];
+			check(`real-source: convertLazy(packages/types/index.ts) walks cleanly`, false, msg);
+		}
+	}
+	else {
+		console.log('  skip - real-source test (file not found)');
+	}
+}
+
 // --- Smoke: rule-style traversal over the lazy tree -------------------
 
 // Walk the lazy ESTree exactly the way ESLint's Traverser does (via
