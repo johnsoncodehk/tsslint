@@ -13,6 +13,73 @@
 // rules read `ref.identifier.parent`, they need a believable parent —
 // `setSyntheticTypeParents` walks back up the TS chain, building a stub
 // ESTree-shaped parent so `.parent.type` etc. don't crash.
+//
+// ─── End-to-end flow ───────────────────────────────────────────────────────
+//
+//   ┌────────────────────────────────────────────────────────────────────┐
+//   │ 1. CONFIG LOAD                                                      │
+//   │   tsslint.config.ts → importESLintRules({...})                      │
+//   │     → compat-eslint.convertRule(rule) → ruleRegistry                │
+//   └────────────────────────────────────────────────────────────────────┘
+//                                  │  first file lint
+//                                  ▼
+//   ┌────────────────────────────────────────────────────────────────────┐
+//   │ 2. PROBE  (index.ts: ensureSelectorProbe — runs once per process)   │
+//   │   for entry of ruleRegistry:                                        │
+//   │     ┌─ rule.create(BARE_STUB_CTX)                                   │
+//   │     │     ├── ✓ → for each listener key:                            │
+//   │     │     │         validateSelector(key)                           │
+//   │     │     │           ├── ✓ → selectors.push                        │
+//   │     │     │           └── ✗ → throw `[id] invalid selector "X"`     │
+//   │     │     └── ✗ create crashed (rule needs real parserServices /    │
+//   │     │             scope state — bare stub forces this on purpose)   │
+//   │     │            │                                                  │
+//   │     └────────── configureSkipKindsForVisitors(ALL_SKIPPABLE) → ret  │
+//   │   configureSkipKindsForVisitors(selectors)                          │
+//   └────────────────────────────────────────────────────────────────────┘
+//                                  │
+//                                  ▼
+//   ┌────────────────────────────────────────────────────────────────────┐
+//   │ 3. SKIP-SET DERIVATION  (this file)                                 │
+//   │   for each selector string:                                         │
+//   │     esquery.parse(s) → walk(esqueryAst)                             │
+//   │       ├─ identifier → visited.add(value)                            │
+//   │       ├─ wildcard   → skipKinds = ∅ (exempt all)                    │
+//   │       └─ matches/not/has/compound/child/...  → recurse              │
+//   │   skipKinds = DEFAULT_SKIP_KINDS \ map(visited → SyntaxKind)        │
+//   └────────────────────────────────────────────────────────────────────┘
+//                                  │
+//                                  ▼
+//   ┌────────────────────────────────────────────────────────────────────┐
+//   │ 4. CONVERSION  (typescript-estree's Converter, monkey-patched)      │
+//   │   Converter.converter(node, parent)                                 │
+//   │     ├─ skipKinds.has(node.kind)  → return null                      │
+//   │     └─ otherwise                 → orig converter                   │
+//   │   ESTree { …, typeAnnotation: null, … }                             │
+//   └────────────────────────────────────────────────────────────────────┘
+//                                  │
+//                                  ▼
+//   ┌────────────────────────────────────────────────────────────────────┐
+//   │ 5. ESLINT TRAVERSAL  (NodeEventGenerator)                           │
+//   │   walks visitorKeys; null children halt descent                     │
+//   │     ├── rule listening on TSAnyKeyword → ✓ fires (preserved by 3)   │
+//   │     ├── rule listening on '*' → ✓ exempts everything (3, wildcard)  │
+//   │     └── rule listening on TSAsExpression                            │
+//   │           └── body reads node.typeAnnotation                        │
+//   │                ├── ALL_SKIPPABLE fallback (2):  ✓ real subtree      │
+//   │                └── otherwise:                    ✗ NULL, crash      │
+//   │                    ▲                                                │
+//   │                    └── known limitation — bare stub in (2) forces   │
+//   │                        such rules through ALL_SKIPPABLE on purpose. │
+//   └────────────────────────────────────────────────────────────────────┘
+//
+// Two load-bearing invariants:
+// - ALL_SKIPPABLE fallback is not just error handling — it's the safety
+//   net for rules whose listener body walks INTO type subtrees from a
+//   non-skipped parent. Selector probing alone can't see those reads.
+// - configureSkipKindsForVisitors is non-cumulative: every call rederives
+//   from DEFAULT, so a config reload that drops a rule actually drops
+//   its exemption.
 
 import ts = require('typescript');
 import path = require('path');
