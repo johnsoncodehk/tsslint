@@ -23,71 +23,111 @@ const { Converter } = require(tseRoot + '/dist/convert.js') as {
 	Converter: { prototype: { converter: (...args: any[]) => any; }; };
 };
 
-// TS SyntaxKinds that are 100% in type position. Their conversion produces
-// TSXxx ESTree nodes that ESLint core rules and TSSLint rules don't read.
-const SKIP_KINDS = new Set<ts.SyntaxKind>([
-	ts.SyntaxKind.TypeReference,
-	ts.SyntaxKind.TypeLiteral,
-	ts.SyntaxKind.ArrayType,
-	ts.SyntaxKind.TupleType,
-	ts.SyntaxKind.OptionalType,
-	ts.SyntaxKind.RestType,
-	ts.SyntaxKind.NamedTupleMember,
-	ts.SyntaxKind.UnionType,
-	ts.SyntaxKind.IntersectionType,
-	ts.SyntaxKind.ConditionalType,
-	ts.SyntaxKind.InferType,
-	ts.SyntaxKind.ParenthesizedType,
-	ts.SyntaxKind.ThisType,
-	ts.SyntaxKind.TypeOperator,
-	ts.SyntaxKind.IndexedAccessType,
-	ts.SyntaxKind.MappedType,
-	ts.SyntaxKind.LiteralType,
-	ts.SyntaxKind.TemplateLiteralType,
-	ts.SyntaxKind.TemplateLiteralTypeSpan,
-	ts.SyntaxKind.TypePredicate,
-	ts.SyntaxKind.TypeQuery,
-	ts.SyntaxKind.ImportType,
-	ts.SyntaxKind.FunctionType,
-	ts.SyntaxKind.ConstructorType,
-	ts.SyntaxKind.ConstructSignature,
-	ts.SyntaxKind.CallSignature,
-	ts.SyntaxKind.IndexSignature,
-	ts.SyntaxKind.MethodSignature,
-	ts.SyntaxKind.PropertySignature,
-	// NOT skipped: TypeAliasDeclaration / InterfaceDeclaration. Their names are
-	// statement-level bindings that ESLint rules (no-unused-vars) check via
-	// the export modifier on the declaration node. Skipping the whole
-	// declaration would hide that modifier and produce false positives.
-	// Keyword type nodes
-	ts.SyntaxKind.AnyKeyword,
-	ts.SyntaxKind.UnknownKeyword,
-	ts.SyntaxKind.NeverKeyword,
-	ts.SyntaxKind.NumberKeyword,
-	ts.SyntaxKind.BigIntKeyword,
-	ts.SyntaxKind.StringKeyword,
-	ts.SyntaxKind.BooleanKeyword,
-	ts.SyntaxKind.SymbolKeyword,
-	ts.SyntaxKind.ObjectKeyword,
-	ts.SyntaxKind.UndefinedKeyword,
-	ts.SyntaxKind.NullKeyword,
-	ts.SyntaxKind.VoidKeyword,
-	ts.SyntaxKind.IntrinsicKeyword,
+// SyntaxKind ↔ ESTree TSXxx name. The forward direction (kind → name) feeds
+// `buildSyntheticParent` below. The reverse direction (name → kind) lets the
+// caller exempt kinds from skipping by passing AST_NODE_TYPE strings (which
+// is what rules' visitors are written against).
+const SK = ts.SyntaxKind;
+const KIND_TO_TS_NAME: Partial<Record<ts.SyntaxKind, string>> = {
+	[SK.TypeReference]: 'TSTypeReference',
+	[SK.TypeLiteral]: 'TSTypeLiteral',
+	[SK.ArrayType]: 'TSArrayType',
+	[SK.TupleType]: 'TSTupleType',
+	[SK.OptionalType]: 'TSOptionalType',
+	[SK.RestType]: 'TSRestType',
+	[SK.NamedTupleMember]: 'TSNamedTupleMember',
+	[SK.UnionType]: 'TSUnionType',
+	[SK.IntersectionType]: 'TSIntersectionType',
+	[SK.ConditionalType]: 'TSConditionalType',
+	[SK.InferType]: 'TSInferType',
+	[SK.ParenthesizedType]: 'TSParenthesizedType',
+	[SK.ThisType]: 'TSThisType',
+	[SK.TypeOperator]: 'TSTypeOperator',
+	[SK.IndexedAccessType]: 'TSIndexedAccessType',
+	[SK.MappedType]: 'TSMappedType',
+	[SK.LiteralType]: 'TSLiteralType',
+	[SK.TemplateLiteralType]: 'TSTemplateLiteralType',
+	[SK.TemplateLiteralTypeSpan]: 'TSTemplateLiteralType',
+	[SK.TypePredicate]: 'TSTypePredicate',
+	[SK.TypeQuery]: 'TSTypeQuery',
+	[SK.ImportType]: 'TSImportType',
+	[SK.FunctionType]: 'TSFunctionType',
+	[SK.ConstructorType]: 'TSConstructorType',
+	[SK.ConstructSignature]: 'TSConstructSignatureDeclaration',
+	[SK.CallSignature]: 'TSCallSignatureDeclaration',
+	[SK.IndexSignature]: 'TSIndexSignature',
+	[SK.MethodSignature]: 'TSMethodSignature',
+	[SK.PropertySignature]: 'TSPropertySignature',
+	[SK.TypeAliasDeclaration]: 'TSTypeAliasDeclaration',
+	[SK.AnyKeyword]: 'TSAnyKeyword',
+	[SK.UnknownKeyword]: 'TSUnknownKeyword',
+	[SK.NeverKeyword]: 'TSNeverKeyword',
+	[SK.NumberKeyword]: 'TSNumberKeyword',
+	[SK.BigIntKeyword]: 'TSBigIntKeyword',
+	[SK.StringKeyword]: 'TSStringKeyword',
+	[SK.BooleanKeyword]: 'TSBooleanKeyword',
+	[SK.SymbolKeyword]: 'TSSymbolKeyword',
+	[SK.ObjectKeyword]: 'TSObjectKeyword',
+	[SK.UndefinedKeyword]: 'TSUndefinedKeyword',
+	[SK.NullKeyword]: 'TSNullKeyword',
+	[SK.VoidKeyword]: 'TSVoidKeyword',
+	[SK.IntrinsicKeyword]: 'TSIntrinsicKeyword',
+};
+
+// Default skip set — TS SyntaxKinds whose ESTree counterpart is type-only and
+// not meaningful to most rules. NOT skipped: TypeAliasDeclaration /
+// InterfaceDeclaration themselves (their `export` modifier matters to
+// no-unused-vars), even though they appear in KIND_TO_TS_NAME above.
+const DEFAULT_SKIP_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
+	SK.TypeReference, SK.TypeLiteral, SK.ArrayType, SK.TupleType, SK.OptionalType,
+	SK.RestType, SK.NamedTupleMember, SK.UnionType, SK.IntersectionType,
+	SK.ConditionalType, SK.InferType, SK.ParenthesizedType, SK.ThisType,
+	SK.TypeOperator, SK.IndexedAccessType, SK.MappedType, SK.LiteralType,
+	SK.TemplateLiteralType, SK.TemplateLiteralTypeSpan, SK.TypePredicate,
+	SK.TypeQuery, SK.ImportType, SK.FunctionType, SK.ConstructorType,
+	SK.ConstructSignature, SK.CallSignature, SK.IndexSignature, SK.MethodSignature,
+	SK.PropertySignature, SK.AnyKeyword, SK.UnknownKeyword, SK.NeverKeyword,
+	SK.NumberKeyword, SK.BigIntKeyword, SK.StringKeyword, SK.BooleanKeyword,
+	SK.SymbolKeyword, SK.ObjectKeyword, SK.UndefinedKeyword, SK.NullKeyword,
+	SK.VoidKeyword, SK.IntrinsicKeyword,
 ]);
 
+// Active skip set — mutated by `configureSkipKindsForVisitors` based on which
+// AST_NODE_TYPEs registered rules listen on. Starts as the default; callers
+// who don't probe rules retain the original behaviour.
+let skipKinds: ReadonlySet<ts.SyntaxKind> = DEFAULT_SKIP_KINDS;
+
 export function isSkippedKind(kind: ts.SyntaxKind): boolean {
-	return SKIP_KINDS.has(kind);
+	return skipKinds.has(kind);
+}
+
+// Adjust the active skip set so any TS kind whose ESTree counterpart is in
+// `astNodeTypesVisited` gets DROPPED from skipping (i.e. gets converted as
+// usual, so rule visitors fire). Call once after rule registration, before
+// the first `astConvertSkipTypes` call. Repeat calls are cumulative — each
+// call re-derives from the default, then removes the visited-set kinds.
+export function configureSkipKindsForVisitors(astNodeTypesVisited: ReadonlySet<string>): void {
+	const next = new Set(DEFAULT_SKIP_KINDS);
+	for (const kindStr of Object.keys(KIND_TO_TS_NAME)) {
+		const kind = Number(kindStr) as ts.SyntaxKind;
+		const name = KIND_TO_TS_NAME[kind]!;
+		if (astNodeTypesVisited.has(name)) {
+			next.delete(kind);
+		}
+	}
+	skipKinds = next;
 }
 
 // Patch Converter.prototype.converter once on first call. The patched method
-// short-circuits TS-only kinds before they enter `convertNode`.
+// short-circuits TS-only kinds before they enter `convertNode`. The active
+// skip set is read each call so reconfiguration takes effect immediately.
 let patched = false;
 function ensurePatched() {
 	if (patched) return;
 	patched = true;
 	const orig = Converter.prototype.converter;
 	Converter.prototype.converter = function(node: ts.Node | undefined, parent: ts.Node | undefined, allowPattern: boolean) {
-		if (node && SKIP_KINDS.has(node.kind)) return null;
+		if (node && skipKinds.has(node.kind)) return null;
 		return orig.call(this, node, parent, allowPattern);
 	};
 }
@@ -98,40 +138,6 @@ export const astConvertSkipTypes: typeof astConverter = (ast, parseSettings, sho
 };
 
 // --- Synthetic parent chain for identifiers in skipped subtrees -----------
-
-// Map a few common TS SyntaxKinds to their ESTree TSXxx node `type` name —
-// just enough for `parent.type === '...'` checks to evaluate. Anything not
-// listed falls back to a generic 'TSStubNode'.
-const TS_TYPE_NAMES: Partial<Record<ts.SyntaxKind, string>> = {
-	[ts.SyntaxKind.TypeReference]: 'TSTypeReference',
-	[ts.SyntaxKind.TypeLiteral]: 'TSTypeLiteral',
-	[ts.SyntaxKind.ArrayType]: 'TSArrayType',
-	[ts.SyntaxKind.TupleType]: 'TSTupleType',
-	[ts.SyntaxKind.UnionType]: 'TSUnionType',
-	[ts.SyntaxKind.IntersectionType]: 'TSIntersectionType',
-	[ts.SyntaxKind.ConditionalType]: 'TSConditionalType',
-	[ts.SyntaxKind.InferType]: 'TSInferType',
-	[ts.SyntaxKind.ParenthesizedType]: 'TSParenthesizedType',
-	[ts.SyntaxKind.TypeOperator]: 'TSTypeOperator',
-	[ts.SyntaxKind.IndexedAccessType]: 'TSIndexedAccessType',
-	[ts.SyntaxKind.MappedType]: 'TSMappedType',
-	[ts.SyntaxKind.LiteralType]: 'TSLiteralType',
-	[ts.SyntaxKind.TypeQuery]: 'TSTypeQuery',
-	[ts.SyntaxKind.TypePredicate]: 'TSTypePredicate',
-	[ts.SyntaxKind.ImportType]: 'TSImportType',
-	[ts.SyntaxKind.FunctionType]: 'TSFunctionType',
-	[ts.SyntaxKind.ConstructorType]: 'TSConstructorType',
-	[ts.SyntaxKind.TypeAliasDeclaration]: 'TSTypeAliasDeclaration',
-	[ts.SyntaxKind.PropertySignature]: 'TSPropertySignature',
-	[ts.SyntaxKind.MethodSignature]: 'TSMethodSignature',
-	[ts.SyntaxKind.CallSignature]: 'TSCallSignatureDeclaration',
-	[ts.SyntaxKind.ConstructSignature]: 'TSConstructSignatureDeclaration',
-	[ts.SyntaxKind.IndexSignature]: 'TSIndexSignature',
-	[ts.SyntaxKind.NamedTupleMember]: 'TSNamedTupleMember',
-	[ts.SyntaxKind.OptionalType]: 'TSOptionalType',
-	[ts.SyntaxKind.RestType]: 'TSRestType',
-	[ts.SyntaxKind.ThisType]: 'TSThisType',
-};
 
 interface StubNode {
 	type: string;
@@ -153,7 +159,7 @@ export function buildSyntheticParent(
 	if (direct) return direct;
 	const cached = stubCache.get(tsNode);
 	if (cached) return cached;
-	const typeName = TS_TYPE_NAMES[tsNode.kind] ?? 'TSStubNode';
+	const typeName = KIND_TO_TS_NAME[tsNode.kind] ?? 'TSStubNode';
 	const stub: StubNode = {
 		type: typeName,
 		range: [tsNode.getStart(), tsNode.getEnd()],

@@ -466,6 +466,81 @@ const PARSE_SETTINGS = {
 	tokens: true,
 };
 
+// Probe every registered rule's selectors so the converter knows which
+// TS-only AST node types it must NOT skip — a rule listening on
+// `TSAnyKeyword` would never fire if the converter dropped that node.
+// Run once per process: rules don't unregister, and the result is the
+// union of all probed selectors so adding more later only widens it.
+let selectorProbeDone = false;
+function ensureSelectorProbe() {
+	if (selectorProbeDone) return;
+	selectorProbeDone = true;
+	const { configureSkipKindsForVisitors } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
+	const visited = new Set<string>();
+	const stubContext: any = {
+		cwd: '/',
+		getCwd: () => '/',
+		filename: '/probe.ts',
+		getFilename: () => '/probe.ts',
+		physicalFilename: '/probe.ts',
+		getPhysicalFilename: () => '/probe.ts',
+		sourceCode: undefined,
+		getSourceCode: () => undefined,
+		settings: {},
+		parserOptions: {},
+		languageOptions: { parserOptions: {} },
+		parserPath: undefined,
+		id: 'probe',
+		options: [],
+		report: () => {},
+		getAncestors: () => [],
+		getDeclaredVariables: () => [],
+		getScope: () => undefined,
+		markVariableAsUsed: () => false,
+	};
+	for (const entry of ruleRegistry.values()) {
+		try {
+			const listeners = entry.eslintRule.create({
+				...stubContext,
+				options: entry.options,
+				...entry.context,
+			}) as Record<string, unknown> | undefined;
+			if (!listeners) continue;
+			for (const sel of Object.keys(listeners)) {
+				// Selectors range from plain `TSAnyKeyword` to esquery patterns
+				// like `TSTypeReference > Identifier[name="x"]:exit`. We
+				// over-approximate by extracting every PascalCase token —
+				// false positives just mean less perf gain, not correctness.
+				const matches = sel.match(/\b[A-Z]\w*/g);
+				if (matches) for (const m of matches) visited.add(m);
+			}
+		}
+		catch {
+			// A rule's create() crashed under the stub context. We can't
+			// know its selectors, so be conservative: assume it watches
+			// every TS-only node and disable skipping entirely for safety.
+			configureSkipKindsForVisitors(new Set([
+				'TSAnyKeyword', 'TSUnknownKeyword', 'TSNeverKeyword',
+				'TSStringKeyword', 'TSNumberKeyword', 'TSBigIntKeyword',
+				'TSBooleanKeyword', 'TSSymbolKeyword', 'TSObjectKeyword',
+				'TSUndefinedKeyword', 'TSNullKeyword', 'TSVoidKeyword',
+				'TSIntrinsicKeyword', 'TSTypeReference', 'TSUnionType',
+				'TSIntersectionType', 'TSConditionalType', 'TSInferType',
+				'TSParenthesizedType', 'TSTypeOperator', 'TSIndexedAccessType',
+				'TSMappedType', 'TSLiteralType', 'TSTemplateLiteralType',
+				'TSTypePredicate', 'TSTypeQuery', 'TSImportType',
+				'TSFunctionType', 'TSConstructorType', 'TSCallSignatureDeclaration',
+				'TSConstructSignatureDeclaration', 'TSIndexSignature',
+				'TSMethodSignature', 'TSPropertySignature', 'TSArrayType',
+				'TSTupleType', 'TSOptionalType', 'TSRestType', 'TSTypeLiteral',
+				'TSNamedTupleMember', 'TSThisType',
+			]));
+			return;
+		}
+	}
+	configureSkipKindsForVisitors(visited);
+}
+
 function getEstree(file: ts.SourceFile, program: ts.Program) {
 	if (cachedEstree?.[0] !== file) {
 		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
@@ -476,6 +551,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		const { SourceCode } = loadEslintInternals();
 		const { TsScopeManager } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
 		const { astConvertSkipTypes } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
+		ensureSelectorProbe();
 
 		const { astMaps, estree } = astConvertSkipTypes(file, PARSE_SETTINGS as any, true);
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
