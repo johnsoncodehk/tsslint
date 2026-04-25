@@ -11,7 +11,7 @@
 // would miss block-scopes-without-decls that ESLint expects.
 
 import type { TSESTree } from '@typescript-eslint/types';
-import type * as ts from 'typescript';
+import ts = require('typescript');
 
 type AstMaps = {
 	esTreeNodeToTSNodeMap: WeakMap<TSESTree.Node, ts.Node>;
@@ -94,7 +94,6 @@ export class TsScopeManager {
 	readonly checker: ts.TypeChecker;
 
 	constructor(
-		readonly ts: typeof import('typescript'),
 		readonly tsFile: ts.SourceFile,
 		readonly program: ts.Program,
 		readonly estree: TSESTree.Program,
@@ -122,9 +121,9 @@ export class TsScopeManager {
 		const walk = (n: ts.Node, parent: TsScope) => {
 			const created = this._createScopesFor(n, parent);
 			const childOwner = created ?? parent;
-			this.ts.forEachChild(n, c => walk(c, childOwner));
+			ts.forEachChild(n, c => walk(c, childOwner));
 		};
-		this.ts.forEachChild(this.tsFile, c => walk(c, topScope));
+		ts.forEachChild(this.tsFile, c => walk(c, topScope));
 
 		// Eagerly populate every scope's variables — this fills
 		// `_variableBySymbol` so reference resolution can distinguish symbols
@@ -148,7 +147,7 @@ export class TsScopeManager {
 	// (or pair of scopes, for named function expressions). Returns the innermost
 	// scope created, so its descendants live in it.
 	_createScopesFor(n: ts.Node, parent: TsScope): TsScope | undefined {
-		const ts_ = this.ts;
+		const ts_ = ts;
 		const k = n.kind;
 		const SK = ts_.SyntaxKind;
 
@@ -255,7 +254,7 @@ export class TsScopeManager {
 
 	_collectBinding(binding: ts.BindingName | undefined, out: TsVariable[]) {
 		if (!binding) return;
-		const ts_ = this.ts;
+		const ts_ = ts;
 		if (ts_.isIdentifier(binding)) {
 			const sym = this.checker.getSymbolAtLocation(binding);
 			if (sym) out.push(this._getOrCreateVariable(sym));
@@ -282,7 +281,7 @@ export class TsScopeManager {
 			}
 			if (sym) out.push(this._getOrCreateVariable(sym));
 		};
-		const ts_ = this.ts;
+		const ts_ = ts;
 		if (ts_.isVariableStatement(tsNode)) {
 			for (const d of tsNode.declarationList.declarations) collect(d);
 		}
@@ -366,7 +365,7 @@ export class TsScopeManager {
 		if (this.#refIndex) return this.#refIndex;
 		const refs = new Map<ts.Symbol, ts.Identifier[]>();
 		const through: TsReference[] = [];
-		const ts_ = this.ts;
+		const ts_ = ts;
 		const walk = (node: ts.Node) => {
 			if (ts_.isIdentifier(node)) {
 				let sym = this.checker.getSymbolAtLocation(node);
@@ -442,7 +441,7 @@ export class TsScopeManager {
 	// Identifier is a reference position (NOT a declaration name, property
 	// access RHS, type/property name, label, etc.). Helper for ref-index walk.
 	_isFreeReference(id: ts.Identifier): boolean {
-		const ts_ = this.ts;
+		const ts_ = ts;
 		const p = id.parent;
 		if (!p) return true;
 		// Property access RHS: obj.X
@@ -507,7 +506,7 @@ export class TsScopeManager {
 	// class / interface / enum / module / type names, import bindings — those
 	// produce a Definition only.
 	_isReferenceableUsage(id: ts.Identifier): boolean {
-		const ts_ = this.ts;
+		const ts_ = ts;
 		const p = id.parent;
 		if (!p) return true;
 		if (ts_.isVariableDeclaration(p) && p.name === id) {
@@ -578,7 +577,7 @@ export class TsScopeManager {
 	// whether an unresolved free reference becomes a `no-undef`-eligible
 	// through-reference.
 	_isValueReferencePosition(id: ts.Identifier): boolean {
-		const ts_ = this.ts;
+		const ts_ = ts;
 		for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
 			if (ts_.isTypeNode(cur)) return false;
 			if (ts_.isExpression(cur) || ts_.isStatement(cur)) return true;
@@ -662,7 +661,7 @@ export class TsScope {
 	}
 
 	_collectVariables(): TsVariable[] {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		const SK = ts_.SyntaxKind;
 		const out: TsVariable[] = [];
 		const seen = new Set<ts.Symbol>();
@@ -842,7 +841,7 @@ export class TsScope {
 	}
 
 	_isOwnScopeBoundary(n: ts.Node): boolean {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		const SK = ts_.SyntaxKind;
 		switch (n.kind) {
 			case SK.FunctionDeclaration:
@@ -902,7 +901,7 @@ export class TsScope {
 		push: (sym: ts.Symbol | undefined) => void,
 		pushBinding: (b: ts.BindingName | undefined) => void,
 	) {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		if (ts_.isVariableStatement(stmt)) {
 			// Module/global/block scope: only let/const/var (var hoists to function,
 			// but at top level it lives in the module/global scope).
@@ -937,7 +936,7 @@ export class TsScope {
 			return;
 		}
 		if (ts_.isEnumDeclaration(stmt) || ts_.isModuleDeclaration(stmt)) {
-			if (stmt.name && this.manager.ts.isIdentifier(stmt.name)) {
+			if (stmt.name && ts.isIdentifier(stmt.name)) {
 				push(this.manager.checker.getSymbolAtLocation(stmt.name));
 			}
 			return;
@@ -1010,7 +1009,7 @@ export class TsVariable {
 	get scope(): TsScope {
 		const decl = this.symbol.declarations?.[0];
 		if (!decl) return this.manager.globalScope;
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		const SK = ts_.SyntaxKind;
 		// Walk parents until we hit a scope-creating node.
 		for (let cur: ts.Node | undefined = decl; cur; cur = cur.parent) {
@@ -1051,7 +1050,7 @@ export class TsVariable {
 	get writeable(): boolean {
 		const decls = this.symbol.declarations ?? [];
 		for (const d of decls) {
-			const ts_ = this.manager.ts;
+			const ts_ = ts;
 			if (ts_.isVariableDeclaration(d)) {
 				const list = d.parent;
 				if (ts_.isVariableDeclarationList(list)) {
@@ -1065,12 +1064,12 @@ export class TsVariable {
 	}
 
 	get isValueVariable(): boolean {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		return (this.symbol.flags & ts_.SymbolFlags.Value) !== 0;
 	}
 
 	get isTypeVariable(): boolean {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		return (this.symbol.flags & ts_.SymbolFlags.Type) !== 0;
 	}
 }
@@ -1090,7 +1089,7 @@ export class TsReference {
 	}
 
 	get from(): TsScope {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		const SK = ts_.SyntaxKind;
 		for (let cur: ts.Node | undefined = this.tsIdentifier.parent; cur; cur = cur.parent) {
 			const arr = this.manager.nodeToScope.get(cur);
@@ -1117,7 +1116,7 @@ export class TsReference {
 	}
 
 	isWrite(): boolean {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		const id = this.tsIdentifier;
 		const parent = id.parent;
 		if (this.init) return true;
@@ -1137,7 +1136,7 @@ export class TsReference {
 		if (this.init) return false;
 		if (!this.isWrite()) return true;
 		const parent = this.tsIdentifier.parent;
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		// Compound assignments (`+=`, `-=`, etc.) read+write.
 		if (parent && ts_.isBinaryExpression(parent) && parent.left === this.tsIdentifier) {
 			return parent.operatorToken.kind !== ts_.SyntaxKind.EqualsToken;
@@ -1155,7 +1154,7 @@ export class TsReference {
 	isReadWrite(): boolean { return this.isRead() && this.isWrite(); }
 
 	get isValueReference(): boolean {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		for (let cur: ts.Node | undefined = this.tsIdentifier.parent; cur; cur = cur.parent) {
 			if (ts_.isTypeNode(cur)) return false;
 			if (ts_.isExpression(cur)) return true;
@@ -1174,7 +1173,7 @@ export class TsDefinition {
 	) {}
 
 	get type(): DefinitionType {
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		const d = this.tsDeclaration;
 		if (ts_.isVariableDeclaration(d)) {
 			// In TS, catch params are modeled as VariableDeclaration whose parent is
@@ -1209,7 +1208,7 @@ export class TsDefinition {
 		// For Variable defs, ESLint expects the VariableDeclarator (TS:
 		// VariableDeclaration). For destructured names whose declaration is a
 		// BindingElement / pattern, walk up until we find the declarator.
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		let target: ts.Node = this.tsDeclaration;
 		while (
 			target
@@ -1234,7 +1233,7 @@ export class TsDefinition {
 	get parent(): TSESTree.Node | undefined {
 		// For VariableDeclarator, parent is VariableDeclaration (TS:
 		// VariableDeclarationList → parent is VariableStatement).
-		const ts_ = this.manager.ts;
+		const ts_ = ts;
 		let target: ts.Node = this.tsDeclaration;
 		while (
 			target

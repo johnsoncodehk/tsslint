@@ -233,7 +233,7 @@ function runFixture(fx: Fixture): string[] {
 	// TS lib intrinsics — those don't exist in our `node.locals` view, so
 	// comparing them just spams noise.
 	const upstream = analyze(estree, { sourceType, childVisitorKeys: visitorKeys, lib: [] });
-	const ours = new TsScopeManager(ts, sourceFile, program, estree, astMaps, sourceType);
+	const ours = new TsScopeManager(sourceFile, program, estree, astMaps, sourceType);
 	const diffs: string[] = [];
 
 	// Walk both scope trees in parallel. They should be isomorphic (same shape,

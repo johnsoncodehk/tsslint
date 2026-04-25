@@ -481,8 +481,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';
-		const ts: typeof import('typescript') = require('typescript');
-		const scopeManager = new TsScopeManager(ts, file, program, estree, astMaps, estree.sourceType);
+		const scopeManager = new TsScopeManager(file, program, estree, astMaps, estree.sourceType);
 		const sourceCode = new SourceCode({
 			text: file.text,
 			ast: estree,
