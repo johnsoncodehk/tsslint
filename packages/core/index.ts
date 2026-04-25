@@ -20,9 +20,6 @@ export function createLinter(
 	rootDir: string,
 	config: Config | Config[],
 	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
-	syntaxOnlyLanguageService?: ts.LanguageService & {
-		getNonBoundSourceFile?(fileName: string): ts.SourceFile;
-	},
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
@@ -50,83 +47,23 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
-	const rule2Mode = new Map<string, /* typeAwareMode */ boolean>();
-	const getNonBoundSourceFile = syntaxOnlyLanguageService?.getNonBoundSourceFile;
-
-	let shouldEnableTypeAware = false;
 
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
-			let shouldRetry = false;
-			let rulesContext: RuleContext;
 
 			const rules = getRulesForFile(fileName, cache?.[2]);
-			const typeAwareMode = !getNonBoundSourceFile
-				|| shouldEnableTypeAware && !Object.keys(rules).some(ruleId => !rule2Mode.has(ruleId));
 			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName, cache?.[2]);
 
-			// Fast path for warm runs: every rule is cached and none cached a
-			// diagnostic for this file. We can skip the per-file parse entirely
-			// as long as no plugin's resolveDiagnostics actually reads the file.
-			// Hand plugins a Proxy that only triggers a parse on the first
-			// property access — if they short-circuit on an empty diagnostic
-			// list (the common case for createIgnorePlugin), they never touch
-			// it and we save the parse cost.
-			if (
-				cache && !typeAwareMode && getNonBoundSourceFile
-				&& Object.keys(rules).every(id => {
-					const c = cache[1][id];
-					return c && c[1].length === 0;
-				})
-			) {
-				let parsed: ts.SourceFile | undefined;
-				const lazyFile = new Proxy({} as ts.SourceFile, {
-					get(_, p) {
-						return Reflect.get(parsed ??= getNonBoundSourceFile!(fileName), p);
-					},
-				});
-				let diagnostics: ts.DiagnosticWithLocation[] = [];
-				try {
-					for (const { plugins } of configs) {
-						for (const { resolveDiagnostics } of plugins) {
-							if (resolveDiagnostics) {
-								diagnostics = resolveDiagnostics(lazyFile, diagnostics);
-							}
-						}
-					}
-				}
-				catch {
-					// Fall through to the regular path if a plugin barfs on the
-					// proxy / lazy parse — extremely unlikely but keeps semantics.
-					parsed = undefined;
-					return this.lint(fileName, undefined);
-				}
-				return diagnostics;
-			}
-
-			if (typeAwareMode) {
-				const program = ctx.languageService.getProgram()!;
-				const file = ctx.languageService.getProgram()!.getSourceFile(fileName)!;
-				rulesContext = {
-					typescript: ctx.typescript,
-					file,
-					program,
-					report,
-				};
-			}
-			else {
-				const file = getNonBoundSourceFile(fileName);
-				rulesContext = {
-					typescript: ctx.typescript,
-					get program(): ts.Program {
-						throw new Error('Not supported');
-					},
-					file,
-					report,
-				};
-			}
+			const program = ctx.languageService.getProgram()!;
+			const file = program.getSourceFile(fileName)!;
+			const rulesContext: RuleContext = {
+				typescript: ctx.typescript,
+				file,
+				program,
+				report,
+			};
 
 			lintResults.set(fileName, [rulesContext.file, new Map(), []]);
 
@@ -151,29 +88,18 @@ export function createLinter(
 							file: rulesContext.file,
 							relatedInformation: cacheDiagnostic.relatedInformation?.map(info => ({
 								...info,
-								file: info.file ? getNonBoundSourceFile?.(info.file.fileName) : undefined,
+								file: info.file ? program.getSourceFile(info.file.fileName) : undefined,
 							})),
 						}, []);
-					}
-					if (!typeAwareMode) {
-						rule2Mode.set(currentRuleId, false);
 					}
 					continue;
 				}
 
 				try {
 					rule(rulesContext);
-					if (!typeAwareMode) {
-						rule2Mode.set(currentRuleId, false);
-					}
 				}
 				catch (err) {
-					if (!typeAwareMode) {
-						// console.log(`Rule "${currentRuleId}" is type aware.`);
-						rule2Mode.set(currentRuleId, true);
-						shouldRetry = true;
-					}
-					else if (err instanceof Error) {
+					if (err instanceof Error) {
 						report(err.stack ?? err.message, 0, 0).at(err, 0);
 					}
 					else {
@@ -181,7 +107,7 @@ export function createLinter(
 					}
 				}
 
-				if (cache && !rule2Mode.get(currentRuleId)) {
+				if (cache) {
 					cache[1][currentRuleId] ??= [false, []];
 
 					for (const [_, fixes] of lintResult[1]) {
@@ -193,38 +119,14 @@ export function createLinter(
 				}
 			}
 
-			if (shouldRetry) {
-				// Retry
-				shouldEnableTypeAware = true;
-				if (cache && Object.values(cache[1]).some(([hasFix]) => hasFix)) {
-					cache[1] = {};
-					cache[2] = {};
-				}
-				return this.lint(fileName, cache);
-			}
-
 			let diagnostics = [...lintResult[1].keys()];
 
-			try {
-				for (const { plugins } of configs) {
-					for (const { resolveDiagnostics } of plugins) {
-						if (resolveDiagnostics) {
-							diagnostics = resolveDiagnostics(rulesContext.file, diagnostics);
-						}
+			for (const { plugins } of configs) {
+				for (const { resolveDiagnostics } of plugins) {
+					if (resolveDiagnostics) {
+						diagnostics = resolveDiagnostics(rulesContext.file, diagnostics);
 					}
 				}
-			}
-			catch (error) {
-				if (!typeAwareMode) {
-					// Retry
-					shouldEnableTypeAware = true;
-					if (cache && Object.values(cache[1]).some(([hasFix]) => hasFix)) {
-						cache[1] = {};
-						cache[2] = {};
-					}
-					return this.lint(fileName, cache);
-				}
-				throw error;
 			}
 
 			// Remove fixes and refactors that removed by resolveDiagnostics
@@ -258,7 +160,7 @@ export function createLinter(
 				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
 				let cachedObj: ts.DiagnosticWithLocation | undefined;
 
-				if (cache && !rule2Mode.get(currentRuleId)) {
+				if (cache) {
 					cachedObj = {
 						...error,
 						file: undefined as any,

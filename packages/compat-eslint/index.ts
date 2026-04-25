@@ -55,9 +55,7 @@ let sharedCache: {
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 } | undefined;
 
-let cachedEstree:
-	| [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[], program: ts.Program | undefined]
-	| undefined;
+let cachedEstree: [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[]] | undefined;
 
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
@@ -75,16 +73,10 @@ export function convertRule(
 	const entry: RuleEntry = { id, eslintRule, options, context, category };
 	ruleRegistry.set(eslintRule, entry);
 
-	const tsslintRule: TSSLint.Rule = rulesContext => {
-		// Don't destructure `program` out — TSSLint core's syntax-only context
-		// defines it as a throwing getter, and `{ ...ctx }` would trip it on
-		// every call before any rule code runs, marking every rule type-aware
-		// and forcing a Program build for the whole file.
-		const file = rulesContext.file;
-		const report = rulesContext.report;
+	const tsslintRule: TSSLint.Rule = ({ file, report, program }) => {
 		if (sharedCache?.file !== file) {
 			sharedCache = { file, reports: new Map(), errors: new Map() };
-			runSharedTraversal(file, () => rulesContext.program, sharedCache.reports, sharedCache.errors);
+			runSharedTraversal(file, program, sharedCache.reports, sharedCache.errors);
 		}
 
 		const ruleError = sharedCache.errors.get(eslintRule);
@@ -175,18 +167,13 @@ function makeRuleEmitter(errors: Map<ESLint.Rule.RuleModule, unknown>) {
 
 function runSharedTraversal(
 	file: ts.SourceFile,
-	getProgram: () => ts.Program,
+	program: ts.Program,
 	reports: Map<ESLint.Rule.RuleModule, DeferredReport[]>,
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 ) {
-	const { sourceCode, eventQueue, program } = getEstree(file, getProgram);
+	const { sourceCode, eventQueue } = getEstree(file, program);
 	const emitter = makeRuleEmitter(errors);
-	// `cwd` mustn't depend on getProgram() — many rules (e.g.
-	// eslint-plugin-import-x's makeContextCacheKey) read it before any
-	// type-aware decision, so reaching for the program here would crash every
-	// rule in syntax-only mode. Reuse the program getEstree already probed for
-	// us; fall back to process.cwd() in syntax-only mode.
-	const cwd = program?.getCurrentDirectory() ?? process.cwd();
+	const cwd = program.getCurrentDirectory();
 
 	let currentNode: any;
 
@@ -479,10 +466,7 @@ const PARSE_SETTINGS = {
 	tokens: true,
 };
 
-function getEstree(
-	file: ts.SourceFile,
-	getProgram: () => ts.Program,
-) {
+function getEstree(file: ts.SourceFile, program: ts.Program) {
 	if (cachedEstree?.[0] !== file) {
 		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
 		// whole parser package on first call (the heaviest single dep) and just
@@ -492,28 +476,6 @@ function getEstree(
 		const { analyze } = require('@typescript-eslint/scope-manager');
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
 		const { SourceCode } = loadEslintInternals();
-
-		// Probe TSSLint core for an actual Program: in syntax-only mode the
-		// `program` getter throws "Not supported", in type-aware mode it returns
-		// the built Program. Hand rules whatever's available — undefined when
-		// types aren't, the real Program when they are. This matches what
-		// @typescript-eslint/parser exposes without `parserOptions.project`, so
-		// rules that probe `parserServices.program` truthiness (e.g.
-		// eslint-plugin-regexp's getTypeScriptTools) skip the type-aware path
-		// instead of tripping the throw and forcing a Program build.
-		let program: ts.Program | undefined;
-		try {
-			program = getProgram();
-		}
-		catch {
-			program = undefined;
-		}
-
-		// astConverter walks via ts.Node#getText, which needs parent pointers.
-		// Type-checking sets these; the syntax-only path may not.
-		if (file.statements.length > 0 && file.statements[0].parent !== file) {
-			bindTsParents(file);
-		}
 
 		const { astMaps, estree } = astConverter(file, PARSE_SETTINGS, true);
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
@@ -528,44 +490,24 @@ function getEstree(
 			ast: estree,
 			scopeManager,
 			visitorKeys,
-			parserServices: program
-				? {
-					...astMaps,
-					program,
-					hasFullTypeInformation: true,
-					emitDecoratorMetadata: undefined,
-					experimentalDecorators: undefined,
-					isolatedDeclarations: undefined,
-					getSymbolAtLocation: (node: any) =>
-						program!.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-					getTypeAtLocation: (node: any) =>
-						program!.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-				}
-				: {
-					// Syntax-only shape — match what @typescript-eslint/parser returns
-					// when `parserOptions.project` isn't set, so plugins fall back to
-					// their syntax-only paths instead of trying to call type-aware
-					// helpers that wouldn't exist.
-					...astMaps,
-					program: undefined,
-					emitDecoratorMetadata: undefined,
-					experimentalDecorators: undefined,
-					isolatedDeclarations: undefined,
-				},
+			parserServices: {
+				...astMaps,
+				program,
+				hasFullTypeInformation: true,
+				emitDecoratorMetadata: undefined,
+				experimentalDecorators: undefined,
+				isolatedDeclarations: undefined,
+				getSymbolAtLocation: (node: any) =>
+					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+				getTypeAtLocation: (node: any) =>
+					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+			},
 		});
 		const eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
-		cachedEstree = [file, sourceCode, eventQueue, program];
+		cachedEstree = [file, sourceCode, eventQueue];
 	}
 	return {
 		sourceCode: cachedEstree[1],
 		eventQueue: cachedEstree[2],
-		program: cachedEstree[3],
 	};
-}
-
-function bindTsParents(node: ts.Node): void {
-	node.forEachChild(child => {
-		(child as { parent: ts.Node }).parent = node;
-		bindTsParents(child);
-	});
 }

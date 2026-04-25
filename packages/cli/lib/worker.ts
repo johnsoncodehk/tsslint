@@ -18,7 +18,6 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
-let linterSyntaxOnlyLanguageService!: ts.LanguageService;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -70,7 +69,6 @@ const originalHost: ts.LanguageServiceHost = {
 };
 const linterHost: ts.LanguageServiceHost = { ...originalHost };
 const originalService = ts.createLanguageService(linterHost);
-const originalSyntaxOnlyService = ts.createLanguageService(linterHost, undefined, true);
 
 export function createLocal() {
 	return {
@@ -200,7 +198,6 @@ async function setup(
 		}
 	}
 	linterLanguageService = originalService;
-	linterSyntaxOnlyLanguageService = originalSyntaxOnlyService;
 	language = undefined;
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
@@ -224,10 +221,6 @@ async function setup(
 		const proxy = createProxyLanguageService(linterLanguageService);
 		proxy.initialize(language);
 		linterLanguageService = proxy.proxy;
-
-		const syntaxOnly = createProxyLanguageService(linterSyntaxOnlyLanguageService);
-		syntaxOnly.initialize(language);
-		linterSyntaxOnlyLanguageService = syntaxOnly.proxy;
 	}
 
 	projectVersion++;
@@ -248,7 +241,6 @@ async function setup(
 		path.dirname(configFile),
 		config,
 		() => [],
-		linterSyntaxOnlyLanguageService,
 	);
 
 	return true;
