@@ -4,6 +4,44 @@ import type * as ts from 'typescript';
 
 import path = require('path');
 
+// ESLint internals — these reach into lib/ paths and may break on major ESLint upgrades.
+const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
+const SourceCode = require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js'));
+const createEmitter = require(path.join(eslintRoot, 'lib/linter/safe-emitter.js'));
+const NodeEventGenerator = require(path.join(eslintRoot, 'lib/linter/node-event-generator.js'));
+const Traverser = require(path.join(eslintRoot, 'lib/shared/traverser.js'));
+
+interface RuleEntry {
+	id: string;
+	eslintRule: ESLint.Rule.RuleModule;
+	options: any[];
+	context: Partial<ESLint.Rule.RuleContext>;
+	category: ts.DiagnosticCategory;
+}
+
+interface DeferredReport {
+	stackErr: Error;
+	message: string;
+	start: number;
+	end: number;
+	category: ts.DiagnosticCategory;
+	textChanges?: ts.TextChange[];
+	suggestions?: { message: string; textChanges: ts.TextChange[] }[];
+}
+
+// Module-level state — populated by convertRule, queried at lint time.
+const ruleRegistry = new Map</* eslintRule */ ESLint.Rule.RuleModule, RuleEntry>();
+
+// Per-file shared cache: stash all rules' deferred reports built during a single
+// traversal pass; each rule's tsslintRule call replays its own bucket. If a rule
+// listener throws, capture it in `errors` so the rule's call can rethrow at
+// replay time (preserving TSSLint core's per-rule type-aware retry semantics).
+let sharedCache: {
+	file: ts.SourceFile;
+	reports: Map</* eslintRule */ ESLint.Rule.RuleModule, DeferredReport[]>;
+	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
+} | undefined;
+
 let cachedEstree: [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[]] | undefined;
 
 export function convertRule(
@@ -12,30 +50,87 @@ export function convertRule(
 	context: Partial<ESLint.Rule.RuleContext> = {},
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
-	// These paths reach into ESLint internals and may break on ESLint major upgrades.
-	const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
-	const createEmitter = require(path.join(eslintRoot, 'lib/linter/safe-emitter.js'));
-	const NodeEventGenerator = require(path.join(eslintRoot, 'lib/linter/node-event-generator.js'));
-	const Traverser = require(path.join(eslintRoot, 'lib/shared/traverser.js'));
+	if (eslintRule.meta?.defaultOptions) {
+		for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
+			options[i] ??= eslintRule.meta.defaultOptions[i];
+		}
+	}
+
+	const id = (context as { id?: string }).id ?? 'unknown';
+	const entry: RuleEntry = { id, eslintRule, options, context, category };
+	ruleRegistry.set(eslintRule, entry);
 
 	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
-		const { sourceCode, eventQueue } = getEstree(file, () => ctx.program);
-		const emitter = createEmitter();
-
-		if (eslintRule.meta?.defaultOptions) {
-			for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
-				options[i] ??= eslintRule.meta.defaultOptions[i];
-			}
+		if (sharedCache?.file !== file) {
+			sharedCache = { file, reports: new Map(), errors: new Map() };
+			runSharedTraversal(file, () => ctx.program, sharedCache.reports, sharedCache.errors);
 		}
 
-		let currentNode: any;
+		const ruleError = sharedCache.errors.get(eslintRule);
+		if (ruleError !== undefined) {
+			throw ruleError;
+		}
 
+		const myReports = sharedCache.reports.get(eslintRule);
+		if (!myReports || myReports.length === 0) {
+			return;
+		}
+
+		for (const r of myReports) {
+			const reporter = report(r.message, r.start, r.end).at(r.stackErr, 1);
+			if (r.category === 0 satisfies ts.DiagnosticCategory.Warning) {
+				reporter.asWarning();
+			}
+			else if (r.category === 1 satisfies ts.DiagnosticCategory.Error) {
+				reporter.asError();
+			}
+			else if (r.category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
+				reporter.asSuggestion();
+			}
+			if (r.textChanges) {
+				const tc = r.textChanges;
+				reporter.withFix(
+					getTextChangeMessage(file, tc),
+					() => [{ fileName: file.fileName, textChanges: tc }],
+				);
+			}
+			if (r.suggestions) {
+				for (const s of r.suggestions) {
+					const tc = s.textChanges;
+					reporter.withRefactor(
+						s.message,
+						() => [{ fileName: file.fileName, textChanges: tc }],
+					);
+				}
+			}
+		}
+	};
+	(tsslintRule as any).meta = eslintRule.meta;
+	return tsslintRule;
+}
+
+function runSharedTraversal(
+	file: ts.SourceFile,
+	getProgram: () => ts.Program,
+	reports: Map<ESLint.Rule.RuleModule, DeferredReport[]>,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+) {
+	const { sourceCode, eventQueue } = getEstree(file, getProgram);
+	const emitter = createEmitter();
+
+	let currentNode: any;
+
+	for (const entry of ruleRegistry.values()) {
+		const myReports: DeferredReport[] = [];
+		reports.set(entry.eslintRule, myReports);
+
+		const eslintRule = entry.eslintRule;
 		const ruleListeners = eslintRule.create({
 			get cwd() {
-				return ctx.program.getCurrentDirectory();
+				return getProgram().getCurrentDirectory();
 			},
 			getCwd() {
-				return ctx.program.getCurrentDirectory();
+				return getProgram().getCurrentDirectory();
 			},
 			filename: file.fileName,
 			getFilename() {
@@ -51,10 +146,12 @@ export function convertRule(
 			},
 			settings: {},
 			parserOptions: {},
-			languageOptions: {},
+			// Provide nested parserOptions to avoid TypeError in rules that read
+			// `context.languageOptions.parserOptions.X` without a guard.
+			languageOptions: { parserOptions: {} },
 			parserPath: undefined,
-			id: 'unknown',
-			options,
+			id: entry.id,
+			options: entry.options,
 			report(descriptor) {
 				let message = 'message' in descriptor
 					? descriptor.message
@@ -89,53 +186,41 @@ export function convertRule(
 					}
 				}
 				catch {}
-				const reporter = report(message, start, end).at(new Error(), 1);
 
-				if (category === 0 satisfies ts.DiagnosticCategory.Warning) {
-					reporter.asWarning();
-				}
-				else if (category === 1 satisfies ts.DiagnosticCategory.Error) {
-					reporter.asError();
-				}
-				else if (category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
-					reporter.asSuggestion();
-				}
+				const deferred: DeferredReport = {
+					stackErr: new Error(),
+					message,
+					start,
+					end,
+					category: entry.category,
+				};
 
 				if (descriptor.fix) {
-					const textChanges = getTextChanges(file, descriptor.fix as ESLint.Rule.ReportFixer | null | undefined);
-					reporter.withFix(
-						getTextChangeMessage(file, textChanges),
-						() => [{
-							fileName: file.fileName,
-							textChanges,
-						}],
-					);
+					deferred.textChanges = getTextChanges(file, descriptor.fix as ESLint.Rule.ReportFixer | null | undefined);
 				}
-				for (const suggest of descriptor.suggest ?? []) {
-					if ('messageId' in suggest) {
-						let message = eslintRule.meta?.messages?.[suggest.messageId] ?? '';
-						message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
-							return suggest.data?.[key.slice(2, -2).trim()] ?? key;
-						});
-						reporter.withRefactor(
-							message,
-							() => [{
-								fileName: file.fileName,
-								textChanges: getTextChanges(file, suggest.fix as ESLint.Rule.ReportFixer | null | undefined),
-							}],
-						);
-					}
-					else {
+
+				if (descriptor.suggest?.length) {
+					deferred.suggestions = [];
+					for (const suggest of descriptor.suggest) {
+						let suggestMsg: string;
+						if ('messageId' in suggest) {
+							suggestMsg = eslintRule.meta?.messages?.[suggest.messageId] ?? '';
+							suggestMsg = suggestMsg.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
+								return suggest.data?.[key.slice(2, -2).trim()] ?? key;
+							});
+						}
+						else {
+							suggestMsg = '';
+						}
 						const textChanges = getTextChanges(file, suggest.fix as ESLint.Rule.ReportFixer | null | undefined);
-						reporter.withRefactor(
-							getTextChangeMessage(file, textChanges),
-							() => [{
-								fileName: file.fileName,
-								textChanges,
-							}],
-						);
+						deferred.suggestions.push({
+							message: suggestMsg || getTextChangeMessage(file, textChanges),
+							textChanges,
+						});
 					}
 				}
+
+				myReports.push(deferred);
 			},
 			getAncestors() {
 				return sourceCode.getAncestors(currentNode);
@@ -149,41 +234,49 @@ export function convertRule(
 			markVariableAsUsed(name) {
 				return sourceCode.markVariableAsUsed(name, currentNode);
 			},
-			...context,
+			...entry.context,
 		});
 
 		for (const selector in ruleListeners) {
-			emitter.on(selector, ruleListeners[selector]);
+			const listener = ruleListeners[selector];
+			if (!listener) continue;
+			emitter.on(selector, (...args: unknown[]) => {
+				if (errors.has(eslintRule)) return;
+				try {
+					(listener as (...a: unknown[]) => void)(...args);
+				}
+				catch (err) {
+					errors.set(eslintRule, err);
+				}
+			});
 		}
+	}
 
-		const eventGenerator = new NodeEventGenerator(emitter, {
-			visitorKeys: sourceCode.visitorKeys,
-			fallback: Traverser.getKeys,
-		});
+	const eventGenerator = new NodeEventGenerator(emitter, {
+		visitorKeys: sourceCode.visitorKeys,
+		fallback: Traverser.getKeys,
+	});
 
-		for (const step of eventQueue) {
-			switch (step.kind) {
-				case 1: {
-					if (step.phase === 1) {
-						currentNode = step.target;
-						eventGenerator.enterNode(step.target);
-					}
-					else {
-						eventGenerator.leaveNode(step.target);
-					}
-					break;
+	for (const step of eventQueue) {
+		switch (step.kind) {
+			case 1: {
+				if (step.phase === 1) {
+					currentNode = step.target;
+					eventGenerator.enterNode(step.target);
 				}
-				case 2: {
-					emitter.emit(step.target, ...step.args);
-					break;
+				else {
+					eventGenerator.leaveNode(step.target);
 				}
-				default:
-					throw new Error(`Invalid traversal step found: "${step.type}".`);
+				break;
 			}
+			case 2: {
+				emitter.emit(step.target, ...step.args);
+				break;
+			}
+			default:
+				throw new Error(`Invalid traversal step found: "${step.type}".`);
 		}
-	};
-	(tsslintRule as any).meta = eslintRule.meta;
-	return tsslintRule;
+	}
 }
 
 function getTextChangeMessage(file: ts.SourceFile, textChanges: ts.TextChange[]) {
@@ -237,119 +330,75 @@ function getTextChangeMessage(file: ts.SourceFile, textChanges: ts.TextChange[])
 		newText = newText.slice(removeLeft);
 		if (text.length + newText.length > 50) {
 			removedRight = true;
-			text = text.slice(0, -removeRight);
-			newText = newText.slice(0, -removeRight);
+			text = text.slice(0, text.length - removeRight);
+			newText = newText.slice(0, newText.length - removeRight);
 		}
 	}
 	else {
 		removedRight = true;
-		text = text.slice(0, -removeRight);
-		newText = newText.slice(0, -removeRight);
+		text = text.slice(0, text.length - removeRight);
+		newText = newText.slice(0, newText.length - removeRight);
 		if (text.length + newText.length > 50) {
 			removedLeft = true;
 			text = text.slice(removeLeft);
 			newText = newText.slice(removeLeft);
 		}
 	}
-	if (removedLeft) {
-		text = '…' + text;
-		newText = '…' + newText;
-	}
-	if (removedRight) {
-		text += '…';
-		newText += '…';
-	}
-	return `Replace \`${text}\` with \`${newText}\`.`;
+	return `Replace \`${removedLeft ? '…' : ''}${text}${removedRight ? '…' : ''}\` with \`${
+		removedLeft ? '…' : ''
+	}${newText}${removedRight ? '…' : ''}\`.`;
 }
 
-function getTextChanges(file: ts.SourceFile, fix: ESLint.Rule.ReportFixer | null | undefined) {
-	const fixes = fix?.({
+function getTextChanges(
+	_file: ts.SourceFile,
+	fix: ESLint.Rule.ReportFixer | null | undefined,
+): ts.TextChange[] {
+	if (!fix) {
+		return [];
+	}
+	const fixer: ESLint.Rule.RuleFixer = {
 		insertTextAfter(nodeOrToken, text) {
-			if (!nodeOrToken.loc?.end) {
-				throw new Error('Cannot insert text after a node without a location.');
-			}
-			const start = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-			return this.insertTextAfterRange([start, start], text);
+			return this.insertTextAfterRange(nodeOrToken.range!, text);
 		},
-		insertTextAfterRange(range, text) {
-			return {
-				text,
-				range: [range[1], range[1]],
-			};
+		insertTextAfterRange([, end], text) {
+			return { range: [end, end], text };
 		},
 		insertTextBefore(nodeOrToken, text) {
-			if (!nodeOrToken.loc?.start) {
-				throw new Error('Cannot insert text before a node without a location.');
-			}
-			const start = file.getPositionOfLineAndCharacter(
-				nodeOrToken.loc.start.line - 1,
-				nodeOrToken.loc.start.column,
-			);
-			return this.insertTextBeforeRange([start, start], text);
+			return this.insertTextBeforeRange(nodeOrToken.range!, text);
 		},
-		insertTextBeforeRange(range, text) {
-			return {
-				text,
-				range: [range[0], range[0]],
-			};
+		insertTextBeforeRange([start], text) {
+			return { range: [start, start], text };
 		},
 		remove(nodeOrToken) {
-			if (!nodeOrToken.loc) {
-				throw new Error('Cannot remove a node without a location.');
-			}
-			const start = file.getPositionOfLineAndCharacter(
-				nodeOrToken.loc.start.line - 1,
-				nodeOrToken.loc.start.column,
-			);
-			const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-			return this.removeRange([start, end]);
+			return this.removeRange(nodeOrToken.range!);
 		},
-		removeRange(range) {
-			return {
-				text: '',
-				range,
-			};
+		removeRange([start, end]) {
+			return { range: [start, end], text: '' };
 		},
 		replaceText(nodeOrToken, text) {
-			if (!nodeOrToken.loc) {
-				throw new Error('Cannot replace text of a node without a location.');
-			}
-			const start = file.getPositionOfLineAndCharacter(
-				nodeOrToken.loc.start.line - 1,
-				nodeOrToken.loc.start.column,
-			);
-			const end = file.getPositionOfLineAndCharacter(nodeOrToken.loc.end.line - 1, nodeOrToken.loc.end.column);
-			return this.replaceTextRange([start, end], text);
+			return this.replaceTextRange(nodeOrToken.range!, text);
 		},
-		replaceTextRange(range, text) {
-			return {
-				text,
-				range,
-			};
+		replaceTextRange([start, end], text) {
+			return { range: [start, end], text };
 		},
-	});
+	};
+	const result = fix(fixer);
+	if (!result) {
+		return [];
+	}
+	const fixes = isIterable(result) ? [...result] : [result];
 	const textChanges: ts.TextChange[] = [];
-	if (fixes && 'text' in fixes) {
+	for (const f of fixes) {
 		textChanges.push({
-			newText: fixes.text,
-			span: {
-				start: fixes.range[0],
-				length: fixes.range[1] - fixes.range[0],
-			},
+			span: { start: f.range[0], length: f.range[1] - f.range[0] },
+			newText: f.text,
 		});
 	}
-	else if (fixes) {
-		for (const fix of fixes) {
-			textChanges.push({
-				newText: fix.text,
-				span: {
-					start: fix.range[0],
-					length: fix.range[1] - fix.range[0],
-				},
-			});
-		}
-	}
 	return textChanges;
+}
+
+function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
+	return obj != null && typeof (obj as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function';
 }
 
 function getEstree(
@@ -360,10 +409,6 @@ function getEstree(
 		let program: ts.Program | undefined;
 
 		const Parser = require('@typescript-eslint/parser');
-		// Reaches into ESLint internals; may break on ESLint major upgrades.
-		const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
-		const SourceCode = require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js'));
-
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
 				program ??= getProgram();
