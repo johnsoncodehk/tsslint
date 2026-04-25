@@ -259,6 +259,13 @@ function maybeFixExports(tsNode: ts.Node, inner: LazyNode, parent: LazyNode): La
 	return new ExportNamedWrappingNode(tsNode, parent, inner, wrapperRange);
 }
 
+// Module-level allow-pattern stack. Mirrors typescript-estree's `allowPattern`
+// instance state: assignment-style BinaryExpression / Parameter rest /
+// destructuring-binding contexts set it true while converting their LHS,
+// then restore. Inside that scope, ArrayLiteralExpression /
+// ObjectLiteralExpression dispatch as ArrayPattern / ObjectPattern.
+let allowPattern = false;
+
 // Dispatch: TS SyntaxKind → lazy ESTree class. Returns null for null/undefined
 // (matching typescript-estree's `converter()` early-exit on falsy input).
 // Cached: if the same TS node has been converted before (e.g. via a parent's
@@ -272,6 +279,17 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		return maybeFixExports(child, inner, parent);
 	}
 	return inner;
+}
+
+function convertChildAsPattern(child: ts.Node | undefined | null, parent: LazyNode): LazyNode | null {
+	const prev = allowPattern;
+	allowPattern = true;
+	try {
+		return convertChild(child, parent);
+	}
+	finally {
+		allowPattern = prev;
+	}
 }
 
 function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
@@ -359,11 +377,19 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ConditionalExpression: return new ConditionalExpressionNode(child as ts.ConditionalExpression, parent);
 		case SK.NewExpression: return new NewExpressionNode(child as ts.NewExpression, parent);
 		case SK.NoSubstitutionTemplateLiteral: return new NoSubstitutionTemplateNode(child as ts.NoSubstitutionTemplateLiteral, parent);
-		case SK.SpreadElement: return new SpreadElementNode(child as ts.SpreadElement, parent);
-		case SK.SpreadAssignment: return new SpreadElementNode(child as ts.SpreadAssignment, parent);
+		case SK.SpreadElement: return allowPattern
+			? new RestElementFromSpreadNode(child as ts.SpreadElement, parent)
+			: new SpreadElementNode(child as ts.SpreadElement, parent);
+		case SK.SpreadAssignment: return allowPattern
+			? new RestElementFromSpreadNode(child as ts.SpreadAssignment, parent)
+			: new SpreadElementNode(child as ts.SpreadAssignment, parent);
 		case SK.ParenthesizedExpression: return convertChild((child as ts.ParenthesizedExpression).expression, parent);
-		case SK.ArrayLiteralExpression: return new ArrayExpressionNode(child as ts.ArrayLiteralExpression, parent);
-		case SK.ObjectLiteralExpression: return new ObjectExpressionNode(child as ts.ObjectLiteralExpression, parent);
+		case SK.ArrayLiteralExpression: return allowPattern
+			? new ArrayPatternFromLiteralNode(child as ts.ArrayLiteralExpression, parent)
+			: new ArrayExpressionNode(child as ts.ArrayLiteralExpression, parent);
+		case SK.ObjectLiteralExpression: return allowPattern
+			? new ObjectPatternFromLiteralNode(child as ts.ObjectLiteralExpression, parent)
+			: new ObjectExpressionNode(child as ts.ObjectLiteralExpression, parent);
 		case SK.PropertyAssignment: return new PropertyAssignmentNode(child as ts.PropertyAssignment, parent);
 		case SK.ShorthandPropertyAssignment: return new ShorthandPropertyNode(child as ts.ShorthandPropertyAssignment, parent);
 		case SK.ComputedPropertyName: return convertChild((child as ts.ComputedPropertyName).expression, parent);
@@ -1638,6 +1664,35 @@ class DecoratorNode extends LazyNode {
 
 // Object/array literals + properties
 
+// Pattern variants of array/object literals — used when the literal is on
+// the LHS of an assignment or in another pattern context.
+class ArrayPatternFromLiteralNode extends LazyNode {
+	readonly type = 'ArrayPattern' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly typeAnnotation = undefined;
+	private _elements?: (LazyNode | null)[];
+	get elements() {
+		const ts_ = this._ts as ts.ArrayLiteralExpression;
+		return this._elements ??= ts_.elements.map(e =>
+			e.kind === SK.OmittedExpression ? null : convertChildAsPattern(e, this)
+		);
+	}
+}
+
+class ObjectPatternFromLiteralNode extends LazyNode {
+	readonly type = 'ObjectPattern' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly typeAnnotation = undefined;
+	private _properties?: (LazyNode | null)[];
+	get properties() {
+		return this._properties ??= (this._ts as ts.ObjectLiteralExpression).properties.map(p =>
+			convertChildAsPattern(p, this)
+		);
+	}
+}
+
 class ArrayExpressionNode extends LazyNode {
 	readonly type = 'ArrayExpression' as const;
 	private _elements?: (LazyNode | null)[];
@@ -2061,6 +2116,21 @@ class NoSubstitutionTemplateNode extends LazyNode {
 				value: { cooked: tsNode.text, raw: tsNode.getText(this._ctx.ast).slice(1, -1) },
 			},
 		];
+	}
+}
+
+class RestElementFromSpreadNode extends LazyNode {
+	readonly type = 'RestElement' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly value = undefined;
+	readonly typeAnnotation = undefined;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChildAsPattern(
+			(this._ts as ts.SpreadElement | ts.SpreadAssignment).expression,
+			this,
+		);
 	}
 }
 
@@ -2885,7 +2955,13 @@ class BinaryLikeExpressionNode extends LazyNode {
 	}
 
 	get left() {
-		return this._left ??= convertChild((this._ts as ts.BinaryExpression).left, this);
+		if (this._left !== undefined) return this._left;
+		const tsLeft = (this._ts as ts.BinaryExpression).left;
+		// Assignment-style: the left is in pattern position (`[a,b] = ...`).
+		if (this.type === 'AssignmentExpression') {
+			return this._left = convertChildAsPattern(tsLeft, this);
+		}
+		return this._left = convertChild(tsLeft, this);
 	}
 
 	get right() {
