@@ -89,6 +89,7 @@ export class TsScopeManager {
 
 	_variableBySymbol = new Map<ts.Symbol, TsVariable>();
 	_libVariableBySymbol = new Map<ts.Symbol, TsVariable>();
+	_libDecisionBySymbol = new Map<ts.Symbol, 0 | 1>();
 	_syntheticArguments = new Map<TsScope, TsVariable>();
 	_refIndex?: Map<ts.Symbol, ts.Identifier[]>;
 	readonly checker: ts.TypeChecker;
@@ -356,7 +357,7 @@ export class TsScopeManager {
 		const refs = new Map<ts.Symbol, ts.Identifier[]>();
 		const through: TsReference[] = [];
 		const checker = this.checker;
-		const SK_Shorthand = ts.SyntaxKind.ShorthandPropertyAssignment;
+		const SK = ts.SyntaxKind;
 		const variableBySymbol = this._variableBySymbol;
 		// Iterate identifiers gathered during the scope-tree walk — no second
 		// AST traversal.
@@ -370,11 +371,25 @@ export class TsScopeManager {
 			const freeRef = this._isFreeReference(node);
 			if (!refUsage && !freeRef) continue;
 
-			let sym = checker.getSymbolAtLocation(node);
+			// Symbol resolution. For binding identifiers (the `x` in `let x = …`,
+			// destructured `{ x }`, `for (const x of …)`), the symbol is already
+			// on the parent declaration node (set by the TS binder) — read it
+			// directly instead of paying for a checker.getSymbolAtLocation walk.
+			const parent = node.parent;
+			let sym: ts.Symbol | undefined;
+			const pk = parent?.kind;
+			if (
+				pk === SK.VariableDeclaration && (parent as ts.VariableDeclaration).name === node
+				|| pk === SK.BindingElement && (parent as ts.BindingElement).name === node
+			) {
+				sym = (parent as { symbol?: ts.Symbol }).symbol;
+			}
+			if (!sym) {
+				sym = checker.getSymbolAtLocation(node);
+			}
 			// `{ x }` shorthand: getSymbolAtLocation returns the property
 			// symbol; we want the binding `x` resolves to.
-			const parent = node.parent;
-			if (parent && parent.kind === SK_Shorthand && (parent as ts.ShorthandPropertyAssignment).name === node) {
+			if (parent && pk === SK.ShorthandPropertyAssignment && (parent as ts.ShorthandPropertyAssignment).name === node) {
 				const valSym = checker.getShorthandAssignmentValueSymbol(parent as ts.ShorthandPropertyAssignment);
 				if (valSym) sym = valSym;
 			}
@@ -387,32 +402,44 @@ export class TsScopeManager {
 					arr.push(node);
 				}
 			}
-			else if (sym && this._isLibGlobalSymbol(sym)) {
-				const isValue = LIB_VALUE_GLOBALS.has(sym.name);
-				const inTypePosition = !this._isValueReferencePosition(node);
-				if (inTypePosition || isValue) {
-					// Resolves: type refs to any lib global, or value refs to
-					// the value-resolvable subset (Object, Function, ...).
-					let v = this._libVariableBySymbol.get(sym);
-					if (!v) {
-						v = new TsVariable(this, sym);
-						this._libVariableBySymbol.set(sym, v);
-						this.globalScope._addLibVariable(v);
+			else if (sym) {
+				// Lib-global decision is cached per symbol: check the cache
+				// before re-walking the symbol's declarations through
+				// `_isLibGlobalSymbol`. `null` in the cache means
+				// "checked, not a lib global".
+				let cached = this._libDecisionBySymbol.get(sym);
+				if (cached === undefined) {
+					cached = this._isLibGlobalSymbol(sym) ? 1 : 0;
+					this._libDecisionBySymbol.set(sym, cached);
+				}
+				if (cached === 1) {
+					const isValue = LIB_VALUE_GLOBALS.has(sym.name);
+					const inTypePosition = !this._isValueReferencePosition(node);
+					if (inTypePosition || isValue) {
+						let v = this._libVariableBySymbol.get(sym);
+						if (!v) {
+							v = new TsVariable(this, sym);
+							this._libVariableBySymbol.set(sym, v);
+							this.globalScope._addLibVariable(v);
+						}
+						let arr = refs.get(sym);
+						if (!arr) refs.set(sym, arr = []);
+						arr.push(node);
 					}
-					let arr = refs.get(sym);
-					if (!arr) refs.set(sym, arr = []);
-					arr.push(node);
+					else if (freeRef) {
+						// Value ref to a type-only lib global (e.g. Set, Map,
+						// Iterable in expression position) — upstream treats
+						// as undefined. Match.
+						through.push(new TsReference(this, node, sym));
+					}
 				}
 				else if (freeRef) {
-					// Value ref to a type-only lib global (e.g. Set, Map,
-					// Iterable in expression position) — upstream treats as
-					// undefined. Match.
 					through.push(new TsReference(this, node, sym));
 				}
 			}
 			else if (freeRef) {
-				// Unresolved free reference — escapes the file.
-				through.push(new TsReference(this, node, sym!));
+				// Unresolved (no symbol). Through-only (e.g. typo).
+				through.push(new TsReference(this, node, undefined as any));
 			}
 		}
 		// Free the identifier list — won't be needed again.
