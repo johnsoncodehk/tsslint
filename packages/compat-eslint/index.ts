@@ -41,7 +41,9 @@ let sharedCache: {
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 } | undefined;
 
-let cachedEstree: [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[]] | undefined;
+let cachedEstree:
+	| [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[], program: ts.Program | undefined]
+	| undefined;
 
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
@@ -163,20 +165,14 @@ function runSharedTraversal(
 	reports: Map<ESLint.Rule.RuleModule, DeferredReport[]>,
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 ) {
-	const { sourceCode, eventQueue } = getEstree(file, getProgram);
+	const { sourceCode, eventQueue, program } = getEstree(file, getProgram);
 	const emitter = makeRuleEmitter(errors);
 	// `cwd` mustn't depend on getProgram() — many rules (e.g.
 	// eslint-plugin-import-x's makeContextCacheKey) read it before any
 	// type-aware decision, so reaching for the program here would crash every
-	// rule in syntax-only mode. Probe once: program's directory if available,
-	// otherwise fall back to process.cwd().
-	let cwd: string;
-	try {
-		cwd = getProgram().getCurrentDirectory();
-	}
-	catch {
-		cwd = process.cwd();
-	}
+	// rule in syntax-only mode. Reuse the program getEstree already probed for
+	// us; fall back to process.cwd() in syntax-only mode.
+	const cwd = program?.getCurrentDirectory() ?? process.cwd();
 
 	let currentNode: any;
 
@@ -542,11 +538,12 @@ function getEstree(
 				},
 		});
 		const eventQueue = sourceCode.traverse();
-		cachedEstree = [file, sourceCode, eventQueue];
+		cachedEstree = [file, sourceCode, eventQueue, program];
 	}
 	return {
 		sourceCode: cachedEstree[1],
 		eventQueue: cachedEstree[2],
+		program: cachedEstree[3],
 	};
 }
 
