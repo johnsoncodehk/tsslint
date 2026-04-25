@@ -682,6 +682,57 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	check('wrapper bottom-up: converges with top-down (same instance)', topDown === bottomUp);
 }
 
+// --- Smoke: rule-style traversal over the lazy tree -------------------
+
+// Walk the lazy ESTree exactly the way ESLint's Traverser does (via
+// visitorKeys), counting TSAnyKeyword visits — same shape that the
+// no-explicit-any rule's listener would see at lint time. This proves
+// the entire chain (lazy materialisation, getter triggering, child
+// arrays, parent chains) is iteratable end-to-end.
+{
+	const { visitorKeys } = require('@typescript-eslint/visitor-keys') as { visitorKeys: Record<string, string[]> };
+	const fixture = 'let x: any = 1; function foo(y: any): any { return y; }';
+	const sf = parseTs(fixture);
+	const { estree } = lazy.convertLazy(sf);
+	const visits: Record<string, number> = {};
+	const walk = (node: any) => {
+		if (!node || typeof node !== 'object') return;
+		visits[node.type] = (visits[node.type] ?? 0) + 1;
+		const keys = visitorKeys[node.type];
+		if (!keys) return;
+		for (const k of keys) {
+			const child = node[k];
+			if (Array.isArray(child)) {
+				for (const c of child) walk(c);
+			}
+			else if (child) {
+				walk(child);
+			}
+		}
+	};
+	walk(estree);
+	check(
+		`smoke: visits TSAnyKeyword 3 times (one per 'any' in source) — got ${visits.TSAnyKeyword ?? 0}`,
+		visits.TSAnyKeyword === 3,
+	);
+	check(
+		`smoke: visits Identifier (canonical TS-aware visit) — got ${visits.Identifier ?? 0}`,
+		(visits.Identifier ?? 0) >= 3,
+	);
+	check(
+		`smoke: visits TSTypeAnnotation wrapper — got ${visits.TSTypeAnnotation ?? 0}`,
+		(visits.TSTypeAnnotation ?? 0) === 3,
+	);
+	check(
+		`smoke: visits FunctionDeclaration — got ${visits.FunctionDeclaration ?? 0}`,
+		visits.FunctionDeclaration === 1,
+	);
+	check(
+		`smoke: visits VariableDeclaration — got ${visits.VariableDeclaration ?? 0}`,
+		visits.VariableDeclaration === 1,
+	);
+}
+
 // --- Future / blocked --------------------------------------------------
 //
 // Edge cases NOT exercisable in current MVP scope. Each is annotated with
