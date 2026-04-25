@@ -1,20 +1,24 @@
-// Patch sync fs methods that resolvers + module loaders pound on. TSSLint is a
-// one-shot CLI that walks the project tree once, so files are stable for the
-// duration of a run and we can serve repeat stat / read calls from memory.
+// Patch sync fs methods + Module._resolveFilename that resolvers + module
+// loaders pound on. TSSLint is a one-shot CLI that walks the project tree
+// once, so files are stable for the duration of a run and we can serve repeat
+// stat / resolve calls from memory.
 //
 // Hot callers we're aiming at:
-//   - eslint-plugin-import-x's `tryRequire` retries the same resolver names
-//     per file, each one walking node_modules with statSync until it finds
-//     (or doesn't find) the module — ~200ms cold on Vite alone.
+//   - eslint-plugin-import-x's `tryRequire` retries 3-5 resolver names per
+//     file, mostly failing — each failure walks the entire node_modules tree
+//     before throwing. Caching the failure result skips this for every
+//     subsequent file (~200ms cold on Vite).
 //   - Node's CJS loader stats each candidate file path during require.
 //   - tsconfig / package.json reads that don't change during the run.
 
 import fs = require('fs');
+import Module = require('module');
 
 type StatEntry = { kind: 'ok'; value: fs.Stats } | { kind: 'err'; value: NodeJS.ErrnoException };
 
 const statCache = new Map<string, StatEntry>();
 const existsCache = new Map<string, boolean>();
+const resolveCache = new Map<string, { ok: string } | { err: unknown }>();
 
 function pathKey(p: fs.PathLike): string {
 	return typeof p === 'string' ? p : p instanceof URL ? p.href : p.toString();
@@ -57,6 +61,32 @@ fs.existsSync = (p: fs.PathLike): boolean => {
 // readFileSync is hit once per file in TSSLint's flow (TS LS / plugin readers
 // already keep their own per-file cache), so wrapping it would add a wrapper
 // call per read with ~0% hit rate — pure overhead. Leave it untouched.
+
+// Patch Module._resolveFilename — both successful and failing resolves benefit
+// because Node walks node_modules each call, and import-x's tryRequire
+// retries the same nonexistent resolver names per file.
+const _Module = Module as unknown as {
+	_resolveFilename(request: string, parent: { path?: string; paths?: string[] } | null, ...args: unknown[]): string;
+};
+const realResolveFilename = _Module._resolveFilename;
+_Module._resolveFilename = function(request, parent, ...args) {
+	const parentPath = parent?.path ?? parent?.paths?.[0] ?? '';
+	const key = request + '\0' + parentPath;
+	let entry = resolveCache.get(key);
+	if (!entry) {
+		try {
+			entry = { ok: realResolveFilename.call(this, request, parent, ...args) };
+		}
+		catch (err) {
+			entry = { err };
+		}
+		resolveCache.set(key, entry);
+	}
+	if ('err' in entry) {
+		throw entry.err;
+	}
+	return entry.ok;
+};
 
 // Invalidate cache entries when something writes to a path — TSSLint's own
 // cache file gets rewritten at end of run; if a future call (in the same
