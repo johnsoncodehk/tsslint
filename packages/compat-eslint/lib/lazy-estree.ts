@@ -334,6 +334,7 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ImportSpecifier: return new ImportSpecifierNode(child as ts.ImportSpecifier, parent);
 		case SK.NamespaceImport: return new ImportNamespaceSpecifierNode(child as ts.NamespaceImport, parent);
 		case SK.ImportClause: return new ImportDefaultSpecifierNode(child as ts.ImportClause, parent);
+		case SK.ImportAttribute: return new ImportAttributeNode(child as ts.ImportAttribute, parent);
 		case SK.InterfaceDeclaration: return new TSInterfaceDeclarationNode(child as ts.InterfaceDeclaration, parent);
 		case SK.PropertySignature: return new TSPropertySignatureNode(child as ts.PropertySignature, parent);
 		case SK.MethodSignature: return new TSMethodSignatureNode(child as ts.MethodSignature, parent);
@@ -2610,14 +2611,24 @@ class TSFunctionTypeNode extends LazyNode {
 class ImportDeclarationNode extends LazyNode {
 	readonly type = 'ImportDeclaration' as const;
 	readonly importKind: 'value' | 'type';
-	readonly attributes: never[] = [];
-	readonly assertions: never[] = [];
+	private _attributes?: (LazyNode | null)[];
 	private _source?: LazyNode | null;
 	private _specifiers?: (LazyNode | null)[];
 
 	constructor(tsNode: ts.ImportDeclaration, parent: LazyNode) {
 		super(tsNode, parent);
 		this.importKind = tsNode.importClause?.isTypeOnly ? 'type' : 'value';
+	}
+
+	get attributes() {
+		if (this._attributes) return this._attributes;
+		const ts_ = this._ts as ts.ImportDeclaration & { attributes?: { elements?: ReadonlyArray<ts.Node> }; assertClause?: { elements?: ReadonlyArray<ts.Node> } };
+		const attrs = ts_.attributes ?? ts_.assertClause;
+		return this._attributes = attrs?.elements ? convertChildren(attrs.elements, this) : [];
+	}
+	// Deprecated alias for attributes.
+	get assertions() {
+		return this.attributes;
 	}
 
 	get source() {
@@ -2675,6 +2686,18 @@ class ImportNamespaceSpecifierNode extends LazyNode {
 
 	get local() {
 		return this._local ??= convertChild((this._ts as ts.NamespaceImport).name, this);
+	}
+}
+
+class ImportAttributeNode extends LazyNode {
+	readonly type = 'ImportAttribute' as const;
+	private _key?: LazyNode | null;
+	private _value?: LazyNode | null;
+	get key() {
+		return this._key ??= convertChild((this._ts as ts.ImportAttribute).name, this);
+	}
+	get value() {
+		return this._value ??= convertChild((this._ts as ts.ImportAttribute).value, this);
 	}
 }
 
