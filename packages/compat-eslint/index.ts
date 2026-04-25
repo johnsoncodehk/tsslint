@@ -473,22 +473,20 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// dispatches to typescript-estree's astConverter, which we already have
 		// a ts.SourceFile for. Calling it directly avoids the parser require.
 		const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
-		const { analyze } = require('@typescript-eslint/scope-manager');
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
 		const { SourceCode } = loadEslintInternals();
+		const { TsScopeManager } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
 
 		const { astMaps, estree } = astConverter(file, PARSE_SETTINGS, true);
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';
-		const scopeManager = analyze(estree, {
-			sourceType: estree.sourceType,
-			childVisitorKeys: visitorKeys,
-		});
+		const ts: typeof import('typescript') = require('typescript');
+		const scopeManager = new TsScopeManager(ts, file, program, estree, astMaps, estree.sourceType);
 		const sourceCode = new SourceCode({
 			text: file.text,
 			ast: estree,
-			scopeManager,
+			scopeManager: scopeManager as unknown as ESLint.Scope.ScopeManager,
 			visitorKeys,
 			parserServices: {
 				...astMaps,
