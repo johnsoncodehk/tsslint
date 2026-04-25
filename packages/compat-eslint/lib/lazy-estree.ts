@@ -434,8 +434,14 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new PropertyDefinitionNode(pd, parent, 'PropertyDefinition');
 		}
 		case SK.Constructor: return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
-		case SK.GetAccessor: return new MethodDefinitionNode(child as ts.GetAccessorDeclaration, parent);
-		case SK.SetAccessor: return new MethodDefinitionNode(child as ts.SetAccessorDeclaration, parent);
+		case SK.GetAccessor:
+		case SK.SetAccessor: {
+			// In an ObjectLiteralExpression, accessors become Property{kind:'get'/'set'}.
+			if (parent._ts.kind === SK.ObjectLiteralExpression) {
+				return new ObjectAccessorPropertyNode(child as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent);
+			}
+			return new MethodDefinitionNode(child as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent);
+		}
 		case SK.ArrayBindingPattern: return new ArrayPatternNode(child as ts.ArrayBindingPattern, parent);
 		case SK.ObjectBindingPattern: return new ObjectPatternNode(child as ts.ObjectBindingPattern, parent);
 		case SK.BindingElement: {
@@ -1196,6 +1202,34 @@ class MethodFunctionExpressionNode extends LazyNode {
 	}
 }
 
+// Object-literal accessor: `{ get foo() {} }` / `{ set foo(v) {} }` becomes
+// Property with kind:'get'/'set' (eager applies the same MethodDefinition
+// case but flips kind based on the TS SyntaxKind).
+class ObjectAccessorPropertyNode extends LazyNode {
+	readonly type = 'Property' as const;
+	readonly kind: 'get' | 'set';
+	readonly method = false;
+	readonly shorthand = false;
+	readonly computed: boolean;
+	readonly optional = false;
+	private _key?: LazyNode | null;
+	private _value?: MethodFunctionExpressionNode;
+	constructor(tsNode: ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.kind = tsNode.kind === SK.GetAccessor ? 'get' : 'set';
+		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
+	}
+	get key() {
+		return this._key ??= convertChild(
+			(this._ts as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name,
+			this,
+		);
+	}
+	get value() {
+		return this._value ??= new MethodFunctionExpressionNode(this._ts as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, this);
+	}
+}
+
 // Object-literal method shorthand: `{ foo() {} }` becomes Property with
 // `method: true` and a FunctionExpression value (mirrors eager line 845).
 class ObjectMethodPropertyNode extends LazyNode {
@@ -1511,7 +1545,7 @@ class TSConstructorTypeNode extends LazyNode {
 class TSMappedTypeNode extends LazyNode {
 	readonly type = 'TSMappedType' as const;
 	readonly readonly: boolean | '+' | '-' | undefined;
-	readonly optional: boolean | '+' | '-' | undefined;
+	readonly optional: boolean | '+' | '-';
 	private _key?: LazyNode | null;
 	private _constraint?: LazyNode | null;
 	private _nameType?: LazyNode | null;
@@ -1519,12 +1553,13 @@ class TSMappedTypeNode extends LazyNode {
 
 	constructor(tsNode: ts.MappedTypeNode, parent: LazyNode) {
 		super(tsNode, parent);
+		// Asymmetry matches eager: readonly defaults to undefined, optional to false.
 		this.readonly = tsNode.readonlyToken
 			? (tsNode.readonlyToken.kind === SK.PlusToken ? '+' : tsNode.readonlyToken.kind === SK.MinusToken ? '-' : true)
 			: undefined;
 		this.optional = tsNode.questionToken
 			? (tsNode.questionToken.kind === SK.PlusToken ? '+' : tsNode.questionToken.kind === SK.MinusToken ? '-' : true)
-			: undefined;
+			: false;
 	}
 	get key() {
 		return this._key ??= convertChild((this._ts as ts.MappedTypeNode).typeParameter.name, this);
@@ -1576,7 +1611,7 @@ class TSTypePredicateNode extends LazyNode {
 	readonly type = 'TSTypePredicate' as const;
 	readonly asserts: boolean;
 	private _parameterName?: LazyNode | null;
-	private _typeAnnotation?: LazyNode | null | undefined;
+	private _typeAnnotation?: LazyNode | null;
 
 	constructor(tsNode: ts.TypePredicateNode, parent: LazyNode) {
 		super(tsNode, parent);
@@ -1588,7 +1623,16 @@ class TSTypePredicateNode extends LazyNode {
 	get typeAnnotation() {
 		if (this._typeAnnotation !== undefined) return this._typeAnnotation;
 		const t = (this._ts as ts.TypePredicateNode).type;
-		return this._typeAnnotation = t ? convertTypeAnnotation(t, this) : undefined;
+		if (!t) return this._typeAnnotation = null;
+		const wrapper = convertTypeAnnotation(t, this);
+		// Eager (line 1908) overrides the wrapper's range/loc to match the
+		// INNER type — type predicates drop the colon-prefixed range.
+		const inner = wrapper.typeAnnotation as { range: [number, number]; loc: ReturnType<typeof getLocFor> } | null;
+		if (inner) {
+			(wrapper as unknown as { range: [number, number]; loc: ReturnType<typeof getLocFor> }).range = inner.range;
+			(wrapper as unknown as { loc: ReturnType<typeof getLocFor> }).loc = inner.loc;
+		}
+		return this._typeAnnotation = wrapper;
 	}
 }
 
@@ -2044,11 +2088,15 @@ class TSRestTypeWrappingNamedTupleMemberNode extends LazyNode {
 	get typeAnnotation() {
 		if (this._typeAnnotation) return this._typeAnnotation;
 		const inner = new TSNamedTupleMemberNode(this._ts as ts.NamedTupleMember, this);
-		// Adjust inner range start to label's start (skip the `...`).
-		const lbl = inner.label;
+		// Eager (line 2173) UNCONDITIONALLY moves the inner's range[0] to
+		// the label's start to skip the leading `...`. Our _extendRange
+		// only extends; do a direct set instead.
+		const lbl = inner.label as { range: [number, number] } | null;
 		if (lbl) {
-			(inner as unknown as { _extendRange: (r: [number, number]) => void })
-				._extendRange([(lbl as { range: [number, number] }).range[0], inner.range[1]]);
+			(inner as unknown as { range: [number, number]; loc: ReturnType<typeof getLocFor> })
+				.range = [lbl.range[0], inner.range[1]];
+			(inner as unknown as { loc: ReturnType<typeof getLocFor> })
+				.loc = getLocFor(this._ctx.ast, lbl.range[0], inner.range[1]);
 		}
 		return this._typeAnnotation = inner;
 	}
