@@ -9,6 +9,39 @@ interface CommentState {
 	endLine?: number;
 }
 
+interface CachedComment {
+	/** First content character (after `//` or `/*`). */
+	pos: number;
+	/** End of comment content. */
+	end: number;
+	/** Cached `fullText.substring(pos, end)`. */
+	text: string;
+}
+
+// `forEachComment` walks every token of the source file; if multiple ignore
+// plugins are configured (one per directive form) we'd walk the same file
+// 3+ times per lint pass. Cache the comment list once per ts.SourceFile so
+// every plugin shares a single sweep. The WeakMap drops entries when the
+// SourceFile is GC'd.
+const sharedFileComments = new WeakMap<ts.SourceFile, CachedComment[]>();
+
+function getFileComments(file: ts.SourceFile): CachedComment[] {
+	let comments = sharedFileComments.get(file);
+	if (!comments) {
+		comments = [];
+		forEachComment(file, (fullText, { pos, end }) => {
+			const start = pos + 2; // strip leading `//` or `/*`
+			comments!.push({
+				pos: start,
+				end,
+				text: fullText.substring(start, end),
+			});
+		});
+		sharedFileComments.set(file, comments);
+	}
+	return comments;
+}
+
 export function create(
 	cmdOption: string | [string, string],
 	reportsUnusedComments: boolean,
@@ -133,16 +166,12 @@ export function create(
 					return results;
 				}
 				const comments = new Map<string | undefined, CommentState[]>();
-				const logs: string[] = [];
 
-				forEachComment(file, (fullText, { pos, end }) => {
-					pos += 2; // Trim the // or /* characters
-					const commentText = fullText.substring(pos, end);
-					logs.push(commentText);
-					const startComment = commentText.match(reg);
+				for (const c of getFileComments(file)) {
+					const startComment = c.text.match(reg);
 
 					if (startComment?.index !== undefined) {
-						const index = startComment.index + pos;
+						const index = startComment.index + c.pos;
 						const ruleId = startComment.groups?.ruleId;
 
 						if (!comments.has(ruleId)) {
@@ -172,10 +201,10 @@ export function create(
 						});
 					}
 					else if (endReg) {
-						const endComment = commentText.match(endReg);
+						const endComment = c.text.match(endReg);
 
 						if (endComment?.index !== undefined) {
-							const index = endComment.index + pos;
+							const index = endComment.index + c.pos;
 							const prevLine = file.getLineAndCharacterOfPosition(index).line;
 							const ruleId = endComment.groups?.ruleId;
 
@@ -185,7 +214,7 @@ export function create(
 							}
 						}
 					}
-				});
+				}
 
 				let reportedRules = reportedRulesOfFile.get(file.fileName);
 				if (!reportedRules) {
