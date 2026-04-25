@@ -466,17 +466,16 @@ const PARSE_SETTINGS = {
 	tokens: true,
 };
 
-// Probe every registered rule's selectors so the converter knows which
-// TS-only AST node types it must NOT skip — a rule listening on
+// Probe every registered rule's listener selectors so the converter knows
+// which TS-only AST node types it must NOT skip — a rule listening on
 // `TSAnyKeyword` would never fire if the converter dropped that node.
-// Run once per process: rules don't unregister, and the result is the
-// union of all probed selectors so adding more later only widens it.
+// Run once per process: rules don't unregister, and the converter is
+// re-configured from the default each call.
 let selectorProbeDone = false;
 function ensureSelectorProbe() {
 	if (selectorProbeDone) return;
 	selectorProbeDone = true;
-	const { configureSkipKindsForVisitors } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
-	const visited = new Set<string>();
+	const { configureSkipKindsForVisitors, ALL_SKIPPABLE_AST_NODE_TYPES } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
 	const stubContext: any = {
 		cwd: '/',
 		getCwd: () => '/',
@@ -498,6 +497,7 @@ function ensureSelectorProbe() {
 		getScope: () => undefined,
 		markVariableAsUsed: () => false,
 	};
+	const selectors: string[] = [];
 	for (const entry of ruleRegistry.values()) {
 		try {
 			const listeners = entry.eslintRule.create({
@@ -505,40 +505,17 @@ function ensureSelectorProbe() {
 				options: entry.options,
 				...entry.context,
 			}) as Record<string, unknown> | undefined;
-			if (!listeners) continue;
-			for (const sel of Object.keys(listeners)) {
-				// Selectors range from plain `TSAnyKeyword` to esquery patterns
-				// like `TSTypeReference > Identifier[name="x"]:exit`. We
-				// over-approximate by extracting every PascalCase token —
-				// false positives just mean less perf gain, not correctness.
-				const matches = sel.match(/\b[A-Z]\w*/g);
-				if (matches) for (const m of matches) visited.add(m);
-			}
+			if (listeners) selectors.push(...Object.keys(listeners));
 		}
 		catch {
 			// A rule's create() crashed under the stub context. We can't
-			// know its selectors, so be conservative: assume it watches
-			// every TS-only node and disable skipping entirely for safety.
-			configureSkipKindsForVisitors(new Set([
-				'TSAnyKeyword', 'TSUnknownKeyword', 'TSNeverKeyword',
-				'TSStringKeyword', 'TSNumberKeyword', 'TSBigIntKeyword',
-				'TSBooleanKeyword', 'TSSymbolKeyword', 'TSObjectKeyword',
-				'TSUndefinedKeyword', 'TSNullKeyword', 'TSVoidKeyword',
-				'TSIntrinsicKeyword', 'TSTypeReference', 'TSUnionType',
-				'TSIntersectionType', 'TSConditionalType', 'TSInferType',
-				'TSParenthesizedType', 'TSTypeOperator', 'TSIndexedAccessType',
-				'TSMappedType', 'TSLiteralType', 'TSTemplateLiteralType',
-				'TSTypePredicate', 'TSTypeQuery', 'TSImportType',
-				'TSFunctionType', 'TSConstructorType', 'TSCallSignatureDeclaration',
-				'TSConstructSignatureDeclaration', 'TSIndexSignature',
-				'TSMethodSignature', 'TSPropertySignature', 'TSArrayType',
-				'TSTupleType', 'TSOptionalType', 'TSRestType', 'TSTypeLiteral',
-				'TSNamedTupleMember', 'TSThisType',
-			]));
+			// know its selectors, so be conservative: disable skipping
+			// entirely for safety until the user updates their config.
+			configureSkipKindsForVisitors(ALL_SKIPPABLE_AST_NODE_TYPES);
 			return;
 		}
 	}
-	configureSkipKindsForVisitors(visited);
+	configureSkipKindsForVisitors(selectors);
 }
 
 function getEstree(file: ts.SourceFile, program: ts.Program) {

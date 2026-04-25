@@ -97,23 +97,50 @@ const DEFAULT_SKIP_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
 // who don't probe rules retain the original behaviour.
 let skipKinds: ReadonlySet<ts.SyntaxKind> = DEFAULT_SKIP_KINDS;
 
+// Every AST_NODE_TYPE that the default skip would drop. Callers use this as
+// a conservative "exempt everything" set when rule probing fails — passing
+// it to `configureSkipKindsForVisitors` disables skipping entirely.
+export const ALL_SKIPPABLE_AST_NODE_TYPES: readonly string[] = (() => {
+	const out: string[] = [];
+	for (const kind of DEFAULT_SKIP_KINDS) {
+		const name = KIND_TO_TS_NAME[kind];
+		if (name) out.push(name);
+	}
+	return out;
+})();
+
 export function isSkippedKind(kind: ts.SyntaxKind): boolean {
 	return skipKinds.has(kind);
 }
 
-// Adjust the active skip set so any TS kind whose ESTree counterpart is in
-// `astNodeTypesVisited` gets DROPPED from skipping (i.e. gets converted as
-// usual, so rule visitors fire). Call once after rule registration, before
-// the first `astConvertSkipTypes` call. Repeat calls are cumulative — each
-// call re-derives from the default, then removes the visited-set kinds.
-export function configureSkipKindsForVisitors(astNodeTypesVisited: ReadonlySet<string>): void {
+// Extract every PascalCase token from a selector string. Selectors range
+// from plain `TSAnyKeyword` to esquery patterns like
+// `TSTypeReference > Identifier[name="x"]:exit`; AST node types are the
+// only PascalCase pieces, so a regex over `\b[A-Z]\w*` captures them.
+// Over-extraction is harmless — false positives just exempt extra kinds
+// from skipping (less perf gain, never less correctness).
+function extractAstNodeTypes(selector: string, into: Set<string>): void {
+	const m = selector.match(/\b[A-Z]\w*/g);
+	if (m) for (const t of m) into.add(t);
+}
+
+// Adjust the active skip set so any TS kind whose ESTree counterpart is
+// referenced by one of `selectors` gets DROPPED from the skip set — i.e.
+// the converter will produce real ESTree nodes for those kinds, so rule
+// visitors registered on them fire normally. `selectors` are raw listener
+// keys exactly as rules' `create()` returns them: plain type names like
+// `'TSAnyKeyword'`, with optional `:exit`, esquery combinators, attribute
+// filters, etc. Call once after rule registration, before the first
+// `astConvertSkipTypes` call. Repeat calls re-derive from the default —
+// not cumulative — so the active set always matches the latest rule mix.
+export function configureSkipKindsForVisitors(selectors: Iterable<string>): void {
+	const visited = new Set<string>();
+	for (const sel of selectors) extractAstNodeTypes(sel, visited);
 	const next = new Set(DEFAULT_SKIP_KINDS);
 	for (const kindStr of Object.keys(KIND_TO_TS_NAME)) {
 		const kind = Number(kindStr) as ts.SyntaxKind;
 		const name = KIND_TO_TS_NAME[kind]!;
-		if (astNodeTypesVisited.has(name)) {
-			next.delete(kind);
-		}
+		if (visited.has(name)) next.delete(kind);
 	}
 	skipKinds = next;
 }

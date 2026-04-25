@@ -1,10 +1,12 @@
 // Tests for the selector-aware skip-type-converter. Run with:
-//   node --experimental-strip-types --no-warnings packages/compat-eslint/test/skip-type-converter.test.ts
+//   node packages/compat-eslint/test/skip-type-converter.test.js
 //
 // The optimisation skips TS-only AST subtrees so ESLint's traverser doesn't
-// visit them. The selector-aware part: if any registered rule listens on a
-// TSXxx node type, that node type must NOT be skipped — otherwise the rule's
-// visitor never fires (silent rule failure).
+// visit them. Selector-aware: `configureSkipKindsForVisitors(selectors)`
+// takes raw rule-listener-key strings (with esquery combinators, attribute
+// filters, `:exit` pseudo-class etc.), extracts the AST node type names,
+// and exempts those kinds from skipping. The contract: any node type
+// referenced by any selector must survive the converter.
 
 import * as ts from 'typescript';
 
@@ -53,57 +55,112 @@ function check(name: string, cond: boolean, detail?: string) {
 	}
 }
 
-// --- Tests --------------------------------------------------------------
-
 console.log('skip-type-converter selector-aware tests');
 
-// Reset to default before each scenario.
-function resetSkipKinds() {
-	skip.configureSkipKindsForVisitors(new Set());
+// --- Default (no selectors) -----------------------------------------------
+
+// Pre-condition: with no selector input, the default SKIP_KINDS is active
+// and all type-only nodes get dropped from the ESTree.
+{
+	skip.configureSkipKindsForVisitors([]);
+	const sf = parseTs('let x: any = 1; type T = string | number; let y: T;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check('default: TSAnyKeyword skipped', countNodes(estree, 'TSAnyKeyword') === 0);
+	check('default: TSUnionType skipped', countNodes(estree, 'TSUnionType') === 0);
+	check('default: TSTypeReference skipped', countNodes(estree, 'TSTypeReference') === 0);
+	check('default: TSStringKeyword skipped', countNodes(estree, 'TSStringKeyword') === 0);
 }
 
-// Scenario 1: default (no rule listens on TSAnyKeyword) — TSAnyKeyword is
-// skipped, so the converted ESTree has zero TSAnyKeyword nodes.
+// --- Plain selectors (the common case) ------------------------------------
+
+// `TSAnyKeyword` listed by `no-explicit-any` — a literal AST node type as
+// the entire selector string.
 {
-	resetSkipKinds();
-	const sf = parseTs('let x: any = 1; function f(y: any): any { return y; }');
+	skip.configureSkipKindsForVisitors(['TSAnyKeyword']);
+	const sf = parseTs('let x: any = 1; function f(y: any): any {}');
 	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
-	const anyCount = countNodes(estree, 'TSAnyKeyword');
-	check('default config skips TSAnyKeyword', anyCount === 0, `count=${anyCount}`);
+	check('plain selector: TSAnyKeyword preserved', countNodes(estree, 'TSAnyKeyword') === 3);
+	check('plain selector: TSTypeReference still skipped', countNodes(estree, 'TSTypeReference') === 0);
 }
 
-// Scenario 2: a rule registers TSAnyKeyword as a visited selector — those
-// nodes must survive the conversion so the rule's visitor fires.
+// --- :exit pseudo-class ---------------------------------------------------
+
+// ESLint allows `Type:exit` to fire on the leave-event for a subtree.
+// `no-redundant-type-constituents` registers `'TSUnionType:exit'`. The
+// extractor must still recognise the type name.
 {
-	skip.configureSkipKindsForVisitors(new Set(['TSAnyKeyword']));
-	const sf = parseTs('let x: any = 1; function f(y: any): any { return y; }');
+	skip.configureSkipKindsForVisitors(['TSUnionType:exit']);
+	const sf = parseTs('let x: string | number = 1;');
 	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
-	const anyCount = countNodes(estree, 'TSAnyKeyword');
-	// Three explicit `any`s in the source.
-	check('TSAnyKeyword is preserved when listened to', anyCount === 3, `count=${anyCount}`);
+	check(':exit selector: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
 }
 
-// Scenario 3: other type-only nodes still get skipped even when TSAnyKeyword
-// is preserved — the carve-out is per-type, not all-or-nothing.
+// --- esquery combinators --------------------------------------------------
+
+// `'TSTypeReference > Identifier'` is a parent>child selector. Both
+// PascalCase tokens should be extracted and exempted (Identifier wasn't in
+// SKIP_KINDS to begin with, so only TSTypeReference is observable).
 {
-	skip.configureSkipKindsForVisitors(new Set(['TSAnyKeyword']));
-	const sf = parseTs('type T = string | number; let x: T = 1;');
+	skip.configureSkipKindsForVisitors(['TSTypeReference > Identifier']);
+	const sf = parseTs('type T = string; let x: T;');
 	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
-	const unionCount = countNodes(estree, 'TSUnionType');
-	const refCount = countNodes(estree, 'TSTypeReference');
-	check('TSUnionType still skipped when not listened', unionCount === 0, `count=${unionCount}`);
-	check('TSTypeReference still skipped when not listened', refCount === 0, `count=${refCount}`);
+	check('combinator selector: TSTypeReference preserved', countNodes(estree, 'TSTypeReference') === 1);
 }
 
-// Scenario 4: multiple selectors at once.
+// --- Attribute filters ----------------------------------------------------
+
+// Selectors like `'CallExpression[callee.name="x"]'` carry attribute
+// filters in brackets. The PascalCase extraction must not pick anything
+// out of `"x"` (it's a string literal). Use a TS keyword so we can verify
+// the right kind was exempted.
 {
-	skip.configureSkipKindsForVisitors(new Set(['TSAnyKeyword', 'TSUnionType']));
-	const sf = parseTs('let x: any | string = 1;');
+	skip.configureSkipKindsForVisitors(['TSAnyKeyword[fixToUnknown=false]']);
+	const sf = parseTs('let x: any = 1;');
 	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
-	const anyCount = countNodes(estree, 'TSAnyKeyword');
-	const unionCount = countNodes(estree, 'TSUnionType');
-	check('multi-selector: TSAnyKeyword preserved', anyCount === 1, `count=${anyCount}`);
-	check('multi-selector: TSUnionType preserved', unionCount === 1, `count=${unionCount}`);
+	check('attribute selector: TSAnyKeyword preserved', countNodes(estree, 'TSAnyKeyword') === 1);
+	// Sanity: we didn't accidentally exempt unrelated kinds.
+	check('attribute selector: TSUnionType still skipped', countNodes(estree, 'TSUnionType') === 0);
+}
+
+// --- Multiple rules contributing different selectors ---------------------
+
+// Realistic case: one rule listens on TSAnyKeyword, another on
+// 'TSUnionType:exit'. The union of both must be preserved.
+{
+	skip.configureSkipKindsForVisitors(['TSAnyKeyword', 'TSUnionType:exit']);
+	const sf = parseTs('let x: any = 1; let y: string | number = 2;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check('multi-rule: TSAnyKeyword preserved', countNodes(estree, 'TSAnyKeyword') === 1);
+	check('multi-rule: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
+	check('multi-rule: unrelated TSTypeReference still skipped', countNodes(estree, 'TSTypeReference') === 0);
+}
+
+// --- Reconfiguration is non-cumulative ----------------------------------
+
+// Calling configureSkipKindsForVisitors a second time must replace, not
+// add to, the previous exemption set — otherwise a config reload that
+// drops a rule wouldn't actually drop its exemption.
+{
+	skip.configureSkipKindsForVisitors(['TSAnyKeyword']);
+	skip.configureSkipKindsForVisitors(['TSUnionType']);
+	const sf = parseTs('let x: any = 1; let y: string | number;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check('non-cumulative: TSAnyKeyword now skipped again', countNodes(estree, 'TSAnyKeyword') === 0);
+	check('non-cumulative: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
+}
+
+// --- ALL_SKIPPABLE_AST_NODE_TYPES escape hatch --------------------------
+
+// When rule probing fails, the caller passes this set to disable skipping
+// entirely. Verify no skippable kind survives in the skip set afterwards.
+{
+	skip.configureSkipKindsForVisitors(skip.ALL_SKIPPABLE_AST_NODE_TYPES);
+	const sf = parseTs('let x: any = 1; let y: string | number; type T = readonly string[]; let z: T;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check('escape hatch: TSAnyKeyword preserved', countNodes(estree, 'TSAnyKeyword') === 1);
+	check('escape hatch: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
+	check('escape hatch: TSTypeReference preserved', countNodes(estree, 'TSTypeReference') >= 1);
+	check('escape hatch: TSArrayType preserved', countNodes(estree, 'TSArrayType') === 1);
 }
 
 // --- Done ---------------------------------------------------------------
