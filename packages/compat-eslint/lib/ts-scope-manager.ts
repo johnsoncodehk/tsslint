@@ -383,7 +383,44 @@ export class TsScopeManager {
 	isImpliedStrict() { return this.sourceType === 'module'; }
 	isModule() { return this.sourceType === 'module'; }
 	isStrictModeSupported() { return true; }
-	addGlobals(_names: string[]) { /* legacy noop */ }
+
+	// Adds synthesized variables to globalScope and resolves matching through
+	// references against them. Used by ESLint configs that declare globals.
+	addGlobals(names: string[]) {
+		for (const name of names) {
+			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
+			const v = new TsVariable(this, fakeSym);
+			this._variableBySymbol.set(fakeSym, v);
+			this.globalScope._addLibVariable(v);
+		}
+		// Re-resolve through references whose identifier name matches an added
+		// global. Move them from `through` into the per-symbol refs map (and
+		// per-scope bucket).
+		this._ensureRefIndex();
+		const through = this._through!;
+		const refs = this._refIndex!;
+		const remaining: TsReference[] = [];
+		for (const ref of through) {
+			const name = ref.identifier.name;
+			let added: TsVariable | undefined;
+			for (const v of this.globalScope.variables) {
+				if (v.name === name && v.symbol.declarations?.length === 0) {
+					added = v;
+					break;
+				}
+			}
+			if (!added) {
+				remaining.push(ref);
+				continue;
+			}
+			// Re-point the ref's symbol so resolved/getReferencesFor work.
+			(ref as { symbol: ts.Symbol }).symbol = added.symbol;
+			let arr = refs.get(added.symbol);
+			if (!arr) refs.set(added.symbol, arr = []);
+			arr.push(ref);
+		}
+		this._through = remaining;
+	}
 
 	// Lazy: a single AST walk classifies every Identifier as either a known
 	// reference (symbol declared in our scope tree) or an unresolved "through"
@@ -1427,14 +1464,32 @@ export class TsReference {
 
 	get from(): TsScope {
 		const SK = ts.SyntaxKind;
+		// Computed property names (`class { [expr]() {} }`, `{ [expr]: … }`)
+		// are evaluated in the OUTER scope, not the method/property scope —
+		// upstream visits the key before entering the function. Detect this
+		// by checking for a ComputedPropertyName ancestor and, if so, skip
+		// past the enclosing method's function scope.
+		let skipMethodScope = false;
 		// Inclusive: the identifier itself can be a scope-creating node
 		// (e.g. class-field-initializer where the scope's block IS the
 		// initializer expression — possibly the identifier being referenced).
 		for (let cur: ts.Node | undefined = this.tsIdentifier; cur; cur = cur.parent) {
+			if (cur.kind === SK.ComputedPropertyName) {
+				skipMethodScope = true;
+			}
 			const arr = this.manager.nodeToScope.get(cur);
 			if (arr && arr.length > 0) {
 				for (let i = arr.length - 1; i >= 0; --i) {
-					if (arr[i].type !== 'function-expression-name') return arr[i];
+					const s = arr[i];
+					if (s.type === 'function-expression-name') continue;
+					if (skipMethodScope && s.type === 'function') {
+						// Skip this method/getter/setter scope — the computed
+						// key reference belongs in the enclosing class/outer
+						// scope.
+						skipMethodScope = false;
+						continue;
+					}
+					return s;
 				}
 			}
 			if (cur.kind === SK.SourceFile) break;
