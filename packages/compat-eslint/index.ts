@@ -59,10 +59,16 @@ export function convertRule(
 	const entry: RuleEntry = { id, eslintRule, options, context, category };
 	ruleRegistry.set(eslintRule, entry);
 
-	const tsslintRule: TSSLint.Rule = ({ file, report, ...ctx }) => {
+	const tsslintRule: TSSLint.Rule = rulesContext => {
+		// Don't destructure `program` out — TSSLint core's syntax-only context
+		// defines it as a throwing getter, and `{ ...ctx }` would trip it on
+		// every call before any rule code runs, marking every rule type-aware
+		// and forcing a Program build for the whole file.
+		const file = rulesContext.file;
+		const report = rulesContext.report;
 		if (sharedCache?.file !== file) {
 			sharedCache = { file, reports: new Map(), errors: new Map() };
-			runSharedTraversal(file, () => ctx.program, sharedCache.reports, sharedCache.errors);
+			runSharedTraversal(file, () => rulesContext.program, sharedCache.reports, sharedCache.errors);
 		}
 
 		const ruleError = sharedCache.errors.get(eslintRule);
@@ -457,8 +463,6 @@ function getEstree(
 	getProgram: () => ts.Program,
 ) {
 	if (cachedEstree?.[0] !== file) {
-		let program: ts.Program | undefined;
-
 		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
 		// whole parser package on first call (the heaviest single dep) and just
 		// dispatches to typescript-estree's astConverter, which we already have
@@ -467,6 +471,11 @@ function getEstree(
 		const { analyze } = require('@typescript-eslint/scope-manager');
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
 
+		// Lazy proxy: only triggers TSSLint core's `ctx.program` getter (which
+		// throws "Not supported" in syntax-only mode) when a rule actually reads
+		// a property off it. The throw is the intended signal — core catches it,
+		// marks the rule type-aware, and retries the file with a real Program.
+		let program: ts.Program | undefined;
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
 				program ??= getProgram();
