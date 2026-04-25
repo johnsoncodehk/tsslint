@@ -918,6 +918,44 @@ class ClassBodyNode extends LazyNode {
 	}
 }
 
+// Method-as-FunctionExpression — eager (line 826) builds the FunctionExpression
+// with `id: null`, `range: [parameters.pos - 1, end]`, and per-context kind.
+// Used as `value` for both class MethodDefinition and object Property.
+class MethodFunctionExpressionNode extends LazyNode {
+	readonly type = 'FunctionExpression' as const;
+	readonly id = null;
+	readonly async: boolean;
+	readonly declare = false;
+	readonly generator: boolean;
+	readonly expression = false;
+	readonly typeParameters = undefined;
+	private _params?: (LazyNode | null)[];
+	private _body?: LazyNode | null;
+	private _returnType?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
+		super(tsNode, parent, undefined, false);
+		// Eager method range starts one before parameters' first paren.
+		const start = tsNode.parameters.pos - 1;
+		const end = tsNode.end;
+		this.range = [start, end];
+		this.loc = getLocFor(this._ctx.ast, start, end);
+		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
+		this.generator = !!(tsNode as ts.MethodDeclaration).asteriskToken;
+	}
+	get params() {
+		return this._params ??= convertChildren((this._ts as ts.MethodDeclaration).parameters, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.MethodDeclaration).body, this);
+	}
+	get returnType() {
+		if (this._returnType !== undefined) return this._returnType;
+		const t = (this._ts as ts.MethodDeclaration).type;
+		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
 // Object-literal method shorthand: `{ foo() {} }` becomes Property with
 // `method: true` and a FunctionExpression value (mirrors eager line 845).
 class ObjectMethodPropertyNode extends LazyNode {
@@ -928,7 +966,7 @@ class ObjectMethodPropertyNode extends LazyNode {
 	readonly computed: boolean;
 	readonly optional: boolean;
 	private _key?: LazyNode | null;
-	private _value?: FunctionExpressionNode;
+	private _value?: MethodFunctionExpressionNode;
 	constructor(tsNode: ts.MethodDeclaration, parent: LazyNode) {
 		super(tsNode, parent);
 		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
@@ -938,7 +976,7 @@ class ObjectMethodPropertyNode extends LazyNode {
 		return this._key ??= convertChild((this._ts as ts.MethodDeclaration).name, this);
 	}
 	get value() {
-		return this._value ??= new FunctionExpressionNode(this._ts as unknown as ts.FunctionExpression, this);
+		return this._value ??= new MethodFunctionExpressionNode(this._ts as ts.MethodDeclaration, this);
 	}
 }
 
@@ -952,7 +990,7 @@ class MethodDefinitionNode extends LazyNode {
 	readonly optional: boolean;
 	readonly decorators: never[] = [];
 	private _key?: LazyNode | null;
-	private _value?: FunctionExpressionNode;
+	private _value?: MethodFunctionExpressionNode;
 
 	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
 		super(tsNode, parent);
@@ -977,18 +1015,39 @@ class MethodDefinitionNode extends LazyNode {
 	get key() {
 		if (this._key !== undefined) return this._key;
 		const t = this._ts as ts.MethodDeclaration | ts.ConstructorDeclaration;
-		// Constructor has no `name`; synthesize an Identifier 'constructor'.
+		// Constructor has no `name`; eager synthesizes an Identifier 'constructor'.
 		if (t.kind === SK.Constructor) {
-			return this._key = null;
+			return this._key = new ConstructorKeyIdentifierNode(t, this);
 		}
 		return this._key = convertChild((t as ts.MethodDeclaration).name, this);
 	}
 	get value() {
-		// FunctionExpression-shaped wrapper. We reuse FunctionExpressionNode
-		// but the TS node is the method itself (which has parameters/body/etc).
-		if (this._value) return this._value;
-		const v = new FunctionExpressionNode(this._ts as unknown as ts.FunctionExpression, this);
-		return this._value = v;
+		return this._value ??= new MethodFunctionExpressionNode(
+			this._ts as ts.MethodDeclaration | ts.ConstructorDeclaration,
+			this,
+		);
+	}
+}
+
+// Synthetic Identifier for `constructor` — eager line 905 builds an
+// Identifier node spanning just the keyword. We replicate the range
+// (start of method, length of "constructor").
+class ConstructorKeyIdentifierNode extends LazyNode {
+	readonly type = 'Identifier' as const;
+	readonly name = 'constructor' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly typeAnnotation = undefined;
+	constructor(tsNode: ts.ConstructorDeclaration, parent: LazyNode) {
+		super(tsNode, parent, undefined, false);
+		// Find the `constructor` keyword: it's the first token after any
+		// modifiers and before the `(`. Easiest: it ends one before the
+		// parameter list start.
+		const ast = this._ctx.ast;
+		const end = tsNode.parameters.pos - 1;
+		const start = end - 'constructor'.length;
+		this.range = [start, end];
+		this.loc = getLocFor(ast, start, end);
 	}
 }
 
