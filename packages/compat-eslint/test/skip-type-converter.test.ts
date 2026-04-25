@@ -246,6 +246,31 @@ console.log('skip-type-converter selector-aware tests');
 	check(':has container: TSPropertySignature preserved', countNodes(estree, 'TSPropertySignature') === 1);
 }
 
+// --- validateSelector: explicit pre-flight check ----------------------
+
+// validateSelector is the primitive index.ts uses to attribute parse
+// errors to a specific rule. It must throw on bad input (so the caller
+// knows to wrap with rule-id context) and stay silent on valid input.
+{
+	let threw = false;
+	try {
+		skip.validateSelector('Foo[name=');
+	}
+	catch {
+		threw = true;
+	}
+	check('validateSelector throws on invalid input', threw);
+
+	let threwOnValid = false;
+	try {
+		skip.validateSelector('TSAnyKeyword');
+	}
+	catch {
+		threwOnValid = true;
+	}
+	check('validateSelector silent on valid input', !threwOnValid);
+}
+
 // --- Invalid selector should throw (no silent wildcard fallback) -------
 
 // A malformed selector means a buggy rule; ESLint's runtime would fail
@@ -321,6 +346,103 @@ console.log('skip-type-converter selector-aware tests');
 			'real rule: TSUnionType still skipped (rule does not listen)',
 			countNodes(estree, 'TSUnionType') === 0,
 		);
+	}
+}
+
+// --- Full-plugin probe: every rule in @typescript-eslint/eslint-plugin --
+
+// Sweep across the entire typescript-eslint rule set. Goal: catch any
+// rule whose listener-key shape we don't handle (esquery parse failure,
+// unexpected non-string keys, etc.) and confirm the aggregate exemption
+// set is non-trivial — i.e. probing actually narrows what gets skipped
+// vs the default. A single failing rule here is a regression risk
+// for downstream users running that rule under TSSLint.
+{
+	let plugin: any;
+	try {
+		plugin = require('@typescript-eslint/eslint-plugin');
+	}
+	catch {
+		console.log('  skip - full-plugin probe (plugin not installed)');
+	}
+	if (plugin?.rules) {
+		// Mirror the production probe stub from index.ts. Deliberately
+		// bare — rules that need real parserServices/scope state crash
+		// here, which (in production) triggers the ALL_SKIPPABLE
+		// fallback. That fallback is load-bearing: it also protects
+		// rules whose visitor body walks INTO type subtrees from a
+		// non-skipped parent (e.g. TSAsExpression listeners reading
+		// node.typeAnnotation). A stronger stub would lower probe
+		// failure but expose those latent crashes.
+		const stubContext: any = {
+			cwd: '/',
+			getCwd: () => '/',
+			filename: '/probe.ts',
+			getFilename: () => '/probe.ts',
+			physicalFilename: '/probe.ts',
+			getPhysicalFilename: () => '/probe.ts',
+			sourceCode: undefined,
+			getSourceCode: () => undefined,
+			settings: {},
+			parserOptions: {},
+			languageOptions: { parserOptions: {} },
+			parserPath: undefined,
+			id: 'probe',
+			options: [{}, {}, {}],
+			report: () => {},
+			getAncestors: () => [],
+			getDeclaredVariables: () => [],
+			getScope: () => undefined,
+			markVariableAsUsed: () => false,
+		};
+		const ruleNames = Object.keys(plugin.rules);
+		const allSelectors: string[] = [];
+		const failures: { rule: string; selector: string; err: string }[] = [];
+		let createCrashes = 0;
+		for (const name of ruleNames) {
+			const rule = plugin.rules[name];
+			let listeners: Record<string, unknown> | undefined;
+			try {
+				listeners = rule.create(stubContext) as Record<string, unknown>;
+			}
+			catch {
+				createCrashes++;
+				continue;
+			}
+			if (!listeners) continue;
+			for (const sel of Object.keys(listeners)) {
+				try {
+					skip.configureSkipKindsForVisitors([sel]);
+					allSelectors.push(sel);
+				}
+				catch (err) {
+					failures.push({ rule: name, selector: sel, err: (err as Error).message.split('\n')[0] });
+				}
+			}
+		}
+		check(
+			`full-plugin: every selector parses (${ruleNames.length} rules, ${allSelectors.length} selectors)`,
+			failures.length === 0,
+			failures.length ? `first failure: ${failures[0].rule} → ${failures[0].selector} (${failures[0].err})` : '',
+		);
+		// Probing is supposed to NARROW the skip set vs the default. If no
+		// rule listens on any TS-only kind, our optimisation is moot.
+		// `consistent-type-imports`, `no-explicit-any` etc. should at minimum
+		// drag in TSAnyKeyword + TSImportType + TSTypeReference.
+		skip.configureSkipKindsForVisitors(allSelectors);
+		const sf = parseTs('let x: any = 1;');
+		const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+		check(
+			'full-plugin: aggregate exemption preserves TSAnyKeyword',
+			countNodes(estree, 'TSAnyKeyword') === 1,
+		);
+		// Crash count is intentionally non-zero — the bare stub forces
+		// rules with real parserServices preconditions to fail probing,
+		// which triggers the conservative fallback in production. We
+		// only care that probing succeeds for ENOUGH rules to learn
+		// non-trivial selector contributions; the count itself is just
+		// info.
+		console.log(`  info  - ${createCrashes}/${ruleNames.length} rules crashed under stub (probe falls back conservatively in prod)`);
 	}
 }
 

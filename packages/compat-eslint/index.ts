@@ -471,11 +471,24 @@ const PARSE_SETTINGS = {
 // `TSAnyKeyword` would never fire if the converter dropped that node.
 // Run once per process: rules don't unregister, and the converter is
 // re-configured from the default each call.
+//
+// Limitation: the probe only sees each rule's TOP-LEVEL listener
+// selectors. Rules whose visitor body walks INTO a type subtree (e.g.
+// `no-unnecessary-type-assertion` listens on `TSAsExpression` then
+// reads `node.typeAnnotation.type`) can still null-deref when the
+// converter has dropped that subtree. The stubContext below is left
+// deliberately bare so any rule that needs real `parserServices` or
+// scope state crashes during create() — that triggers the
+// ALL_SKIPPABLE fallback, which conservatively preserves every type
+// subtree and keeps such rules functional. Strengthening the stub
+// would lower probe failure but expose the latent walk-into-skipped
+// bug, so it stays minimal until selector-aware can also model
+// listener-body reads.
 let selectorProbeDone = false;
 function ensureSelectorProbe() {
 	if (selectorProbeDone) return;
 	selectorProbeDone = true;
-	const { configureSkipKindsForVisitors, ALL_SKIPPABLE_AST_NODE_TYPES } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
+	const { configureSkipKindsForVisitors, validateSelector, ALL_SKIPPABLE_AST_NODE_TYPES } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
 	const stubContext: any = {
 		cwd: '/',
 		getCwd: () => '/',
@@ -499,20 +512,34 @@ function ensureSelectorProbe() {
 	};
 	const selectors: string[] = [];
 	for (const entry of ruleRegistry.values()) {
+		let listeners: Record<string, unknown> | undefined;
 		try {
-			const listeners = entry.eslintRule.create({
+			listeners = entry.eslintRule.create({
 				...stubContext,
 				options: entry.options,
 				...entry.context,
 			}) as Record<string, unknown> | undefined;
-			if (listeners) selectors.push(...Object.keys(listeners));
 		}
 		catch {
-			// A rule's create() crashed under the stub context. We can't
-			// know its selectors, so be conservative: disable skipping
-			// entirely for safety until the user updates their config.
+			// Rule's create() crashed under the bare stub. We can't know
+			// what selectors it uses, so be conservative: disable
+			// skipping entirely. As noted above, this is also
+			// load-bearing for rules that walk into type subtrees from
+			// non-skipped listeners.
 			configureSkipKindsForVisitors(ALL_SKIPPABLE_AST_NODE_TYPES);
 			return;
+		}
+		if (!listeners) continue;
+		for (const sel of Object.keys(listeners)) {
+			try {
+				validateSelector(sel);
+			}
+			catch (err) {
+				throw new Error(
+					`[${entry.id}] invalid selector ${JSON.stringify(sel)}: ${(err as Error).message.split('\n')[0]}`,
+				);
+			}
+			selectors.push(sel);
 		}
 	}
 	configureSkipKindsForVisitors(selectors);

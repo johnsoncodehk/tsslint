@@ -97,6 +97,15 @@ const DEFAULT_SKIP_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
 // who don't probe rules retain the original behaviour.
 let skipKinds: ReadonlySet<ts.SyntaxKind> = DEFAULT_SKIP_KINDS;
 
+// Validate that a selector is parseable. Throws on malformed input. Use
+// when you need rule-id attribution: catch the throw, augment the
+// message, rethrow — the alternative (passing every selector through
+// configureSkipKindsForVisitors and catching there) loses the per-rule
+// origin once selectors merge.
+export function validateSelector(selector: string): void {
+	extractAstNodeTypes(selector, new Set());
+}
+
 // Every AST_NODE_TYPE that the default skip would drop. Callers use this as
 // a conservative "exempt everything" set when rule probing fails — passing
 // it to `configureSkipKindsForVisitors` disables skipping entirely.
