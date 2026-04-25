@@ -333,6 +333,7 @@ export class TsScopeManager {
 			|| ts_.isModuleDeclaration(tsNode)
 			|| ts_.isTypeAliasDeclaration(tsNode)
 			|| ts_.isInterfaceDeclaration(tsNode)
+			|| ts_.isTypeParameterDeclaration(tsNode)
 			|| ts_.isCatchClause(tsNode)
 		) {
 			collect(tsNode);
@@ -589,22 +590,30 @@ export class TsScopeManager {
 
 	// Implicit globals: synthesized variables for unresolved write references
 	// (e.g. `x = 1;` where `x` isn't declared) that ESLint's `no-undef`
-	// alternatives might want to model. One Variable per unique name.
+	// alternatives might want to model. One Variable per unique name; each
+	// gets a synthetic ImplicitGlobalVariable def + the first write's
+	// identifier.
 	_implicitGlobals?: TsVariable[];
 	getImplicitGlobals(): TsVariable[] {
 		if (this._implicitGlobals) return this._implicitGlobals;
 		const through = this.getThroughReferences();
-		const byName = new Map<string, TsVariable>();
+		const byName = new Map<string, { v: TsVariable; firstWrite: TsReference; }>();
 		for (const ref of through) {
 			if (!ref.isWrite()) continue;
 			const name = ref.identifier.name;
 			if (byName.has(name)) continue;
-			// Synthesize a TsVariable with no symbol declarations.
 			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
 			const v = new TsVariable(this, fakeSym);
-			byName.set(name, v);
+			// Override defs / identifiers via instance-level override so the
+			// implicit global has a believable single ImplicitGlobalVariable
+			// def pointing at the write reference's identifier.
+			(v as TsVariable & { _defsOverride?: TsDefinition[] })._defsOverride = [
+				new TsImplicitGlobalDefinition(this, v, ref.tsIdentifier),
+			];
+			(v as TsVariable & { _identifiersOverride?: TSESTree.Identifier[] })._identifiersOverride = [ref.identifier];
+			byName.set(name, { v, firstWrite: ref });
 		}
-		return this._implicitGlobals = Array.from(byName.values());
+		return this._implicitGlobals = Array.from(byName.values()).map(x => x.v);
 	}
 
 	// Identifier is a reference position (NOT a declaration name, property
@@ -1022,14 +1031,25 @@ export class TsScope {
 				const sf = this.tsNode as ts.SourceFile;
 				for (const stmt of sf.statements) this._collectStatementBindings(stmt, push, pushBinding);
 				const locals = (sf as { locals?: ts.SymbolTable }).locals;
-				if (locals) locals.forEach(sym => push(sym));
+				if (locals) {
+					locals.forEach(sym => {
+						// Skip TS's synthetic `default` export symbol.
+						if (sym.name === 'default') return;
+						push(sym);
+					});
+				}
 				break;
 			}
 			case 'module': {
 				const sf = this.tsNode as ts.SourceFile;
 				for (const stmt of sf.statements) this._collectStatementBindings(stmt, push, pushBinding);
 				const locals = (sf as { locals?: ts.SymbolTable }).locals;
-				if (locals) locals.forEach(sym => push(sym));
+				if (locals) {
+					locals.forEach(sym => {
+						if (sym.name === 'default') return;
+						push(sym);
+					});
+				}
 				break;
 			}
 			case 'function': {
@@ -1238,7 +1258,12 @@ export class TsScope {
 			return;
 		}
 		if (ts_.isFunctionDeclaration(stmt) || ts_.isClassDeclaration(stmt)) {
-			if (stmt.name) push(this.manager.checker.getSymbolAtLocation(stmt.name));
+			if (stmt.name) {
+				const sym = this.manager.checker.getSymbolAtLocation(stmt.name);
+				// `export default function f` makes the symbol's name 'default'.
+				// Skip — the locals walk picks up the local `f` symbol instead.
+				if (sym && sym.name !== 'default') push(sym);
+			}
 			return;
 		}
 		if (ts_.isImportDeclaration(stmt)) {
@@ -1365,7 +1390,19 @@ export class TsVariable {
 
 	constructor(readonly manager: TsScopeManager, readonly symbol: ts.Symbol) {}
 
-	get name(): string { return this.symbol.name; }
+	get name(): string {
+		// `export default function f() {}` — TS gives the function's symbol
+		// the synthetic name 'default'. Local-scope variable name should be
+		// the declaration's identifier (`f`).
+		if (this.symbol.name === 'default') {
+			const decls = this.symbol.declarations;
+			if (decls && decls.length > 0) {
+				const nameNode = (decls[0] as { name?: { text?: string } }).name;
+				if (nameNode?.text) return nameNode.text;
+			}
+		}
+		return this.symbol.name;
+	}
 
 	get scope(): TsScope {
 		const decl = this.symbol.declarations?.[0];
@@ -1386,7 +1423,11 @@ export class TsVariable {
 		return this.manager.globalScope;
 	}
 
+	_defsOverride?: TsDefinition[];
+	_identifiersOverride?: TSESTree.Identifier[];
+
 	get defs(): TsDefinition[] {
+		if (this._defsOverride) return this._defsOverride;
 		if (!this._defs) {
 			const decls = this.symbol.declarations ?? [];
 			this._defs = decls.map(d => new TsDefinition(this.manager, this, d));
@@ -1395,6 +1436,7 @@ export class TsVariable {
 	}
 
 	get identifiers(): TSESTree.Identifier[] {
+		if (this._identifiersOverride) return this._identifiersOverride;
 		if (!this._identifiers) {
 			this._identifiers = this.defs.map(d => d.name).filter(Boolean) as TSESTree.Identifier[];
 		}
@@ -1669,10 +1711,12 @@ export class TsDefinition {
 		readonly tsDeclaration: ts.Node,
 	) {}
 
-	// True for `function(...rest)` rest parameter. Other defs return false.
+	// True for `function(...rest)` and `function([a, ...rest])` rest binding.
 	get rest(): boolean {
 		const d = this.tsDeclaration;
-		return ts.isParameter(d) && d.dotDotDotToken !== undefined;
+		if (ts.isParameter(d)) return d.dotDotDotToken !== undefined;
+		if (ts.isBindingElement(d)) return d.dotDotDotToken !== undefined;
+		return false;
 	}
 
 	get type(): DefinitionType {
@@ -1770,4 +1814,18 @@ export class TsDefinition {
 
 	get isVariableDefinition(): boolean { return this.type === 'Variable' || this.type === 'Parameter'; }
 	get isTypeDefinition(): boolean { return this.type === 'Type'; }
+}
+
+// Synthetic def for implicit globals — `x = 1;` for an undeclared `x`.
+// `tsDeclaration` is the first write reference's identifier (a stand-in
+// for a real declaration node).
+export class TsImplicitGlobalDefinition extends TsDefinition {
+	get type(): DefinitionType { return 'ImplicitGlobalVariable'; }
+	get name(): TSESTree.Identifier | undefined {
+		return this.manager.tsToEstreeOrStub<TSESTree.Identifier>(this.tsDeclaration);
+	}
+	get node(): TSESTree.Node | undefined { return this.name; }
+	get parent(): TSESTree.Node | undefined { return undefined; }
+	get isVariableDefinition(): boolean { return true; }
+	get isTypeDefinition(): boolean { return false; }
 }
