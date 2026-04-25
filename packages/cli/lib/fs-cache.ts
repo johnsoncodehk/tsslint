@@ -62,6 +62,11 @@ fs.existsSync = (p: fs.PathLike): boolean => {
 // already keep their own per-file cache), so wrapping it would add a wrapper
 // call per read with ~0% hit rate — pure overhead. Leave it untouched.
 
+// realpathSync looks tempting on pnpm-style installs (~2k calls per Vite run)
+// but only ~20% of them hit the same path twice — most resolve to unique
+// .pnpm store entries. The wrapper-per-call overhead beats the savings, so
+// leave it untouched.
+
 // Patch Module._resolveFilename — both successful and failing resolves benefit
 // because Node walks node_modules each call, and import-x's tryRequire
 // retries the same nonexistent resolver names per file.
