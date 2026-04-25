@@ -219,8 +219,12 @@ export class TsScopeManager {
 			}
 			case SK.CatchClause:
 				return new TsScope(this, n, 'catch', parent, true);
-			case SK.SwitchStatement:
-				return new TsScope(this, n, 'switch', parent, true);
+			case SK.SwitchStatement: {
+				// Use CaseBlock (not SwitchStatement) as the scope's boundary
+				// node, so the discriminant `switch (ok)` resolves to the
+				// outer scope rather than the switch scope.
+				return new TsScope(this, (n as ts.SwitchStatement).caseBlock, 'switch', parent, true);
+			}
 			case SK.WithStatement:
 				return new TsScope(this, n, 'with', parent, true);
 			case SK.EnumDeclaration:
@@ -722,12 +726,12 @@ export class TsScope {
 	}
 
 	get block(): TSESTree.Node | undefined {
+		const SK = ts.SyntaxKind;
+		const k = this.tsNode.kind;
 		// For class methods (Constructor / MethodDeclaration / accessors), TS
 		// has a single node but ESTree splits into MethodDefinition + nested
 		// FunctionExpression. ESLint's scope.block points at the
 		// FunctionExpression — extract it from the MethodDefinition.value slot.
-		const SK = ts.SyntaxKind;
-		const k = this.tsNode.kind;
 		if (
 			k === SK.Constructor
 			|| k === SK.MethodDeclaration
@@ -738,6 +742,11 @@ export class TsScope {
 				| { value?: TSESTree.Node }
 				| undefined;
 			if (md?.value) return md.value;
+		}
+		// Switch scope's tsNode is the CaseBlock (boundary for `from`). ESLint
+		// expects scope.block === SwitchStatement, so step out one level.
+		if (k === SK.CaseBlock && this.tsNode.parent) {
+			return this.manager.tsToEstreeOrStub(this.tsNode.parent);
 		}
 		return this.manager.tsToEstreeOrStub(this.tsNode);
 	}
@@ -877,17 +886,17 @@ export class TsScope {
 			}
 			case 'function': {
 				const fn = this.tsNode as ts.FunctionLikeDeclaration;
-				// Parameters
-				if (fn.parameters) {
-					for (const p of fn.parameters) pushBinding(p.name);
-				}
-				// Synthetic 'arguments' for non-arrow functions.
+				// Synthetic `arguments` first (matches upstream order).
 				if (fn.kind !== SK.ArrowFunction) {
 					const argsVar = this._getOrCreateArgumentsVar();
 					if (!seen.has(argsVar.symbol)) {
 						out.push(argsVar);
 						seen.add(argsVar.symbol);
 					}
+				}
+				// Parameters next.
+				if (fn.parameters) {
+					for (const p of fn.parameters) pushBinding(p.name);
 				}
 				// Var-hoisted decls live in `fn.locals`; let/const/function in
 				// the body live in `body.locals`. ESLint collapses both into
@@ -942,9 +951,26 @@ export class TsScope {
 				if (c.variableDeclaration) pushBinding(c.variableDeclaration.name);
 				break;
 			}
-			case 'switch':
+			case 'switch': {
+				// `switch (…) { case X: let y = …; }` — let/const inside any
+				// case clause are scoped to the switch (single block scope per
+				// the spec). this.tsNode is the CaseBlock.
+				const cb = this.tsNode as ts.CaseBlock;
+				for (const clause of cb.clauses) {
+					for (const stmt of clause.statements) {
+						if (ts_.isVariableStatement(stmt)) {
+							const flags = stmt.declarationList.flags;
+							if (flags & (ts_.NodeFlags.Let | ts_.NodeFlags.Const)) {
+								for (const d of stmt.declarationList.declarations) pushBinding(d.name);
+							}
+							continue;
+						}
+						this._collectStatementBindings(stmt, push, pushBinding);
+					}
+				}
+				break;
+			}
 			case 'with':
-				// No own variables.
 				break;
 			case 'tsEnum': {
 				const e = this.tsNode as ts.EnumDeclaration;
