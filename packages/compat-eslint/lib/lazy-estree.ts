@@ -139,6 +139,34 @@ function findWrapperRoute(tsNode: ts.Node):
 			},
 		};
 	}
+	// `function f(x: T)` — Parameter.type goes through the Identifier
+	// returned by convertParameter, which carries `typeAnnotation`.
+	if (tsParent.kind === SK.Parameter && (tsParent as ts.ParameterDeclaration).type === tsNode) {
+		return {
+			ownerTsNode: tsParent,
+			trigger: (owner) => {
+				const ta = (owner as unknown as { typeAnnotation?: { typeAnnotation: unknown } }).typeAnnotation;
+				if (ta) void ta.typeAnnotation;
+			},
+		};
+	}
+	// `function f(): T` / `(): T => ...` — function-like return type goes
+	// through the function node's `returnType` getter (a TSTypeAnnotation
+	// wrapper).
+	if (
+		(tsParent.kind === SK.FunctionDeclaration
+			|| tsParent.kind === SK.FunctionExpression
+			|| tsParent.kind === SK.ArrowFunction)
+		&& (tsParent as ts.SignatureDeclaration).type === tsNode
+	) {
+		return {
+			ownerTsNode: tsParent,
+			trigger: (owner) => {
+				const rt = (owner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
+				if (rt) void rt.typeAnnotation;
+			},
+		};
+	}
 	return null;
 }
 
@@ -217,6 +245,10 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		case SK.CallExpression: return new CallExpressionNode(child as ts.CallExpression, parent);
 		case SK.TrueKeyword: return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
 		case SK.FalseKeyword: return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
+		case SK.FunctionDeclaration: return new FunctionDeclarationNode(child as ts.FunctionDeclaration, parent);
+		case SK.FunctionExpression: return new FunctionExpressionNode(child as ts.FunctionExpression, parent);
+		case SK.ArrowFunction: return new ArrowFunctionExpressionNode(child as ts.ArrowFunction, parent);
+		case SK.Parameter: return convertParameter(child as ts.ParameterDeclaration, parent);
 		case SK.AnyKeyword: return new TypeKeywordNode('TSAnyKeyword', child, parent);
 		case SK.UnknownKeyword: return new TypeKeywordNode('TSUnknownKeyword', child, parent);
 		case SK.NumberKeyword: return new TypeKeywordNode('TSNumberKeyword', child, parent);
@@ -475,6 +507,146 @@ class IfStatementNode extends LazyNode {
 	get alternate() {
 		return this._alternate ??= convertChild((this._ts as ts.IfStatement).elseStatement, this);
 	}
+}
+
+// Function-like declarations share a shape — id (sometimes), params,
+// body, returnType, generator/async/declare modifiers. typescript-estree
+// flattens this into per-kind cases (FunctionDeclaration, FunctionExpression,
+// ArrowFunction); we do the same to keep `this.type` literal.
+
+class FunctionDeclarationNode extends LazyNode {
+	readonly type: 'FunctionDeclaration' | 'TSDeclareFunction';
+	readonly async: boolean;
+	readonly declare: boolean;
+	readonly generator: boolean;
+	readonly expression = false;
+	readonly typeParameters = undefined;
+	private _id?: LazyNode | null;
+	private _params?: (LazyNode | null)[];
+	private _body?: LazyNode | null | undefined;
+	private _returnType?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.FunctionDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
+		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
+		this.generator = !!tsNode.asteriskToken;
+		this.type = tsNode.body ? 'FunctionDeclaration' : 'TSDeclareFunction';
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.FunctionDeclaration).name, this);
+	}
+	get params() {
+		return this._params ??= convertChildren((this._ts as ts.FunctionDeclaration).parameters, this);
+	}
+	get body() {
+		if (this._body !== undefined) return this._body;
+		const b = (this._ts as ts.FunctionDeclaration).body;
+		return this._body = b ? convertChild(b, this) : undefined;
+	}
+	get returnType() {
+		if (this._returnType !== undefined) return this._returnType;
+		const t = (this._ts as ts.FunctionDeclaration).type;
+		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
+class FunctionExpressionNode extends LazyNode {
+	readonly type = 'FunctionExpression' as const;
+	readonly async: boolean;
+	readonly declare = false;
+	readonly generator: boolean;
+	readonly expression = false;
+	readonly typeParameters = undefined;
+	private _id?: LazyNode | null;
+	private _params?: (LazyNode | null)[];
+	private _body?: LazyNode | null;
+	private _returnType?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.FunctionExpression, parent: LazyNode) {
+		super(tsNode, parent);
+		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
+		this.generator = !!tsNode.asteriskToken;
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.FunctionExpression).name, this);
+	}
+	get params() {
+		return this._params ??= convertChildren((this._ts as ts.FunctionExpression).parameters, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.FunctionExpression).body, this);
+	}
+	get returnType() {
+		if (this._returnType !== undefined) return this._returnType;
+		const t = (this._ts as ts.FunctionExpression).type;
+		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
+class ArrowFunctionExpressionNode extends LazyNode {
+	readonly type = 'ArrowFunctionExpression' as const;
+	readonly async: boolean;
+	readonly generator = false;
+	readonly id = null;
+	readonly typeParameters = undefined;
+	readonly expression: boolean;
+	private _params?: (LazyNode | null)[];
+	private _body?: LazyNode | null;
+	private _returnType?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.ArrowFunction, parent: LazyNode) {
+		super(tsNode, parent);
+		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
+		// `expression: true` for `() => x`, `false` for `() => { x }`.
+		this.expression = tsNode.body.kind !== SK.Block;
+	}
+	get params() {
+		return this._params ??= convertChildren((this._ts as ts.ArrowFunction).parameters, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.ArrowFunction).body, this);
+	}
+	get returnType() {
+		if (this._returnType !== undefined) return this._returnType;
+		const t = (this._ts as ts.ArrowFunction).type;
+		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
+// Parameter doesn't have its own ESTree type for the simple case — the
+// underlying Identifier is returned with `typeAnnotation` attached. Mirrors
+// typescript-estree's Parameter case (line 1156). MVP: simple identifier
+// only; rest/default/modifiers/optional throw.
+function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): LazyNode | null {
+	if (tsNode.dotDotDotToken) {
+		throw new Error('lazy-estree: rest parameter not yet supported');
+	}
+	if (tsNode.initializer) {
+		throw new Error('lazy-estree: parameter with default value not yet supported');
+	}
+	if (tsNode.modifiers?.length) {
+		throw new Error('lazy-estree: parameter modifiers (TSParameterProperty) not yet supported');
+	}
+	const idNode = convertChild(tsNode.name, parent);
+	if (!idNode) return null;
+	if (tsNode.type) {
+		const annotation = convertTypeAnnotation(tsNode.type, idNode);
+		(idNode as { typeAnnotation?: LazyNode | null }).typeAnnotation = annotation;
+		(idNode as unknown as { _extendRange: (r: [number, number]) => void })._extendRange(annotation.range);
+	}
+	if (tsNode.questionToken) {
+		(idNode as { optional?: boolean }).optional = true;
+		// typescript-estree extends the parameter's range to cover the `?`.
+		if (tsNode.questionToken.end > idNode.range[1]) {
+			(idNode as unknown as { _extendRange: (r: [number, number]) => void })
+				._extendRange([idNode.range[0], tsNode.questionToken.end]);
+		}
+	}
+	// Map the Parameter TS node to the Identifier — typescript-estree does
+	// this implicitly via converter()→registerTSNodeInNodeMap.
+	parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, idNode);
+	return idNode;
 }
 
 // One class for all binary-shaped operators. typescript-estree splits the

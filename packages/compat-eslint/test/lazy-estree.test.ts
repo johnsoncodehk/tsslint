@@ -134,6 +134,17 @@ runFixture('call', 'foo(1, 2);');
 runFixture('chained call', 'foo().bar(1);');
 runFixture('boolean literal', 'true; false;');
 
+// Batch 3: functions
+runFixture('function decl no params', 'function f() { return 1; }');
+runFixture('function decl with params', 'function f(a, b) { return a + b; }');
+runFixture('function decl w/ types', 'function f(x: number): number { return x; }');
+runFixture('arrow fn expr body', 'let f = () => 1;');
+runFixture('arrow fn block body', 'let f = () => { return 1; };');
+runFixture('arrow fn with type', 'let f = (x: number): number => x;');
+runFixture('function expression', 'let f = function g() { return 1; };');
+runFixture('async arrow', 'let f = async () => 1;');
+runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any): any { return y; }');
+
 // --- Lazy invariants ----------------------------------------------------
 
 // Property memoisation: reading a child slot twice returns the SAME instance
