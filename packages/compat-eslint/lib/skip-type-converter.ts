@@ -133,9 +133,25 @@ function extractAstNodeTypes(selector: string, into: Set<string>): void {
 // filters, etc. Call once after rule registration, before the first
 // `astConvertSkipTypes` call. Repeat calls re-derive from the default —
 // not cumulative — so the active set always matches the latest rule mix.
+//
+// Special case: a `*` selector listens on every node, so it can't be
+// served while any kind is skipped — promote it to an "exempt all"
+// signal up front rather than relying on the per-token regex (which
+// can't extract node types from `*`).
 export function configureSkipKindsForVisitors(selectors: Iterable<string>): void {
 	const visited = new Set<string>();
-	for (const sel of selectors) extractAstNodeTypes(sel, visited);
+	let wildcard = false;
+	for (const sel of selectors) {
+		if (matchesAllNodes(sel)) {
+			wildcard = true;
+			break;
+		}
+		extractAstNodeTypes(sel, visited);
+	}
+	if (wildcard) {
+		skipKinds = new Set();
+		return;
+	}
 	const next = new Set(DEFAULT_SKIP_KINDS);
 	for (const kindStr of Object.keys(KIND_TO_TS_NAME)) {
 		const kind = Number(kindStr) as ts.SyntaxKind;
@@ -143,6 +159,15 @@ export function configureSkipKindsForVisitors(selectors: Iterable<string>): void
 		if (visited.has(name)) next.delete(kind);
 	}
 	skipKinds = next;
+}
+
+// True when `selector` matches every AST node — i.e. its evaluation does
+// not narrow the visited set, so we can't serve it without converting
+// every type subtree. The bare `*` is the canonical case; `*:exit` is
+// the leave-event variant.
+function matchesAllNodes(selector: string): boolean {
+	const trimmed = selector.trim();
+	return trimmed === '*' || trimmed === '*:exit';
 }
 
 // Patch Converter.prototype.converter once on first call. The patched method

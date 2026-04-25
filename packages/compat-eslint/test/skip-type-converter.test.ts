@@ -149,6 +149,32 @@ console.log('skip-type-converter selector-aware tests');
 	check('non-cumulative: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
 }
 
+// --- :matches / :not / :has containing type names ----------------------
+
+// Real rules (e.g. consistent-type-imports) use compound selectors like
+// `:matches(ClassBody, TSInterfaceBody, TSTypeLiteral)` — every PascalCase
+// token inside the parens must be exempted, including TS-only ones.
+{
+	skip.configureSkipKindsForVisitors([':matches(ClassBody, TSInterfaceBody, TSTypeLiteral)']);
+	const sf = parseTs('let x: { foo: number };');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check(':matches selector: TSTypeLiteral preserved', countNodes(estree, 'TSTypeLiteral') === 1);
+}
+
+// --- wildcard `*` selector -----------------------------------------------
+
+// A rule registering `'*'` listens on every node — it CANNOT be served if
+// the converter drops type-only subtrees, since the rule's listener would
+// never see those nodes. The probe must treat `*` as "exempt all
+// skippable kinds".
+{
+	skip.configureSkipKindsForVisitors(['*']);
+	const sf = parseTs('let x: any = 1; let y: string | number;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check('wildcard: TSAnyKeyword preserved', countNodes(estree, 'TSAnyKeyword') === 1);
+	check('wildcard: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
+}
+
 // --- ALL_SKIPPABLE_AST_NODE_TYPES escape hatch --------------------------
 
 // When rule probing fails, the caller passes this set to disable skipping
@@ -161,6 +187,67 @@ console.log('skip-type-converter selector-aware tests');
 	check('escape hatch: TSUnionType preserved', countNodes(estree, 'TSUnionType') === 1);
 	check('escape hatch: TSTypeReference preserved', countNodes(estree, 'TSTypeReference') >= 1);
 	check('escape hatch: TSArrayType preserved', countNodes(estree, 'TSArrayType') === 1);
+}
+
+// --- Real rule integration: probe a typescript-eslint plugin rule -------
+
+// The full selector-aware path: load a real rule, call its `create()`
+// under a stub context, hand the listener keys straight to
+// `configureSkipKindsForVisitors`. The rule's visitor selectors come
+// from production code, not hand-typed strings — this catches breakage
+// from rule shape evolution (e.g. switching to esquery selectors).
+{
+	let noExplicitAny: any;
+	try {
+		noExplicitAny = require('@typescript-eslint/eslint-plugin').rules['no-explicit-any']
+			?? require('@typescript-eslint/eslint-plugin/dist/rules/no-explicit-any.js').default;
+	}
+	catch {
+		console.log('  skip - real rule integration (plugin not installed)');
+	}
+	if (noExplicitAny) {
+		const stubContext: any = {
+			cwd: '/',
+			getCwd: () => '/',
+			filename: '/probe.ts',
+			getFilename: () => '/probe.ts',
+			physicalFilename: '/probe.ts',
+			getPhysicalFilename: () => '/probe.ts',
+			sourceCode: undefined,
+			getSourceCode: () => undefined,
+			settings: {},
+			parserOptions: {},
+			languageOptions: { parserOptions: {} },
+			parserPath: undefined,
+			id: 'probe',
+			options: [{}],
+			report: () => {},
+			getAncestors: () => [],
+			getDeclaredVariables: () => [],
+			getScope: () => undefined,
+			markVariableAsUsed: () => false,
+		};
+		const listeners = noExplicitAny.create(stubContext) as Record<string, unknown>;
+		const selectorKeys = Object.keys(listeners);
+		check(
+			'real rule: no-explicit-any registers TSAnyKeyword',
+			selectorKeys.some(k => /\bTSAnyKeyword\b/.test(k)),
+			`keys=${selectorKeys.join(',')}`,
+		);
+		skip.configureSkipKindsForVisitors(selectorKeys);
+		const sf = parseTs('let x: any = 1; function f(y: any): any {}');
+		const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+		check(
+			'real rule: TSAnyKeyword preserved after probe',
+			countNodes(estree, 'TSAnyKeyword') === 3,
+		);
+		// Negative: an unrelated type-only kind that no-explicit-any does NOT
+		// listen on still gets skipped — we only exempt what's needed.
+		check(
+			'real rule: TSUnionType still skipped (rule does not listen)',
+			countNodes(estree, 'TSUnionType') === 0,
+		);
+	}
 }
 
 // --- Done ---------------------------------------------------------------
