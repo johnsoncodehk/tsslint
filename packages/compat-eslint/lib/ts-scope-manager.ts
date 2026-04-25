@@ -638,6 +638,23 @@ export class TsScopeManager {
 	tsToEstree<T extends TSESTree.Node = TSESTree.Node>(tsNode: ts.Node): T | undefined {
 		return this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 	}
+
+	// Like tsToEstree, but if the node lives in a skipped (TS-only) subtree,
+	// return a synthetic stub with `parent` chained back to the nearest
+	// real ancestor. Used by rule-facing getters (def.name, def.node, etc.)
+	// where returning undefined would crash rules that read `.parent.type`.
+	tsToEstreeOrStub<T extends TSESTree.Node = TSESTree.Node>(tsNode: ts.Node | undefined): T | undefined {
+		if (!tsNode) return undefined;
+		const real = this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
+		if (real) return real;
+		const { buildSyntheticParent } = require(
+			'./skip-type-converter',
+		) as typeof import('./skip-type-converter');
+		return buildSyntheticParent(
+			tsNode,
+			this.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>,
+		) as T | undefined;
+	}
 }
 
 export class TsScope {
@@ -659,7 +676,7 @@ export class TsScope {
 	}
 
 	get block(): TSESTree.Node | undefined {
-		return this.manager.tsToEstree(this.tsNode);
+		return this.manager.tsToEstreeOrStub(this.tsNode);
 	}
 
 	get variableScope(): TsScope {
@@ -1120,8 +1137,26 @@ export class TsReference {
 	) {}
 
 	get identifier(): TSESTree.Identifier {
-		return this._estreeIdent ??= this.manager.tsToEstree<TSESTree.Identifier>(this.tsIdentifier)
-			?? ({ type: 'Identifier', name: this.tsIdentifier.text, range: [this.tsIdentifier.getStart(), this.tsIdentifier.end] } as TSESTree.Identifier);
+		if (this._estreeIdent) return this._estreeIdent;
+		const real = this.manager.tsToEstree<TSESTree.Identifier>(this.tsIdentifier);
+		if (real) return this._estreeIdent = real;
+		// Identifier sits inside a skipped (TS-only) subtree — synthesize a
+		// stub that rules can read `.parent.type` etc. on without crashing.
+		const { buildSyntheticParent } = require(
+			'./skip-type-converter',
+		) as typeof import('./skip-type-converter');
+		const stub: TSESTree.Identifier = {
+			type: 'Identifier',
+			name: this.tsIdentifier.text,
+			range: [this.tsIdentifier.getStart(), this.tsIdentifier.end],
+		} as TSESTree.Identifier;
+		if (this.tsIdentifier.parent) {
+			(stub as { parent?: object }).parent = buildSyntheticParent(
+				this.tsIdentifier.parent,
+				this.manager.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>,
+			);
+		}
+		return this._estreeIdent = stub;
 	}
 
 	get from(): TsScope {
@@ -1237,7 +1272,7 @@ export class TsDefinition {
 	get name(): TSESTree.Identifier | undefined {
 		const nameNode = (this.tsDeclaration as { name?: ts.Node }).name;
 		if (!nameNode) return undefined;
-		return this.manager.tsToEstree<TSESTree.Identifier>(nameNode);
+		return this.manager.tsToEstreeOrStub<TSESTree.Identifier>(nameNode);
 	}
 
 	get node(): TSESTree.Node | undefined {
@@ -1263,7 +1298,7 @@ export class TsDefinition {
 		if (target && ts_.isVariableDeclaration(target) && target.parent && ts_.isCatchClause(target.parent)) {
 			target = target.parent;
 		}
-		return this.manager.tsToEstree(target);
+		return this.manager.tsToEstreeOrStub(target);
 	}
 
 	get parent(): TSESTree.Node | undefined {
@@ -1284,10 +1319,10 @@ export class TsDefinition {
 		if (target && ts_.isVariableDeclaration(target)) {
 			const list = target.parent;
 			if (list && ts_.isVariableDeclarationList(list)) {
-				return this.manager.tsToEstree(list.parent);
+				return this.manager.tsToEstreeOrStub(list.parent);
 			}
 		}
-		return this.manager.tsToEstree(target?.parent);
+		return this.manager.tsToEstreeOrStub(target?.parent);
 	}
 
 	get isVariableDefinition(): boolean { return this.type === 'Variable' || this.type === 'Parameter'; }
