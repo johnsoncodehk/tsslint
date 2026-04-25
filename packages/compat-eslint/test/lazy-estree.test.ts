@@ -120,6 +120,20 @@ runFixture('if (block)', 'if (1) { 2; }');
 runFixture('if/else', 'if (1) { 2; } else { 3; }');
 runFixture('nested if', 'if (1) { if (2) { 3; } }');
 
+// Batch 2: expressions
+runFixture('binary plus', '1 + 2;');
+runFixture('binary chain', '1 + 2 * 3;');
+runFixture('logical and', 'true && false;');
+runFixture('logical or', 'true || false;');
+runFixture('comparison', '1 === 2;');
+runFixture('assignment', 'let x = 1; x = 2;');
+runFixture('compound assignment', 'let x = 1; x += 2;');
+runFixture('member access', 'let x = 1; x.foo;');
+runFixture('element access', 'let x = 1; x[0];');
+runFixture('call', 'foo(1, 2);');
+runFixture('chained call', 'foo().bar(1);');
+runFixture('boolean literal', 'true; false;');
+
 // --- Lazy invariants ----------------------------------------------------
 
 // Property memoisation: reading a child slot twice returns the SAME instance

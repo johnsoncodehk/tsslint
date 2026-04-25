@@ -211,6 +211,12 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		case SK.ReturnStatement: return new ReturnStatementNode(child as ts.ReturnStatement, parent);
 		case SK.Block: return new BlockStatementNode(child as ts.Block, parent);
 		case SK.IfStatement: return new IfStatementNode(child as ts.IfStatement, parent);
+		case SK.BinaryExpression: return new BinaryLikeExpressionNode(child as ts.BinaryExpression, parent);
+		case SK.PropertyAccessExpression: return new MemberExpressionNode(child as ts.PropertyAccessExpression, parent);
+		case SK.ElementAccessExpression: return new MemberExpressionNode(child as ts.ElementAccessExpression, parent);
+		case SK.CallExpression: return new CallExpressionNode(child as ts.CallExpression, parent);
+		case SK.TrueKeyword: return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
+		case SK.FalseKeyword: return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
 		case SK.AnyKeyword: return new TypeKeywordNode('TSAnyKeyword', child, parent);
 		case SK.UnknownKeyword: return new TypeKeywordNode('TSUnknownKeyword', child, parent);
 		case SK.NumberKeyword: return new TypeKeywordNode('TSNumberKeyword', child, parent);
@@ -468,6 +474,103 @@ class IfStatementNode extends LazyNode {
 	}
 	get alternate() {
 		return this._alternate ??= convertChild((this._ts as ts.IfStatement).elseStatement, this);
+	}
+}
+
+// One class for all binary-shaped operators. typescript-estree splits the
+// shape into BinaryExpression / LogicalExpression / AssignmentExpression
+// based on the operator; we do the same in the constructor.
+class BinaryLikeExpressionNode extends LazyNode {
+	readonly type: 'BinaryExpression' | 'LogicalExpression' | 'AssignmentExpression';
+	readonly operator: string;
+	private _left?: LazyNode | null;
+	private _right?: LazyNode | null;
+
+	constructor(tsNode: ts.BinaryExpression, parent: LazyNode) {
+		super(tsNode, parent);
+		const op = tsNode.operatorToken.getText(this._ctx.ast);
+		this.operator = op;
+		if (op === '&&' || op === '||' || op === '??') {
+			this.type = 'LogicalExpression';
+		}
+		else if (op.endsWith('=') && op !== '==' && op !== '===' && op !== '!=' && op !== '!==' && op !== '<=' && op !== '>=') {
+			this.type = 'AssignmentExpression';
+		}
+		else {
+			this.type = 'BinaryExpression';
+		}
+	}
+
+	get left() {
+		return this._left ??= convertChild((this._ts as ts.BinaryExpression).left, this);
+	}
+
+	get right() {
+		return this._right ??= convertChild((this._ts as ts.BinaryExpression).right, this);
+	}
+}
+
+class MemberExpressionNode extends LazyNode {
+	readonly type = 'MemberExpression' as const;
+	readonly computed: boolean;
+	readonly optional: boolean;
+	private _object?: LazyNode | null;
+	private _property?: LazyNode | null;
+
+	constructor(tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression, parent: LazyNode) {
+		super(tsNode, parent);
+		this.computed = tsNode.kind === SK.ElementAccessExpression;
+		this.optional = !!tsNode.questionDotToken;
+	}
+
+	get object() {
+		return this._object ??= convertChild(
+			(this._ts as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression,
+			this,
+		);
+	}
+
+	get property() {
+		if (this._property !== undefined) return this._property;
+		const ts_ = this._ts as ts.PropertyAccessExpression | ts.ElementAccessExpression;
+		return this._property = this.computed
+			? convertChild((ts_ as ts.ElementAccessExpression).argumentExpression, this)
+			: convertChild((ts_ as ts.PropertyAccessExpression).name, this);
+	}
+}
+
+class CallExpressionNode extends LazyNode {
+	readonly type = 'CallExpression' as const;
+	readonly optional: boolean;
+	readonly typeArguments = undefined;
+	readonly typeParameters = undefined;
+	private _callee?: LazyNode | null;
+	private _arguments?: (LazyNode | null)[];
+
+	constructor(tsNode: ts.CallExpression, parent: LazyNode) {
+		super(tsNode, parent);
+		this.optional = !!tsNode.questionDotToken;
+	}
+
+	get callee() {
+		return this._callee ??= convertChild((this._ts as ts.CallExpression).expression, this);
+	}
+
+	get arguments() {
+		return this._arguments ??= convertChildren((this._ts as ts.CallExpression).arguments, this);
+	}
+}
+
+// `true` / `false` keyword literals. typescript-estree maps them to
+// `Literal { value: true|false, raw: 'true'|'false' }`.
+class BoolLiteralNode extends LazyNode {
+	readonly type = 'Literal' as const;
+	readonly value: boolean;
+	readonly raw: 'true' | 'false';
+	constructor(tsNode: ts.TrueLiteral | ts.FalseLiteral, parent: LazyNode, value: boolean) {
+		super(tsNode, parent);
+		this.value = value;
+		this.raw = value ? 'true' : 'false';
 	}
 }
 
