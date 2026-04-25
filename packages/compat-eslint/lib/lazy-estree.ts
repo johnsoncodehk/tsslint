@@ -271,6 +271,85 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		case SK.CallSignature: return new TSCallishSignatureNode('TSCallSignatureDeclaration', child as ts.CallSignatureDeclaration, parent);
 		case SK.ConstructSignature: return new TSCallishSignatureNode('TSConstructSignatureDeclaration', child as ts.ConstructSignatureDeclaration, parent);
 		case SK.IndexSignature: return new TSIndexSignatureNode(child as ts.IndexSignatureDeclaration, parent);
+		case SK.ExportDeclaration: return convertExportDeclaration(child as ts.ExportDeclaration, parent);
+		case SK.ExportSpecifier: return new ExportSpecifierNode(child as ts.ExportSpecifier, parent);
+		case SK.ExportAssignment: return convertExportAssignment(child as ts.ExportAssignment, parent);
+		case SK.ImportEqualsDeclaration: return new TSImportEqualsDeclarationNode(child as ts.ImportEqualsDeclaration, parent);
+		case SK.ExternalModuleReference: return new TSExternalModuleReferenceNode(child as ts.ExternalModuleReference, parent);
+		case SK.TypeAliasDeclaration: return new TSTypeAliasDeclarationNode(child as ts.TypeAliasDeclaration, parent);
+		case SK.PrefixUnaryExpression: return new UnaryLikeExpressionNode(child as ts.PrefixUnaryExpression, parent, true);
+		case SK.PostfixUnaryExpression: return new UnaryLikeExpressionNode(child as ts.PostfixUnaryExpression, parent, false);
+		case SK.TypeOfExpression: return new TypeofExpressionNode(child as ts.TypeOfExpression, parent);
+		case SK.NonNullExpression: return new TSNonNullExpressionNode(child as ts.NonNullExpression, parent);
+		case SK.TupleType: return new TSTupleTypeNode(child as ts.TupleTypeNode, parent);
+		case SK.NamedTupleMember: return convertNamedTupleMember(child as ts.NamedTupleMember, parent);
+		case SK.OptionalType: return new TSOptionalTypeNode(child as ts.OptionalTypeNode, parent);
+		case SK.RestType: return new TSRestTypeNode(child as ts.RestTypeNode, parent);
+		case SK.ConditionalExpression: return new ConditionalExpressionNode(child as ts.ConditionalExpression, parent);
+		case SK.NewExpression: return new NewExpressionNode(child as ts.NewExpression, parent);
+		case SK.NoSubstitutionTemplateLiteral: return new NoSubstitutionTemplateNode(child as ts.NoSubstitutionTemplateLiteral, parent);
+		case SK.SpreadElement: return new SpreadElementNode(child as ts.SpreadElement, parent);
+		case SK.SpreadAssignment: return new SpreadElementNode(child as ts.SpreadAssignment, parent);
+		case SK.ParenthesizedExpression: return convertChild((child as ts.ParenthesizedExpression).expression, parent);
+		case SK.ArrayLiteralExpression: return new ArrayExpressionNode(child as ts.ArrayLiteralExpression, parent);
+		case SK.ObjectLiteralExpression: return new ObjectExpressionNode(child as ts.ObjectLiteralExpression, parent);
+		case SK.PropertyAssignment: return new PropertyAssignmentNode(child as ts.PropertyAssignment, parent);
+		case SK.ShorthandPropertyAssignment: return new ShorthandPropertyNode(child as ts.ShorthandPropertyAssignment, parent);
+		case SK.ComputedPropertyName: return convertChild((child as ts.ComputedPropertyName).expression, parent);
+		case SK.TemplateExpression: return new TemplateLiteralNode(child as ts.TemplateExpression, parent);
+		case SK.RegularExpressionLiteral: return new RegExpLiteralNode(child as ts.RegularExpressionLiteral, parent);
+		case SK.ThrowStatement: return new ThrowStatementNode(child as ts.ThrowStatement, parent);
+		case SK.TryStatement: return new TryStatementNode(child as ts.TryStatement, parent);
+		case SK.CatchClause: return new CatchClauseNode(child as ts.CatchClause, parent);
+		case SK.WhileStatement: return new WhileStatementNode(child as ts.WhileStatement, parent);
+		case SK.DoStatement: return new DoWhileStatementNode(child as ts.DoStatement, parent);
+		case SK.ForStatement: return new ForStatementNode(child as ts.ForStatement, parent);
+		case SK.ForInStatement: return new ForInStatementNode(child as ts.ForInStatement, parent);
+		case SK.ForOfStatement: return new ForOfStatementNode(child as ts.ForOfStatement, parent);
+		case SK.SwitchStatement: return new SwitchStatementNode(child as ts.SwitchStatement, parent);
+		case SK.CaseClause: return new SwitchCaseNode(child as ts.CaseClause, parent);
+		case SK.DefaultClause: return new SwitchCaseNode(child as ts.DefaultClause, parent);
+		case SK.BreakStatement: return new BreakOrContinueNode('BreakStatement', child as ts.BreakStatement, parent);
+		case SK.ContinueStatement: return new BreakOrContinueNode('ContinueStatement', child as ts.ContinueStatement, parent);
+		case SK.LabeledStatement: return new LabeledStatementNode(child as ts.LabeledStatement, parent);
+		case SK.EmptyStatement: return new EmptyStatementNode(child as ts.EmptyStatement, parent);
+		case SK.AwaitExpression: return new AwaitExpressionNode(child as ts.AwaitExpression, parent);
+		case SK.YieldExpression: return new YieldExpressionNode(child as ts.YieldExpression, parent);
+		case SK.ClassDeclaration: return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
+		case SK.ClassExpression: return new ClassNode('ClassExpression', child as ts.ClassExpression, parent);
+		case SK.MethodDeclaration: return new MethodDefinitionNode(child as ts.MethodDeclaration, parent);
+		case SK.PropertyDeclaration: return new PropertyDefinitionNode(child as ts.PropertyDeclaration, parent);
+		case SK.Constructor: return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
+		case SK.GetAccessor: return new MethodDefinitionNode(child as ts.GetAccessorDeclaration, parent);
+		case SK.SetAccessor: return new MethodDefinitionNode(child as ts.SetAccessorDeclaration, parent);
+		case SK.ArrayBindingPattern: return new ArrayPatternNode(child as ts.ArrayBindingPattern, parent);
+		case SK.ObjectBindingPattern: return new ObjectPatternNode(child as ts.ObjectBindingPattern, parent);
+		case SK.BindingElement: return new BindingElementNode(child as ts.BindingElement, parent);
+		case SK.OmittedExpression: return null;
+		case SK.NullKeyword: return new NullLiteralNode(child as ts.NullLiteral, parent);
+		case SK.SuperKeyword: return new SuperNode(child, parent);
+		case SK.ThisKeyword: return new ThisExpressionNode(child, parent);
+		case SK.TypeParameter: return new TSTypeParameterNode(child as ts.TypeParameterDeclaration, parent);
+		case SK.ExpressionWithTypeArguments: return convertChild((child as ts.ExpressionWithTypeArguments).expression, parent);
+		case SK.PrivateIdentifier: return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
+		case SK.TypeAssertionExpression: return new TSTypeAssertionNode(child as ts.TypeAssertion, parent);
+		case SK.SatisfiesExpression: return new TSSatisfiesExpressionNode(child as ts.SatisfiesExpression, parent);
+		case SK.ConstructorType: return new TSConstructorTypeNode(child as ts.ConstructorTypeNode, parent);
+		case SK.MappedType: return new TSMappedTypeNode(child as ts.MappedTypeNode, parent);
+		case SK.ConditionalType: return new TSConditionalTypeNode(child as ts.ConditionalTypeNode, parent);
+		case SK.InferType: return new TSInferTypeNode(child as ts.InferTypeNode, parent);
+		case SK.ThisType: return new TSThisTypeNode(child, parent);
+		case SK.TypePredicate: return new TSTypePredicateNode(child as ts.TypePredicateNode, parent);
+		case SK.ModuleDeclaration: return new TSModuleDeclarationNode(child as ts.ModuleDeclaration, parent);
+		case SK.ModuleBlock: return new TSModuleBlockNode(child as ts.ModuleBlock, parent);
+		case SK.EnumDeclaration: return new TSEnumDeclarationNode(child as ts.EnumDeclaration, parent);
+		case SK.EnumMember: return new TSEnumMemberNode(child as ts.EnumMember, parent);
+		case SK.Decorator: return new DecoratorNode(child as ts.Decorator, parent);
+		case SK.HeritageClause: return null; // handled inline by ClassNode
+		case SK.VariableDeclarationList: return new VariableDeclarationListAsNode(child as ts.VariableDeclarationList, parent);
+		case SK.VoidExpression: return new VoidExpressionNode(child as ts.VoidExpression, parent);
+		case SK.DeleteExpression: return new DeleteExpressionNode(child as ts.DeleteExpression, parent);
+		case SK.JsxText: return null; // JSX not supported in MVP
 		case SK.AnyKeyword: return new TypeKeywordNode('TSAnyKeyword', child, parent);
 		case SK.UnknownKeyword: return new TypeKeywordNode('TSUnknownKeyword', child, parent);
 		case SK.NumberKeyword: return new TypeKeywordNode('TSNumberKeyword', child, parent);
@@ -646,6 +725,1146 @@ class TSQualifiedNameNode extends LazyNode {
 	}
 }
 
+class VoidExpressionNode extends LazyNode {
+	readonly type = 'UnaryExpression' as const;
+	readonly operator = 'void' as const;
+	readonly prefix = true as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.VoidExpression).expression, this);
+	}
+}
+
+class DeleteExpressionNode extends LazyNode {
+	readonly type = 'UnaryExpression' as const;
+	readonly operator = 'delete' as const;
+	readonly prefix = true as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.DeleteExpression).expression, this);
+	}
+}
+
+// VariableDeclarationList appears in for-loop initializers (`for (let i = 0;...)`).
+// typescript-estree converts it to a VariableDeclaration with no `declare`.
+class VariableDeclarationListAsNode extends LazyNode {
+	readonly type = 'VariableDeclaration' as const;
+	readonly kind: 'var' | 'let' | 'const';
+	readonly declare = false;
+	private _declarations?: (LazyNode | null)[];
+	constructor(tsNode: ts.VariableDeclarationList, parent: LazyNode) {
+		super(tsNode, parent);
+		const flags = tsNode.flags;
+		this.kind = flags & ts.NodeFlags.Const ? 'const' : flags & ts.NodeFlags.Let ? 'let' : 'var';
+	}
+	get declarations() {
+		return this._declarations ??= convertChildren((this._ts as ts.VariableDeclarationList).declarations, this);
+	}
+}
+
+// Classes — typescript-estree assembles `body` from the class members
+// filtered through `isESTreeClassMember`. MVP just passes them through;
+// HeritageClause folded into superClass / implements via inline scan.
+
+class ClassNode extends LazyNode {
+	readonly type: 'ClassDeclaration' | 'ClassExpression';
+	readonly abstract: boolean;
+	readonly declare: boolean;
+	readonly decorators: never[] = [];
+	readonly typeParameters = undefined;
+	readonly superTypeArguments = undefined;
+	readonly superTypeParameters = undefined;
+	private _id?: LazyNode | null;
+	private _body?: ClassBodyNode;
+	private _superClass?: LazyNode | null;
+	private _implements?: (LazyNode | null)[];
+
+	constructor(
+		type: 'ClassDeclaration' | 'ClassExpression',
+		tsNode: ts.ClassDeclaration | ts.ClassExpression,
+		parent: LazyNode,
+	) {
+		super(tsNode, parent);
+		this.type = type;
+		this.abstract = !!tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword);
+		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.ClassDeclaration).name, this);
+	}
+	get body() {
+		if (this._body) return this._body;
+		const ts_ = this._ts as ts.ClassDeclaration;
+		const range: [number, number] = [ts_.members.pos - 1, ts_.end];
+		return this._body = new ClassBodyNode(ts_, this, range);
+	}
+	get superClass() {
+		if (this._superClass !== undefined) return this._superClass;
+		const ext = (this._ts as ts.ClassDeclaration).heritageClauses
+			?.find(h => h.token === SK.ExtendsKeyword);
+		const t = ext?.types[0]?.expression;
+		return this._superClass = t ? convertChild(t, this) : null;
+	}
+	get implements() {
+		if (this._implements) return this._implements;
+		const impl = (this._ts as ts.ClassDeclaration).heritageClauses
+			?.find(h => h.token === SK.ImplementsKeyword);
+		return this._implements = impl ? convertChildren(impl.types, this) : [];
+	}
+}
+
+class ClassBodyNode extends LazyNode {
+	readonly type = 'ClassBody' as const;
+	private _body?: (LazyNode | null)[];
+	constructor(classTsNode: ts.ClassDeclaration | ts.ClassExpression, parent: LazyNode, range: [number, number]) {
+		super(classTsNode, parent, undefined, false);
+		this.range = range;
+		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
+	}
+	get body() {
+		if (this._body) return this._body;
+		const members = (this._ts as ts.ClassDeclaration).members.filter(m => m.kind !== SK.SemicolonClassElement);
+		return this._body = convertChildren(members, this);
+	}
+}
+
+class MethodDefinitionNode extends LazyNode {
+	readonly type = 'MethodDefinition' as const;
+	readonly kind: 'method' | 'constructor' | 'get' | 'set';
+	readonly static: boolean;
+	readonly override: boolean;
+	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
+	readonly computed: boolean;
+	readonly optional: boolean;
+	readonly decorators: never[] = [];
+	private _key?: LazyNode | null;
+	private _value?: FunctionExpressionNode;
+
+	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.kind = tsNode.kind === SK.Constructor
+			? 'constructor'
+			: tsNode.kind === SK.GetAccessor
+				? 'get'
+				: tsNode.kind === SK.SetAccessor
+					? 'set'
+					: 'method';
+		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
+		this.override = !!tsNode.modifiers?.some(m => m.kind === SK.OverrideKeyword);
+		const accMod = tsNode.modifiers?.find(m =>
+			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
+		);
+		this.accessibility = accMod
+			? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
+			: undefined;
+		this.computed = !!(tsNode as ts.MethodDeclaration).name && (tsNode as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName;
+		this.optional = !!(tsNode as ts.MethodDeclaration).questionToken;
+	}
+	get key() {
+		if (this._key !== undefined) return this._key;
+		const t = this._ts as ts.MethodDeclaration | ts.ConstructorDeclaration;
+		// Constructor has no `name`; synthesize an Identifier 'constructor'.
+		if (t.kind === SK.Constructor) {
+			return this._key = null;
+		}
+		return this._key = convertChild((t as ts.MethodDeclaration).name, this);
+	}
+	get value() {
+		// FunctionExpression-shaped wrapper. We reuse FunctionExpressionNode
+		// but the TS node is the method itself (which has parameters/body/etc).
+		if (this._value) return this._value;
+		const v = new FunctionExpressionNode(this._ts as unknown as ts.FunctionExpression, this);
+		return this._value = v;
+	}
+}
+
+class PropertyDefinitionNode extends LazyNode {
+	readonly type = 'PropertyDefinition' as const;
+	readonly static: boolean;
+	readonly override: boolean;
+	readonly readonly: boolean;
+	readonly declare: boolean;
+	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
+	readonly computed: boolean;
+	readonly optional: boolean;
+	readonly definite: boolean;
+	readonly decorators: never[] = [];
+	private _key?: LazyNode | null;
+	private _value?: LazyNode | null;
+	private _typeAnnotation?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.PropertyDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
+		this.override = !!tsNode.modifiers?.some(m => m.kind === SK.OverrideKeyword);
+		this.readonly = !!tsNode.modifiers?.some(m => m.kind === SK.ReadonlyKeyword);
+		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
+		const accMod = tsNode.modifiers?.find(m =>
+			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
+		);
+		this.accessibility = accMod
+			? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
+			: undefined;
+		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
+		this.optional = !!tsNode.questionToken;
+		this.definite = !!tsNode.exclamationToken;
+	}
+	get key() {
+		return this._key ??= convertChild((this._ts as ts.PropertyDeclaration).name, this);
+	}
+	get value() {
+		return this._value ??= convertChild((this._ts as ts.PropertyDeclaration).initializer, this);
+	}
+	get typeAnnotation() {
+		if (this._typeAnnotation !== undefined) return this._typeAnnotation;
+		const t = (this._ts as ts.PropertyDeclaration).type;
+		return this._typeAnnotation = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
+class ArrayPatternNode extends LazyNode {
+	readonly type = 'ArrayPattern' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly typeAnnotation = undefined;
+	private _elements?: (LazyNode | null)[];
+	get elements() {
+		const ts_ = this._ts as ts.ArrayBindingPattern;
+		return this._elements ??= ts_.elements.map(e => e.kind === SK.OmittedExpression ? null : convertChild(e, this));
+	}
+}
+
+class ObjectPatternNode extends LazyNode {
+	readonly type = 'ObjectPattern' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly typeAnnotation = undefined;
+	private _properties?: (LazyNode | null)[];
+	get properties() {
+		return this._properties ??= convertChildren((this._ts as ts.ObjectBindingPattern).elements, this);
+	}
+}
+
+class BindingElementNode extends LazyNode {
+	readonly type: 'Property' | 'RestElement';
+	readonly computed = false;
+	readonly kind: 'init' = 'init';
+	readonly method = false;
+	readonly optional = false;
+	readonly shorthand: boolean;
+	private _key?: LazyNode | null;
+	private _value?: LazyNode | null;
+	private _argument?: LazyNode | null;
+
+	constructor(tsNode: ts.BindingElement, parent: LazyNode) {
+		super(tsNode, parent);
+		this.type = tsNode.dotDotDotToken ? 'RestElement' : 'Property';
+		// shorthand iff no `propertyName` (just `name`).
+		this.shorthand = !tsNode.propertyName;
+	}
+	get key() {
+		if (this._key !== undefined) return this._key;
+		const t = this._ts as ts.BindingElement;
+		return this._key = convertChild(t.propertyName ?? t.name, this);
+	}
+	get value() {
+		return this._value ??= convertChild((this._ts as ts.BindingElement).name, this);
+	}
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.BindingElement).name, this);
+	}
+}
+
+class NullLiteralNode extends LazyNode {
+	readonly type = 'Literal' as const;
+	readonly value = null;
+	readonly raw = 'null';
+}
+
+class SuperNode extends LazyNode {
+	readonly type = 'Super' as const;
+}
+
+class ThisExpressionNode extends LazyNode {
+	readonly type = 'ThisExpression' as const;
+}
+
+class TSTypeParameterNode extends LazyNode {
+	readonly type = 'TSTypeParameter' as const;
+	readonly const: boolean;
+	readonly in: boolean;
+	readonly out: boolean;
+	private _name?: LazyNode | null;
+	private _constraint?: LazyNode | null;
+	private _default?: LazyNode | null;
+
+	constructor(tsNode: ts.TypeParameterDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.const = !!tsNode.modifiers?.some(m => m.kind === SK.ConstKeyword);
+		this.in = !!tsNode.modifiers?.some(m => m.kind === SK.InKeyword);
+		this.out = !!tsNode.modifiers?.some(m => m.kind === SK.OutKeyword);
+	}
+	get name() {
+		return this._name ??= convertChild((this._ts as ts.TypeParameterDeclaration).name, this);
+	}
+	get constraint() {
+		return this._constraint ??= convertChild((this._ts as ts.TypeParameterDeclaration).constraint, this);
+	}
+	get default() {
+		return this._default ??= convertChild((this._ts as ts.TypeParameterDeclaration).default, this);
+	}
+}
+
+class PrivateIdentifierNode extends LazyNode {
+	readonly type = 'PrivateIdentifier' as const;
+	readonly name: string;
+	constructor(tsNode: ts.PrivateIdentifier, parent: LazyNode) {
+		super(tsNode, parent);
+		this.name = tsNode.text.slice(1);
+	}
+}
+
+class TSTypeAssertionNode extends LazyNode {
+	readonly type = 'TSTypeAssertion' as const;
+	private _expression?: LazyNode | null;
+	private _typeAnnotation?: LazyNode | null;
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.TypeAssertion).expression, this);
+	}
+	get typeAnnotation() {
+		return this._typeAnnotation ??= convertChild((this._ts as ts.TypeAssertion).type, this);
+	}
+}
+
+class TSSatisfiesExpressionNode extends LazyNode {
+	readonly type = 'TSSatisfiesExpression' as const;
+	private _expression?: LazyNode | null;
+	private _typeAnnotation?: LazyNode | null;
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.SatisfiesExpression).expression, this);
+	}
+	get typeAnnotation() {
+		return this._typeAnnotation ??= convertChild((this._ts as ts.SatisfiesExpression).type, this);
+	}
+}
+
+class TSConstructorTypeNode extends LazyNode {
+	readonly type = 'TSConstructorType' as const;
+	readonly abstract: boolean;
+	readonly typeParameters = undefined;
+	private _params?: (LazyNode | null)[];
+	private _returnType?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.ConstructorTypeNode, parent: LazyNode) {
+		super(tsNode, parent);
+		this.abstract = !!tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword);
+	}
+	get params() {
+		return this._params ??= convertChildren((this._ts as ts.ConstructorTypeNode).parameters, this);
+	}
+	get returnType() {
+		if (this._returnType !== undefined) return this._returnType;
+		const t = (this._ts as ts.ConstructorTypeNode).type;
+		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
+class TSMappedTypeNode extends LazyNode {
+	readonly type = 'TSMappedType' as const;
+	readonly readonly: boolean | '+' | '-' | undefined;
+	readonly optional: boolean | '+' | '-' | undefined;
+	private _key?: LazyNode | null;
+	private _constraint?: LazyNode | null;
+	private _nameType?: LazyNode | null;
+	private _typeAnnotation?: LazyNode | null;
+
+	constructor(tsNode: ts.MappedTypeNode, parent: LazyNode) {
+		super(tsNode, parent);
+		this.readonly = tsNode.readonlyToken
+			? (tsNode.readonlyToken.kind === SK.PlusToken ? '+' : tsNode.readonlyToken.kind === SK.MinusToken ? '-' : true)
+			: undefined;
+		this.optional = tsNode.questionToken
+			? (tsNode.questionToken.kind === SK.PlusToken ? '+' : tsNode.questionToken.kind === SK.MinusToken ? '-' : true)
+			: undefined;
+	}
+	get key() {
+		return this._key ??= convertChild((this._ts as ts.MappedTypeNode).typeParameter.name, this);
+	}
+	get constraint() {
+		return this._constraint ??= convertChild((this._ts as ts.MappedTypeNode).typeParameter.constraint, this);
+	}
+	get nameType() {
+		return this._nameType ??= convertChild((this._ts as ts.MappedTypeNode).nameType, this) ?? null;
+	}
+	get typeAnnotation() {
+		return this._typeAnnotation ??= convertChild((this._ts as ts.MappedTypeNode).type, this);
+	}
+}
+
+class TSConditionalTypeNode extends LazyNode {
+	readonly type = 'TSConditionalType' as const;
+	private _checkType?: LazyNode | null;
+	private _extendsType?: LazyNode | null;
+	private _trueType?: LazyNode | null;
+	private _falseType?: LazyNode | null;
+	get checkType() {
+		return this._checkType ??= convertChild((this._ts as ts.ConditionalTypeNode).checkType, this);
+	}
+	get extendsType() {
+		return this._extendsType ??= convertChild((this._ts as ts.ConditionalTypeNode).extendsType, this);
+	}
+	get trueType() {
+		return this._trueType ??= convertChild((this._ts as ts.ConditionalTypeNode).trueType, this);
+	}
+	get falseType() {
+		return this._falseType ??= convertChild((this._ts as ts.ConditionalTypeNode).falseType, this);
+	}
+}
+
+class TSInferTypeNode extends LazyNode {
+	readonly type = 'TSInferType' as const;
+	private _typeParameter?: LazyNode | null;
+	get typeParameter() {
+		return this._typeParameter ??= convertChild((this._ts as ts.InferTypeNode).typeParameter, this);
+	}
+}
+
+class TSThisTypeNode extends LazyNode {
+	readonly type = 'TSThisType' as const;
+}
+
+class TSTypePredicateNode extends LazyNode {
+	readonly type = 'TSTypePredicate' as const;
+	readonly asserts: boolean;
+	private _parameterName?: LazyNode | null;
+	private _typeAnnotation?: LazyNode | null | undefined;
+
+	constructor(tsNode: ts.TypePredicateNode, parent: LazyNode) {
+		super(tsNode, parent);
+		this.asserts = tsNode.assertsModifier != null;
+	}
+	get parameterName() {
+		return this._parameterName ??= convertChild((this._ts as ts.TypePredicateNode).parameterName, this);
+	}
+	get typeAnnotation() {
+		if (this._typeAnnotation !== undefined) return this._typeAnnotation;
+		const t = (this._ts as ts.TypePredicateNode).type;
+		return this._typeAnnotation = t ? convertTypeAnnotation(t, this) : undefined;
+	}
+}
+
+class TSModuleDeclarationNode extends LazyNode {
+	readonly type = 'TSModuleDeclaration' as const;
+	readonly declare: boolean;
+	readonly global: boolean;
+	readonly kind: 'namespace' | 'module' | 'global';
+	private _id?: LazyNode | null;
+	private _body?: LazyNode | null;
+
+	constructor(tsNode: ts.ModuleDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
+		this.global = !!(tsNode.flags & ts.NodeFlags.GlobalAugmentation);
+		this.kind = tsNode.flags & ts.NodeFlags.Namespace ? 'namespace' : 'module';
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.ModuleDeclaration).name, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.ModuleDeclaration).body, this);
+	}
+}
+
+class TSModuleBlockNode extends LazyNode {
+	readonly type = 'TSModuleBlock' as const;
+	private _body?: (LazyNode | null)[];
+	get body() {
+		return this._body ??= convertChildren((this._ts as ts.ModuleBlock).statements, this);
+	}
+}
+
+class TSEnumDeclarationNode extends LazyNode {
+	readonly type = 'TSEnumDeclaration' as const;
+	readonly const: boolean;
+	readonly declare: boolean;
+	private _id?: LazyNode | null;
+	private _members?: (LazyNode | null)[];
+
+	constructor(tsNode: ts.EnumDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.const = !!tsNode.modifiers?.some(m => m.kind === SK.ConstKeyword);
+		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.EnumDeclaration).name, this);
+	}
+	get members() {
+		return this._members ??= convertChildren((this._ts as ts.EnumDeclaration).members, this);
+	}
+}
+
+class TSEnumMemberNode extends LazyNode {
+	readonly type = 'TSEnumMember' as const;
+	readonly computed: boolean;
+	private _id?: LazyNode | null;
+	private _initializer?: LazyNode | null;
+	constructor(tsNode: ts.EnumMember, parent: LazyNode) {
+		super(tsNode, parent);
+		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.EnumMember).name, this);
+	}
+	get initializer() {
+		return this._initializer ??= convertChild((this._ts as ts.EnumMember).initializer, this);
+	}
+}
+
+class DecoratorNode extends LazyNode {
+	readonly type = 'Decorator' as const;
+	private _expression?: LazyNode | null;
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.Decorator).expression, this);
+	}
+}
+
+// Object/array literals + properties
+
+class ArrayExpressionNode extends LazyNode {
+	readonly type = 'ArrayExpression' as const;
+	private _elements?: (LazyNode | null)[];
+	get elements() {
+		const ts_ = this._ts as ts.ArrayLiteralExpression;
+		return this._elements ??= ts_.elements.map(e => e.kind === SK.OmittedExpression ? null : convertChild(e, this));
+	}
+}
+
+class ObjectExpressionNode extends LazyNode {
+	readonly type = 'ObjectExpression' as const;
+	private _properties?: (LazyNode | null)[];
+	get properties() {
+		return this._properties ??= convertChildren((this._ts as ts.ObjectLiteralExpression).properties, this);
+	}
+}
+
+class PropertyAssignmentNode extends LazyNode {
+	readonly type = 'Property' as const;
+	readonly kind: 'init' = 'init';
+	readonly method = false;
+	readonly optional = false;
+	readonly shorthand = false;
+	readonly computed: boolean;
+	private _key?: LazyNode | null;
+	private _value?: LazyNode | null;
+	constructor(tsNode: ts.PropertyAssignment, parent: LazyNode) {
+		super(tsNode, parent);
+		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
+	}
+	get key() {
+		return this._key ??= convertChild((this._ts as ts.PropertyAssignment).name, this);
+	}
+	get value() {
+		return this._value ??= convertChild((this._ts as ts.PropertyAssignment).initializer, this);
+	}
+}
+
+class ShorthandPropertyNode extends LazyNode {
+	readonly type = 'Property' as const;
+	readonly kind: 'init' = 'init';
+	readonly method = false;
+	readonly optional = false;
+	readonly shorthand = true;
+	readonly computed = false;
+	private _key?: LazyNode | null;
+	get key() {
+		return this._key ??= convertChild((this._ts as ts.ShorthandPropertyAssignment).name, this);
+	}
+	get value() { return this.key; }
+}
+
+class TemplateLiteralNode extends LazyNode {
+	readonly type = 'TemplateLiteral' as const;
+	private _quasis?: object[];
+	private _expressions?: (LazyNode | null)[];
+	get quasis() {
+		if (this._quasis) return this._quasis;
+		const ts_ = this._ts as ts.TemplateExpression;
+		const ast = this._ctx.ast;
+		const out: object[] = [];
+		const headRange: [number, number] = [ts_.head.getStart(ast), ts_.head.getEnd()];
+		out.push({
+			type: 'TemplateElement',
+			tail: false,
+			range: headRange,
+			loc: getLocFor(ast, headRange[0], headRange[1]),
+			value: { cooked: ts_.head.text, raw: ts_.head.getText(ast).slice(1, -2) },
+		});
+		for (const span of ts_.templateSpans) {
+			const lit = span.literal;
+			const isTail = lit.kind === SK.TemplateTail;
+			const range: [number, number] = [lit.getStart(ast), lit.getEnd()];
+			const raw = lit.getText(ast);
+			out.push({
+				type: 'TemplateElement',
+				tail: isTail,
+				range,
+				loc: getLocFor(ast, range[0], range[1]),
+				value: {
+					cooked: lit.text,
+					raw: isTail ? raw.slice(1, -1) : raw.slice(1, -2),
+				},
+			});
+		}
+		return this._quasis = out;
+	}
+	get expressions() {
+		if (this._expressions) return this._expressions;
+		const ts_ = this._ts as ts.TemplateExpression;
+		return this._expressions = ts_.templateSpans.map(s => convertChild(s.expression, this));
+	}
+}
+
+class RegExpLiteralNode extends LazyNode {
+	readonly type = 'Literal' as const;
+	readonly value: RegExp | null;
+	readonly raw: string;
+	readonly regex: { pattern: string; flags: string };
+	constructor(tsNode: ts.RegularExpressionLiteral, parent: LazyNode) {
+		super(tsNode, parent);
+		this.raw = tsNode.text;
+		const m = /^\/(.+)\/([gimsuy]*)$/.exec(tsNode.text);
+		const pattern = m?.[1] ?? '';
+		const flags = m?.[2] ?? '';
+		this.regex = { pattern, flags };
+		try {
+			this.value = new RegExp(pattern, flags);
+		}
+		catch {
+			this.value = null;
+		}
+	}
+}
+
+class ThrowStatementNode extends LazyNode {
+	readonly type = 'ThrowStatement' as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.ThrowStatement).expression, this);
+	}
+}
+
+class TryStatementNode extends LazyNode {
+	readonly type = 'TryStatement' as const;
+	private _block?: LazyNode | null;
+	private _handler?: LazyNode | null;
+	private _finalizer?: LazyNode | null;
+	get block() {
+		return this._block ??= convertChild((this._ts as ts.TryStatement).tryBlock, this);
+	}
+	get handler() {
+		return this._handler ??= convertChild((this._ts as ts.TryStatement).catchClause, this);
+	}
+	get finalizer() {
+		return this._finalizer ??= convertChild((this._ts as ts.TryStatement).finallyBlock, this);
+	}
+}
+
+class CatchClauseNode extends LazyNode {
+	readonly type = 'CatchClause' as const;
+	private _param?: LazyNode | null;
+	private _body?: LazyNode | null;
+	get param() {
+		const decl = (this._ts as ts.CatchClause).variableDeclaration;
+		return this._param ??= decl ? convertChild(decl.name, this) : null;
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.CatchClause).block, this);
+	}
+}
+
+class WhileStatementNode extends LazyNode {
+	readonly type = 'WhileStatement' as const;
+	private _test?: LazyNode | null;
+	private _body?: LazyNode | null;
+	get test() {
+		return this._test ??= convertChild((this._ts as ts.WhileStatement).expression, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.WhileStatement).statement, this);
+	}
+}
+
+class DoWhileStatementNode extends LazyNode {
+	readonly type = 'DoWhileStatement' as const;
+	private _test?: LazyNode | null;
+	private _body?: LazyNode | null;
+	get test() {
+		return this._test ??= convertChild((this._ts as ts.DoStatement).expression, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.DoStatement).statement, this);
+	}
+}
+
+class ForStatementNode extends LazyNode {
+	readonly type = 'ForStatement' as const;
+	private _init?: LazyNode | null;
+	private _test?: LazyNode | null;
+	private _update?: LazyNode | null;
+	private _body?: LazyNode | null;
+	get init() {
+		return this._init ??= convertChild((this._ts as ts.ForStatement).initializer, this);
+	}
+	get test() {
+		return this._test ??= convertChild((this._ts as ts.ForStatement).condition, this);
+	}
+	get update() {
+		return this._update ??= convertChild((this._ts as ts.ForStatement).incrementor, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.ForStatement).statement, this);
+	}
+}
+
+class ForInStatementNode extends LazyNode {
+	readonly type = 'ForInStatement' as const;
+	private _left?: LazyNode | null;
+	private _right?: LazyNode | null;
+	private _body?: LazyNode | null;
+	get left() {
+		return this._left ??= convertChild((this._ts as ts.ForInStatement).initializer, this);
+	}
+	get right() {
+		return this._right ??= convertChild((this._ts as ts.ForInStatement).expression, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.ForInStatement).statement, this);
+	}
+}
+
+class ForOfStatementNode extends LazyNode {
+	readonly type = 'ForOfStatement' as const;
+	readonly await: boolean;
+	private _left?: LazyNode | null;
+	private _right?: LazyNode | null;
+	private _body?: LazyNode | null;
+	constructor(tsNode: ts.ForOfStatement, parent: LazyNode) {
+		super(tsNode, parent);
+		this.await = !!tsNode.awaitModifier;
+	}
+	get left() {
+		return this._left ??= convertChild((this._ts as ts.ForOfStatement).initializer, this);
+	}
+	get right() {
+		return this._right ??= convertChild((this._ts as ts.ForOfStatement).expression, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.ForOfStatement).statement, this);
+	}
+}
+
+class SwitchStatementNode extends LazyNode {
+	readonly type = 'SwitchStatement' as const;
+	private _discriminant?: LazyNode | null;
+	private _cases?: (LazyNode | null)[];
+	get discriminant() {
+		return this._discriminant ??= convertChild((this._ts as ts.SwitchStatement).expression, this);
+	}
+	get cases() {
+		return this._cases ??= convertChildren((this._ts as ts.SwitchStatement).caseBlock.clauses, this);
+	}
+}
+
+class SwitchCaseNode extends LazyNode {
+	readonly type = 'SwitchCase' as const;
+	private _test?: LazyNode | null;
+	private _consequent?: (LazyNode | null)[];
+	get test() {
+		const ts_ = this._ts as ts.CaseClause | ts.DefaultClause;
+		return this._test ??= ts_.kind === SK.CaseClause ? convertChild(ts_.expression, this) : null;
+	}
+	get consequent() {
+		return this._consequent ??= convertChildren((this._ts as ts.CaseClause | ts.DefaultClause).statements, this);
+	}
+}
+
+class BreakOrContinueNode extends LazyNode {
+	readonly type: 'BreakStatement' | 'ContinueStatement';
+	private _label?: LazyNode | null;
+	constructor(type: 'BreakStatement' | 'ContinueStatement', tsNode: ts.BreakOrContinueStatement, parent: LazyNode) {
+		super(tsNode, parent);
+		this.type = type;
+	}
+	get label() {
+		return this._label ??= convertChild((this._ts as ts.BreakOrContinueStatement).label, this);
+	}
+}
+
+class LabeledStatementNode extends LazyNode {
+	readonly type = 'LabeledStatement' as const;
+	private _label?: LazyNode | null;
+	private _body?: LazyNode | null;
+	get label() {
+		return this._label ??= convertChild((this._ts as ts.LabeledStatement).label, this);
+	}
+	get body() {
+		return this._body ??= convertChild((this._ts as ts.LabeledStatement).statement, this);
+	}
+}
+
+class EmptyStatementNode extends LazyNode {
+	readonly type = 'EmptyStatement' as const;
+}
+
+class AwaitExpressionNode extends LazyNode {
+	readonly type = 'AwaitExpression' as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.AwaitExpression).expression, this);
+	}
+}
+
+class YieldExpressionNode extends LazyNode {
+	readonly type = 'YieldExpression' as const;
+	readonly delegate: boolean;
+	private _argument?: LazyNode | null;
+	constructor(tsNode: ts.YieldExpression, parent: LazyNode) {
+		super(tsNode, parent);
+		this.delegate = !!tsNode.asteriskToken;
+	}
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.YieldExpression).expression, this);
+	}
+}
+
+class TSTupleTypeNode extends LazyNode {
+	readonly type = 'TSTupleType' as const;
+	private _elementTypes?: (LazyNode | null)[];
+	get elementTypes() {
+		return this._elementTypes ??= convertChildren((this._ts as ts.TupleTypeNode).elements, this);
+	}
+}
+
+// NamedTupleMember: with `...` becomes TSRestType wrapping the member.
+function convertNamedTupleMember(tsNode: ts.NamedTupleMember, parent: LazyNode): LazyNode {
+	if (tsNode.dotDotDotToken) {
+		return new TSRestTypeWrappingNamedTupleMemberNode(tsNode, parent);
+	}
+	return new TSNamedTupleMemberNode(tsNode, parent);
+}
+
+class TSNamedTupleMemberNode extends LazyNode {
+	readonly type = 'TSNamedTupleMember' as const;
+	readonly optional: boolean;
+	private _label?: LazyNode | null;
+	private _elementType?: LazyNode | null;
+	constructor(tsNode: ts.NamedTupleMember, parent: LazyNode) {
+		super(tsNode, parent);
+		this.optional = tsNode.questionToken != null;
+	}
+	get label() {
+		return this._label ??= convertChild((this._ts as ts.NamedTupleMember).name, this);
+	}
+	get elementType() {
+		return this._elementType ??= convertChild((this._ts as ts.NamedTupleMember).type, this);
+	}
+}
+
+class TSRestTypeWrappingNamedTupleMemberNode extends LazyNode {
+	readonly type = 'TSRestType' as const;
+	private _typeAnnotation?: TSNamedTupleMemberNode;
+	get typeAnnotation() {
+		if (this._typeAnnotation) return this._typeAnnotation;
+		const inner = new TSNamedTupleMemberNode(this._ts as ts.NamedTupleMember, this);
+		// Adjust inner range start to label's start (skip the `...`).
+		const lbl = inner.label;
+		if (lbl) {
+			(inner as unknown as { _extendRange: (r: [number, number]) => void })
+				._extendRange([(lbl as { range: [number, number] }).range[0], inner.range[1]]);
+		}
+		return this._typeAnnotation = inner;
+	}
+}
+
+class TSOptionalTypeNode extends LazyNode {
+	readonly type = 'TSOptionalType' as const;
+	private _typeAnnotation?: LazyNode | null;
+	get typeAnnotation() {
+		return this._typeAnnotation ??= convertChild((this._ts as ts.OptionalTypeNode).type, this);
+	}
+}
+
+class TSRestTypeNode extends LazyNode {
+	readonly type = 'TSRestType' as const;
+	private _typeAnnotation?: LazyNode | null;
+	get typeAnnotation() {
+		return this._typeAnnotation ??= convertChild((this._ts as ts.RestTypeNode).type, this);
+	}
+}
+
+class ConditionalExpressionNode extends LazyNode {
+	readonly type = 'ConditionalExpression' as const;
+	private _test?: LazyNode | null;
+	private _consequent?: LazyNode | null;
+	private _alternate?: LazyNode | null;
+	get test() {
+		return this._test ??= convertChild((this._ts as ts.ConditionalExpression).condition, this);
+	}
+	get consequent() {
+		return this._consequent ??= convertChild((this._ts as ts.ConditionalExpression).whenTrue, this);
+	}
+	get alternate() {
+		return this._alternate ??= convertChild((this._ts as ts.ConditionalExpression).whenFalse, this);
+	}
+}
+
+class NewExpressionNode extends LazyNode {
+	readonly type = 'NewExpression' as const;
+	readonly typeArguments = undefined;
+	readonly typeParameters = undefined;
+	private _callee?: LazyNode | null;
+	private _arguments?: (LazyNode | null)[];
+	get callee() {
+		return this._callee ??= convertChild((this._ts as ts.NewExpression).expression, this);
+	}
+	get arguments() {
+		return this._arguments ??= convertChildren((this._ts as ts.NewExpression).arguments ?? [], this);
+	}
+}
+
+// NoSubstitutionTemplateLiteral: backtick string with no `${}`. Maps to a
+// TemplateLiteral with a single quasi.
+class NoSubstitutionTemplateNode extends LazyNode {
+	readonly type = 'TemplateLiteral' as const;
+	readonly expressions: never[] = [];
+	readonly quasis: object[];
+	constructor(tsNode: ts.NoSubstitutionTemplateLiteral, parent: LazyNode) {
+		super(tsNode, parent);
+		this.quasis = [
+			{
+				type: 'TemplateElement',
+				tail: true,
+				range: this.range,
+				loc: this.loc,
+				value: { cooked: tsNode.text, raw: tsNode.getText(this._ctx.ast).slice(1, -1) },
+			},
+		];
+	}
+}
+
+class SpreadElementNode extends LazyNode {
+	readonly type = 'SpreadElement' as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild(
+			(this._ts as ts.SpreadElement | ts.SpreadAssignment).expression,
+			this,
+		);
+	}
+}
+
+class TSTypeAliasDeclarationNode extends LazyNode {
+	readonly type = 'TSTypeAliasDeclaration' as const;
+	readonly declare: boolean;
+	readonly typeParameters = undefined;
+	private _id?: LazyNode | null;
+	private _typeAnnotation?: LazyNode | null;
+
+	constructor(tsNode: ts.TypeAliasDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.TypeAliasDeclaration).name, this);
+	}
+	get typeAnnotation() {
+		return this._typeAnnotation ??= convertChild((this._ts as ts.TypeAliasDeclaration).type, this);
+	}
+}
+
+// Prefix/postfix unary expressions: ++/-- become UpdateExpression, others
+// become UnaryExpression (matches typescript-estree's split at line 2188).
+class UnaryLikeExpressionNode extends LazyNode {
+	readonly type: 'UpdateExpression' | 'UnaryExpression';
+	readonly operator: string;
+	readonly prefix: boolean;
+	private _argument?: LazyNode | null;
+
+	constructor(tsNode: ts.PrefixUnaryExpression | ts.PostfixUnaryExpression, parent: LazyNode, prefix: boolean) {
+		super(tsNode, parent);
+		this.prefix = prefix;
+		const tokenKind = tsNode.operator;
+		const op = tokenKind === SK.PlusPlusToken
+			? '++'
+			: tokenKind === SK.MinusMinusToken
+				? '--'
+				: tokenKind === SK.PlusToken
+					? '+'
+					: tokenKind === SK.MinusToken
+						? '-'
+						: tokenKind === SK.ExclamationToken
+							? '!'
+							: tokenKind === SK.TildeToken
+								? '~'
+								: '?';
+		this.operator = op;
+		this.type = (op === '++' || op === '--') ? 'UpdateExpression' : 'UnaryExpression';
+	}
+	get argument() {
+		return this._argument ??= convertChild(
+			(this._ts as ts.PrefixUnaryExpression | ts.PostfixUnaryExpression).operand,
+			this,
+		);
+	}
+}
+
+class TypeofExpressionNode extends LazyNode {
+	readonly type = 'UnaryExpression' as const;
+	readonly operator = 'typeof' as const;
+	readonly prefix = true as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.TypeOfExpression).expression, this);
+	}
+}
+
+class TSNonNullExpressionNode extends LazyNode {
+	readonly type = 'TSNonNullExpression' as const;
+	private _expression?: LazyNode | null;
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.NonNullExpression).expression, this);
+	}
+}
+
+// Export forms — typescript-estree picks ExportNamedDeclaration vs
+// ExportAllDeclaration vs ExportDefaultDeclaration vs TSExportAssignment
+// based on the structure. Mirror.
+function convertExportDeclaration(tsNode: ts.ExportDeclaration, parent: LazyNode): LazyNode {
+	if (tsNode.exportClause?.kind === SK.NamedExports) {
+		return new ExportNamedDeclarationNode(tsNode, parent);
+	}
+	return new ExportAllDeclarationNode(tsNode, parent);
+}
+
+function convertExportAssignment(tsNode: ts.ExportAssignment, parent: LazyNode): LazyNode {
+	if (tsNode.isExportEquals) {
+		return new TSExportAssignmentNode(tsNode, parent);
+	}
+	return new ExportDefaultDeclarationNode(tsNode, parent);
+}
+
+class ExportNamedDeclarationNode extends LazyNode {
+	readonly type = 'ExportNamedDeclaration' as const;
+	readonly declaration = null;
+	readonly exportKind: 'value' | 'type';
+	readonly attributes: never[] = [];
+	readonly assertions: never[] = [];
+	private _source?: LazyNode | null;
+	private _specifiers?: (LazyNode | null)[];
+
+	constructor(tsNode: ts.ExportDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.exportKind = tsNode.isTypeOnly ? 'type' : 'value';
+	}
+	get source() {
+		return this._source ??= convertChild((this._ts as ts.ExportDeclaration).moduleSpecifier, this);
+	}
+	get specifiers() {
+		if (this._specifiers !== undefined) return this._specifiers;
+		const clause = (this._ts as ts.ExportDeclaration).exportClause;
+		if (clause?.kind === SK.NamedExports) {
+			return this._specifiers = convertChildren(clause.elements, this);
+		}
+		return this._specifiers = [];
+	}
+}
+
+class ExportAllDeclarationNode extends LazyNode {
+	readonly type = 'ExportAllDeclaration' as const;
+	readonly exportKind: 'value' | 'type';
+	readonly attributes: never[] = [];
+	readonly assertions: never[] = [];
+	private _exported?: LazyNode | null;
+	private _source?: LazyNode | null;
+
+	constructor(tsNode: ts.ExportDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.exportKind = tsNode.isTypeOnly ? 'type' : 'value';
+	}
+	get exported() {
+		if (this._exported !== undefined) return this._exported;
+		const clause = (this._ts as ts.ExportDeclaration).exportClause;
+		return this._exported = clause?.kind === SK.NamespaceExport ? convertChild(clause.name, this) : null;
+	}
+	get source() {
+		return this._source ??= convertChild((this._ts as ts.ExportDeclaration).moduleSpecifier, this);
+	}
+}
+
+class ExportSpecifierNode extends LazyNode {
+	readonly type = 'ExportSpecifier' as const;
+	readonly exportKind: 'value' | 'type';
+	private _exported?: LazyNode | null;
+	private _local?: LazyNode | null;
+
+	constructor(tsNode: ts.ExportSpecifier, parent: LazyNode) {
+		super(tsNode, parent);
+		this.exportKind = tsNode.isTypeOnly ? 'type' : 'value';
+	}
+	get exported() {
+		return this._exported ??= convertChild((this._ts as ts.ExportSpecifier).name, this);
+	}
+	get local() {
+		const ts_ = this._ts as ts.ExportSpecifier;
+		return this._local ??= convertChild(ts_.propertyName ?? ts_.name, this);
+	}
+}
+
+class ExportDefaultDeclarationNode extends LazyNode {
+	readonly type = 'ExportDefaultDeclaration' as const;
+	readonly exportKind: 'value' = 'value';
+	private _declaration?: LazyNode | null;
+
+	get declaration() {
+		return this._declaration ??= convertChild((this._ts as ts.ExportAssignment).expression, this);
+	}
+}
+
+class TSExportAssignmentNode extends LazyNode {
+	readonly type = 'TSExportAssignment' as const;
+	private _expression?: LazyNode | null;
+
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.ExportAssignment).expression, this);
+	}
+}
+
+class TSImportEqualsDeclarationNode extends LazyNode {
+	readonly type = 'TSImportEqualsDeclaration' as const;
+	readonly importKind: 'value' | 'type';
+	private _id?: LazyNode | null;
+	private _moduleReference?: LazyNode | null;
+
+	constructor(tsNode: ts.ImportEqualsDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.importKind = tsNode.isTypeOnly ? 'type' : 'value';
+	}
+	get id() {
+		return this._id ??= convertChild((this._ts as ts.ImportEqualsDeclaration).name, this);
+	}
+	get moduleReference() {
+		return this._moduleReference ??= convertChild((this._ts as ts.ImportEqualsDeclaration).moduleReference, this);
+	}
+}
+
+class TSExternalModuleReferenceNode extends LazyNode {
+	readonly type = 'TSExternalModuleReference' as const;
+	private _expression?: LazyNode | null;
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.ExternalModuleReference).expression, this);
+	}
+}
+
 // CallSignature + ConstructSignature share a shape — params + returnType +
 // typeParameters. typescript-estree picks the type literal at construction.
 class TSCallishSignatureNode extends LazyNode {
@@ -1014,39 +2233,120 @@ class ArrowFunctionExpressionNode extends LazyNode {
 	}
 }
 
-// Parameter doesn't have its own ESTree type for the simple case — the
-// underlying Identifier is returned with `typeAnnotation` attached. Mirrors
-// typescript-estree's Parameter case (line 1156). MVP: simple identifier
-// only; rest/default/modifiers/optional throw.
+// Parameter — typescript-estree (line 1156) builds it in steps:
+//   1. Pick the inner shape (RestElement / AssignmentPattern / plain Identifier).
+//   2. Attach typeAnnotation onto the inner.
+//   3. Extend range for `?`, set `optional`.
+//   4. Wrap in TSParameterProperty if there are class-constructor modifiers.
+// We mirror that structure.
 function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): LazyNode | null {
+	const isClassPropertyModifier = (m: ts.ModifierLike) =>
+		m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
+		|| m.kind === SK.ReadonlyKeyword || m.kind === SK.OverrideKeyword;
+	const propertyModifiers = tsNode.modifiers?.filter(isClassPropertyModifier);
+	const hasPropertyModifiers = !!propertyModifiers?.length;
+
+	let parameter: LazyNode | null;
+	let result: LazyNode | null;
+
 	if (tsNode.dotDotDotToken) {
-		throw new Error('lazy-estree: rest parameter not yet supported');
+		const rest = new RestElementNode(tsNode, parent);
+		parameter = rest;
+		result = rest;
 	}
-	if (tsNode.initializer) {
-		throw new Error('lazy-estree: parameter with default value not yet supported');
+	else if (tsNode.initializer) {
+		const inner = convertChild(tsNode.name, parent);
+		if (!inner) return null;
+		const assign = new AssignmentPatternNode(tsNode, parent, inner);
+		parameter = inner;
+		result = assign;
 	}
-	if (tsNode.modifiers?.length) {
-		throw new Error('lazy-estree: parameter modifiers (TSParameterProperty) not yet supported');
+	else {
+		const inner = convertChild(tsNode.name, parent);
+		parameter = inner;
+		result = inner;
 	}
-	const idNode = convertChild(tsNode.name, parent);
-	if (!idNode) return null;
-	if (tsNode.type) {
-		const annotation = convertTypeAnnotation(tsNode.type, idNode);
-		(idNode as { typeAnnotation?: LazyNode | null }).typeAnnotation = annotation;
-		(idNode as unknown as { _extendRange: (r: [number, number]) => void })._extendRange(annotation.range);
+
+	if (parameter && tsNode.type) {
+		const annotation = convertTypeAnnotation(tsNode.type, parameter);
+		(parameter as { typeAnnotation?: LazyNode | null }).typeAnnotation = annotation;
+		(parameter as unknown as { _extendRange: (r: [number, number]) => void })._extendRange(annotation.range);
 	}
-	if (tsNode.questionToken) {
-		(idNode as { optional?: boolean }).optional = true;
-		// typescript-estree extends the parameter's range to cover the `?`.
-		if (tsNode.questionToken.end > idNode.range[1]) {
-			(idNode as unknown as { _extendRange: (r: [number, number]) => void })
-				._extendRange([idNode.range[0], tsNode.questionToken.end]);
+	if (parameter && tsNode.questionToken) {
+		(parameter as { optional?: boolean }).optional = true;
+		if (tsNode.questionToken.end > parameter.range[1]) {
+			(parameter as unknown as { _extendRange: (r: [number, number]) => void })
+				._extendRange([parameter.range[0], tsNode.questionToken.end]);
 		}
 	}
-	// Map the Parameter TS node to the Identifier — typescript-estree does
-	// this implicitly via converter()→registerTSNodeInNodeMap.
-	parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, idNode);
-	return idNode;
+
+	if (hasPropertyModifiers && result) {
+		const wrapper = new TSParameterPropertyNode(tsNode, parent, result, propertyModifiers!);
+		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, wrapper);
+		return wrapper;
+	}
+
+	if (result) {
+		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, result);
+	}
+	return result;
+}
+
+class RestElementNode extends LazyNode {
+	readonly type = 'RestElement' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly value = undefined;
+	typeAnnotation: LazyNode | null | undefined = undefined;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.ParameterDeclaration).name, this);
+	}
+}
+
+class AssignmentPatternNode extends LazyNode {
+	readonly type = 'AssignmentPattern' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	typeAnnotation: LazyNode | null | undefined = undefined;
+	readonly left: LazyNode;
+	private _right?: LazyNode | null;
+
+	constructor(tsNode: ts.ParameterDeclaration, parent: LazyNode, left: LazyNode) {
+		super(tsNode, parent);
+		this.left = left;
+		// AssignmentPattern range starts at the param name (eager strips
+		// modifiers from the range — line 1182).
+		const start = (tsNode.name as ts.Node).getStart(this._ctx.ast);
+		const end = tsNode.initializer!.end;
+		this.range = [start, end];
+		this.loc = getLocFor(this._ctx.ast, start, end);
+	}
+	get right() {
+		return this._right ??= convertChild((this._ts as ts.ParameterDeclaration).initializer, this);
+	}
+}
+
+class TSParameterPropertyNode extends LazyNode {
+	readonly type = 'TSParameterProperty' as const;
+	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
+	readonly override: boolean;
+	readonly readonly: boolean;
+	readonly static = false;
+	readonly decorators: never[] = [];
+	readonly parameter: LazyNode;
+	constructor(tsNode: ts.ParameterDeclaration, parent: LazyNode, parameter: LazyNode, mods: ReadonlyArray<ts.ModifierLike>) {
+		super(tsNode, parent);
+		const accMod = mods.find(m =>
+			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
+		);
+		this.accessibility = accMod
+			? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
+			: undefined;
+		this.override = mods.some(m => m.kind === SK.OverrideKeyword);
+		this.readonly = mods.some(m => m.kind === SK.ReadonlyKeyword);
+		this.parameter = parameter;
+	}
 }
 
 // One class for all binary-shaped operators. typescript-estree splits the

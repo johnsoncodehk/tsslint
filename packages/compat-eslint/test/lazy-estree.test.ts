@@ -691,32 +691,45 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const fs = require('fs') as typeof import('fs');
 	const path = require('path') as typeof import('path');
 	const { visitorKeys } = require('@typescript-eslint/visitor-keys') as { visitorKeys: Record<string, string[]> };
-	const realFile = path.resolve(__dirname, '../../types/index.ts');
-	if (fs.existsSync(realFile)) {
+	const targets = [
+		'../../types/index.ts',
+		'../../config/index.ts',
+		'../../core/index.ts',
+		'../../cli/index.ts',
+		'../../compat-eslint/index.ts',
+		'../../compat-eslint/lib/lazy-estree.ts',
+		'../../compat-eslint/lib/skip-type-converter.ts',
+	];
+	const walkAll = (estree: any) => {
+		const walk = (n: any) => {
+			if (!n || typeof n !== 'object') return;
+			const keys = visitorKeys[n.type];
+			if (!keys) return;
+			for (const k of keys) {
+				const c = n[k];
+				if (Array.isArray(c)) c.forEach(walk);
+				else if (c) walk(c);
+			}
+		};
+		walk(estree);
+	};
+	for (const rel of targets) {
+		const realFile = path.resolve(__dirname, rel);
+		if (!fs.existsSync(realFile)) {
+			console.log(`  skip - real-source: ${rel} (file not found)`);
+			continue;
+		}
 		const source = fs.readFileSync(realFile, 'utf8');
 		const sf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		try {
 			const { estree } = lazy.convertLazy(sf);
-			const walk = (n: any) => {
-				if (!n || typeof n !== 'object') return;
-				const keys = visitorKeys[n.type];
-				if (!keys) return;
-				for (const k of keys) {
-					const c = n[k];
-					if (Array.isArray(c)) c.forEach(walk);
-					else if (c) walk(c);
-				}
-			};
-			walk(estree);
-			check(`real-source: convertLazy(packages/types/index.ts) walks cleanly`, true);
+			walkAll(estree);
+			check(`real-source: convertLazy(${rel}) walks cleanly`, true);
 		}
 		catch (err) {
 			const msg = (err as Error).message.split('\n')[0];
-			check(`real-source: convertLazy(packages/types/index.ts) walks cleanly`, false, msg);
+			check(`real-source: convertLazy(${rel}) walks cleanly`, false, msg);
 		}
-	}
-	else {
-		console.log('  skip - real-source test (file not found)');
 	}
 }
 
