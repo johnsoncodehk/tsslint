@@ -722,6 +722,23 @@ export class TsScope {
 	}
 
 	get block(): TSESTree.Node | undefined {
+		// For class methods (Constructor / MethodDeclaration / accessors), TS
+		// has a single node but ESTree splits into MethodDefinition + nested
+		// FunctionExpression. ESLint's scope.block points at the
+		// FunctionExpression — extract it from the MethodDefinition.value slot.
+		const SK = ts.SyntaxKind;
+		const k = this.tsNode.kind;
+		if (
+			k === SK.Constructor
+			|| k === SK.MethodDeclaration
+			|| k === SK.GetAccessor
+			|| k === SK.SetAccessor
+		) {
+			const md = this.manager.tsToEstreeOrStub<TSESTree.Node>(this.tsNode) as
+				| { value?: TSESTree.Node }
+				| undefined;
+			if (md?.value) return md.value;
+		}
 		return this.manager.tsToEstreeOrStub(this.tsNode);
 	}
 
@@ -841,15 +858,21 @@ export class TsScope {
 		switch (this.type) {
 			case 'global': {
 				// In module mode the globalScope is empty — moduleScope owns the
-				// top-level decls. In script mode globalScope owns them.
+				// top-level decls. In script mode globalScope owns them. In
+				// either case TS's binder pre-hoists `var` (including
+				// `for (var x in …)`) into SourceFile.locals — pull those in too.
 				if (this.manager.isModule()) break;
 				const sf = this.tsNode as ts.SourceFile;
 				for (const stmt of sf.statements) this._collectStatementBindings(stmt, push, pushBinding);
+				const locals = (sf as { locals?: ts.SymbolTable }).locals;
+				if (locals) locals.forEach(sym => push(sym));
 				break;
 			}
 			case 'module': {
 				const sf = this.tsNode as ts.SourceFile;
 				for (const stmt of sf.statements) this._collectStatementBindings(stmt, push, pushBinding);
+				const locals = (sf as { locals?: ts.SymbolTable }).locals;
+				if (locals) locals.forEach(sym => push(sym));
 				break;
 			}
 			case 'function': {
@@ -1262,7 +1285,13 @@ export class TsReference {
 	}
 
 	get resolved(): TsVariable | null {
-		return this.manager._getOrCreateVariable(this.symbol);
+		// Resolved iff the symbol points to a variable declared in our scope
+		// tree. Through refs (lib globals, undeclared) → null.
+		if (!this.symbol) return null;
+		const local = this.manager._variableBySymbol.get(this.symbol);
+		if (local) return local;
+		const lib = this.manager._libVariableBySymbol.get(this.symbol);
+		return lib ?? null;
 	}
 
 	// Identifier IS the declaration name (binding position), not just a usage
@@ -1285,18 +1314,49 @@ export class TsReference {
 	}
 
 	isWrite(): boolean {
-		const ts_ = ts;
+		const SK = ts.SyntaxKind;
 		const id = this.tsIdentifier;
 		const parent = id.parent;
 		if (this._isBindingIdentifier) return true;
-		if (parent && ts_.isBinaryExpression(parent) && parent.left === id) {
-			const op = parent.operatorToken.kind;
-			return op === ts_.SyntaxKind.EqualsToken
-				|| (op >= ts_.SyntaxKind.FirstCompoundAssignment && op <= ts_.SyntaxKind.LastCompoundAssignment);
+		if (!parent) return false;
+		// Direct assignment: `x = …`, `x += …`.
+		if (parent.kind === SK.BinaryExpression && (parent as ts.BinaryExpression).left === id) {
+			const op = (parent as ts.BinaryExpression).operatorToken.kind;
+			return op === SK.EqualsToken
+				|| (op >= SK.FirstCompoundAssignment && op <= SK.LastCompoundAssignment);
 		}
-		if (parent && (ts_.isPrefixUnaryExpression(parent) || ts_.isPostfixUnaryExpression(parent))) {
-			const op = parent.operator;
-			return op === ts_.SyntaxKind.PlusPlusToken || op === ts_.SyntaxKind.MinusMinusToken;
+		// Update: `x++` / `++x`.
+		if (parent.kind === SK.PrefixUnaryExpression || parent.kind === SK.PostfixUnaryExpression) {
+			const op = (parent as ts.PrefixUnaryExpression | ts.PostfixUnaryExpression).operator;
+			return op === SK.PlusPlusToken || op === SK.MinusMinusToken;
+		}
+		// Destructuring assignment: `[a] = …`, `({a} = …)`, etc. Walk up
+		// through pattern wrappers (ArrayLiteralExpression / ObjectLiteralExpression
+		// /SpreadElement / Property assignments / Parens) until we hit either
+		// a `=` BinaryExpression (write) or anything else (not a write).
+		for (let cur: ts.Node | undefined = parent; cur; cur = cur.parent) {
+			switch (cur.kind) {
+				case SK.ArrayLiteralExpression:
+				case SK.ObjectLiteralExpression:
+				case SK.SpreadElement:
+				case SK.SpreadAssignment:
+				case SK.PropertyAssignment:
+				case SK.ShorthandPropertyAssignment:
+				case SK.ParenthesizedExpression:
+					continue;
+				case SK.BinaryExpression: {
+					const op = (cur as ts.BinaryExpression).operatorToken.kind;
+					if (op !== SK.EqualsToken) return false;
+					return (cur as ts.BinaryExpression).left.pos <= id.pos
+						&& (cur as ts.BinaryExpression).left.end >= id.end;
+				}
+				case SK.ForInStatement:
+				case SK.ForOfStatement:
+					return (cur as ts.ForInStatement | ts.ForOfStatement).initializer.pos <= id.pos
+						&& (cur as ts.ForInStatement | ts.ForOfStatement).initializer.end >= id.end;
+				default:
+					return false;
+			}
 		}
 		return false;
 	}
