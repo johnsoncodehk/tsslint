@@ -113,9 +113,15 @@ importers:
       '@tsslint/types':
         specifier: 3.0.4
         version: link:../types
-      '@typescript-eslint/parser':
+      '@typescript-eslint/scope-manager':
         specifier: ^8.16.0
-        version: 8.59.0(eslint@9.27.0(jiti@2.6.1))(typescript@6.0.3)
+        version: 8.59.0
+      '@typescript-eslint/typescript-estree':
+        specifier: ^8.16.0
+        version: 8.59.0(typescript@6.0.3)
+      '@typescript-eslint/visitor-keys':
+        specifier: ^8.16.0
+        version: 8.59.0
       eslint:
         specifier: '>=9.0.0 <9.28.0'
         version: 9.27.0(jiti@2.6.1)

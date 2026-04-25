@@ -401,6 +401,17 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 	return obj != null && typeof (obj as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function';
 }
 
+// Subset of ParseSettings that astConverter actually reads.
+const PARSE_SETTINGS = {
+	allowInvalidAST: false,
+	comment: true,
+	errorOnUnknownASTType: false,
+	loc: true,
+	range: true,
+	suppressDeprecatedPropertyWarnings: true,
+	tokens: true,
+};
+
 function getEstree(
 	file: ts.SourceFile,
 	getProgram: () => ts.Program,
@@ -408,33 +419,50 @@ function getEstree(
 	if (cachedEstree?.[0] !== file) {
 		let program: ts.Program | undefined;
 
-		const Parser = require('@typescript-eslint/parser');
+		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
+		// whole parser package on first call (the heaviest single dep) and just
+		// dispatches to typescript-estree's astConverter, which we already have
+		// a ts.SourceFile for. Calling it directly avoids the parser require.
+		const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
+		const { analyze } = require('@typescript-eslint/scope-manager');
+		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
+
 		const programProxy = new Proxy({} as ts.Program, {
 			get(_target, p, receiver) {
 				program ??= getProgram();
 				return Reflect.get(program, p, receiver);
 			},
 		});
-		const { ast, scopeManager, visitorKeys, services } = Parser.parseForESLint(file, {
-			tokens: true,
-			comment: true,
-			loc: true,
-			range: true,
-			preserveNodeMaps: true,
-			filePath: file.fileName,
+
+		// astConverter walks via ts.Node#getText, which needs parent pointers.
+		// Type-checking sets these; the syntax-only path may not.
+		if (file.statements.length > 0 && file.statements[0].parent !== file) {
+			bindTsParents(file);
+		}
+
+		const { astMaps, estree } = astConverter(file, PARSE_SETTINGS, true);
+		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
+			? 'module'
+			: 'script';
+		const scopeManager = analyze(estree, {
+			sourceType: estree.sourceType,
+			childVisitorKeys: visitorKeys,
 		});
 		const sourceCode = new SourceCode({
 			text: file.text,
-			ast,
+			ast: estree,
 			scopeManager,
 			visitorKeys,
 			parserServices: {
-				...services,
+				...astMaps,
 				program: programProxy,
+				emitDecoratorMetadata: undefined,
+				experimentalDecorators: undefined,
+				isolatedDeclarations: undefined,
 				getSymbolAtLocation: (node: any) =>
-					programProxy.getTypeChecker().getSymbolAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+					programProxy.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
 				getTypeAtLocation: (node: any) =>
-					programProxy.getTypeChecker().getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node)),
+					programProxy.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
 			},
 		});
 		const eventQueue = sourceCode.traverse();
@@ -444,4 +472,11 @@ function getEstree(
 		sourceCode: cachedEstree[1],
 		eventQueue: cachedEstree[2],
 	};
+}
+
+function bindTsParents(node: ts.Node): void {
+	node.forEachChild(child => {
+		(child as { parent: ts.Node }).parent = node;
+		bindTsParents(child);
+	});
 }
