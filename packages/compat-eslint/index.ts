@@ -165,6 +165,18 @@ function runSharedTraversal(
 ) {
 	const { sourceCode, eventQueue } = getEstree(file, getProgram);
 	const emitter = makeRuleEmitter(errors);
+	// `cwd` mustn't depend on getProgram() — many rules (e.g.
+	// eslint-plugin-import-x's makeContextCacheKey) read it before any
+	// type-aware decision, so reaching for the program here would crash every
+	// rule in syntax-only mode. Probe once: program's directory if available,
+	// otherwise fall back to process.cwd().
+	let cwd: string;
+	try {
+		cwd = getProgram().getCurrentDirectory();
+	}
+	catch {
+		cwd = process.cwd();
+	}
 
 	let currentNode: any;
 
@@ -174,11 +186,9 @@ function runSharedTraversal(
 		// Lazy: rules that don't fire on this file pay no array allocation.
 		let myReports: DeferredReport[] | undefined;
 		const ruleListeners = eslintRule.create({
-			get cwd() {
-				return getProgram().getCurrentDirectory();
-			},
+			cwd,
 			getCwd() {
-				return getProgram().getCurrentDirectory();
+				return cwd;
 			},
 			filename: file.fileName,
 			getFilename() {
@@ -471,17 +481,21 @@ function getEstree(
 		const { analyze } = require('@typescript-eslint/scope-manager');
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
 
-		// Lazy proxy: only triggers TSSLint core's `ctx.program` getter (which
-		// throws "Not supported" in syntax-only mode) when a rule actually reads
-		// a property off it. The throw is the intended signal — core catches it,
-		// marks the rule type-aware, and retries the file with a real Program.
+		// Probe TSSLint core for an actual Program: in syntax-only mode the
+		// `program` getter throws "Not supported", in type-aware mode it returns
+		// the built Program. Hand rules whatever's available — undefined when
+		// types aren't, the real Program when they are. This matches what
+		// @typescript-eslint/parser exposes without `parserOptions.project`, so
+		// rules that probe `parserServices.program` truthiness (e.g.
+		// eslint-plugin-regexp's getTypeScriptTools) skip the type-aware path
+		// instead of tripping the throw and forcing a Program build.
 		let program: ts.Program | undefined;
-		const programProxy = new Proxy({} as ts.Program, {
-			get(_target, p, receiver) {
-				program ??= getProgram();
-				return Reflect.get(program, p, receiver);
-			},
-		});
+		try {
+			program = getProgram();
+		}
+		catch {
+			program = undefined;
+		}
 
 		// astConverter walks via ts.Node#getText, which needs parent pointers.
 		// Type-checking sets these; the syntax-only path may not.
@@ -502,17 +516,30 @@ function getEstree(
 			ast: estree,
 			scopeManager,
 			visitorKeys,
-			parserServices: {
-				...astMaps,
-				program: programProxy,
-				emitDecoratorMetadata: undefined,
-				experimentalDecorators: undefined,
-				isolatedDeclarations: undefined,
-				getSymbolAtLocation: (node: any) =>
-					programProxy.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-				getTypeAtLocation: (node: any) =>
-					programProxy.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-			},
+			parserServices: program
+				? {
+					...astMaps,
+					program,
+					hasFullTypeInformation: true,
+					emitDecoratorMetadata: undefined,
+					experimentalDecorators: undefined,
+					isolatedDeclarations: undefined,
+					getSymbolAtLocation: (node: any) =>
+						program!.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+					getTypeAtLocation: (node: any) =>
+						program!.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+				}
+				: {
+					// Syntax-only shape — match what @typescript-eslint/parser returns
+					// when `parserOptions.project` isn't set, so plugins fall back to
+					// their syntax-only paths instead of trying to call type-aware
+					// helpers that wouldn't exist.
+					...astMaps,
+					program: undefined,
+					emitDecoratorMetadata: undefined,
+					experimentalDecorators: undefined,
+					isolatedDeclarations: undefined,
+				},
 		});
 		const eventQueue = sourceCode.traverse();
 		cachedEstree = [file, sourceCode, eventQueue];
