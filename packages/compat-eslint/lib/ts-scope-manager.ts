@@ -390,7 +390,7 @@ export class TsScopeManager {
 			// `{ x }` shorthand: getSymbolAtLocation returns the property
 			// symbol; we want the binding `x` resolves to.
 			if (parent && pk === SK.ShorthandPropertyAssignment && (parent as ts.ShorthandPropertyAssignment).name === node) {
-				const valSym = checker.getShorthandAssignmentValueSymbol(parent as ts.ShorthandPropertyAssignment);
+				const valSym = checker.getShorthandAssignmentValueSymbol(parent);
 				if (valSym) sym = valSym;
 			}
 			if (sym && variableBySymbol.has(sym)) {
