@@ -1,3 +1,7 @@
+// Patch fs before anything else loads — resolver-heavy plugins (import-x in
+// particular) pound on statSync per file and benefit from in-process caching.
+require('./lib/fs-cache.js');
+
 import ts = require('typescript');
 import path = require('path');
 import cache = require('./lib/cache.js');
