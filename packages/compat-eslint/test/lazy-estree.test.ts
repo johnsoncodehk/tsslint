@@ -113,6 +113,13 @@ runFixture('TSAsExpression', 'let x = 1 as number;');
 runFixture('typeAnnotation simple', 'let x: number = 1;');
 runFixture('TSTypeReference simple', 'let x: Foo = 1;');
 
+// Batch 1: simple statements
+runFixture('expression statement', '"hello";');
+runFixture('expression statement numeric', '1;');
+runFixture('if (block)', 'if (1) { 2; }');
+runFixture('if/else', 'if (1) { 2; } else { 3; }');
+runFixture('nested if', 'if (1) { if (2) { 3; } }');
+
 // --- Lazy invariants ----------------------------------------------------
 
 // Property memoisation: reading a child slot twice returns the SAME instance

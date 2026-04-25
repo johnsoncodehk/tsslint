@@ -207,6 +207,10 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		case SK.TypeReference: return new TSTypeReferenceNode(child as ts.TypeReferenceNode, parent);
 		case SK.NumericLiteral: return new LiteralNode(child as ts.NumericLiteral, parent);
 		case SK.StringLiteral: return new LiteralNode(child as ts.StringLiteral, parent);
+		case SK.ExpressionStatement: return new ExpressionStatementNode(child as ts.ExpressionStatement, parent);
+		case SK.ReturnStatement: return new ReturnStatementNode(child as ts.ReturnStatement, parent);
+		case SK.Block: return new BlockStatementNode(child as ts.Block, parent);
+		case SK.IfStatement: return new IfStatementNode(child as ts.IfStatement, parent);
 		case SK.AnyKeyword: return new TypeKeywordNode('TSAnyKeyword', child, parent);
 		case SK.UnknownKeyword: return new TypeKeywordNode('TSUnknownKeyword', child, parent);
 		case SK.NumberKeyword: return new TypeKeywordNode('TSNumberKeyword', child, parent);
@@ -261,8 +265,43 @@ class ProgramNode extends LazyNode {
 	}
 
 	get body() {
-		return this._body ??= convertChildren((this._ts as ts.SourceFile).statements, this);
+		return this._body ??= convertBodyWithDirectives(
+			(this._ts as ts.SourceFile).statements,
+			this,
+		);
 	}
+}
+
+// Mirrors typescript-estree's `convertBodyExpressions`: leading
+// string-literal ExpressionStatements get a `directive` field. The check
+// stops at the first non-string-literal statement. Calling this forces
+// materialisation of the leading children (we need their `.expression.raw`
+// to set the directive); subsequent siblings stay lazy via convertChildren.
+function convertBodyWithDirectives(
+	statements: ReadonlyArray<ts.Statement>,
+	parent: LazyNode,
+): (LazyNode | null)[] {
+	const out: (LazyNode | null)[] = [];
+	let allowDirectives = true;
+	for (const stmt of statements) {
+		const child = convertChild(stmt, parent);
+		if (
+			allowDirectives
+			&& stmt.kind === SK.ExpressionStatement
+			&& (stmt as ts.ExpressionStatement).expression.kind === SK.StringLiteral
+			&& child
+		) {
+			const expr = (child as unknown as { expression: { raw?: string } | null }).expression;
+			if (expr?.raw) {
+				(child as unknown as { directive: string }).directive = expr.raw.slice(1, -1);
+			}
+			out.push(child);
+			continue;
+		}
+		allowDirectives = false;
+		out.push(child);
+	}
+	return out;
 }
 
 class IdentifierNode extends LazyNode {
@@ -388,6 +427,47 @@ class TypeKeywordNode extends LazyNode {
 	constructor(type: string, tsNode: ts.Node, parent: LazyNode) {
 		super(tsNode, parent);
 		this.type = type;
+	}
+}
+
+class ExpressionStatementNode extends LazyNode {
+	readonly type = 'ExpressionStatement' as const;
+	directive: string | undefined = undefined;
+	private _expression?: LazyNode | null;
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.ExpressionStatement).expression, this);
+	}
+}
+
+class ReturnStatementNode extends LazyNode {
+	readonly type = 'ReturnStatement' as const;
+	private _argument?: LazyNode | null;
+	get argument() {
+		return this._argument ??= convertChild((this._ts as ts.ReturnStatement).expression, this);
+	}
+}
+
+class BlockStatementNode extends LazyNode {
+	readonly type = 'BlockStatement' as const;
+	private _body?: (LazyNode | null)[];
+	get body() {
+		return this._body ??= convertChildren((this._ts as ts.Block).statements, this);
+	}
+}
+
+class IfStatementNode extends LazyNode {
+	readonly type = 'IfStatement' as const;
+	private _test?: LazyNode | null;
+	private _consequent?: LazyNode | null;
+	private _alternate?: LazyNode | null;
+	get test() {
+		return this._test ??= convertChild((this._ts as ts.IfStatement).expression, this);
+	}
+	get consequent() {
+		return this._consequent ??= convertChild((this._ts as ts.IfStatement).thenStatement, this);
+	}
+	get alternate() {
+		return this._alternate ??= convertChild((this._ts as ts.IfStatement).elseStatement, this);
 	}
 }
 
