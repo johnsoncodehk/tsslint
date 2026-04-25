@@ -18,6 +18,34 @@ type AstMaps = {
 	tsNodeToESTreeNodeMap: WeakMap<ts.Node, TSESTree.Node>;
 };
 
+// Lib globals that upstream's `analyze({ lib: ['esnext'] })` exposes as values
+// (i.e. `isValueVariable === true`) after resolving the lib chain. Most lib
+// names are type-only because later libs (e.g. `esnext.collection`) override
+// es5/es2015's TYPE_VALUE entries with TYPE. Captured empirically from a
+// minimal analyze() run; refresh if upstream's lib data changes.
+const LIB_VALUE_GLOBALS = new Set([
+	'AggregateError',
+	'AsyncDisposableStack',
+	'BigInt',
+	'Boolean',
+	'DisposableStack',
+	'EvalError',
+	'FinalizationRegistry',
+	'Float16Array',
+	'Intl',
+	'Iterator',
+	'Object',
+	'RangeError',
+	'ReferenceError',
+	'Reflect',
+	'SuppressedError',
+	'SyntaxError',
+	'Temporal',
+	'TypeError',
+	'URIError',
+	'WeakRef',
+]);
+
 // Scope kinds we tag. Names match upstream casing (e.g. 'tsEnum', 'tsModule').
 type ScopeType =
 	| 'global'
@@ -60,6 +88,7 @@ export class TsScopeManager {
 	currentScope: TsScope | null = null;
 
 	_variableBySymbol = new Map<ts.Symbol, TsVariable>();
+	_libVariableBySymbol = new Map<ts.Symbol, TsVariable>();
 	_syntheticArguments = new Map<TsScope, TsVariable>();
 	#refIndex?: Map<ts.Symbol, ts.Identifier[]>;
 	readonly checker: ts.TypeChecker;
@@ -224,6 +253,22 @@ export class TsScopeManager {
 		return v;
 	}
 
+	_collectBinding(binding: ts.BindingName | undefined, out: TsVariable[]) {
+		if (!binding) return;
+		const ts_ = this.ts;
+		if (ts_.isIdentifier(binding)) {
+			const sym = this.checker.getSymbolAtLocation(binding);
+			if (sym) out.push(this._getOrCreateVariable(sym));
+			return;
+		}
+		if (ts_.isObjectBindingPattern(binding) || ts_.isArrayBindingPattern(binding)) {
+			for (const el of binding.elements) {
+				if (ts_.isOmittedExpression(el)) continue;
+				this._collectBinding(el.name, out);
+			}
+		}
+	}
+
 	getDeclaredVariables(node: TSESTree.Node): TsVariable[] {
 		const tsNode = this.astMaps.esTreeNodeToTSNodeMap.get(node);
 		if (!tsNode) return [];
@@ -249,17 +294,35 @@ export class TsScopeManager {
 			|| ts_.isParameter(tsNode)
 			|| ts_.isFunctionDeclaration(tsNode)
 			|| ts_.isFunctionExpression(tsNode)
+			|| ts_.isArrowFunction(tsNode)
+			|| ts_.isMethodDeclaration(tsNode)
 			|| ts_.isClassDeclaration(tsNode)
 			|| ts_.isClassExpression(tsNode)
 			|| ts_.isImportSpecifier(tsNode)
 			|| ts_.isImportClause(tsNode)
 			|| ts_.isNamespaceImport(tsNode)
+			|| ts_.isImportEqualsDeclaration(tsNode)
 			|| ts_.isEnumDeclaration(tsNode)
 			|| ts_.isModuleDeclaration(tsNode)
 			|| ts_.isTypeAliasDeclaration(tsNode)
 			|| ts_.isInterfaceDeclaration(tsNode)
+			|| ts_.isCatchClause(tsNode)
 		) {
 			collect(tsNode);
+		}
+		// For function-like nodes, also return their parameters.
+		if (
+			ts_.isFunctionDeclaration(tsNode)
+			|| ts_.isFunctionExpression(tsNode)
+			|| ts_.isArrowFunction(tsNode)
+			|| ts_.isMethodDeclaration(tsNode)
+		) {
+			const fn = tsNode as ts.FunctionLikeDeclaration;
+			if (fn.parameters) {
+				for (const p of fn.parameters) {
+					this._collectBinding(p.name, out);
+				}
+			}
 		}
 		return out;
 	}
@@ -306,16 +369,54 @@ export class TsScopeManager {
 		const ts_ = this.ts;
 		const walk = (node: ts.Node) => {
 			if (ts_.isIdentifier(node)) {
-				const sym = this.checker.getSymbolAtLocation(node);
-				if (sym && this._variableBySymbol.has(sym)) {
-					// Resolved reference — add to per-symbol index.
-					let arr = refs.get(sym);
-					if (!arr) refs.set(sym, arr = []);
-					arr.push(node);
+				let sym = this.checker.getSymbolAtLocation(node);
+				// `{ x }` shorthand: getSymbolAtLocation returns the property
+				// symbol; we want the binding `x` resolves to.
+				if (node.parent && ts_.isShorthandPropertyAssignment(node.parent) && node.parent.name === node) {
+					const valSym = this.checker.getShorthandAssignmentValueSymbol(node.parent);
+					if (valSym) sym = valSym;
 				}
-				else if (this._isFreeReference(node) && this._isValueReferencePosition(node)) {
-					// Unresolved free value reference — escapes the file
-					// (no-undef territory).
+				if (sym && this._variableBySymbol.has(sym)) {
+					// Resolved reference — add to per-symbol index. Skip
+					// pure-declaration positions (parameters, function/class
+					// names, etc.); those don't create a Reference in ESLint's
+					// model. VariableDeclaration WITH initializer is a special
+					// case: ESLint counts it as an init Reference.
+					if (this._isReferenceableUsage(node)) {
+						let arr = refs.get(sym);
+						if (!arr) refs.set(sym, arr = []);
+						arr.push(node);
+					}
+				}
+				else if (sym && this._isLibGlobalSymbol(sym)) {
+					const isValue = LIB_VALUE_GLOBALS.has(sym.name);
+					const inTypePosition = !this._isValueReferencePosition(node);
+					if (inTypePosition || isValue) {
+						// Resolves: type refs to any lib global, or value refs to
+						// the value-resolvable subset (Object, Function, ...).
+						// Track in a separate map so future *value* refs to the
+						// same symbol still get the type/value check.
+						let v = this._libVariableBySymbol.get(sym);
+						if (!v) {
+							v = new TsVariable(this, sym);
+							this._libVariableBySymbol.set(sym, v);
+							this.globalScope._addLibVariable(v);
+						}
+						let arr = refs.get(sym);
+						if (!arr) refs.set(sym, arr = []);
+						arr.push(node);
+					}
+					else if (this._isFreeReference(node)) {
+						// Value ref to a type-only lib global (e.g. Set, Map,
+						// Iterable in expression position) — upstream treats as
+						// undefined. Match.
+						through.push(new TsReference(this, node, sym));
+					}
+				}
+				else if (this._isFreeReference(node)) {
+					// Unresolved free reference — escapes the file. Upstream
+					// puts both type and value references in `through`; the
+					// rule (e.g. no-undef) decides what to do with each.
 					through.push(new TsReference(this, node, sym!));
 				}
 			}
@@ -378,10 +479,98 @@ export class TsScopeManager {
 		if (ts_.isImportSpecifier(p) && p.name === id) return false;
 		if (ts_.isImportEqualsDeclaration(p) && p.name === id) return false;
 		if (ts_.isExportSpecifier(p) && (p.name === id || p.propertyName === id)) return false;
-		// Binding element names (already handled by the var/param decl chain)
-		if (ts_.isBindingElement(p) && p.name === id) return false;
+		// Binding element name + propertyName (renamed destructuring)
+		if (ts_.isBindingElement(p) && (p.name === id || p.propertyName === id)) return false;
+		// TS labeled tuple member: `[label: T, ...rest: U[]]` — the `label`
+		// identifier is just a syntactic tag, not a binding/reference.
+		if (ts_.isNamedTupleMember(p) && p.name === id) return false;
+		// `expr as const` — `const` is a syntactic marker for a const assertion,
+		// not a real reference. Upstream defines an implicit global for it; we
+		// just skip it.
+		if (
+			id.text === 'const'
+			&& p
+			&& ts_.isTypeReferenceNode(p)
+			&& p.typeName === id
+			&& p.parent
+			&& (ts_.isAsExpression(p.parent) || ts_.isTypeAssertionExpression(p.parent))
+			&& p.parent.type === p
+		) return false;
 		// JSX attribute names
 		if (ts_.isJsxAttribute(p) && p.name === id) return false;
+		return true;
+	}
+
+	// Should this identifier produce a Reference in ESLint's model? True for
+	// usages and for VariableDeclaration-with-initializer (which counts as an
+	// init Reference). False for "pure declarations" — Parameter, function /
+	// class / interface / enum / module / type names, import bindings — those
+	// produce a Definition only.
+	_isReferenceableUsage(id: ts.Identifier): boolean {
+		const ts_ = this.ts;
+		const p = id.parent;
+		if (!p) return true;
+		if (ts_.isVariableDeclaration(p) && p.name === id) {
+			// `let x = expr` → init reference. `let x;` → no reference.
+			// `for (const x of y)` / `for (const x in y)` → counts too (the
+			// loop binding receives a value).
+			if (p.initializer !== undefined) return true;
+			const list = p.parent;
+			if (list && ts_.isVariableDeclarationList(list)) {
+				const stmt = list.parent;
+				if (stmt && (ts_.isForOfStatement(stmt) || ts_.isForInStatement(stmt))) return true;
+			}
+			return false;
+		}
+		if (ts_.isParameter(p) && p.name === id) return false;
+		if (ts_.isBindingElement(p) && (p.name === id || p.propertyName === id)) {
+			// Destructured names: count as a reference if the enclosing
+			// VariableDeclaration has an initializer OR is the binding side of
+			// a for-of / for-in (the iteration provides the value).
+			for (let cur: ts.Node | undefined = p; cur; cur = cur.parent) {
+				if (ts_.isVariableDeclaration(cur)) {
+					if (cur.initializer !== undefined) return true;
+					const list = cur.parent;
+					if (list && ts_.isVariableDeclarationList(list)) {
+						const stmt = list.parent;
+						if (stmt && (ts_.isForOfStatement(stmt) || ts_.isForInStatement(stmt))) return true;
+					}
+					return false;
+				}
+				if (ts_.isParameter(cur)) return false;
+			}
+			return false;
+		}
+		if (ts_.isFunctionDeclaration(p) && p.name === id) return false;
+		if (ts_.isFunctionExpression(p) && p.name === id) return false;
+		if (ts_.isClassDeclaration(p) && p.name === id) return false;
+		if (ts_.isClassExpression(p) && p.name === id) return false;
+		if (ts_.isEnumDeclaration(p) && p.name === id) return false;
+		if (ts_.isEnumMember(p) && p.name === id) return false;
+		if (ts_.isModuleDeclaration(p) && p.name === id) return false;
+		if (ts_.isInterfaceDeclaration(p) && p.name === id) return false;
+		if (ts_.isTypeAliasDeclaration(p) && p.name === id) return false;
+		if (ts_.isTypeParameterDeclaration(p) && p.name === id) return false;
+		if (ts_.isImportClause(p) && p.name === id) return false;
+		if (ts_.isNamespaceImport(p) && p.name === id) return false;
+		if (ts_.isImportSpecifier(p) && (p.name === id || p.propertyName === id)) return false;
+		if (ts_.isImportEqualsDeclaration(p) && p.name === id) return false;
+		if (ts_.isExportSpecifier(p) && (p.name === id || p.propertyName === id)) return false;
+		if (ts_.isNamedTupleMember(p) && p.name === id) return false;
+		// Property/Method names — not free references.
+		if (ts_.isPropertyAccessExpression(p) && p.name === id) return false;
+		if (ts_.isQualifiedName(p) && p.right === id) return false;
+		if (ts_.isPropertyDeclaration(p) && p.name === id) return false;
+		if (ts_.isPropertySignature(p) && p.name === id) return false;
+		if (ts_.isPropertyAssignment(p) && p.name === id) return false;
+		if (ts_.isMethodDeclaration(p) && p.name === id) return false;
+		if (ts_.isMethodSignature(p) && p.name === id) return false;
+		if (ts_.isGetAccessorDeclaration(p) && p.name === id) return false;
+		if (ts_.isSetAccessorDeclaration(p) && p.name === id) return false;
+		if (ts_.isJsxAttribute(p) && p.name === id) return false;
+		// Labels
+		if (ts_.isLabeledStatement(p) && p.label === id) return false;
+		if ((ts_.isBreakStatement(p) || ts_.isContinueStatement(p)) && p.label === id) return false;
 		return true;
 	}
 
@@ -393,6 +582,20 @@ export class TsScopeManager {
 		for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
 			if (ts_.isTypeNode(cur)) return false;
 			if (ts_.isExpression(cur) || ts_.isStatement(cur)) return true;
+		}
+		return true;
+	}
+
+	// True if this symbol is declared exclusively in a TS default library
+	// (`lib.es*.d.ts`). The caller decides whether the reference resolves —
+	// type-position refs always do; value-position refs only do for the names
+	// upstream marks as `isValueVariable: true` (LIB_VALUE_GLOBALS).
+	_isLibGlobalSymbol(sym: ts.Symbol): boolean {
+		const decls = sym.declarations;
+		if (!decls || decls.length === 0) return false;
+		for (const d of decls) {
+			const sf = d.getSourceFile();
+			if (!this.program.isSourceFileDefaultLibrary(sf)) return false;
 		}
 		return true;
 	}
@@ -448,14 +651,31 @@ export class TsScope {
 		return this.#variables;
 	}
 
+	// Inject a synthesized lib global (Object, Array, etc.) discovered during
+	// reference-index walk. Only globalScope receives these.
+	_addLibVariable(v: TsVariable) {
+		void this.variables; // ensure populated
+		if (!this.#variables!.includes(v)) {
+			this.#variables!.push(v);
+			this.#set?.set(v.name, v);
+		}
+	}
+
 	_collectVariables(): TsVariable[] {
 		const ts_ = this.manager.ts;
 		const SK = ts_.SyntaxKind;
 		const out: TsVariable[] = [];
 		const seen = new Set<ts.Symbol>();
+		const seenNames = new Set<string>();
 		const push = (sym: ts.Symbol | undefined) => {
 			if (!sym || seen.has(sym)) return;
 			seen.add(sym);
+			// Dedupe by name too: TS sometimes produces multiple symbols for the
+			// same lexical binding (e.g. parameter properties have one symbol
+			// for the parameter and another for the synthesized class member).
+			// ESLint expects one Variable per name in a scope.
+			if (seenNames.has(sym.name)) return;
+			seenNames.add(sym.name);
 			out.push(this.manager._getOrCreateVariable(sym));
 		};
 		const symOf = (decl: ts.Node | undefined): ts.Symbol | undefined => {
@@ -519,11 +739,14 @@ export class TsScope {
 						seen.add(argsVar.symbol);
 					}
 				}
-				// Var-hoisted declarations + function decls inside the body live
-				// in this scope (TS puts these in `node.locals`).
-				const locals = (fn as { locals?: ts.SymbolTable }).locals;
-				if (locals) {
-					locals.forEach(sym => push(sym));
+				// Var-hoisted decls live in `fn.locals`; let/const/function in
+				// the body live in `body.locals`. ESLint collapses both into
+				// the function scope.
+				const fnLocals = (fn as { locals?: ts.SymbolTable }).locals;
+				if (fnLocals) fnLocals.forEach(sym => push(sym));
+				if (fn.body && ts_.isBlock(fn.body)) {
+					const bodyLocals = (fn.body as { locals?: ts.SymbolTable }).locals;
+					if (bodyLocals) bodyLocals.forEach(sym => push(sym));
 				}
 				break;
 			}
@@ -587,12 +810,30 @@ export class TsScope {
 				break;
 			}
 			case 'type':
-			case 'function-type':
-			case 'mapped-type':
 			case 'conditional-type': {
 				const tps = (this.tsNode as { typeParameters?: ts.NodeArray<ts.TypeParameterDeclaration> }).typeParameters;
 				if (tps) {
 					for (const tp of tps) push(symOf(tp));
+				}
+				break;
+			}
+			case 'mapped-type': {
+				// Mapped types use a single `typeParameter` (not the plural array).
+				const tp = (this.tsNode as ts.MappedTypeNode).typeParameter;
+				if (tp) push(symOf(tp));
+				break;
+			}
+			case 'function-type': {
+				// Function type signatures (FunctionType, MethodSignature, etc.):
+				// type params + parameter names are scoped here. Upstream's
+				// no-unused-vars treats their parameter names as variables.
+				const tps = (this.tsNode as { typeParameters?: ts.NodeArray<ts.TypeParameterDeclaration> }).typeParameters;
+				if (tps) {
+					for (const tp of tps) push(symOf(tp));
+				}
+				const params = (this.tsNode as { parameters?: ts.NodeArray<ts.ParameterDeclaration> }).parameters;
+				if (params) {
+					for (const p of params) pushBinding(p.name);
 				}
 				break;
 			}
@@ -897,8 +1138,14 @@ export class TsReference {
 		if (!this.isWrite()) return true;
 		const parent = this.tsIdentifier.parent;
 		const ts_ = this.manager.ts;
+		// Compound assignments (`+=`, `-=`, etc.) read+write.
 		if (parent && ts_.isBinaryExpression(parent) && parent.left === this.tsIdentifier) {
 			return parent.operatorToken.kind !== ts_.SyntaxKind.EqualsToken;
+		}
+		// `x++` / `++x` / `x--` / `--x` read+write.
+		if (parent && (ts_.isPrefixUnaryExpression(parent) || ts_.isPostfixUnaryExpression(parent))) {
+			const op = parent.operator;
+			return op === ts_.SyntaxKind.PlusPlusToken || op === ts_.SyntaxKind.MinusMinusToken;
 		}
 		return false;
 	}
@@ -970,6 +1217,10 @@ export class TsDefinition {
 				|| ts_.isObjectBindingPattern(target)
 				|| ts_.isArrayBindingPattern(target))
 		) {
+			target = target.parent;
+		}
+		// Parameter: ESLint expects `node` to be the enclosing function-like.
+		if (target && ts_.isParameter(target) && target.parent) {
 			target = target.parent;
 		}
 		// Catch param: TS models as VariableDeclaration under CatchClause; ESLint
