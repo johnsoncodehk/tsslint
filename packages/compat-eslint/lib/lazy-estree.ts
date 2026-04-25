@@ -1382,6 +1382,7 @@ class BindingElementNode extends LazyNode {
 	readonly method = false;
 	readonly optional = false;
 	readonly shorthand: boolean;
+	readonly decorators: never[] = [];
 	private _key?: LazyNode | null;
 	private _value?: LazyNode | null;
 	private _argument?: LazyNode | null;
@@ -1397,8 +1398,11 @@ class BindingElementNode extends LazyNode {
 		const t = this._ts as ts.BindingElement;
 		return this._key = convertChild(t.propertyName ?? t.name, this);
 	}
+	// `value` only exists on the Property variant (RestElement has none).
+	// eager line 1015 sets value to convertPattern of the binding name.
 	get value() {
-		return this._value ??= convertChild((this._ts as ts.BindingElement).name, this);
+		if (this.type !== 'Property') return undefined;
+		return this._value ??= convertChildAsPattern((this._ts as ts.BindingElement).name, this);
 	}
 	get argument() {
 		return this._argument ??= convertChild((this._ts as ts.BindingElement).name, this);
