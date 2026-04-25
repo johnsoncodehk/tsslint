@@ -218,6 +218,47 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	return node;
 }
 
+// Kinds whose top-level form (`export function f` etc.) gets wrapped in
+// ExportNamedDeclaration / ExportDefaultDeclaration via fixExports.
+const EXPORTABLE_KINDS = new Set<ts.SyntaxKind>([
+	SK.FunctionDeclaration,
+	SK.VariableStatement,
+	SK.ClassDeclaration,
+	SK.InterfaceDeclaration,
+	SK.TypeAliasDeclaration,
+	SK.EnumDeclaration,
+	SK.ModuleDeclaration,
+	SK.ImportEqualsDeclaration,
+]);
+
+// typescript-estree's fixExports (line 2334): if an exportable declaration
+// carries an `export` keyword, wrap the result in
+// ExportNamedDeclaration / ExportDefaultDeclaration and shrink the inner
+// declaration's range so it starts AFTER the keyword.
+function maybeFixExports(tsNode: ts.Node, inner: LazyNode, parent: LazyNode): LazyNode {
+	const modifiers = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
+	if (!modifiers?.length || modifiers[0].kind !== SK.ExportKeyword) return inner;
+	const exportKeyword = modifiers[0];
+	const next = modifiers[1];
+	const isDefault = next?.kind === SK.DefaultKeyword;
+
+	// Adjust inner's range to start after `export` (or `export default`).
+	const declStart = (isDefault ? next : exportKeyword).getEnd();
+	let cursor = declStart;
+	const text = parent._ctx.ast.text;
+	while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
+	(inner as unknown as { range: [number, number]; loc: ReturnType<typeof getLocFor> })
+		.range = [cursor, inner.range[1]];
+	(inner as unknown as { loc: ReturnType<typeof getLocFor> })
+		.loc = getLocFor(parent._ctx.ast, cursor, inner.range[1]);
+
+	const wrapperRange: [number, number] = [exportKeyword.getStart(parent._ctx.ast), inner.range[1]];
+	if (isDefault) {
+		return new ExportDefaultWrappingNode(tsNode, parent, inner, wrapperRange);
+	}
+	return new ExportNamedWrappingNode(tsNode, parent, inner, wrapperRange);
+}
+
 // Dispatch: TS SyntaxKind → lazy ESTree class. Returns null for null/undefined
 // (matching typescript-estree's `converter()` early-exit on falsy input).
 // Cached: if the same TS node has been converted before (e.g. via a parent's
@@ -226,6 +267,14 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 	if (!child) return null;
 	const cached = parent._ctx.maps.tsNodeToESTreeNodeMap.get(child);
 	if (cached) return cached as LazyNode;
+	const inner = convertChildInner(child, parent);
+	if (inner && EXPORTABLE_KINDS.has(child.kind)) {
+		return maybeFixExports(child, inner, parent);
+	}
+	return inner;
+}
+
+function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 	switch (child.kind) {
 		case SK.SourceFile: return new ProgramNode(child as ts.SourceFile, parent);
 		case SK.Identifier: return new IdentifierNode(child as ts.Identifier, parent);
@@ -325,7 +374,15 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 		case SK.YieldExpression: return new YieldExpressionNode(child as ts.YieldExpression, parent);
 		case SK.ClassDeclaration: return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
 		case SK.ClassExpression: return new ClassNode('ClassExpression', child as ts.ClassExpression, parent);
-		case SK.MethodDeclaration: return new MethodDefinitionNode(child as ts.MethodDeclaration, parent);
+		case SK.MethodDeclaration: {
+			// In an ObjectLiteralExpression, a MethodDeclaration becomes a
+			// Property with `method: true` and a FunctionExpression value
+			// (eager line 845). In a class body, it stays a MethodDefinition.
+			if (parent._ts.kind === SK.ObjectLiteralExpression) {
+				return new ObjectMethodPropertyNode(child as ts.MethodDeclaration, parent);
+			}
+			return new MethodDefinitionNode(child as ts.MethodDeclaration, parent);
+		}
 		case SK.PropertyDeclaration: return new PropertyDefinitionNode(child as ts.PropertyDeclaration, parent);
 		case SK.Constructor: return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
 		case SK.GetAccessor: return new MethodDefinitionNode(child as ts.GetAccessorDeclaration, parent);
@@ -392,6 +449,35 @@ function convertTypeAnnotation(child: ts.Node, parent: LazyNode): TSTypeAnnotati
 	const start = child.getFullStart() - offset;
 	const end = child.getEnd();
 	return new TSTypeAnnotationNode(child, parent, [start, end]);
+}
+
+// Wrap typeArguments (e.g. `<number, string>`) in TSTypeParameterInstantiation
+// matching typescript-estree's `convertTypeArguments` (line 264). Range
+// extends one char before the first type to cover the `<`.
+function convertTypeArguments(typeArgs: ts.NodeArray<ts.TypeNode> | undefined, parent: LazyNode): TSTypeParameterInstantiationNode | undefined {
+	if (!typeArgs || typeArgs.length === 0) return undefined;
+	return new TSTypeParameterInstantiationNode(typeArgs, parent);
+}
+
+class TSTypeParameterInstantiationNode extends LazyNode {
+	readonly type = 'TSTypeParameterInstantiation' as const;
+	private _params?: (LazyNode | null)[];
+	private _typeArgs: ts.NodeArray<ts.TypeNode>;
+	constructor(typeArgs: ts.NodeArray<ts.TypeNode>, parent: LazyNode) {
+		// Synthetic — no single TS node, range covers the whole `<...>`.
+		// Use the first type node's parent (the actual host) as the
+		// underlying TS reference so cycles aren't introduced.
+		const host = typeArgs[0].parent;
+		super(host, parent, undefined, false);
+		this._typeArgs = typeArgs;
+		const start = typeArgs.pos - 1; // one before first type to cover `<`
+		const end = typeArgs.end + 1;   // one after last type to cover `>`
+		this.range = [start, end];
+		this.loc = getLocFor(this._ctx.ast, start, end);
+	}
+	get params() {
+		return this._params ??= this._typeArgs.map(t => convertChild(t, this));
+	}
 }
 
 // --- Per-kind classes ---------------------------------------------------
@@ -532,7 +618,7 @@ class TSAsExpressionNode extends LazyNode {
 class TSTypeReferenceNode extends LazyNode {
 	readonly type = 'TSTypeReference' as const;
 	private _typeName?: LazyNode | null;
-	private _typeArguments?: LazyNode | null;
+	private _typeArguments?: LazyNode | undefined;
 
 	get typeName() {
 		return this._typeName ??= convertChild((this._ts as ts.TypeReferenceNode).typeName, this);
@@ -540,11 +626,7 @@ class TSTypeReferenceNode extends LazyNode {
 
 	get typeArguments() {
 		if (this._typeArguments !== undefined) return this._typeArguments;
-		// typescript-estree wraps node.typeArguments in a TSTypeParameterInstantiation
-		// node. MVP elides this — return undefined when absent. Add a wrapper class
-		// when a rule actually needs it.
-		const args = (this._ts as ts.TypeReferenceNode).typeArguments;
-		return this._typeArguments = args ? null : null;
+		return this._typeArguments = convertTypeArguments((this._ts as ts.TypeReferenceNode).typeArguments, this);
 	}
 }
 
@@ -833,6 +915,30 @@ class ClassBodyNode extends LazyNode {
 		if (this._body) return this._body;
 		const members = (this._ts as ts.ClassDeclaration).members.filter(m => m.kind !== SK.SemicolonClassElement);
 		return this._body = convertChildren(members, this);
+	}
+}
+
+// Object-literal method shorthand: `{ foo() {} }` becomes Property with
+// `method: true` and a FunctionExpression value (mirrors eager line 845).
+class ObjectMethodPropertyNode extends LazyNode {
+	readonly type = 'Property' as const;
+	readonly kind: 'init' = 'init';
+	readonly method = true;
+	readonly shorthand = false;
+	readonly computed: boolean;
+	readonly optional: boolean;
+	private _key?: LazyNode | null;
+	private _value?: FunctionExpressionNode;
+	constructor(tsNode: ts.MethodDeclaration, parent: LazyNode) {
+		super(tsNode, parent);
+		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
+		this.optional = !!tsNode.questionToken;
+	}
+	get key() {
+		return this._key ??= convertChild((this._ts as ts.MethodDeclaration).name, this);
+	}
+	get value() {
+		return this._value ??= new FunctionExpressionNode(this._ts as unknown as ts.FunctionExpression, this);
 	}
 }
 
@@ -1628,15 +1734,19 @@ class ConditionalExpressionNode extends LazyNode {
 
 class NewExpressionNode extends LazyNode {
 	readonly type = 'NewExpression' as const;
-	readonly typeArguments = undefined;
 	readonly typeParameters = undefined;
 	private _callee?: LazyNode | null;
 	private _arguments?: (LazyNode | null)[];
+	private _typeArguments?: LazyNode | undefined;
 	get callee() {
 		return this._callee ??= convertChild((this._ts as ts.NewExpression).expression, this);
 	}
 	get arguments() {
 		return this._arguments ??= convertChildren((this._ts as ts.NewExpression).arguments ?? [], this);
+	}
+	get typeArguments() {
+		if (this._typeArguments !== undefined) return this._typeArguments;
+		return this._typeArguments = convertTypeArguments((this._ts as ts.NewExpression).typeArguments, this);
 	}
 }
 
@@ -1759,6 +1869,47 @@ function convertExportAssignment(tsNode: ts.ExportAssignment, parent: LazyNode):
 		return new TSExportAssignmentNode(tsNode, parent);
 	}
 	return new ExportDefaultDeclarationNode(tsNode, parent);
+}
+
+// Wrapper variants used by maybeFixExports. They have an explicit
+// pre-built `declaration` field (the inner declaration) rather than
+// re-converting from a TS node.
+class ExportNamedWrappingNode extends LazyNode {
+	readonly type = 'ExportNamedDeclaration' as const;
+	readonly attributes: never[] = [];
+	readonly assertions: never[] = [];
+	readonly source = null;
+	readonly specifiers: never[] = [];
+	readonly exportKind: 'value' | 'type';
+	readonly declaration: LazyNode;
+	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
+		super(tsNode, parent, undefined, false);
+		this.range = range;
+		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
+		// Inner gets re-pointed to us in the maps (eager registers the
+		// wrapper as the canonical mapping for the original TS node).
+		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
+		this._ctx.maps.esTreeNodeToTSNodeMap.set(this, tsNode);
+		this.declaration = declaration;
+		const isType = declaration.type === 'TSInterfaceDeclaration'
+			|| declaration.type === 'TSTypeAliasDeclaration';
+		const isDeclare = !!(declaration as unknown as { declare?: boolean }).declare;
+		this.exportKind = isType || isDeclare ? 'type' : 'value';
+	}
+}
+
+class ExportDefaultWrappingNode extends LazyNode {
+	readonly type = 'ExportDefaultDeclaration' as const;
+	readonly exportKind: 'value' = 'value';
+	readonly declaration: LazyNode;
+	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
+		super(tsNode, parent, undefined, false);
+		this.range = range;
+		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
+		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
+		this._ctx.maps.esTreeNodeToTSNodeMap.set(this, tsNode);
+		this.declaration = declaration;
+	}
 }
 
 class ExportNamedDeclarationNode extends LazyNode {
@@ -2422,10 +2573,10 @@ class MemberExpressionNode extends LazyNode {
 class CallExpressionNode extends LazyNode {
 	readonly type = 'CallExpression' as const;
 	readonly optional: boolean;
-	readonly typeArguments = undefined;
 	readonly typeParameters = undefined;
 	private _callee?: LazyNode | null;
 	private _arguments?: (LazyNode | null)[];
+	private _typeArguments?: LazyNode | undefined;
 
 	constructor(tsNode: ts.CallExpression, parent: LazyNode) {
 		super(tsNode, parent);
@@ -2438,6 +2589,11 @@ class CallExpressionNode extends LazyNode {
 
 	get arguments() {
 		return this._arguments ??= convertChildren((this._ts as ts.CallExpression).arguments, this);
+	}
+
+	get typeArguments() {
+		if (this._typeArguments !== undefined) return this._typeArguments;
+		return this._typeArguments = convertTypeArguments((this._ts as ts.CallExpression).typeArguments, this);
 	}
 }
 

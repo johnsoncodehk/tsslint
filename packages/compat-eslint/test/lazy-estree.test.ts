@@ -722,7 +722,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		};
 		walk(estree);
 	};
-	const failed: { file: string; msg: string }[] = [];
+	const walked: { file: string; msg: string }[] = [];
 	let passed = 0;
 	for (const rel of targets) {
 		const realFile = path.resolve(packagesRoot, rel);
@@ -734,20 +734,53 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 			passed++;
 		}
 		catch (err) {
-			failed.push({ file: rel, msg: (err as Error).message.split('\n')[0] });
+			walked.push({ file: rel, msg: (err as Error).message.split('\n')[0] });
 		}
 	}
 	check(
-		`real-source: ${passed}/${targets.length} TS files under packages/ walk cleanly`,
-		failed.length === 0,
-		failed.length ? `first failure: ${failed[0].file} → ${failed[0].msg}` : '',
+		`real-source walk: ${passed}/${targets.length} TS files under packages/`,
+		walked.length === 0,
+		walked.length ? `first failure: ${walked[0].file} → ${walked[0].msg}` : '',
 	);
-	if (failed.length) {
-		// Show distinct error messages so we know what to add next, not
-		// per-file (one missing kind tends to fail many files).
-		const distinct = new Set(failed.map(f => f.msg));
-		console.log(`  info  - ${distinct.size} distinct failure(s):`);
-		for (const m of distinct) console.log(`    - ${m}`);
+
+	// Full structural parity sweep: for each file, compare lazy output to
+	// eager byte-for-byte (type / range / primitive fields / child shapes).
+	// Reports per-file diff count; files that walk cleanly but diverge in
+	// shape get caught here.
+	const parityResults: { file: string; diffs: string[] }[] = [];
+	for (const rel of targets) {
+		const realFile = path.resolve(packagesRoot, rel);
+		const source = fs.readFileSync(realFile, 'utf8');
+		const sf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		const beforeFails = failures.length;
+		try {
+			const { estree: lazyEstree } = lazy.convertLazy(sf);
+			const eagerSf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+			const eagerEstree = eagerConvert(eagerSf);
+			compare(lazyEstree, eagerEstree, `parity:${rel}`);
+		}
+		catch {
+			// Already counted in walk failure above.
+		}
+		const newFails = failures.slice(beforeFails);
+		if (newFails.length) {
+			parityResults.push({ file: rel, diffs: newFails.slice(0, 3) });
+			// Pop out of the `failures` list so we report per-file rather
+			// than per-diff (avoids 1000+ lines of output).
+			failures.length = beforeFails;
+		}
+	}
+	check(
+		`real-source parity: ${targets.length - parityResults.length}/${targets.length} files match eager byte-for-byte`,
+		parityResults.length === 0,
+		parityResults.length ? `${parityResults.length} files diverge` : '',
+	);
+	if (parityResults.length) {
+		console.log(`  info  - parity divergences (showing first 5 files, first 3 diffs each):`);
+		for (const p of parityResults.slice(0, 5)) {
+			console.log(`    [${p.file}]`);
+			for (const d of p.diffs) console.log(`      - ${d}`);
+		}
 	}
 }
 
