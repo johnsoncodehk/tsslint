@@ -329,7 +329,15 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.IndexedAccessType: return new TSIndexedAccessTypeNode(child as ts.IndexedAccessTypeNode, parent);
 		case SK.LiteralType: return convertLiteralType(child as ts.LiteralTypeNode, parent);
 		case SK.ParenthesizedType: return convertChild((child as ts.ParenthesizedTypeNode).type, parent);
-		case SK.ImportType: return new TSImportTypeNode(child as ts.ImportTypeNode, parent);
+		case SK.ImportType: {
+			// `typeof import('x')` — when isTypeOf, wrap in TSTypeQuery.
+			const it = child as ts.ImportTypeNode;
+			const inner = new TSImportTypeNode(it, parent);
+			if (it.isTypeOf) {
+				return new TSTypeQueryWrappingNode(it, parent, inner);
+			}
+			return inner;
+		}
 		case SK.QualifiedName: return new TSQualifiedNameNode(child as ts.QualifiedName, parent);
 		case SK.CallSignature: return new TSCallishSignatureNode('TSCallSignatureDeclaration', child as ts.CallSignatureDeclaration, parent);
 		case SK.ConstructSignature: return new TSCallishSignatureNode('TSConstructSignatureDeclaration', child as ts.ConstructSignatureDeclaration, parent);
@@ -874,6 +882,23 @@ class TSLiteralTypeNode extends LazyNode {
 	private _literal?: LazyNode | null;
 	get literal() {
 		return this._literal ??= convertChild((this._ts as ts.LiteralTypeNode).literal, this);
+	}
+}
+
+// `typeof import('x')` produces a TSTypeQuery whose exprName is a
+// TSImportType. The wrapper takes the same TS node identity (matching
+// eager line 1962).
+class TSTypeQueryWrappingNode extends LazyNode {
+	readonly type = 'TSTypeQuery' as const;
+	readonly typeArguments = undefined;
+	readonly exprName: LazyNode;
+	constructor(tsNode: ts.ImportTypeNode, parent: LazyNode, exprName: LazyNode) {
+		super(tsNode, parent, undefined, false);
+		// Re-point the TS node map to the outer wrapper.
+		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
+		this._ctx.maps.esTreeNodeToTSNodeMap.set(this, tsNode);
+		(exprName as { parent: LazyNode }).parent = this;
+		this.exprName = exprName;
 	}
 }
 
