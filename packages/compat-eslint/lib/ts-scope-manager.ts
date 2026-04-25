@@ -388,7 +388,15 @@ export class TsScopeManager {
 	// Adds synthesized variables to globalScope and resolves matching through
 	// references against them. Used by ESLint configs that declare globals.
 	addGlobals(names: string[]) {
+		// Skip names that already exist as declared globals — upstream's
+		// addGlobals is a no-op for already-known names (test name:
+		// "doesn't affect already declared global variables").
+		const existingNames = new Set<string>();
+		for (const v of this.globalScope.variables) {
+			existingNames.add(v.name);
+		}
 		for (const name of names) {
+			if (existingNames.has(name)) continue;
 			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
 			const v = new TsVariable(this, fakeSym);
 			this._variableBySymbol.set(fakeSym, v);
