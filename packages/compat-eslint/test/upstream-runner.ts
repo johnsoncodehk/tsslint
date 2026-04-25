@@ -21,7 +21,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 const Module = require('module') as typeof import('module');
 
-const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
+// Use the same patched converter as production (`compat-eslint/index.ts`) so
+// these tests cover the real code path, not a parallel one.
+const { astConvertSkipTypes: astConverter } = require('../lib/skip-type-converter.js') as { astConvertSkipTypes: any; };
 const { TsScopeManager } = require('../lib/ts-scope-manager.js') as typeof import('../lib/ts-scope-manager.js');
 
 const PARSE_SETTINGS = {
