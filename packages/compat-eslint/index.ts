@@ -4,11 +4,25 @@ import type * as ts from 'typescript';
 
 import path = require('path');
 
-// ESLint internals — these reach into lib/ paths and may break on major ESLint upgrades.
-const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
-const SourceCode = require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js'));
-const NodeEventGenerator = require(path.join(eslintRoot, 'lib/linter/node-event-generator.js'));
-const Traverser = require(path.join(eslintRoot, 'lib/shared/traverser.js'));
+// ESLint internals — these reach into lib/ paths and may break on major ESLint
+// upgrades. Resolved on first use so warm runs that hit TSSLint's per-rule
+// cache for every file never have to load them.
+let eslintInternals: {
+	SourceCode: typeof ESLint.SourceCode;
+	NodeEventGenerator: any;
+	Traverser: { getKeys(node: object): string[] };
+} | undefined;
+function loadEslintInternals() {
+	if (!eslintInternals) {
+		const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
+		eslintInternals = {
+			SourceCode: require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js')),
+			NodeEventGenerator: require(path.join(eslintRoot, 'lib/linter/node-event-generator.js')),
+			Traverser: require(path.join(eslintRoot, 'lib/shared/traverser.js')),
+		};
+	}
+	return eslintInternals;
+}
 
 interface RuleEntry {
 	id: string;
@@ -304,6 +318,7 @@ function runSharedTraversal(
 	}
 	emitter.setCurrentRule(undefined);
 
+	const { NodeEventGenerator, Traverser } = loadEslintInternals();
 	const eventGenerator = new NodeEventGenerator(emitter, {
 		visitorKeys: sourceCode.visitorKeys,
 		fallback: Traverser.getKeys,
@@ -476,6 +491,7 @@ function getEstree(
 		const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
 		const { analyze } = require('@typescript-eslint/scope-manager');
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
+		const { SourceCode } = loadEslintInternals();
 
 		// Probe TSSLint core for an actual Program: in syntax-only mode the
 		// `program` getter throws "Not supported", in type-aware mode it returns
@@ -537,7 +553,7 @@ function getEstree(
 					isolatedDeclarations: undefined,
 				},
 		});
-		const eventQueue = sourceCode.traverse();
+		const eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
 		cachedEstree = [file, sourceCode, eventQueue, program];
 	}
 	return {
