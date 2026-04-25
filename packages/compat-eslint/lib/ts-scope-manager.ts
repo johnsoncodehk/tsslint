@@ -713,7 +713,8 @@ export class TsScopeManager {
 			case SK.BindingElement: {
 				const b = p as ts.BindingElement;
 				if (b.name !== id && b.propertyName !== id) return true;
-				// Same rules as VariableDeclaration with init or for-of/in bind.
+				// Same rules as VariableDeclaration / Parameter with init or
+				// for-of/in bind.
 				for (let cur: ts.Node | undefined = p; cur; cur = cur.parent) {
 					if (cur.kind === SK.VariableDeclaration) {
 						const v = cur as ts.VariableDeclaration;
@@ -725,7 +726,11 @@ export class TsScopeManager {
 						}
 						return false;
 					}
-					if (cur.kind === SK.Parameter) return false;
+					if (cur.kind === SK.Parameter) {
+						// `function f([a = 0] = [])` — outer Parameter has an
+						// initializer, count as init reference.
+						return (cur as ts.ParameterDeclaration).initializer !== undefined;
+					}
 				}
 				return false;
 			}
@@ -1601,35 +1606,36 @@ export class TsReference {
 	isReadOnly(): boolean { return this.isRead() && !this.isWrite(); }
 	isReadWrite(): boolean { return this.isRead() && this.isWrite(); }
 
-	get writeExpr(): TSESTree.Node | null {
-		// For an init reference (`let x = expr`, `function f(b = expr)`, etc.),
+	get writeExpr(): TSESTree.Node | null | undefined {
+		// For an init reference (`let x = expr`, `function f(b = expr)`),
 		// returns the initializer expression. For an assignment (`x = expr`,
-		// `x += expr`), returns the right-hand side. Else null.
+		// `x += expr`), returns the right-hand side. For pure reads, returns
+		// undefined (matches ESLint's distinction: present-but-null vs absent).
 		const SK = ts.SyntaxKind;
 		const id = this.tsIdentifier;
 		const parent = id.parent;
-		if (!parent) return null;
+		if (!parent) return undefined;
 		// VariableDeclaration / Parameter init.
 		if (
 			(parent.kind === SK.VariableDeclaration && (parent as ts.VariableDeclaration).name === id)
 			|| (parent.kind === SK.Parameter && (parent as ts.ParameterDeclaration).name === id)
 		) {
 			const init = (parent as { initializer?: ts.Node }).initializer;
-			return init ? this.manager.tsToEstreeOrStub(init) ?? null : null;
+			return init ? this.manager.tsToEstreeOrStub(init) ?? null : undefined;
 		}
 		// BindingElement (destructured init): use the enclosing VariableDeclaration's initializer.
 		if (parent.kind === SK.BindingElement && (parent as ts.BindingElement).name === id) {
 			for (let cur: ts.Node | undefined = parent; cur; cur = cur.parent) {
 				if (cur.kind === SK.VariableDeclaration) {
 					const init = (cur as ts.VariableDeclaration).initializer;
-					return init ? this.manager.tsToEstreeOrStub(init) ?? null : null;
+					return init ? this.manager.tsToEstreeOrStub(init) ?? null : undefined;
 				}
 				if (cur.kind === SK.Parameter) {
 					const init = (cur as ts.ParameterDeclaration).initializer;
-					return init ? this.manager.tsToEstreeOrStub(init) ?? null : null;
+					return init ? this.manager.tsToEstreeOrStub(init) ?? null : undefined;
 				}
 			}
-			return null;
+			return undefined;
 		}
 		// Assignment: x = rhs, x += rhs.
 		if (parent.kind === SK.BinaryExpression && (parent as ts.BinaryExpression).left === id) {
@@ -1641,7 +1647,7 @@ export class TsReference {
 				return this.manager.tsToEstreeOrStub((parent as ts.BinaryExpression).right) ?? null;
 			}
 		}
-		return null;
+		return undefined;
 	}
 
 	get isValueReference(): boolean {
