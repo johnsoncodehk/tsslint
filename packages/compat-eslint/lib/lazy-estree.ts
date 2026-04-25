@@ -397,7 +397,15 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return new MethodDefinitionNode(child as ts.MethodDeclaration, parent);
 		}
-		case SK.PropertyDeclaration: return new PropertyDefinitionNode(child as ts.PropertyDeclaration, parent);
+		case SK.PropertyDeclaration: {
+			const pd = child as ts.PropertyDeclaration;
+			const isAbstract = !!pd.modifiers?.some(m => m.kind === SK.AbstractKeyword);
+			const isAccessor = !!pd.modifiers?.some(m => m.kind === SK.AccessorKeyword);
+			if (isAbstract && isAccessor) return new PropertyDefinitionNode(pd, parent, 'TSAbstractAccessorProperty');
+			if (isAbstract) return new PropertyDefinitionNode(pd, parent, 'TSAbstractPropertyDefinition');
+			if (isAccessor) return new PropertyDefinitionNode(pd, parent, 'AccessorProperty');
+			return new PropertyDefinitionNode(pd, parent, 'PropertyDefinition');
+		}
 		case SK.Constructor: return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
 		case SK.GetAccessor: return new MethodDefinitionNode(child as ts.GetAccessorDeclaration, parent);
 		case SK.SetAccessor: return new MethodDefinitionNode(child as ts.SetAccessorDeclaration, parent);
@@ -428,7 +436,20 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.SuperKeyword: return new SuperNode(child, parent);
 		case SK.ThisKeyword: return new ThisExpressionNode(child, parent);
 		case SK.TypeParameter: return new TSTypeParameterNode(child as ts.TypeParameterDeclaration, parent);
-		case SK.ExpressionWithTypeArguments: return convertChild((child as ts.ExpressionWithTypeArguments).expression, parent);
+		case SK.ExpressionWithTypeArguments: {
+			// Parent-aware shape (mirrors eager line 1858):
+			// - InterfaceDeclaration → TSInterfaceHeritage
+			// - HeritageClause (class extends/implements) → TSClassImplements
+			// - else → TSInstantiationExpression
+			const ewta = child as ts.ExpressionWithTypeArguments;
+			const pk = parent._ts.kind;
+			const tag = pk === SK.InterfaceDeclaration
+				? 'TSInterfaceHeritage'
+				: pk === SK.HeritageClause
+					? 'TSClassImplements'
+					: 'TSInstantiationExpression';
+			return new ExpressionWithTypeArgumentsNode(ewta, parent, tag);
+		}
 		case SK.PrivateIdentifier: return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
 		case SK.TypeAssertionExpression: return new TSTypeAssertionNode(child as ts.TypeAssertion, parent);
 		case SK.SatisfiesExpression: return new TSSatisfiesExpressionNode(child as ts.SatisfiesExpression, parent);
@@ -544,6 +565,32 @@ class ChainExpressionWrappingNode extends LazyNode {
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 		this._ctx.maps.esTreeNodeToTSNodeMap.set(this, tsNode);
 		this.expression = expression;
+	}
+}
+
+// Wrap typeParameters declaration (`<T extends X>`) in
+// TSTypeParameterDeclaration matching eager. Used by classes,
+// interfaces, type aliases, and any function-like with `<T>` generics.
+function convertTypeParameters(typeParams: ts.NodeArray<ts.TypeParameterDeclaration> | undefined, parent: LazyNode): TSTypeParameterDeclarationNode | undefined {
+	if (!typeParams || typeParams.length === 0) return undefined;
+	return new TSTypeParameterDeclarationNode(typeParams, parent);
+}
+
+class TSTypeParameterDeclarationNode extends LazyNode {
+	readonly type = 'TSTypeParameterDeclaration' as const;
+	private _params?: (LazyNode | null)[];
+	private _typeParams: ts.NodeArray<ts.TypeParameterDeclaration>;
+	constructor(typeParams: ts.NodeArray<ts.TypeParameterDeclaration>, parent: LazyNode) {
+		const host = typeParams[0].parent;
+		super(host, parent, undefined, false);
+		this._typeParams = typeParams;
+		const start = typeParams.pos - 1;
+		const end = typeParams.end + 1;
+		this.range = [start, end];
+		this.loc = getLocFor(this._ctx.ast, start, end);
+	}
+	get params() {
+		return this._params ??= this._typeParams.map(t => convertChild(t, this));
 	}
 }
 
@@ -905,14 +952,49 @@ class TSTypeQueryWrappingNode extends LazyNode {
 class TSImportTypeNode extends LazyNode {
 	readonly type = 'TSImportType' as const;
 	readonly options = null;
-	readonly typeArguments = null;
-	private _argument?: LazyNode | null;
+	private _source?: LazyNode | null;
 	private _qualifier?: LazyNode | null;
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.ImportTypeNode).argument, this);
+	private _typeArguments?: LazyNode | null;
+	private _argumentEstree?: LazyNode | null;
+
+	constructor(tsNode: ts.ImportTypeNode, parent: LazyNode) {
+		super(tsNode, parent);
+		// `typeof import('x')` — when isTypeOf is true, the wrapping TSTypeQuery
+		// adjusts the range. For TSImportType itself, eager uses the
+		// importType's own range MINUS the leading `typeof ` if isTypeOf.
+		if (tsNode.isTypeOf) {
+			const typeofTokenStart = tsNode.getStart(this._ctx.ast);
+			// eager: range[0] = findNextToken(getFirstToken(), node).getStart(ast)
+			const text = this._ctx.ast.text;
+			let cursor = typeofTokenStart + 'typeof'.length;
+			while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
+			this.range = [cursor, this.range[1]];
+			this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
+		}
 	}
+
+	// eager exposes `source` (= argument.literal — the StringLiteral) and
+	// `argument` is a deprecated alias.
+	get source() {
+		if (this._source !== undefined) return this._source;
+		const argEstree = this._argumentEstree ??= convertChild((this._ts as ts.ImportTypeNode).argument, this);
+		// argEstree is a TSLiteralType wrapping a StringLiteral.
+		const lit = (argEstree as unknown as { literal?: LazyNode | null } | null)?.literal ?? null;
+		return this._source = lit;
+	}
+
+	// Deprecated alias for source — eager wires this via #withDeprecatedAliasGetter.
+	get argument() {
+		return this._argumentEstree ??= convertChild((this._ts as ts.ImportTypeNode).argument, this);
+	}
+
 	get qualifier() {
 		return this._qualifier ??= convertChild((this._ts as ts.ImportTypeNode).qualifier, this);
+	}
+
+	get typeArguments() {
+		if (this._typeArguments !== undefined) return this._typeArguments;
+		return this._typeArguments = convertTypeArguments((this._ts as ts.ImportTypeNode).typeArguments, this) ?? null;
 	}
 }
 
@@ -974,9 +1056,9 @@ class ClassNode extends LazyNode {
 	readonly abstract: boolean;
 	readonly declare: boolean;
 	readonly decorators: never[] = [];
-	readonly typeParameters = undefined;
 	readonly superTypeArguments = undefined;
 	readonly superTypeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _id?: LazyNode | null;
 	private _body?: ClassBodyNode;
 	private _superClass?: LazyNode | null;
@@ -994,6 +1076,10 @@ class ClassNode extends LazyNode {
 	}
 	get id() {
 		return this._id ??= convertChild((this._ts as ts.ClassDeclaration).name, this);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.ClassDeclaration).typeParameters, this);
 	}
 	get body() {
 		if (this._body) return this._body;
@@ -1041,7 +1127,7 @@ class MethodFunctionExpressionNode extends LazyNode {
 	readonly declare = false;
 	readonly generator: boolean;
 	readonly expression = false;
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _params?: (LazyNode | null)[];
 	private _body?: LazyNode | null;
 	private _returnType?: LazyNode | null | undefined;
@@ -1061,6 +1147,10 @@ class MethodFunctionExpressionNode extends LazyNode {
 	}
 	get body() {
 		return this._body ??= convertChild((this._ts as ts.MethodDeclaration).body, this);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.MethodDeclaration).typeParameters, this);
 	}
 	get returnType() {
 		if (this._returnType !== undefined) return this._returnType;
@@ -1165,7 +1255,7 @@ class ConstructorKeyIdentifierNode extends LazyNode {
 }
 
 class PropertyDefinitionNode extends LazyNode {
-	readonly type = 'PropertyDefinition' as const;
+	readonly type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty';
 	readonly static: boolean;
 	readonly override: boolean;
 	readonly readonly: boolean;
@@ -1179,8 +1269,9 @@ class PropertyDefinitionNode extends LazyNode {
 	private _value?: LazyNode | null;
 	private _typeAnnotation?: LazyNode | null | undefined;
 
-	constructor(tsNode: ts.PropertyDeclaration, parent: LazyNode) {
+	constructor(tsNode: ts.PropertyDeclaration, parent: LazyNode, type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty' = 'PropertyDefinition') {
 		super(tsNode, parent);
+		this.type = type;
 		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
 		this.override = !!tsNode.modifiers?.some(m => m.kind === SK.OverrideKeyword);
 		this.readonly = !!tsNode.modifiers?.some(m => m.kind === SK.ReadonlyKeyword);
@@ -1354,13 +1445,17 @@ class TSSatisfiesExpressionNode extends LazyNode {
 class TSConstructorTypeNode extends LazyNode {
 	readonly type = 'TSConstructorType' as const;
 	readonly abstract: boolean;
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _params?: (LazyNode | null)[];
 	private _returnType?: LazyNode | null | undefined;
 
 	constructor(tsNode: ts.ConstructorTypeNode, parent: LazyNode) {
 		super(tsNode, parent);
 		this.abstract = !!tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.ConstructorTypeNode).typeParameters, this);
 	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.ConstructorTypeNode).parameters, this);
@@ -1973,7 +2068,7 @@ class SpreadElementNode extends LazyNode {
 class TSTypeAliasDeclarationNode extends LazyNode {
 	readonly type = 'TSTypeAliasDeclaration' as const;
 	readonly declare: boolean;
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _id?: LazyNode | null;
 	private _typeAnnotation?: LazyNode | null;
 
@@ -1983,6 +2078,10 @@ class TSTypeAliasDeclarationNode extends LazyNode {
 	}
 	get id() {
 		return this._id ??= convertChild((this._ts as ts.TypeAliasDeclaration).name, this);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.TypeAliasDeclaration).typeParameters, this);
 	}
 	get typeAnnotation() {
 		return this._typeAnnotation ??= convertChild((this._ts as ts.TypeAliasDeclaration).type, this);
@@ -2058,6 +2157,25 @@ function convertExportAssignment(tsNode: ts.ExportAssignment, parent: LazyNode):
 		return new TSExportAssignmentNode(tsNode, parent);
 	}
 	return new ExportDefaultDeclarationNode(tsNode, parent);
+}
+
+// ExpressionWithTypeArguments — three possible ESTree types depending on parent.
+class ExpressionWithTypeArgumentsNode extends LazyNode {
+	readonly type: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression';
+	private _expression?: LazyNode | null;
+	private _typeArguments?: LazyNode | undefined;
+
+	constructor(tsNode: ts.ExpressionWithTypeArguments, parent: LazyNode, type: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression') {
+		super(tsNode, parent);
+		this.type = type;
+	}
+	get expression() {
+		return this._expression ??= convertChild((this._ts as ts.ExpressionWithTypeArguments).expression, this);
+	}
+	get typeArguments() {
+		if (this._typeArguments !== undefined) return this._typeArguments;
+		return this._typeArguments = convertTypeArguments((this._ts as ts.ExpressionWithTypeArguments).typeArguments, this);
+	}
 }
 
 // Wrapper variants used by maybeFixExports. They have an explicit
@@ -2217,7 +2335,7 @@ class TSExternalModuleReferenceNode extends LazyNode {
 // typeParameters. typescript-estree picks the type literal at construction.
 class TSCallishSignatureNode extends LazyNode {
 	readonly type: 'TSCallSignatureDeclaration' | 'TSConstructSignatureDeclaration';
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _params?: (LazyNode | null)[];
 	private _returnType?: LazyNode | null | undefined;
 
@@ -2228,6 +2346,10 @@ class TSCallishSignatureNode extends LazyNode {
 	) {
 		super(tsNode, parent);
 		this.type = type;
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.SignatureDeclarationBase).typeParameters, this);
 	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.SignatureDeclarationBase).parameters!, this);
@@ -2268,10 +2390,10 @@ class TSIndexSignatureNode extends LazyNode {
 class TSInterfaceDeclarationNode extends LazyNode {
 	readonly type = 'TSInterfaceDeclaration' as const;
 	readonly declare: boolean;
-	readonly extends: never[] = [];
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _body?: TSInterfaceBodyNode;
 	private _id?: LazyNode | null;
+	private _extends?: (LazyNode | null)[];
 
 	constructor(tsNode: ts.InterfaceDeclaration, parent: LazyNode) {
 		super(tsNode, parent);
@@ -2279,6 +2401,17 @@ class TSInterfaceDeclarationNode extends LazyNode {
 	}
 	get id() {
 		return this._id ??= convertChild((this._ts as ts.InterfaceDeclaration).name, this);
+	}
+	get extends() {
+		if (this._extends) return this._extends;
+		const ext = (this._ts as ts.InterfaceDeclaration).heritageClauses
+			?.filter(h => h.token === SK.ExtendsKeyword)
+			.flatMap(h => h.types.map(t => convertChild(t, this)));
+		return this._extends = ext ?? [];
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.InterfaceDeclaration).typeParameters, this);
 	}
 	get body() {
 		if (this._body) return this._body;
@@ -2339,7 +2472,7 @@ class TSMethodSignatureNode extends LazyNode {
 	readonly readonly: boolean;
 	readonly static: boolean;
 	readonly kind: 'method' = 'method';
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _key?: LazyNode | null;
 	private _params?: (LazyNode | null)[];
 	private _returnType?: LazyNode | null | undefined;
@@ -2350,6 +2483,10 @@ class TSMethodSignatureNode extends LazyNode {
 		this.optional = !!tsNode.questionToken;
 		this.readonly = !!tsNode.modifiers?.some(m => m.kind === SK.ReadonlyKeyword);
 		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.MethodSignature).typeParameters, this);
 	}
 	get key() {
 		return this._key ??= convertChild((this._ts as ts.MethodSignature).name, this);
@@ -2366,10 +2503,14 @@ class TSMethodSignatureNode extends LazyNode {
 
 class TSFunctionTypeNode extends LazyNode {
 	readonly type = 'TSFunctionType' as const;
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _params?: (LazyNode | null)[];
 	private _returnType?: LazyNode | null | undefined;
 
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.FunctionTypeNode).typeParameters, this);
+	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.FunctionTypeNode).parameters, this);
 	}
@@ -2487,7 +2628,7 @@ class FunctionDeclarationNode extends LazyNode {
 	readonly declare: boolean;
 	readonly generator: boolean;
 	readonly expression = false;
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _id?: LazyNode | null;
 	private _params?: (LazyNode | null)[];
 	private _body?: LazyNode | null | undefined;
@@ -2502,6 +2643,10 @@ class FunctionDeclarationNode extends LazyNode {
 	}
 	get id() {
 		return this._id ??= convertChild((this._ts as ts.FunctionDeclaration).name, this);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.FunctionDeclaration).typeParameters, this);
 	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.FunctionDeclaration).parameters, this);
@@ -2524,7 +2669,7 @@ class FunctionExpressionNode extends LazyNode {
 	readonly declare = false;
 	readonly generator: boolean;
 	readonly expression = false;
-	readonly typeParameters = undefined;
+	private _typeParameters?: LazyNode | undefined;
 	private _id?: LazyNode | null;
 	private _params?: (LazyNode | null)[];
 	private _body?: LazyNode | null;
@@ -2537,6 +2682,10 @@ class FunctionExpressionNode extends LazyNode {
 	}
 	get id() {
 		return this._id ??= convertChild((this._ts as ts.FunctionExpression).name, this);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.FunctionExpression).typeParameters, this);
 	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.FunctionExpression).parameters, this);
@@ -2556,8 +2705,8 @@ class ArrowFunctionExpressionNode extends LazyNode {
 	readonly async: boolean;
 	readonly generator = false;
 	readonly id = null;
-	readonly typeParameters = undefined;
 	readonly expression: boolean;
+	private _typeParameters?: LazyNode | undefined;
 	private _params?: (LazyNode | null)[];
 	private _body?: LazyNode | null;
 	private _returnType?: LazyNode | null | undefined;
@@ -2570,6 +2719,10 @@ class ArrowFunctionExpressionNode extends LazyNode {
 	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.ArrowFunction).parameters, this);
+	}
+	get typeParameters() {
+		if (this._typeParameters !== undefined) return this._typeParameters;
+		return this._typeParameters = convertTypeParameters((this._ts as ts.ArrowFunction).typeParameters, this);
 	}
 	get body() {
 		return this._body ??= convertChild((this._ts as ts.ArrowFunction).body, this);
