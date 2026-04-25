@@ -189,6 +189,63 @@ console.log('skip-type-converter selector-aware tests');
 	check('escape hatch: TSArrayType preserved', countNodes(estree, 'TSArrayType') === 1);
 }
 
+// --- esquery-grade precision (selectors a regex would mishandle) -------
+
+// Attribute *value* contains a string that looks like a node-type name,
+// but it's not — it's a literal being matched against. The selector
+// only looks at MemberExpression nodes; it does NOT introduce a TS
+// type into the visited set. esquery sees this as `attribute → literal`
+// and never visits its content.
+{
+	skip.configureSkipKindsForVisitors(['MemberExpression[property.name="TSTypeReference"]']);
+	const sf = parseTs('type T = string; let x: T = "a";');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check(
+		'attribute literal: TSTypeReference NOT preserved (was inside string)',
+		countNodes(estree, 'TSTypeReference') === 0,
+	);
+}
+
+// Attribute regex pattern contains uppercase letters that aren't node
+// types. `[A-Z]` is a character class inside a regex literal — esquery
+// drops the regex content entirely; a regex extractor would falsely
+// pull `A` (or `Z`).
+{
+	skip.configureSkipKindsForVisitors(['Identifier[name=/^[A-Z]/]']);
+	const sf = parseTs('let x: any = 1;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check(
+		'regex literal in attribute: TSAnyKeyword still skipped',
+		countNodes(estree, 'TSAnyKeyword') === 0,
+	);
+}
+
+// `:not()` has the inverse semantic — `:not(TSAnyKeyword)` listens on
+// every node EXCEPT TSAnyKeyword. We treat the inner identifier as
+// "exempt" anyway because the OUTER selector still narrows to a node
+// type the rule may want to visit (and over-exempting is safe). The
+// goal of this test isn't semantic correctness — it's that esquery
+// gracefully handles nested form without us having to special-case it.
+{
+	skip.configureSkipKindsForVisitors(['TSTypeReference:not(TSImportType)']);
+	const sf = parseTs('type T = string; let x: T;');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check(
+		':not container: outer TSTypeReference preserved',
+		countNodes(estree, 'TSTypeReference') === 1,
+	);
+}
+
+// `:has()` works on subtree presence: `Foo:has(Bar)` matches Foo whose
+// descendants include Bar. Both PascalCase tokens should be exempted.
+{
+	skip.configureSkipKindsForVisitors(['TSTypeLiteral:has(TSPropertySignature)']);
+	const sf = parseTs('let x: { foo: number };');
+	const { estree } = skip.astConvertSkipTypes(sf, PARSE_SETTINGS as any, true);
+	check(':has container: TSTypeLiteral preserved', countNodes(estree, 'TSTypeLiteral') === 1);
+	check(':has container: TSPropertySignature preserved', countNodes(estree, 'TSPropertySignature') === 1);
+}
+
 // --- Real rule integration: probe a typescript-eslint plugin rule -------
 
 // The full selector-aware path: load a real rule, call its `create()`

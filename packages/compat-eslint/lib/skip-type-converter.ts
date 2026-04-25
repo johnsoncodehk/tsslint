@@ -113,15 +113,43 @@ export function isSkippedKind(kind: ts.SyntaxKind): boolean {
 	return skipKinds.has(kind);
 }
 
-// Extract every PascalCase token from a selector string. Selectors range
-// from plain `TSAnyKeyword` to esquery patterns like
-// `TSTypeReference > Identifier[name="x"]:exit`; AST node types are the
-// only PascalCase pieces, so a regex over `\b[A-Z]\w*` captures them.
-// Over-extraction is harmless — false positives just exempt extra kinds
-// from skipping (less perf gain, never less correctness).
-function extractAstNodeTypes(selector: string, into: Set<string>): void {
-	const m = selector.match(/\b[A-Z]\w*/g);
-	if (m) for (const t of m) into.add(t);
+// Parse a selector with esquery and walk the resulting AST to pull out
+// every node-type identifier — i.e. selectors like `TSAnyKeyword`,
+// `TSTypeReference > Identifier`, `:matches(A, B)`. Attribute filters,
+// regex literals, string literals, and other esquery node types are
+// ignored, so we don't pick up false-positive PascalCase tokens that
+// happen to live inside `[name="Foo"]` or `[name=/^[A-Z]/]`.
+//
+// Returns true if the selector contains a wildcard (`*`) — caller uses
+// that to short-circuit to "exempt all skippable kinds".
+const esquery = require('esquery') as { parse(s: string): any; };
+function extractAstNodeTypes(selector: string, into: Set<string>): boolean {
+	let parsed;
+	try {
+		parsed = esquery.parse(selector);
+	}
+	catch {
+		// Bad selector — treat conservatively as wildcard so the rule's
+		// listener has every chance to fire.
+		return true;
+	}
+	let hasWildcard = false;
+	const walk = (n: any): void => {
+		if (!n || typeof n !== 'object') return;
+		if (n.type === 'identifier') into.add(n.value);
+		else if (n.type === 'wildcard') hasWildcard = true;
+		// Recurse into every container shape esquery emits: matches/not/has
+		// hold `selectors`, combinators hold `left`/`right`, etc. We just
+		// walk every object-typed property — `parent`/`loc` aren't present
+		// in esquery's AST so the no-cycle assumption holds.
+		for (const k in n) {
+			const v = n[k];
+			if (Array.isArray(v)) for (const c of v) walk(c);
+			else if (v && typeof v === 'object') walk(v);
+		}
+	};
+	walk(parsed);
+	return hasWildcard;
 }
 
 // Adjust the active skip set so any TS kind whose ESTree counterpart is
@@ -134,19 +162,16 @@ function extractAstNodeTypes(selector: string, into: Set<string>): void {
 // `astConvertSkipTypes` call. Repeat calls re-derive from the default —
 // not cumulative — so the active set always matches the latest rule mix.
 //
-// Special case: a `*` selector listens on every node, so it can't be
-// served while any kind is skipped — promote it to an "exempt all"
-// signal up front rather than relying on the per-token regex (which
-// can't extract node types from `*`).
+// A wildcard (`*`) anywhere in any selector forces "exempt all skippable
+// kinds" — `*` matches every node, so we can't serve it while skipping
+// any subtree.
 export function configureSkipKindsForVisitors(selectors: Iterable<string>): void {
 	const visited = new Set<string>();
 	let wildcard = false;
 	for (const sel of selectors) {
-		if (matchesAllNodes(sel)) {
+		if (extractAstNodeTypes(sel, visited)) {
 			wildcard = true;
-			break;
 		}
-		extractAstNodeTypes(sel, visited);
 	}
 	if (wildcard) {
 		skipKinds = new Set();
@@ -159,15 +184,6 @@ export function configureSkipKindsForVisitors(selectors: Iterable<string>): void
 		if (visited.has(name)) next.delete(kind);
 	}
 	skipKinds = next;
-}
-
-// True when `selector` matches every AST node — i.e. its evaluation does
-// not narrow the visited set, so we can't serve it without converting
-// every type subtree. The bare `*` is the canonical case; `*:exit` is
-// the leave-event variant.
-function matchesAllNodes(selector: string): boolean {
-	const trimmed = selector.trim();
-	return trimmed === '*' || trimmed === '*:exit';
 }
 
 // Patch Converter.prototype.converter once on first call. The patched method
