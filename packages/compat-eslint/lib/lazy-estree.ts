@@ -389,7 +389,26 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.SetAccessor: return new MethodDefinitionNode(child as ts.SetAccessorDeclaration, parent);
 		case SK.ArrayBindingPattern: return new ArrayPatternNode(child as ts.ArrayBindingPattern, parent);
 		case SK.ObjectBindingPattern: return new ObjectPatternNode(child as ts.ObjectBindingPattern, parent);
-		case SK.BindingElement: return new BindingElementNode(child as ts.BindingElement, parent);
+		case SK.BindingElement: {
+			// In ArrayBindingPattern, BindingElement resolves to the inner
+			// name directly (or wrapped in RestElement if `...`). Only
+			// inside ObjectBindingPattern does it become a Property
+			// (matches eager line 992 split).
+			const be = child as ts.BindingElement;
+			if (parent._ts.kind === SK.ArrayBindingPattern) {
+				if (be.dotDotDotToken) {
+					return new RestElementNode(be as unknown as ts.ParameterDeclaration, parent);
+				}
+				if (be.initializer) {
+					// `[a = 1] = ...` — AssignmentPattern wrapping the name.
+					const inner = convertChild(be.name, parent);
+					if (!inner) return null;
+					return new BindingAssignmentPatternNode(be, parent, inner);
+				}
+				return convertChild(be.name, parent);
+			}
+			return new BindingElementNode(be, parent);
+		}
 		case SK.OmittedExpression: return null;
 		case SK.NullKeyword: return new NullLiteralNode(child as ts.NullLiteral, parent);
 		case SK.SuperKeyword: return new SuperNode(child, parent);
@@ -1115,6 +1134,23 @@ class ObjectPatternNode extends LazyNode {
 	private _properties?: (LazyNode | null)[];
 	get properties() {
 		return this._properties ??= convertChildren((this._ts as ts.ObjectBindingPattern).elements, this);
+	}
+}
+
+// Used when `[a = 1] = ...` — wraps the inner pattern with a default value.
+class BindingAssignmentPatternNode extends LazyNode {
+	readonly type = 'AssignmentPattern' as const;
+	readonly decorators: never[] = [];
+	readonly optional = false;
+	readonly typeAnnotation = undefined;
+	readonly left: LazyNode;
+	private _right?: LazyNode | null;
+	constructor(tsNode: ts.BindingElement, parent: LazyNode, left: LazyNode) {
+		super(tsNode, parent);
+		this.left = left;
+	}
+	get right() {
+		return this._right ??= convertChild((this._ts as ts.BindingElement).initializer, this);
 	}
 }
 
