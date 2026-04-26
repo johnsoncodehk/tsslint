@@ -147,14 +147,25 @@ function traverse(code: string, selectors: string[]) {
 }
 
 {
-	// Hybrid type roots (TSAsExpression, etc.) are NOT skipped — slot-level
-	// skip is a future enhancement. Document the current behaviour with a
-	// regression test so changes here are intentional.
-	const code = `let v = (x as number);`;
+	// Hybrid root: TSAsExpression itself isn't a TYPE_ONLY_ROOT (its
+	// `expression` slot is arbitrary JS), but its `typeAnnotation` slot
+	// holds a composite TS type (TSTypeReference) which IS a root — slot-
+	// level skip falls out of the traversal stepping through the slot.
+	const code = `let v = (x as Foo<T>);`;
 	const { types } = traverse(code, ['VariableDeclaration']);
-	check('hybrid root: TSAsExpression entered', types.enter.includes('TSAsExpression'));
-	check('hybrid root limitation: TSNumberKeyword inside TSAsExpression IS visited (slot-level skip not implemented)',
-		types.enter.includes('TSNumberKeyword'));
+	check('hybrid: TSAsExpression entered (expression slot is JS)', types.enter.includes('TSAsExpression'));
+	check('hybrid: TSTypeReference entered as the typeAnnotation value', types.enter.includes('TSTypeReference'));
+	check('hybrid: TSTypeParameterInstantiation inside TSTypeReference skipped',
+		!types.enter.includes('TSTypeParameterInstantiation'));
+}
+
+{
+	// Bare keyword type slot: TSAnyKeyword is a leaf (no children), so
+	// adding it as a root or not doesn't matter. Sanity-check that
+	// triggering on it still visits.
+	const code = `let v = (x as any);`;
+	const { types } = traverse(code, ['TSAnyKeyword']);
+	check('TSAnyKeyword leaf trigger: visited', types.enter.includes('TSAnyKeyword'));
 }
 
 // --- Wildcard / isAll forces no skip ---------------------------------

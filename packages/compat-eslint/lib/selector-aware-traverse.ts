@@ -33,20 +33,71 @@ const { VisitNodeStep } = require(pluginKitPath) as {
 	VisitNodeStep: new (init: { target: unknown; phase: 1 | 2; args: unknown[] }) => unknown;
 };
 
-// Subtrees rooted at these types contain ONLY:
-//   - TS-prefixed types listed in TYPE_ONLY_REACH below
-//   - Identifier (type names: T, Foo)
-//   - Literal (TSLiteralType.literal)
-//   - UnaryExpression (TSLiteralType: `-1`)
-//   - TemplateLiteral / TemplateElement (TSTemplateLiteralType, TSLiteralType)
+// Subtrees rooted at these types contain ONLY types listed in
+// TYPE_ONLY_REACH below.
 //
-// Conservative — only the most common type-context roots. TSEnumDeclaration
-// and TSModuleDeclaration are excluded because they contain JS Expressions
-// (TSEnumMember.initializer, TSModuleBlock.body Statements).
+// The 3 wrappers (TSTypeAnnotation, TSTypeAliasDeclaration,
+// TSInterfaceDeclaration) cover the most common entry points. Adding the
+// composite TS types (TSTypeReference, TSUnionType, etc.) lets us also
+// skip the typeAnnotation / typeArguments slots of HYBRID roots like
+// TSAsExpression, where a TS type appears DIRECTLY (no wrapper).
+//
+// Excluded:
+//   - Hybrid roots (TSAsExpression, TSSatisfiesExpression, TSTypeAssertion,
+//     TSNonNullExpression, TSInstantiationExpression) — `expression` slot
+//     is arbitrary JS. Their type slot lands directly on a composite TS
+//     type below, so slot-level skip still kicks in.
+//   - TSClassImplements / TSInterfaceHeritage — `expression` is a
+//     MemberExpression chain (`A.B.C`); MemberExpression is in REACH so
+//     skipping these would miss MemberExpression-listening rules.
+//   - TSEnumDeclaration / TSEnumBody / TSEnumMember — Expression
+//     initializers.
+//   - TSModuleDeclaration / TSModuleBlock — body is Statement[].
+//   - TSImportEqualsDeclaration / TSExternalModuleReference /
+//     TSExportAssignment / TSNamespaceExportDeclaration — top-level decls
+//     with Expression slots.
+//   - TSDeclareFunction / TSEmptyBodyFunctionExpression — params can
+//     carry decorators (Expression).
+//   - TSAbstractMethodDefinition / TSAbstractPropertyDefinition /
+//     TSAbstractAccessorProperty / TSParameterProperty — class-member
+//     flavored, contain JS expression slots.
+//   - TSCallSignatureDeclaration / TSConstructSignatureDeclaration /
+//     TSMethodSignature / TSPropertySignature / TSIndexSignature /
+//     TSInterfaceBody — only ever appear inside TSInterfaceDeclaration
+//     (already a root), so they're never reached as a top-level skip
+//     target. Adding them changes nothing.
 export const TYPE_ONLY_ROOTS: ReadonlySet<string> = new Set([
+	// v1 wrappers
 	'TSTypeAnnotation',
 	'TSTypeAliasDeclaration',
 	'TSInterfaceDeclaration',
+	// v2: composite TS types — appear directly as `as T` typeAnnotation,
+	// `Foo<T>` typeArguments inner, etc.
+	'TSArrayType',
+	'TSConditionalType',
+	'TSConstructorType',
+	'TSFunctionType',
+	'TSImportType',
+	'TSIndexedAccessType',
+	'TSInferType',
+	'TSIntersectionType',
+	'TSLiteralType',
+	'TSMappedType',
+	'TSNamedTupleMember',
+	'TSOptionalType',
+	'TSQualifiedName',
+	'TSRestType',
+	'TSTemplateLiteralType',
+	'TSTupleType',
+	'TSTypeLiteral',
+	'TSTypeOperator',
+	'TSTypeParameter',
+	'TSTypeParameterDeclaration',
+	'TSTypeParameterInstantiation',
+	'TSTypePredicate',
+	'TSTypeQuery',
+	'TSTypeReference',
+	'TSUnionType',
 ]);
 
 // All types that can appear inside a TYPE_ONLY_ROOTS subtree. Soundness
@@ -94,6 +145,7 @@ export const TYPE_ONLY_REACH: ReadonlySet<string> = new Set([
 	'UnaryExpression',     // TSLiteralType: -1
 	'TemplateLiteral',     // TSLiteralType, TSTemplateLiteralType
 	'TemplateElement',
+	'MemberExpression',    // TSInterfaceHeritage.expression: `A.B.C`
 ]);
 
 export interface TraverseOptions {
