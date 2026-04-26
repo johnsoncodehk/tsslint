@@ -55,7 +55,14 @@ let sharedCache: {
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 } | undefined;
 
-let cachedEstree: [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[]] | undefined;
+// sourceCode cache is per-file. eventQueue is built lazily after rule
+// listeners register so we can drive selector-aware traversal (Phase B).
+// Stable rule registry → eventQueue cached alongside sourceCode.
+let cachedEstree: {
+	file: ts.SourceFile;
+	sourceCode: ESLint.SourceCode;
+	eventQueue: any[] | undefined;
+} | undefined;
 
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
@@ -171,11 +178,12 @@ function runSharedTraversal(
 	reports: Map<ESLint.Rule.RuleModule, DeferredReport[]>,
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 ) {
-	const { sourceCode, eventQueue } = getEstree(file, program);
+	const { sourceCode } = getEstree(file, program);
 	const emitter = makeRuleEmitter(errors);
 	const cwd = program.getCurrentDirectory();
 
 	let currentNode: any;
+	const listenerKeys = new Set<string>();
 
 	for (const entry of ruleRegistry.values()) {
 		const eslintRule = entry.eslintRule;
@@ -299,6 +307,7 @@ function runSharedTraversal(
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
 			if (listener) {
+				listenerKeys.add(selector);
 				emitter.on(selector, listener as (...a: unknown[]) => void);
 			}
 		}
@@ -311,6 +320,7 @@ function runSharedTraversal(
 		fallback: Traverser.getKeys,
 	});
 
+	const eventQueue = getEventQueue(sourceCode, listenerKeys);
 	for (const step of eventQueue) {
 		switch (step.kind) {
 			case 1: {
@@ -456,7 +466,7 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 }
 
 function getEstree(file: ts.SourceFile, program: ts.Program) {
-	if (cachedEstree?.[0] !== file) {
+	if (cachedEstree?.file !== file) {
 		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
 		// whole parser package on first call (the heaviest single dep) and just
 		// dispatches to typescript-estree's astConverter, which we already have
@@ -502,11 +512,58 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
 			},
 		});
-		const eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
-		cachedEstree = [file, sourceCode, eventQueue];
+		cachedEstree = { file, sourceCode, eventQueue: undefined };
 	}
 	return {
-		sourceCode: cachedEstree[1],
-		eventQueue: cachedEstree[2],
+		sourceCode: cachedEstree.sourceCode,
 	};
+}
+
+// Build the eventQueue selector-aware (Phase B) when possible. Falls back
+// to ESLint's SourceCode.traverse() when rules need full CPA or a wildcard
+// listener forces every node to be considered. Cached on `cachedEstree`
+// alongside sourceCode (rules are stable across calls in TSSLint's flow,
+// so the queue stays valid for the lifetime of a single file's lint).
+function getEventQueue(
+	sourceCode: ESLint.SourceCode,
+	listenerKeys: ReadonlySet<string>,
+): any[] {
+	if (!cachedEstree) {
+		throw new Error('getEventQueue called without an active sourceCode cache');
+	}
+	if (cachedEstree.eventQueue) return cachedEstree.eventQueue;
+
+	const { buildTriggerSet, isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
+	let usesCodePath = false;
+	for (const key of listenerKeys) {
+		if (isCodePathListener(key)) {
+			usesCodePath = true;
+			break;
+		}
+	}
+
+	let eventQueue: any[];
+	if (usesCodePath) {
+		// CPA emit steps must be threaded through every node — ESLint's
+		// SourceCode.traverse() wraps the analyzer with CodePathAnalyzer
+		// to do this. Falling back to it preserves CPA correctness.
+		eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
+	} else {
+		const triggers = buildTriggerSet(listenerKeys);
+		if (triggers.isAll()) {
+			// At least one selector is a wildcard or unparseable — every
+			// node must be considered. ESLint's traverser is fine.
+			eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
+		} else {
+			const { Traverser } = loadEslintInternals();
+			const { selectorAwareTraverse } = require('./lib/selector-aware-traverse') as typeof import('./lib/selector-aware-traverse');
+			eventQueue = selectorAwareTraverse(sourceCode.ast as unknown as object, {
+				visitorKeys: sourceCode.visitorKeys as Record<string, readonly string[] | undefined>,
+				fallbackKeys: Traverser.getKeys,
+				triggers,
+			}) as any[];
+		}
+	}
+	cachedEstree.eventQueue = eventQueue;
+	return eventQueue;
 }
