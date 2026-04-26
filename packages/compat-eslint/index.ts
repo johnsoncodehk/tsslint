@@ -470,7 +470,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// typescript-estree's eager Converter on every TS file under
 		// packages/, but materialises children on first read. Rules see
 		// real subtrees and can't null-deref into them.
-		const { astMaps, estree } = convertLazy(file) as { astMaps: { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> }; estree: any };
+		const { astMaps, estree } = convertLazy(file) as { astMaps: any; estree: any };
 		// tokens / comments come from typescript-estree's standalone scanner
 		// helpers — neither depends on its Converter. Rules like
 		// no-unnecessary-type-assertion call `sourceCode.getTokenAfter()`
