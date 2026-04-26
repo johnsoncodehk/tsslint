@@ -25,14 +25,20 @@ const SK = ts.SyntaxKind;
 // each access. Caching this once avoids the getter per visit (~2% hot path).
 const tsForEachChild = ts.forEachChild;
 
-// VisitNodeStep constructor (re-resolved here so this module doesn't
-// depend on the index.ts wiring).
-const pluginKitPath = require.resolve('@eslint/plugin-kit', {
-	paths: [require.resolve('eslint/package.json')],
-});
-const { VisitNodeStep } = require(pluginKitPath) as {
-	VisitNodeStep: new (init: { target: unknown; phase: 1 | 2; args: unknown[] }) => unknown;
-};
+// Step shape compatible with @eslint/plugin-kit's VisitNodeStep — both
+// dispatchFast (index.ts) and NodeEventGenerator's switch on `step.kind`
+// only read these four fields and never check instanceof. Constructing
+// plain objects directly avoids one class allocation, one options-object
+// allocation, and one args-array allocation per step (~6 allocations
+// per trigger hit × tens of thousands of hits per lint pass).
+//
+// `args` is left undefined: it's only consumed in NodeEventGenerator's
+// `case 2: emit(target, ...args)` branch, and our walker only emits
+// kind === 1 (visit) steps.
+type VisitStep = { type: 'visit'; kind: 1; target: unknown; phase: 1 | 2; args: undefined };
+function makeStep(target: unknown, phase: 1 | 2): VisitStep {
+	return { type: 'visit', kind: 1, target, phase, args: undefined };
+}
 
 type Predicate = (n: ts.Node) => boolean;
 
@@ -687,7 +693,7 @@ export function tsScanTraverse(
 			// Outer-first enter (mirrors ESLint's pre-order: parent before children).
 			for (let i = 0; i < chain.length; i++) {
 				const t = chain[i];
-				steps.push(new VisitNodeStep({ target: t, phase: 1, args: [t] }));
+				steps.push(makeStep(t, 1));
 			}
 		}
 		tsForEachChild(node, visit);
@@ -695,7 +701,7 @@ export function tsScanTraverse(
 			// Inner-first leave.
 			for (let i = chain.length - 1; i >= 0; i--) {
 				const t = chain[i];
-				steps.push(new VisitNodeStep({ target: t, phase: 2, args: [t] }));
+				steps.push(makeStep(t, 2));
 			}
 		}
 	};
