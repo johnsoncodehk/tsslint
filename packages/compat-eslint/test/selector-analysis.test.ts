@@ -1,7 +1,7 @@
 // Trigger-set extraction tests for lib/selector-analysis.ts.
 // Run via: node --experimental-strip-types --no-warnings packages/compat-eslint/test/selector-analysis.test.ts
 
-const { buildTriggerSet, isCodePathListener, decomposeSimple } = require('../lib/selector-analysis.js') as typeof import('../lib/selector-analysis.js');
+const { buildTriggerSet, isCodePathListener, decomposeSimple, UnsupportedSelectorError } = require('../lib/selector-analysis.js') as typeof import('../lib/selector-analysis.js');
 
 const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: string) {
@@ -246,14 +246,14 @@ function check(name: string, cond: boolean, detail?: string) {
 //   fieldFire + filter) the way `dispatchFast` would; returns whether
 //   the listener would fire.
 
-function take(infos: ReturnType<typeof decomposeSimple>): NonNullable<ReturnType<typeof decomposeSimple>>[number] {
-	if (!infos || infos.length !== 1) {
-		throw new Error(`expected single decomposition, got ${infos === null ? 'null' : infos.length}`);
+function take(infos: ReturnType<typeof decomposeSimple>): ReturnType<typeof decomposeSimple>[number] {
+	if (infos.length !== 1) {
+		throw new Error(`expected single decomposition, got ${infos.length}`);
 	}
 	return infos[0];
 }
 
-function apply(info: NonNullable<ReturnType<typeof decomposeSimple>>[number], target: any): boolean {
+function apply(info: ReturnType<typeof decomposeSimple>[number], target: any): boolean {
 	// Mirrors dispatchFast: type-gate happens FIRST on the dispatched
 	// node (target), THEN fieldFire / typeFilter / filter resolve.
 	if (info.types !== 'all' && !info.types.has(target.type)) return false;
@@ -620,6 +620,217 @@ function wire(node: any): any {
 	const parent2: any = { type: 'CallExpression', optional: false, callee: target2 };
 	target2.parent = parent2;
 	check('parent attr filter rejects non-optional CallExpression', !apply(info, parent2));
+}
+
+// --- Right-side combinator selectors (closes walkChild fallthroughs) --
+
+{
+	const info = take(decomposeSimple('Foo > :not(Bar)'));
+	check('Foo > :not(Bar) types include {Foo}-anchored wildcard',
+		info.types === 'all');
+	const okTree = wire({ type: 'Foo', body: { type: 'Other' } });
+	const badTree = wire({ type: 'Foo', body: { type: 'Bar' } });
+	check('Foo > :not(Bar) accepts non-Bar child', info.filter!(okTree.body));
+	check('Foo > :not(Bar) rejects Bar child', !info.filter!(badTree.body));
+}
+
+{
+	const info = take(decomposeSimple('Foo > :has(Bar)'));
+	const ok = wire({ type: 'Foo', body: { type: 'Wrapper', body: { type: 'Bar' } } });
+	check('Foo > :has(Bar) accepts wrapper child with Bar descendant', info.filter!(ok.body));
+	const bad = wire({ type: 'Foo', body: { type: 'Wrapper', body: { type: 'X' } } });
+	check('Foo > :has(Bar) rejects wrapper with no Bar', !info.filter!(bad.body));
+}
+
+{
+	const info = take(decomposeSimple('Foo > :function'));
+	check('Foo > :function types is the 3-fn set',
+		info.types !== 'all'
+		&& info.types.has('FunctionDeclaration')
+		&& info.types.has('FunctionExpression')
+		&& info.types.has('ArrowFunctionExpression'));
+}
+
+{
+	const info = take(decomposeSimple('BlockStatement > :first-child'));
+	const root = wire({ type: 'BlockStatement', body: [{ type: 'A' }, { type: 'B' }] });
+	check('BlockStatement > :first-child fires on body[0]', info.filter!(root.body[0]));
+	check('BlockStatement > :first-child rejects body[1]', !info.filter!(root.body[1]));
+}
+
+// --- :scope binding inside :has -----------------------------------
+
+{
+	const info = take(decomposeSimple('Foo:has(:scope > Bar)'));
+	check('Foo:has(:scope > Bar) types {Foo}', info.types !== 'all' && info.types.has('Foo'));
+	// Fires when Bar is a DIRECT child of the Foo (the :scope).
+	const direct = wire({ type: 'Foo', body: { type: 'Bar' } });
+	check(':has(:scope > Bar) accepts direct Bar child', info.filter!(direct));
+	// Does NOT fire when Bar is only a transitive descendant.
+	const transitive = wire({ type: 'Foo', body: { type: 'Wrapper', body: { type: 'Bar' } } });
+	check(':has(:scope > Bar) rejects deeply-nested Bar', !info.filter!(transitive));
+}
+
+{
+	// `:has(:scope X)` (descendant inside :has) — Bar must be a
+	// descendant of the scope (any depth).
+	const info = take(decomposeSimple('Foo:has(:scope Bar)'));
+	const direct = wire({ type: 'Foo', body: { type: 'Bar' } });
+	const deep = wire({ type: 'Foo', body: { type: 'X', body: { type: 'Y', body: { type: 'Bar' } } } });
+	check(':has(:scope Bar) accepts direct descendant', info.filter!(direct));
+	check(':has(:scope Bar) accepts deep descendant', info.filter!(deep));
+}
+
+// --- Wildcard descendant / sibling -----------------------------------
+
+{
+	const info = take(decomposeSimple('Foo *'));
+	check('Foo * types is all', info.types === 'all');
+	const ok = wire({ type: 'Foo', body: { type: 'Bar', body: { type: 'Baz' } } });
+	check('Foo * fires on any descendant', info.filter!(ok.body) && info.filter!(ok.body.body));
+	const bare = wire({ type: 'Other' });
+	check('Foo * rejects bare node with no Foo ancestor', !info.filter!(bare));
+}
+
+{
+	const info = take(decomposeSimple('A ~ *'));
+	const root = wire({
+		type: 'BlockStatement',
+		body: [{ type: 'A' }, { type: 'B' }, { type: 'C' }],
+	});
+	check('A ~ * fires on later siblings', info.filter!(root.body[1]) && info.filter!(root.body[2]));
+	check('A ~ * rejects A itself (no earlier A)', !info.filter!(root.body[0]));
+}
+
+// --- Numeric attribute comparisons -----------------------------------
+
+{
+	const info = take(decomposeSimple('Foo[arity<3]'));
+	check('attr <  3 matches arity 2', info.filter!({ type: 'Foo', arity: 2 }));
+	check('attr <  3 rejects arity 3', !info.filter!({ type: 'Foo', arity: 3 }));
+}
+
+{
+	const info = take(decomposeSimple('Foo[arity<=3]'));
+	check('attr <= 3 matches arity 3', info.filter!({ type: 'Foo', arity: 3 }));
+	check('attr <= 3 rejects arity 4', !info.filter!({ type: 'Foo', arity: 4 }));
+}
+
+{
+	const info = take(decomposeSimple('Foo[arity>3]'));
+	check('attr >  3 matches arity 4', info.filter!({ type: 'Foo', arity: 4 }));
+	check('attr >  3 rejects arity 3', !info.filter!({ type: 'Foo', arity: 3 }));
+}
+
+{
+	const info = take(decomposeSimple('Foo[arity>=3]'));
+	check('attr >= 3 matches arity 3', info.filter!({ type: 'Foo', arity: 3 }));
+	check('attr >= 3 rejects arity 2', !info.filter!({ type: 'Foo', arity: 2 }));
+}
+
+// --- typeof attribute ------------------------------------------------
+
+{
+	const info = take(decomposeSimple('Foo[bar=type(string)]'));
+	check('typeof = string matches', info.filter!({ type: 'Foo', bar: 'hi' }));
+	check('typeof = string rejects number', !info.filter!({ type: 'Foo', bar: 42 }));
+}
+
+{
+	const info = take(decomposeSimple('Foo[bar!=type(undefined)]'));
+	check('typeof != undefined matches set value', info.filter!({ type: 'Foo', bar: 1 }));
+	check('typeof != undefined rejects missing value', !info.filter!({ type: 'Foo' }));
+}
+
+// --- Negated regex ---------------------------------------------------
+
+{
+	const info = take(decomposeSimple('Foo[name!=/Sync$/]'));
+	check('name !~ /Sync$/ rejects "fooSync"', !info.filter!({ type: 'Foo', name: 'fooSync' }));
+	check('name !~ /Sync$/ accepts "foo"', info.filter!({ type: 'Foo', name: 'foo' }));
+}
+
+// --- Field selector inside compound (B.field) ------------------------
+
+{
+	const info = take(decomposeSimple('Foo Identifier.label'));
+	const root = wire({
+		type: 'Foo',
+		body: { type: 'Bar', label: { type: 'Identifier', name: 'lbl' }, value: { type: 'Identifier', name: 'v' } },
+	});
+	const labelId = root.body.label;
+	const valueId = root.body.value;
+	check('descendant + Identifier.label fires on label slot', info.filter!(labelId));
+	check('descendant + Identifier.label rejects value slot', !info.filter!(valueId));
+}
+
+// --- Standalone .field / standalone [attr] ---------------------------
+
+{
+	const info = take(decomposeSimple('.label'));
+	check('standalone .label is all-types', info.types === 'all');
+	const root = wire({ type: 'Foo', label: { type: 'Identifier' }, value: { type: 'Other' } });
+	check('.label fires on parent.label', info.filter!(root.label));
+	check('.label rejects parent.value', !info.filter!(root.value));
+}
+
+{
+	const info = take(decomposeSimple('[deprecated]'));
+	check('standalone [attr] truthy-existence', info.filter!({ type: 'X', deprecated: true }));
+	check('standalone [attr] rejects falsy', !info.filter!({ type: 'X', deprecated: false }));
+}
+
+// --- :matches with per-branch filters --------------------------------
+
+{
+	// Top-level `:matches(A[x=1], B[y=2])` expands per-branch (so each
+	// branch's filter is scoped to its own type entry).
+	const infos = decomposeSimple(':matches(A[x=1], B[y=2])');
+	check(':matches expands to 2 entries', infos.length === 2);
+	const aInfo = infos.find(i => i.types !== 'all' && i.types.has('A'))!;
+	const bInfo = infos.find(i => i.types !== 'all' && i.types.has('B'))!;
+	check('branch A filter accepts {A,x=1}', aInfo.filter!({ type: 'A', x: 1 }));
+	check('branch A filter rejects {A,x=2}', !aInfo.filter!({ type: 'A', x: 2 }));
+	check('branch B filter accepts {B,y=2}', bInfo.filter!({ type: 'B', y: 2 }));
+}
+
+{
+	// Nested `Foo:matches(A.field, B.field2)` — outer compound carries
+	// the trigger type {Foo}; matches inside is filter-only-ish (per
+	// branch contributes types {A}/{B}, but Foo's identifier wins so
+	// the matches collapses through the compound branch). Verify the
+	// filter executes per-branch.
+	const infos = decomposeSimple(':matches(A:not(B), C)');
+	check(':matches A:not(B), C expands per-branch', infos.length === 2);
+	const aInfo = infos.find(i => i.types !== 'all' && i.types.has('A'))!;
+	check('A:not(B) filter rejects when type is B (impossible) — accepts type A',
+		aInfo.filter!({ type: 'A' }));
+}
+
+// --- UnsupportedSelectorError + parse error throws -------------------
+
+{
+	let threw = false;
+	let isUnsupported = false;
+	try { decomposeSimple('('); } catch (e: any) {
+		threw = true;
+		isUnsupported = e instanceof UnsupportedSelectorError;
+	}
+	check('invalid esquery throws', threw);
+	check('invalid esquery throws plain Error (not UnsupportedSelectorError)', !isUnsupported);
+}
+
+{
+	// Force a structurally-impossible-to-decompose selector. Most well-
+	// formed shapes now succeed; deliberately construct an unhandled
+	// AST by feeding a class macro we don't recognise.
+	let threw = false;
+	let isUnsupported = false;
+	try { decomposeSimple(':bogus-class-macro'); } catch (e: any) {
+		threw = true;
+		isUnsupported = e instanceof UnsupportedSelectorError;
+	}
+	check('unknown class macro throws UnsupportedSelectorError', threw && isUnsupported);
 }
 
 console.log();

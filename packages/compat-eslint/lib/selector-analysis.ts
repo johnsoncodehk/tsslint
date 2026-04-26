@@ -199,18 +199,38 @@ export interface FastDispatchInfo {
 	filter?: (target: any) => boolean;
 }
 
+// Thrown when a selector parses as valid esquery syntax but its shape
+// isn't yet covered by the fast-dispatch decomposer. Distinct from a
+// raw parse error so callers can tell the difference between user
+// typos and our coverage gaps.
+export class UnsupportedSelectorError extends Error {
+	constructor(public readonly selector: string, reason?: string) {
+		super(`compat-eslint fast dispatch can't decompose selector \`${selector}\`${reason ? `: ${reason}` : ''}. This is a coverage gap in selector-analysis.ts; please open an issue with the selector + the rule that registered it.`);
+		this.name = 'UnsupportedSelectorError';
+	}
+}
+
 // `decomposeSimple` returns an array of dispatch infos. A single
 // identifier / compound / child selector typically yields one entry, but
 // a top-level matches/`A, B` list with per-branch filters expands into
 // one entry per branch so each can carry its own filter.
-export function decomposeSimple(selector: string): FastDispatchInfo[] | null {
+//
+// Throws on:
+//   - esquery parse error (syntactically invalid selector — user bug)
+//   - any selector shape we don't yet decompose (UnsupportedSelectorError
+//     — coverage gap; see callers of the helper). The caller (e.g.
+//     tryBuildFastDispatch) MUST propagate, never silently swallow —
+//     fallback to NodeEventGenerator was retired.
+export function decomposeSimple(selector: string): FastDispatchInfo[] {
 	let ast: unknown;
 	try {
 		ast = esquery.parse(selector);
-	} catch {
-		return null;
+	} catch (e) {
+		throw new Error(`Invalid esquery selector \`${selector}\`: ${(e as Error).message}`);
 	}
-	return walkSelector(ast as any, false);
+	const infos = walkSelector(ast as any, false);
+	if (!infos) throw new UnsupportedSelectorError(selector);
+	return infos;
 }
 
 // Top-level selector entry. Handles combinators / attribute compounds.
@@ -248,11 +268,12 @@ function walkSelector(ast: any, isExit: boolean): FastDispatchInfo[] | null {
 }
 
 // `Left ~ Right` (sibling, any earlier) and `Left + Right` (adjacent
-// previous). Trigger on Right type; filter checks earlier siblings in
-// whichever array slot the node occupies on its parent.
+// previous). Trigger on Right type (or `all` when right is wildcard);
+// filter checks earlier siblings in whichever array slot the node
+// occupies on its parent.
 function walkSibling(left: any, right: any, isExit: boolean, adjacent: boolean): FastDispatchInfo | null {
 	const rightInfo = walkTypeMatcher(right, isExit);
-	if (!rightInfo || rightInfo.types === 'all') return null;
+	if (!rightInfo) return null;
 	const leftMatch = collectMatcher(left);
 	if (!leftMatch) return null;
 	const filter = adjacent
@@ -327,9 +348,9 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 				addFilter(n => !inner(n));
 				wildcard = wildcard || typeFilter === undefined;
 			} else if (sub.type === 'has') {
-				const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
-				if (!inner) return null;
-				addFilter(n => hasDescendantMatching(n, inner));
+				const m = collectMatcher(sub);
+				if (!m) return null;
+				addFilter(m);
 			} else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
 				const idx = sub.index?.value;
 				if (typeof idx !== 'number') return null;
@@ -395,15 +416,25 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			filter: n => parentMatch(n.parent),
 		};
 	}
-	return null;
+	// Fallback: any other selector kind on the right (`:not`, `:has`,
+	// `:nth-child`, `:function`, etc.) — let walkTypeMatcher decompose
+	// it as a standalone, then compose parent-of-target via collectMatcher.
+	const rightInfo = walkTypeMatcher(right, isExit);
+	if (!rightInfo) return null;
+	const parentMatch = collectMatcher(left);
+	if (!parentMatch) return null;
+	const parentFilter = (n: any) => parentMatch(n.parent);
+	const prev = rightInfo.filter;
+	rightInfo.filter = prev ? n => parentFilter(n) && prev(n) : parentFilter;
+	return rightInfo;
 }
 
-// `Parent Right` (descendant). Trigger on right type, walk ancestors
-// at dispatch time looking for a Parent-typed node. Right side must be
-// a plain type matcher (no nested combinators / matches).
+// `Parent Right` (descendant). Trigger on right type (or `all` when
+// right is wildcard / class macro), walk ancestors at dispatch time
+// looking for a Parent-typed node.
 function walkDescendant(left: any, right: any, isExit: boolean): FastDispatchInfo | null {
 	const rightInfo = walkTypeMatcher(right, isExit);
-	if (!rightInfo || rightInfo.types === 'all') return null;
+	if (!rightInfo) return null;
 	const ancestorMatch = collectMatcher(left);
 	if (!ancestorMatch) return null;
 	const ancestorFilter = (n: any) => {
@@ -450,10 +481,11 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 		}
 		case 'has': {
 			// `:has(X)` standalone — wildcard, fires when the node has at
-			// least one descendant matching X.
-			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors });
-			if (!inner) return null;
-			return { types: 'all', isExit, filter: n => hasDescendantMatching(n, inner) };
+			// least one descendant matching X. Delegate to collectMatcher
+			// so the inner properly binds `:scope` to the dispatched node.
+			const m = collectMatcher(ast);
+			if (!m) return null;
+			return { types: 'all', isExit, filter: m };
 		}
 		case 'nth-child':
 		case 'nth-last-child': {
@@ -465,6 +497,33 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 				isExit,
 				filter: n => isNthChild(n, idx, fromEnd),
 			};
+		}
+		case 'attribute': {
+			// Standalone `[attr=val]` — wildcard with attribute filter.
+			const f = makeAttributeFilter(ast);
+			if (!f) return null;
+			return { types: 'all', isExit, filter: f };
+		}
+		case 'field': {
+			// Standalone `.field` — wildcard, fires when the node
+			// occupies the named field slot on its parent.
+			const fieldName = ast.name as string;
+			return {
+				types: 'all',
+				isExit,
+				filter: n => !!n.parent && n.parent[fieldName] === n,
+			};
+		}
+		case 'sibling':
+		case 'adjacent':
+		case 'child':
+		case 'descendant': {
+			// Combinator nested inside a context that wants a type
+			// matcher (e.g. inside `:has(...)` or `:matches(...)`).
+			// Walk via collectMatcher to get a runtime predicate.
+			const m = collectMatcher(ast);
+			if (!m) return null;
+			return { types: 'all', isExit, filter: m };
 		}
 		case 'compound': {
 			const collected = new Set<string>();
@@ -479,29 +538,26 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					isAll = true;
 					sawType = true;
 				} else if (sub.type === 'matches') {
-					// Try as a type-contributing matches (union of identifier
-					// branches). If that fails, every branch must be a
-					// filter-only check (attribute or class macro), so
-					// treat the whole `:matches(...)` as a per-target
-					// filter via collectMatcher (OR-combines the branches).
 					const inner = walkTypeMatcher(sub, isExit);
-					if (inner) {
-						if (inner.types === 'all') {
-							isAll = true;
-						} else {
-							for (const t of inner.types) collected.add(t);
+					if (!inner) return null;
+					if (inner.types === 'all') {
+						// Filter-only matches (e.g. `:matches([a=1], [b=2])`)
+						// — the outer compound's identifier supplies the
+						// type. Don't promote the compound to wildcard;
+						// just add this matches as an extra OR filter.
+						if (inner.filter) {
+							const prev = extraFilter;
+							const innerFilter = inner.filter;
+							extraFilter = prev ? n => prev(n) && innerFilter(n) : innerFilter;
 						}
+					} else {
+						for (const t of inner.types) collected.add(t);
 						if (inner.filter) {
 							const prev = extraFilter;
 							const innerFilter = inner.filter;
 							extraFilter = prev ? n => prev(n) && innerFilter(n) : innerFilter;
 						}
 						sawType = true;
-					} else {
-						const m = collectMatcher(sub);
-						if (!m) return null;
-						const prev = extraFilter;
-						extraFilter = prev ? n => prev(n) && m(n) : m;
 					}
 				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 					isExit = true;
@@ -532,14 +588,13 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && negFilter(n) : negFilter;
 				} else if (sub.type === 'has') {
-					// `Foo:has(Bar)` — types stay {Foo}, add filter checking
-					// descendants. The matcher captures the same scope as the
-					// trigger, so DFS starts from the dispatched node.
-					const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
-					if (!inner) return null;
-					const hasFilter = (n: any) => hasDescendantMatching(n, inner);
+					// `Foo:has(Bar)` — types stay {Foo}, add :has filter
+					// (delegates to collectMatcher so `:scope` binds
+					// correctly to the dispatched node).
+					const m = collectMatcher(sub);
+					if (!m) return null;
 					const prev = extraFilter;
-					extraFilter = prev ? n => prev(n) && hasFilter(n) : hasFilter;
+					extraFilter = prev ? n => prev(n) && m(n) : m;
 				} else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
 					const idx = sub.index?.value;
 					if (typeof idx !== 'number') return null;
@@ -552,6 +607,20 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					if (!attrFilter) return null;
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && attrFilter(n) : attrFilter;
+				} else if (sub.type === 'field') {
+					// `Foo.field` — node is at parent[field]. Reference equality.
+					const fieldName = sub.name as string;
+					const f = (n: any) => !!n.parent && n.parent[fieldName] === n;
+					const prev = extraFilter;
+					extraFilter = prev ? n => prev(n) && f(n) : f;
+				} else if (sub.type === 'sibling' || sub.type === 'adjacent'
+					|| sub.type === 'child' || sub.type === 'descendant') {
+					// Nested combinator inside a compound — fall back to
+					// collectMatcher's full evaluation as a per-target filter.
+					const m = collectMatcher(sub);
+					if (!m) return null;
+					const prev = extraFilter;
+					extraFilter = prev ? n => prev(n) && m(n) : m;
 				} else {
 					return null;
 				}
@@ -560,25 +629,45 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 			return { types: isAll ? 'all' : collected, isExit, filter: extraFilter };
 		}
 		case 'matches': {
-			let types: Set<string> | null = null;
+			// Each branch contributes a (typeMatcher, optional filter) pair.
+			// At runtime, target matches if ANY branch's typeMatcher fires
+			// AND that branch's filter (if any) passes. The advertised
+			// `types` is the union (or 'all' if any branch is unbounded).
+			interface Branch { types: Set<string> | 'all'; filter?: NodePredicate; }
+			const branches: Branch[] = [];
 			let mergedExit: boolean | null = null;
-			let extraFilter: ((t: any) => boolean) | undefined;
+			let anyAll = false;
 			for (const sub of ast.selectors) {
 				const inner = walkTypeMatcher(sub, isExit);
-				if (!inner || inner.types === 'all') return null;
+				if (!inner) return null;
 				if (mergedExit === null) mergedExit = inner.isExit;
 				else if (mergedExit !== inner.isExit) return null;
-				types ??= new Set();
-				for (const t of inner.types) types.add(t);
-				if (inner.filter) {
-					// Inside a `matches(...)`, each branch's filter applies only
-					// to that branch's types — we can't represent per-branch
-					// filters in the flat Set + filter shape, so bail.
-					return null;
-				}
+				if (inner.types === 'all') anyAll = true;
+				branches.push({ types: inner.types, filter: inner.filter });
 			}
-			if (!types) return null;
-			return { types, isExit: mergedExit ?? isExit, filter: extraFilter };
+			if (branches.length === 0) return null;
+			let types: Set<string> | 'all';
+			if (anyAll) {
+				types = 'all';
+			} else {
+				const merged = new Set<string>();
+				for (const b of branches) {
+					if (b.types !== 'all') for (const t of b.types) merged.add(t);
+				}
+				types = merged;
+			}
+			// Combined filter: OR across branches; each branch checks its
+			// own type set first then its own filter.
+			const combined: NodePredicate = n => {
+				for (let i = 0; i < branches.length; i++) {
+					const b = branches[i];
+					if (b.types !== 'all' && !b.types.has(n.type)) continue;
+					if (b.filter && !b.filter(n)) continue;
+					return true;
+				}
+				return false;
+			};
+			return { types, isExit: mergedExit ?? isExit, filter: combined };
 		}
 		default:
 			return null;
@@ -599,7 +688,12 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 //   class macros → :function / :statement / :expression /
 //                  :declaration / :pattern (suffix-based)
 type NodePredicate = (node: any) => boolean;
-function collectMatcher(ast: any): NodePredicate | null {
+// `scopeRef` is a per-`:has` evaluation cell. `:has(:scope > X)` binds
+// `:scope` to the node currently being tested by the outer `:has`. The
+// outer `:has` swaps `scopeRef.value` to the test root before evaluating
+// its inner matcher; nested `:has` get their own cell.
+type ScopeRef = { value: any };
+function collectMatcher(ast: any, scope?: ScopeRef): NodePredicate | null {
 	if (!ast) return null;
 	switch (ast.type) {
 		case 'identifier': {
@@ -607,11 +701,11 @@ function collectMatcher(ast: any): NodePredicate | null {
 			return n => !!n && n.type === v;
 		}
 		case 'wildcard':
-			return _n => true;
+			return n => !!n;
 		case 'matches': {
 			const subs: NodePredicate[] = [];
 			for (const sub of ast.selectors) {
-				const m = collectMatcher(sub);
+				const m = collectMatcher(sub, scope);
 				if (!m) return null;
 				subs.push(m);
 			}
@@ -623,7 +717,7 @@ function collectMatcher(ast: any): NodePredicate | null {
 		case 'not': {
 			const subs: NodePredicate[] = [];
 			for (const sub of ast.selectors) {
-				const m = collectMatcher(sub);
+				const m = collectMatcher(sub, scope);
 				if (!m) return null;
 				subs.push(m);
 			}
@@ -637,11 +731,11 @@ function collectMatcher(ast: any): NodePredicate | null {
 			const subs: NodePredicate[] = [];
 			for (const sub of ast.selectors) {
 				if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') continue;
-				const m = collectMatcher(sub);
+				const m = collectMatcher(sub, scope);
 				if (!m) return null;
 				subs.push(m);
 			}
-			if (subs.length === 0) return _n => true;
+			if (subs.length === 0) return n => !!n;
 			return n => {
 				if (!n) return false;
 				for (let i = 0; i < subs.length; i++) if (!subs[i](n)) return false;
@@ -652,20 +746,27 @@ function collectMatcher(ast: any): NodePredicate | null {
 			const f = makeAttributeFilter(ast);
 			return f;
 		}
-		case 'class':
-			return classMacroMatcher(String(ast.name).toLowerCase());
+		case 'class': {
+			const name = String(ast.name).toLowerCase();
+			if (name === 'scope') {
+				// Inside `:has(...)` the scope cell points at the node being
+				// tested; outside it acts like wildcard (matches anything).
+				return scope ? n => n === scope.value : n => !!n;
+			}
+			return classMacroMatcher(name);
+		}
 		case 'child': {
 			// `Left > Right` — n matches when n matches Right AND n.parent
 			// matches Left. Nested combinators bottom out here.
-			const leftMatch = collectMatcher(ast.left);
-			const rightMatch = collectMatcher(ast.right);
+			const leftMatch = collectMatcher(ast.left, scope);
+			const rightMatch = collectMatcher(ast.right, scope);
 			if (!leftMatch || !rightMatch) return null;
 			return n => !!n && rightMatch(n) && leftMatch(n.parent);
 		}
 		case 'descendant': {
 			// `Left Right` — n matches Right AND some ancestor matches Left.
-			const leftMatch = collectMatcher(ast.left);
-			const rightMatch = collectMatcher(ast.right);
+			const leftMatch = collectMatcher(ast.left, scope);
+			const rightMatch = collectMatcher(ast.right, scope);
 			if (!leftMatch || !rightMatch) return null;
 			return n => {
 				if (!n || !rightMatch(n)) return false;
@@ -685,9 +786,20 @@ function collectMatcher(ast: any): NodePredicate | null {
 			return n => !!n && !!n.parent && n.parent[fieldName] === n;
 		}
 		case 'has': {
-			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors });
+			// Each `:has(...)` gets its own scope cell so the inner
+			// selector's `:scope` references resolve to the node currently
+			// being tested by THIS has, not an enclosing one.
+			const innerScope: ScopeRef = { value: null };
+			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors }, innerScope);
 			if (!inner) return null;
-			return n => !!n && hasDescendantMatching(n, inner);
+			return n => {
+				if (!n) return false;
+				const prev = innerScope.value;
+				innerScope.value = n;
+				const ok = hasDescendantMatching(n, inner);
+				innerScope.value = prev;
+				return ok;
+			};
 		}
 		case 'nth-child':
 		case 'nth-last-child': {
@@ -697,8 +809,8 @@ function collectMatcher(ast: any): NodePredicate | null {
 			return n => !!n && isNthChild(n, idx, fromEnd);
 		}
 		case 'sibling': {
-			const leftMatch = collectMatcher(ast.left);
-			const rightMatch = collectMatcher(ast.right);
+			const leftMatch = collectMatcher(ast.left, scope);
+			const rightMatch = collectMatcher(ast.right, scope);
 			if (!leftMatch || !rightMatch) return null;
 			return n => {
 				if (!n || !rightMatch(n)) return false;
@@ -711,8 +823,8 @@ function collectMatcher(ast: any): NodePredicate | null {
 			};
 		}
 		case 'adjacent': {
-			const leftMatch = collectMatcher(ast.left);
-			const rightMatch = collectMatcher(ast.right);
+			const leftMatch = collectMatcher(ast.left, scope);
+			const rightMatch = collectMatcher(ast.right, scope);
 			if (!leftMatch || !rightMatch) return null;
 			return n => {
 				if (!n || !rightMatch(n)) return false;
@@ -771,7 +883,15 @@ function classMacroMatcher(name: string): NodePredicate | null {
 }
 
 // Build a predicate from an esquery attribute selector AST.
-// Supports: name(.path), op (=, !=), value (literal/regexp/type).
+// Mirrors every combination esquery itself supports (see
+// esquery.esm.js:3981 onwards):
+//   - `[name]` (no operator): truthy-existence check
+//   - `[name=value]` / `[name!=value]`:
+//       * literal — stringify both sides and compare (loose-string)
+//       * /regex/ — regex.test on the stringified attribute
+//       * type(name) — typeof check
+//   - `[name<v]` / `[name<=v]` / `[name>v]` / `[name>=v]`:
+//       * numeric — coerce both sides to Number, compare
 function makeAttributeFilter(attr: any): ((target: any) => boolean) | null {
 	const path = String(attr.name).split('.');
 	const get = (target: any) => {
@@ -791,27 +911,56 @@ function makeAttributeFilter(attr: any): ((target: any) => boolean) | null {
 		};
 	}
 	const want = attr.value;
+	// Regex: applies to `=` and `!=` only.
 	if (want?.type === 'regexp') {
-		const re = want.value;
-		return target => {
-			const v = get(target);
-			return typeof v === 'string' && re.test(v);
-		};
+		const re = want.value as RegExp;
+		switch (op) {
+			case '=':
+				return target => {
+					const v = get(target);
+					return typeof v === 'string' && re.test(v);
+				};
+			case '!=':
+				return target => {
+					const v = get(target);
+					return !(typeof v === 'string' && re.test(v));
+				};
+			default:
+				return null;
+		}
 	}
-	const literal = want?.type === 'literal' ? want.value : undefined;
-	const wantType = want?.type === 'type' ? want.value : undefined; // unused: rare
-	if (literal === undefined && wantType === undefined) return null;
-	// esquery's grammar has no booleans / numbers — every literal is a
-	// string. To match nodes whose attribute is a boolean / number /
-	// string, esquery stringifies both sides before comparing
-	// (esquery.esm.js:3998). Mirror that exactly so `[optional=true]`
-	// matches `optional: true`, `[arity=2]` matches `arity: 2`, etc.
-	const wantStr = `${literal}`;
+	// Type-of: esquery's `[attr=type(string)]` form (esquery.esm.js:4004).
+	if (want?.type === 'type') {
+		const wantType = want.value as string;
+		switch (op) {
+			case '=':
+				return target => typeof get(target) === wantType;
+			case '!=':
+				return target => typeof get(target) !== wantType;
+			default:
+				return null;
+		}
+	}
+	// Literal value: numeric / string / null / boolean. esquery parses
+	// numbers as JS numbers and bare words as strings; we delegate to
+	// the operator's natural coercion.
+	if (want?.type !== 'literal') return null;
+	const literal = want.value;
 	switch (op) {
 		case '=':
-			return target => `${get(target)}` === wantStr;
+			// Stringify both sides — esquery has no boolean grammar, so
+			// `[optional=true]` is "true" matched against String(node.optional).
+			return target => `${get(target)}` === `${literal}`;
 		case '!=':
-			return target => `${get(target)}` !== wantStr;
+			return target => `${get(target)}` !== `${literal}`;
+		case '<':
+			return target => Number(get(target)) < Number(literal);
+		case '<=':
+			return target => Number(get(target)) <= Number(literal);
+		case '>':
+			return target => Number(get(target)) > Number(literal);
+		case '>=':
+			return target => Number(get(target)) >= Number(literal);
 		default:
 			return null;
 	}

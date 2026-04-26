@@ -322,66 +322,29 @@ function runSharedTraversal(
 	}
 	emitter.setCurrentRule(undefined);
 
-	// Fast dispatch: if every registered selector is simple (just type
-	// names + optional :exit), build per-type listener arrays and bypass
-	// NodeEventGenerator entirely. Saves the per-event ancestry shuffle
-	// (currentAncestry.unshift/shift), the applySelectors loop, and the
-	// esquery `matches()` call. For self-lint with only type-name
-	// selectors this is the dominant per-event cost.
-	const fast = tryBuildFastDispatch(allListeners);
+	// Fast dispatch is the only path. Every selector decomposes into a
+	// (typeSet, fieldFire?, typeFilter?, filter?) tuple via
+	// `decomposeSimple`; if it can't, an UnsupportedSelectorError fires
+	// — never silent NodeEventGenerator fallback. See `buildFastDispatch`.
+	const fast = buildFastDispatch(allListeners);
 
-	// Phase B+: when fast dispatch is available AND every trigger ESTree
-	// type has a TS-AST predicate, scan the TS AST directly and only
-	// materialise the LazyNodes that are actual trigger hits. The
-	// existing eventQueue (from selectorAwareTraverse / sourceCode.traverse)
-	// is bypassed entirely — most files with narrow rule sets visit a
-	// handful of nodes instead of thousands.
+	// Phase B+: when no rule registers an onCodePath* listener, scan
+	// the TS AST directly via tsScanTraverse and only materialise the
+	// LazyNodes that are actual trigger hits. With CPA listeners
+	// present, fall back to sourceCode.traverse() (still on lazy
+	// ESTree) — that path builds an eventQueue with both kind=1 (visit)
+	// and kind=2 (codePath emit) steps which dispatchFast handles
+	// uniformly. Either way, dispatch goes through dispatchFast — no
+	// NodeEventGenerator anywhere.
 	let eventQueue: any[] | undefined;
-	if (fast && fast.codePath.size === 0) {
-		// Skip tsScan when any onCodePath* listener is registered:
-		// CodePathAnalyzer needs to observe every node in canonical ESTree
-		// pre-order, but our TS-AST walk emits structural mismatches at
-		// CaseBlock / ParenthesizedExpression / VariableDeclarationList
-		// that CPA's per-kind state machine can't reconcile. Fall back
-		// to sourceCode.traverse() (still on lazy ESTree) — that path
-		// builds an eventQueue with both kind=1 (visit) and kind=2
-		// (codePath emit) steps, which dispatchFast now handles in one
-		// loop without going through NodeEventGenerator.
+	if (fast.codePath.size === 0) {
 		eventQueue = tryTsScanEventQueue(file, fast);
 	}
 	if (!eventQueue) {
 		eventQueue = getEventQueue(sourceCode, listenerKeys);
 	}
 
-	if (fast) {
-		dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
-	} else {
-		const { NodeEventGenerator, Traverser } = loadEslintInternals();
-		const eventGenerator = new NodeEventGenerator(emitter, {
-			visitorKeys: sourceCode.visitorKeys,
-			fallback: Traverser.getKeys,
-		});
-		for (const step of eventQueue) {
-			switch (step.kind) {
-				case 1: {
-					if (step.phase === 1) {
-						currentNode = step.target;
-						eventGenerator.enterNode(step.target);
-					}
-					else {
-						eventGenerator.leaveNode(step.target);
-					}
-					break;
-				}
-				case 2: {
-					emitter.emit(step.target, ...step.args);
-					break;
-				}
-				default:
-					throw new Error(`Invalid traversal step found: "${step.type}".`);
-			}
-		}
-	}
+	dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
 }
 
 
@@ -410,9 +373,15 @@ interface FastDispatch {
 	codePath: Map<string, Array<[ESLint.Rule.RuleModule, (...args: unknown[]) => void]>>;
 }
 
-function tryBuildFastDispatch(
+// Always returns a FastDispatch — never null. `decomposeSimple` throws
+// when it encounters a selector form it can't decompose, and we let
+// that throw propagate. The legacy NodeEventGenerator fallback was
+// retired once selector coverage hit 100% of the ESLint / typescript-
+// eslint rule catalogue; any new gap should surface immediately as
+// an UnsupportedSelectorError, not silently degrade performance.
+function buildFastDispatch(
 	allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]>,
-): FastDispatch | null {
+): FastDispatch {
 	const { decomposeSimple, isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
 	const enter = new Map<string, DispatchEntry[]>();
 	const exit = new Map<string, DispatchEntry[]>();
@@ -427,7 +396,6 @@ function tryBuildFastDispatch(
 			continue;
 		}
 		const infos = decomposeSimple(selector);
-		if (!infos) return null;
 		for (const info of infos) {
 			const map = info.isExit ? exit : enter;
 			const allList = info.isExit ? exitAll : enterAll;
