@@ -455,96 +455,6 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 	return obj != null && typeof (obj as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function';
 }
 
-// Subset of ParseSettings that astConverter actually reads.
-const PARSE_SETTINGS = {
-	allowInvalidAST: false,
-	comment: true,
-	errorOnUnknownASTType: false,
-	loc: true,
-	range: true,
-	suppressDeprecatedPropertyWarnings: true,
-	tokens: true,
-};
-
-// Probe every registered rule's listener selectors so the converter knows
-// which TS-only AST node types it must NOT skip — a rule listening on
-// `TSAnyKeyword` would never fire if the converter dropped that node.
-// Run once per process: rules don't unregister, and the converter is
-// re-configured from the default each call.
-//
-// Limitation: the probe only sees each rule's TOP-LEVEL listener
-// selectors. Rules whose visitor body walks INTO a type subtree (e.g.
-// `no-unnecessary-type-assertion` listens on `TSAsExpression` then
-// reads `node.typeAnnotation.type`) can still null-deref when the
-// converter has dropped that subtree. The stubContext below is left
-// deliberately bare so any rule that needs real `parserServices` or
-// scope state crashes during create() — that triggers the
-// ALL_SKIPPABLE fallback, which conservatively preserves every type
-// subtree and keeps such rules functional. Strengthening the stub
-// would lower probe failure but expose the latent walk-into-skipped
-// bug, so it stays minimal until selector-aware can also model
-// listener-body reads.
-let selectorProbeDone = false;
-function ensureSelectorProbe() {
-	if (selectorProbeDone) return;
-	selectorProbeDone = true;
-	const { configureSkipKindsForVisitors, validateSelector, ALL_SKIPPABLE_AST_NODE_TYPES } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
-	const stubContext: any = {
-		cwd: '/',
-		getCwd: () => '/',
-		filename: '/probe.ts',
-		getFilename: () => '/probe.ts',
-		physicalFilename: '/probe.ts',
-		getPhysicalFilename: () => '/probe.ts',
-		sourceCode: undefined,
-		getSourceCode: () => undefined,
-		settings: {},
-		parserOptions: {},
-		languageOptions: { parserOptions: {} },
-		parserPath: undefined,
-		id: 'probe',
-		options: [],
-		report: () => {},
-		getAncestors: () => [],
-		getDeclaredVariables: () => [],
-		getScope: () => undefined,
-		markVariableAsUsed: () => false,
-	};
-	const selectors: string[] = [];
-	for (const entry of ruleRegistry.values()) {
-		let listeners: Record<string, unknown> | undefined;
-		try {
-			listeners = entry.eslintRule.create({
-				...stubContext,
-				options: entry.options,
-				...entry.context,
-			}) as Record<string, unknown> | undefined;
-		}
-		catch {
-			// Rule's create() crashed under the bare stub. We can't know
-			// what selectors it uses, so be conservative: disable
-			// skipping entirely. As noted above, this is also
-			// load-bearing for rules that walk into type subtrees from
-			// non-skipped listeners.
-			configureSkipKindsForVisitors(ALL_SKIPPABLE_AST_NODE_TYPES);
-			return;
-		}
-		if (!listeners) continue;
-		for (const sel of Object.keys(listeners)) {
-			try {
-				validateSelector(sel);
-			}
-			catch (err) {
-				throw new Error(
-					`[${entry.id}] invalid selector ${JSON.stringify(sel)}: ${(err as Error).message.split('\n')[0]}`,
-				);
-			}
-			selectors.push(sel);
-		}
-	}
-	configureSkipKindsForVisitors(selectors);
-}
-
 function getEstree(file: ts.SourceFile, program: ts.Program) {
 	if (cachedEstree?.[0] !== file) {
 		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
@@ -554,38 +464,22 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
 		const { SourceCode } = loadEslintInternals();
 		const { TsScopeManager } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
+		const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
 
-		// `TSSLINT_LAZY_ESTREE=1` switches to the lazy ESTree shim
-		// (lib/lazy-estree.ts). It produces byte-identical output to
-		// typescript-estree's eager Converter on every file in our test
-		// sweep, but materialises children on first read instead of upfront.
-		// No selector probing needed (rules see real subtrees, can't
-		// null-deref). Default off until perf wins are measured.
-		let astMaps: { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> };
-		let estree: any;
-		if (process.env.TSSLINT_LAZY_ESTREE === '1') {
-			const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
-			const result = convertLazy(file);
-			astMaps = result.astMaps as any;
-			estree = result.estree;
-			// tokens / comments come from typescript-estree's standalone
-			// scanner helpers — neither depends on its Converter, so we
-			// can borrow them without doing the eager AST conversion.
-			// Rules like no-unnecessary-type-assertion call
-			// `sourceCode.getTokenAfter()` and need the tokens array.
-			const tseRoot = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
-			const { convertTokens } = require(tseRoot + '/dist/node-utils.js') as { convertTokens(ast: ts.SourceFile): unknown[] };
-			const { convertComments } = require(tseRoot + '/dist/convert-comments.js') as { convertComments(ast: ts.SourceFile): unknown[] };
-			estree.tokens = convertTokens(file);
-			estree.comments = convertComments(file);
-		}
-		else {
-			const { astConvertSkipTypes } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
-			ensureSelectorProbe();
-			const result = astConvertSkipTypes(file, PARSE_SETTINGS as any, true);
-			astMaps = result.astMaps as any;
-			estree = result.estree;
-		}
+		// Lazy ESTree shim (lib/lazy-estree.ts). Byte-identical to
+		// typescript-estree's eager Converter on every TS file under
+		// packages/, but materialises children on first read. Rules see
+		// real subtrees and can't null-deref into them.
+		const { astMaps, estree } = convertLazy(file) as { astMaps: { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> }; estree: any };
+		// tokens / comments come from typescript-estree's standalone scanner
+		// helpers — neither depends on its Converter. Rules like
+		// no-unnecessary-type-assertion call `sourceCode.getTokenAfter()`
+		// and need the tokens array.
+		const tseRoot = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
+		const { convertTokens } = require(tseRoot + '/dist/node-utils.js') as { convertTokens(ast: ts.SourceFile): unknown[] };
+		const { convertComments } = require(tseRoot + '/dist/convert-comments.js') as { convertComments(ast: ts.SourceFile): unknown[] };
+		estree.tokens = convertTokens(file);
+		estree.comments = convertComments(file);
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';

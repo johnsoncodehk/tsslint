@@ -845,22 +845,37 @@ export class TsScopeManager {
 		return this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 	}
 
-	// Like tsToEstree, but if the node lives in a skipped (TS-only) subtree,
-	// return a synthetic stub with `parent` chained back to the nearest
-	// real ancestor. Used by rule-facing getters (def.name, def.node, etc.)
-	// where returning undefined would crash rules that read `.parent.type`.
+	// Like tsToEstree, but if the node hasn't been materialised yet,
+	// returns a synthetic stub with `parent` chained back to the nearest
+	// real ancestor. Used by rule-facing getters where returning undefined
+	// would crash rules that read `.parent.type`.
 	tsToEstreeOrStub<T extends TSESTree.Node = TSESTree.Node>(tsNode: ts.Node | undefined): T | undefined {
 		if (!tsNode) return undefined;
 		const real = this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 		if (real) return real;
-		const { buildSyntheticParent } = require(
-			'./skip-type-converter',
-		) as typeof import('./skip-type-converter');
-		return buildSyntheticParent(
-			tsNode,
-			this.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>,
-		) as T | undefined;
+		return synthesizeStub(tsNode, this.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>) as T;
 	}
+}
+
+// Synthetic stub for TS nodes whose ESTree counterpart hasn't been
+// materialised. Recursive parent chain so `.parent.type` walks work.
+// Critically, the recursion ALSO checks `tsNodeToESTreeNodeMap` at
+// every step — without this, `parent.parent` would be a stub even when
+// the real ESTree ancestor exists, breaking identity comparisons in
+// tests like "parent.parent === referencingNode".
+const _stubCache = new WeakMap<ts.Node, object>();
+function synthesizeStub(tsNode: ts.Node, map: WeakMap<ts.Node, object>): object {
+	const real = map.get(tsNode);
+	if (real) return real;
+	const cached = _stubCache.get(tsNode);
+	if (cached) return cached;
+	const stub: { type: string; range: [number, number]; parent?: object } = {
+		type: 'TS' + ts.SyntaxKind[tsNode.kind],
+		range: [tsNode.getStart(), tsNode.getEnd()],
+	};
+	_stubCache.set(tsNode, stub);
+	if (tsNode.parent) stub.parent = synthesizeStub(tsNode.parent, map);
+	return stub;
 }
 
 export class TsScope {
@@ -1511,25 +1526,15 @@ export class TsReference {
 
 	get identifier(): TSESTree.Identifier {
 		if (this._estreeIdent) return this._estreeIdent;
-		const real = this.manager.tsToEstree<TSESTree.Identifier>(this.tsIdentifier);
-		if (real) return this._estreeIdent = real;
-		// Identifier sits inside a skipped (TS-only) subtree — synthesize a
-		// stub that rules can read `.parent.type` etc. on without crashing.
-		const { buildSyntheticParent } = require(
-			'./skip-type-converter',
-		) as typeof import('./skip-type-converter');
-		const stub: TSESTree.Identifier = {
-			type: 'Identifier',
-			name: this.tsIdentifier.text,
-			range: [this.tsIdentifier.getStart(), this.tsIdentifier.end],
-		} as TSESTree.Identifier;
-		if (this.tsIdentifier.parent) {
-			(stub as { parent?: object }).parent = buildSyntheticParent(
-				this.tsIdentifier.parent,
-				this.manager.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>,
-			);
-		}
-		return this._estreeIdent = stub;
+		// Materialise via tsToEstreeOrStub — same path as other rule-facing
+		// node lookups. Returns a real lazy ESTree Identifier in normal
+		// cases; falls back to a synthetic stub for unsupported kinds.
+		return this._estreeIdent = this.manager.tsToEstreeOrStub<TSESTree.Identifier>(this.tsIdentifier)
+			?? ({
+				type: 'Identifier',
+				name: this.tsIdentifier.text,
+				range: [this.tsIdentifier.getStart(), this.tsIdentifier.end],
+			} as TSESTree.Identifier);
 	}
 
 	get from(): TsScope {

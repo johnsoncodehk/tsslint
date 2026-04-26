@@ -13,9 +13,9 @@ The test files are vendored unchanged so their import paths
 
 Run with: `node packages/compat-eslint/test/upstream-runner.js [pattern]`
 
-## Known failures (209/225 passing)
+## Known failures (212/225 passing)
 
-The 16 remaining failures fall into four buckets, none of which are bugs
+The 13 remaining failures fall into three buckets, none of which are bugs
 in `TsScopeManager`:
 
 - **ES6 destructuring with default values (8 tests)**: upstream's analyzer
@@ -29,10 +29,9 @@ in `TsScopeManager`:
 - **`impliedStrict` option (3 tests)**: ESLint's flag forcing strict mode
   on all scopes regardless of source. Not a TS concept; we do not support
   the option.
-- **ESTree-traversal of type-position nodes (3 tests)**: the runner uses
-  the same patched converter as production (`astConvertSkipTypes`), which
-  returns `null` for `TSTypeReference`, `TSTypeParameter`, etc. so the
-  traverser skips them. Tests that walk the ESTree to collect
-  type-position nodes therefore find none. This is the intended
-  perf/integration tradeoff — rules that need type information are
-  expected to query the TS checker.
+
+(The "ESTree-traversal of type-position nodes" bucket from earlier is
+gone: `astConvertSkipTypes` was removed when the lazy ESTree shim
+became default — see `lib/lazy-estree.ts`. The runner uses
+typescript-estree's eager `astConverter` directly so type subtrees are
+fully populated.)

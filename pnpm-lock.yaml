@@ -125,9 +125,6 @@ importers:
       eslint:
         specifier: '>=9.0.0 <9.28.0'
         version: 9.27.0(jiti@2.6.1)
-      esquery:
-        specifier: ^1.7.0
-        version: 1.7.0
     devDependencies:
       '@types/eslint':
         specifier: ^8.56.10
