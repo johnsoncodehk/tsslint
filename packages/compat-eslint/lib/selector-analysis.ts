@@ -29,21 +29,12 @@
 const esqueryPath = require.resolve('esquery', { paths: [require.resolve('eslint/package.json')] });
 const esquery = require(esqueryPath) as { parse(selector: string): unknown };
 
-// Lazy-loaded visitor-keys table (`@typescript-eslint/visitor-keys`) —
-// used by sibling / `:nth-child` / `:has` filters at dispatch time to
-// walk a node's children without hard-coding keys per type. The package
-// is a direct dependency; `require` failure means a broken install, so
-// we let the load-time error propagate rather than silently falling
-// back to a property scan that wouldn't see lazy getters anyway.
-let _visitorKeys: Record<string, readonly string[] | undefined> | null = null;
+// Vendored visitor-keys table (`./visitor-keys`) — used by sibling /
+// `:nth-child` / `:has` filters at dispatch time to walk a node's
+// children without hard-coding keys per type.
+import { visitorKeys as _visitorKeys } from './visitor-keys';
 function visitorKeysFor(type: string): readonly string[] | null {
-	if (_visitorKeys === null) {
-		const eslintRoot = (require('path') as typeof import('path')).dirname(require.resolve('eslint/package.json'));
-		_visitorKeys = require(require.resolve('@typescript-eslint/visitor-keys', {
-			paths: [eslintRoot],
-		})).visitorKeys;
-	}
-	return _visitorKeys![type] ?? null;
+	return _visitorKeys[type] ?? null;
 }
 
 // Iterate every direct child node (or array element) under `node`. Used

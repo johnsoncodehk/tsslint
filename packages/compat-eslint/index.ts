@@ -676,7 +676,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// whole parser package on first call (the heaviest single dep) and just
 		// dispatches to typescript-estree's astConverter, which we already have
 		// a ts.SourceFile for. Calling it directly avoids the parser require.
-		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
+		const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
 		const { SourceCode } = loadEslintInternals();
 		const { TsScopeManager } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
 		const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
@@ -718,7 +718,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 			text: file.text,
 			ast: estree as unknown as ESLint.AST.Program,
 			scopeManager: scopeManager as unknown as ESLint.Scope.ScopeManager,
-			visitorKeys,
+			visitorKeys: visitorKeys as Record<string, string[]>,
 			parserServices: {
 				...astMaps,
 				program,
