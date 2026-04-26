@@ -31,20 +31,17 @@ const esquery = require(esqueryPath) as { parse(selector: string): unknown };
 
 // Lazy-loaded visitor-keys table (`@typescript-eslint/visitor-keys`) —
 // used by sibling / `:nth-child` / `:has` filters at dispatch time to
-// walk a node's children without hard-coding keys per type. Falls back
-// to enumerating own enumerable properties if the package isn't on the
-// resolve path (some test harnesses).
+// walk a node's children without hard-coding keys per type. The package
+// is a direct dependency; `require` failure means a broken install, so
+// we let the load-time error propagate rather than silently falling
+// back to a property scan that wouldn't see lazy getters anyway.
 let _visitorKeys: Record<string, readonly string[] | undefined> | null = null;
 function visitorKeysFor(type: string): readonly string[] | null {
 	if (_visitorKeys === null) {
-		try {
-			const eslintRoot = (require('path') as typeof import('path')).dirname(require.resolve('eslint/package.json'));
-			_visitorKeys = require(require.resolve('@typescript-eslint/visitor-keys', {
-				paths: [eslintRoot],
-			})).visitorKeys;
-		} catch {
-			_visitorKeys = {};
-		}
+		const eslintRoot = (require('path') as typeof import('path')).dirname(require.resolve('eslint/package.json'));
+		_visitorKeys = require(require.resolve('@typescript-eslint/visitor-keys', {
+			paths: [eslintRoot],
+		})).visitorKeys;
 	}
 	return _visitorKeys![type] ?? null;
 }
@@ -53,7 +50,10 @@ function visitorKeysFor(type: string): readonly string[] | null {
 // by `:has(X)` (DFS) and structural filters that need the full child
 // list, not just specific named slots. When visitor-keys has no entry
 // for the type, fall back to enumerating own enumerable properties —
-// covers synthetic test fixtures and exotic node types.
+// this safely covers GenericTSNode (synthetic, no lazy children to miss)
+// and plain test fixtures with arbitrary types. LazyNodes always have a
+// visitor-keys entry, so the fallback never fires for them; if it did,
+// `Object.keys` couldn't see their lazy getters anyway.
 function* iterChildNodes(node: any): IterableIterator<any> {
 	const keys = visitorKeysFor(node.type) ?? Object.keys(node);
 	for (const key of keys) {
@@ -75,7 +75,8 @@ function* iterChildNodes(node: any): IterableIterator<any> {
 // Find the array on `node.parent` that contains `node`, plus its index.
 // Returns null if the node sits in a non-array slot (e.g. parent.test
 // rather than parent.body[]) — `:nth-child` / sibling combinators only
-// have meaning inside an array slot.
+// have meaning inside an array slot. Same visitor-keys-with-fallback
+// policy as iterChildNodes.
 function locateInArraySlot(node: any): { siblings: any[]; index: number } | null {
 	const parent = node.parent;
 	if (!parent) return null;
