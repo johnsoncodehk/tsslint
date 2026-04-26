@@ -139,49 +139,6 @@ export function convertRule(
 	return tsslintRule;
 }
 
-// A stripped-down replacement for ESLint's safe-emitter that knows which rule
-// each listener belongs to. The per-listener try/catch + "skip if this rule
-// already errored" guard runs inline at emit time, so we don't have to wrap
-// every (rule × selector × file) listener in its own closure.
-function makeRuleEmitter(errors: Map<ESLint.Rule.RuleModule, unknown>) {
-	// Flat `[rule, fn, rule, fn, ...]` per event keeps the dispatch loop tight.
-	const listeners = new Map<string, unknown[]>();
-	let currentRule: ESLint.Rule.RuleModule | undefined;
-	return {
-		setCurrentRule(rule: ESLint.Rule.RuleModule | undefined) {
-			currentRule = rule;
-		},
-		on(eventName: string, listener: (...args: unknown[]) => void) {
-			let arr = listeners.get(eventName);
-			if (!arr) {
-				listeners.set(eventName, arr = []);
-			}
-			arr.push(currentRule, listener);
-		},
-		eventNames() {
-			return [...listeners.keys()];
-		},
-		emit(eventName: string, ...args: unknown[]) {
-			const arr = listeners.get(eventName);
-			if (!arr) {
-				return;
-			}
-			for (let i = 0; i < arr.length; i += 2) {
-				const rule = arr[i] as ESLint.Rule.RuleModule;
-				if (errors.has(rule)) {
-					continue;
-				}
-				try {
-					(arr[i + 1] as (...a: unknown[]) => void)(...args);
-				}
-				catch (err) {
-					errors.set(rule, err);
-				}
-			}
-		},
-	};
-}
-
 function runSharedTraversal(
 	file: ts.SourceFile,
 	program: ts.Program,
@@ -189,17 +146,15 @@ function runSharedTraversal(
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 ) {
 	const { sourceCode } = getEstree(file, program);
-	const emitter = makeRuleEmitter(errors);
 	const cwd = program.getCurrentDirectory();
 
 	let currentNode: any;
-	// (rule, selector, listener) triples — used to build fast dispatch
-	// tables when every selector is simple. Parallel to emitter.on().
+	// (rule, selector, listener) triples — fed into buildFastDispatch
+	// which builds the per-type listener arrays dispatchFast walks.
 	const allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]> = [];
 
 	for (const entry of ruleRegistry.values()) {
 		const eslintRule = entry.eslintRule;
-		emitter.setCurrentRule(eslintRule);
 		// Lazy: rules that don't fire on this file pay no array allocation.
 		let myReports: DeferredReport[] | undefined;
 		const ruleListeners = eslintRule.create({
@@ -319,12 +274,10 @@ function runSharedTraversal(
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
 			if (listener) {
-				emitter.on(selector, listener as (...a: unknown[]) => void);
 				allListeners.push([eslintRule, selector, listener as (n: unknown) => void]);
 			}
 		}
 	}
-	emitter.setCurrentRule(undefined);
 
 	// Fast dispatch is the only path. Every selector decomposes into a
 	// (typeSet, fieldFire?, typeFilter?, filter?) tuple via
