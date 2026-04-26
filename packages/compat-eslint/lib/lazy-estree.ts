@@ -461,13 +461,22 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	// Build downward: innermost element of `toBuild` is the original
 	// tsNode, outermost is the closest ts.Node to the cached ancestor.
 	// Iterate from the outer end inward, threading `parent` through.
+	//
+	// Inline convertChild's body: every toBuild element is a confirmed
+	// cache miss (the ancestor walk above breaks on the first cache hit),
+	// so the cache lookup convertChild does on entry would always miss
+	// here. Skip it and call convertChildInner / maybeFixExports directly.
 	for (let i = toBuild.length - 1; i >= 0; i--) {
-		const node = convertChild(toBuild[i], parent);
+		const child = toBuild[i];
+		let node = convertChildInner(child, parent);
+		if (node && EXPORTABLE_KINDS.has(child.kind)) {
+			node = maybeFixExports(child, node, parent);
+		}
 		if (!node) {
 			// convertChild returns null for kinds with no ESTree counterpart
 			// (HeritageClause, OmittedExpression, JsxText). Bottom-up
 			// materialise wants SOMETHING rather than nothing.
-			return new GenericTSNode(toBuild[i], parent);
+			return new GenericTSNode(child, parent);
 		}
 		parent = node;
 	}
