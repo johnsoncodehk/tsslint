@@ -25,19 +25,16 @@ const SK = ts.SyntaxKind;
 // each access. Caching this once avoids the getter per visit (~2% hot path).
 const tsForEachChild = ts.forEachChild;
 
-// Step shape compatible with @eslint/plugin-kit's VisitNodeStep — both
+// Step shape compatible with @eslint/plugin-kit's VisitNodeStep. Both
 // dispatchFast (index.ts) and NodeEventGenerator's switch on `step.kind`
-// only read these four fields and never check instanceof. Constructing
-// plain objects directly avoids one class allocation, one options-object
-// allocation, and one args-array allocation per step (~6 allocations
-// per trigger hit × tens of thousands of hits per lint pass).
-//
-// `args` is left undefined: it's only consumed in NodeEventGenerator's
-// `case 2: emit(target, ...args)` branch, and our walker only emits
-// kind === 1 (visit) steps.
-type VisitStep = { type: 'visit'; kind: 1; target: unknown; phase: 1 | 2; args: undefined };
+// only read kind/target/phase. `type` is referenced in an error-message
+// default branch, never on the happy path; `args` is only consumed for
+// kind === 2 (CallMethodStep) — our walker only emits kind === 1.
+// Skipping those two fields cuts the step object's hidden-class slot
+// count from 5 to 3, which V8 stores more compactly.
+type VisitStep = { kind: 1; target: unknown; phase: 1 | 2 };
 function makeStep(target: unknown, phase: 1 | 2): VisitStep {
-	return { type: 'visit', kind: 1, target, phase, args: undefined };
+	return { kind: 1, target, phase };
 }
 
 // Wrapper kinds whose `materialize()` result expands into multi-layer
