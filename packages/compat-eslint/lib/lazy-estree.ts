@@ -209,11 +209,19 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	}
 	const parent: LazyNode | null = walker ? materialize(walker, ctx) : null;
 	if (!parent) {
-		throw new Error('lazy-estree: cannot materialise without an ESTree ancestor — did you call materialize() with the SourceFile? convertLazy() handles that.');
+		// No ESTree ancestor — should only happen for the SourceFile itself,
+		// which convertLazy() always pre-registers. As a last resort, hand
+		// back a generic node anchored to nothing.
+		return new GenericTSNode(tsNode, null);
 	}
 	const node = convertChild(tsNode, parent);
 	if (!node) {
-		throw new Error(`lazy-estree: convertChild returned null for ${SK[tsNode.kind]}`);
+		// convertChild returns null for kinds with no ESTree counterpart
+		// (HeritageClause, OmittedExpression, JsxText). For top-down callers
+		// the null is meaningful; for bottom-up materialise we want SOMETHING
+		// rather than nothing — fall back to a generic stub so callers
+		// reading `.type === 'X'` etc. don't crash.
+		return new GenericTSNode(tsNode, parent);
 	}
 	return node;
 }
@@ -516,16 +524,44 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ObjectKeyword: return new TypeKeywordNode('TSObjectKeyword', child, parent);
 		case SK.IntrinsicKeyword: return new TypeKeywordNode('TSIntrinsicKeyword', child, parent);
 		default:
-			throw new Error(
-				`lazy-estree: unsupported SyntaxKind ${SK[child.kind] ?? child.kind} `
-					+ `(at ${child.getStart(parent._ctx.ast)}-${child.getEnd()}). `
-					+ `Add a case to convertChild() with the corresponding LazyNode subclass.`,
-			);
+			// Unsupported SyntaxKind — fall back to a generic node mirroring
+			// typescript-estree's `deeplyCopy`: type='TS<KindName>', range +
+			// parent only. Lets `tsToEstreeOrStub` always return SOMETHING
+			// so callers reading `.type === 'X'` etc. don't crash. Add a
+			// real case if the shape matters (i.e. children should be
+			// reachable via getter, not just the type tag).
+			return new GenericTSNode(child, parent);
 	}
 }
 
 function convertChildren(children: ReadonlyArray<ts.Node>, parent: LazyNode): (LazyNode | null)[] {
 	return children.map(c => convertChild(c, parent));
+}
+
+// Generic fallback for SyntaxKinds without a dedicated class. Mirrors
+// typescript-estree's `deeplyCopy`: type='TS<KindName>', range, parent.
+// Used when:
+//   - a kind isn't handled by `convertChildInner` (long-tail cases),
+//   - bottom-up `materialize()` walks up past TS-only kinds and hits a
+//     null-returning convertChild (HeritageClause, OmittedExpression,
+//     JsxText).
+// Children are intentionally NOT exposed via getters — the shape is
+// minimal-viable so `.type === 'X'` and `.parent.type` checks work
+// without us having to choose accessors arbitrarily. Add a real
+// LazyNode subclass when a rule actually needs the children.
+class GenericTSNode extends LazyNode {
+	readonly type: string;
+	constructor(tsNode: ts.Node, parent: LazyNode | null) {
+		// Synthetic — don't claim the TS node's slot in the maps if a
+		// real subclass might be made for it later (avoid cache pollution).
+		// But DO register so cache hits work for repeated lookups via
+		// materialise during the same conversion. The downside: if a real
+		// converter later wants this slot, we'd return the generic. For
+		// now the cases that hit GenericTSNode are unsupported kinds where
+		// no real subclass exists; safe.
+		super(tsNode, parent);
+		this.type = 'TS' + ts.SyntaxKind[tsNode.kind];
+	}
 }
 
 // Wraps a type node in an extra TSTypeAnnotation that adds the leading colon

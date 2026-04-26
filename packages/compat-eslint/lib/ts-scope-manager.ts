@@ -854,45 +854,17 @@ export class TsScopeManager {
 		const real = this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 		if (real) return real;
 		// Bottom-up materialise the missing node via the lazy ESTree shim.
-		// Builds a real ESTree counterpart with proper parent chain — same
-		// identity it would have if reached via top-down traversal,
-		// because materialize walks up the TS parent chain hitting the
-		// shared WeakMap cache.
+		// Builds a real ESTree counterpart with proper parent chain. Lazy
+		// has a generic-fallback for unsupported kinds and null returns,
+		// so this never throws.
 		const { materialize } = require(
 			'./lazy-estree',
 		) as typeof import('./lazy-estree');
-		try {
-			return materialize(tsNode, {
-				ast: this.tsFile,
-				maps: this.astMaps as unknown as { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> },
-			}) as unknown as T;
-		}
-		catch {
-			// Lazy can't materialise this kind (or hit an unhandled
-			// wrapper-route). Return a minimal synthetic stub so callers
-			// reading `.type === 'X'` still work.
-			return synthesizeStub(tsNode, this.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>) as T;
-		}
+		return materialize(tsNode, {
+			ast: this.tsFile,
+			maps: this.astMaps as unknown as { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> },
+		}) as unknown as T;
 	}
-}
-
-// Last-resort stub for TS nodes that lazy can't materialise. Recursive
-// parent chain so `.parent.type` walks work. Recursion checks the map
-// at every step so identity comparisons still match real ESTree
-// ancestors when those exist.
-const _stubCache = new WeakMap<ts.Node, object>();
-function synthesizeStub(tsNode: ts.Node, map: WeakMap<ts.Node, object>): object {
-	const real = map.get(tsNode);
-	if (real) return real;
-	const cached = _stubCache.get(tsNode);
-	if (cached) return cached;
-	const stub: { type: string; range: [number, number]; parent?: object } = {
-		type: 'TS' + ts.SyntaxKind[tsNode.kind],
-		range: [tsNode.getStart(), tsNode.getEnd()],
-	};
-	_stubCache.set(tsNode, stub);
-	if (tsNode.parent) stub.parent = synthesizeStub(tsNode.parent, map);
-	return stub;
 }
 
 export class TsScope {
