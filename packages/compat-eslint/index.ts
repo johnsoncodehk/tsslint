@@ -568,18 +568,16 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 			const result = convertLazy(file);
 			astMaps = result.astMaps as any;
 			estree = result.estree;
-			// typescript-estree's astConverter populates `tokens` /
-			// `comments` via a separate scanner pass; rules like
-			// no-unnecessary-type-assertion call `sourceCode.getTokenAfter`
-			// and crash without them. Borrow eager's token/comment output
-			// without materialising its full AST.
-			const eager = require('@typescript-eslint/typescript-estree/use-at-your-own-risk').astConverter(
-				file,
-				PARSE_SETTINGS as any,
-				false,
-			);
-			estree.tokens = eager.estree.tokens;
-			estree.comments = eager.estree.comments;
+			// tokens / comments come from typescript-estree's standalone
+			// scanner helpers — neither depends on its Converter, so we
+			// can borrow them without doing the eager AST conversion.
+			// Rules like no-unnecessary-type-assertion call
+			// `sourceCode.getTokenAfter()` and need the tokens array.
+			const tseRoot = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
+			const { convertTokens } = require(tseRoot + '/dist/node-utils.js') as { convertTokens(ast: ts.SourceFile): unknown[] };
+			const { convertComments } = require(tseRoot + '/dist/convert-comments.js') as { convertComments(ast: ts.SourceFile): unknown[] };
+			estree.tokens = convertTokens(file);
+			estree.comments = convertComments(file);
 		}
 		else {
 			const { astConvertSkipTypes } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
