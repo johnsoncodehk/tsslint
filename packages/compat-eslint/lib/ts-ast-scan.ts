@@ -28,11 +28,11 @@ const tsForEachChild = ts.forEachChild;
 
 // Step shape compatible with @eslint/plugin-kit's VisitNodeStep. Both
 // dispatchFast (index.ts) and NodeEventGenerator's switch on `step.kind`
-// only read kind/target/phase. `type` is referenced in an error-message
-// default branch, never on the happy path; `args` is only consumed for
-// kind === 2 (CallMethodStep) — our walker only emits kind === 1.
-// Skipping those two fields cuts the step object's hidden-class slot
-// count from 5 to 3, which V8 stores more compactly.
+// only read kind/target/phase, so we omit the `type` / `args` fields
+// upstream's VisitNodeStep carries. The narrow type is dispatcher-contract
+// shape, not a perf win — V8 hidden-class size hasn't shown up in
+// pair-test bench at this slot count. Don't reintroduce the absent fields
+// unless a downstream consumer actually needs them.
 type VisitStep = { kind: 1; target: unknown; phase: 1 | 2 };
 function makeStep(target: unknown, phase: 1 | 2): VisitStep {
 	return { kind: 1, target, phase };
