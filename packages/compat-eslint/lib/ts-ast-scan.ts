@@ -51,6 +51,10 @@ const WRAPPER_HEAD_TYPES = new Set<string>([
 ]);
 
 type Predicate = (n: ts.Node) => boolean;
+// Predicate enriched with the underlying simple-kinds bitmap when one
+// exists. visit() reads the bitmap directly to avoid a function call per
+// visited node (~298k visits per lintOnce on checker.ts).
+type PredicateWithBitmap = Predicate & { __bitmap?: Uint8Array };
 
 // --- Operator buckets ------------------------------------------------
 
@@ -660,7 +664,11 @@ export function predicateForTriggerSet(estreeTypes: Iterable<string>): Predicate
 	if (simpleCount === 0 && conditional.length === 0) return () => false;
 	if (conditional.length === 0) {
 		// Pure simple-kind path — bitmap[kind] is truthy when kind triggers.
-		return n => simpleBitmap[n.kind] === 1;
+		// Also stash the bitmap on the function so tsScanTraverse can read
+		// it inline and skip the per-visit function call.
+		const fn: PredicateWithBitmap = n => simpleBitmap[n.kind] === 1;
+		fn.__bitmap = simpleBitmap;
+		return fn;
 	}
 	if (simpleCount === 0) {
 		// All conditional — no bitmap fast path.
@@ -695,6 +703,10 @@ export function tsScanTraverse(
 	ctx: ConvertContext,
 ): unknown[] {
 	const steps: unknown[] = [];
+	// Pure-bitmap predicates expose their Uint8Array; reading bitmap[kind]
+	// inline saves a closure call per visit (≈300k visits on checker.ts).
+	// Mixed/conditional predicates fall through to calling match() as before.
+	const bitmap = (match as PredicateWithBitmap).__bitmap;
 	const visit = (node: ts.Node): void => {
 		// Two-state hit result: most hits produce a single-layer target
 		// (`single` set, `chain` null); wrapper kinds (Export*, Chain,
@@ -703,7 +715,8 @@ export function tsScanTraverse(
 		// array allocation on the >95% common path.
 		let single: unknown = null;
 		let chain: unknown[] | null = null;
-		if (match(node)) {
+		const hit = bitmap ? bitmap[node.kind] === 1 : match(node);
+		if (hit) {
 			const target = materialize(node, ctx);
 			const t = (target as { type?: string }).type;
 			if (t && WRAPPER_HEAD_TYPES.has(t)) {
