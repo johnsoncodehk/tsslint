@@ -196,6 +196,14 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 				extraFilter = prev ? n => prev(n) && attrFilter(n) : attrFilter;
 			} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 				isExit = true;
+			} else if (sub.type === 'not') {
+				// `Foo > :not(Bar).field` — exclude target.type matching Bar.
+				const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
+				if (!inner) return null;
+				const negFilter = (n: any) => !inner(n);
+				const prev = extraFilter;
+				extraFilter = prev ? n => prev(n) && negFilter(n) : negFilter;
+				wildcard = wildcard || (typeFilter === undefined);
 			} else {
 				return null;
 			}
@@ -216,10 +224,9 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 		// on Right type, filter parent.type === Parent.
 		if (typeFilter || wildcard) {
 			const types: Set<string> | 'all' = wildcard ? 'all' : new Set([typeFilter!]);
-			const parentTypes = collectTypes(left);
-			if (!parentTypes) return null;
-			const parentFilter = (n: any) =>
-				!!n.parent && parentTypes.has(n.parent.type);
+			const parentMatch = collectMatcher(left);
+			if (!parentMatch) return null;
+			const parentFilter = (n: any) => parentMatch(n.parent);
 			return {
 				types,
 				isExit,
@@ -233,12 +240,12 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 		const types: Set<string> | 'all' = right.type === 'wildcard'
 			? 'all'
 			: new Set([right.value]);
-		const parentTypes = collectTypes(left);
-		if (!parentTypes) return null;
+		const parentMatch = collectMatcher(left);
+		if (!parentMatch) return null;
 		return {
 			types,
 			isExit,
-			filter: n => !!n.parent && parentTypes.has(n.parent.type),
+			filter: n => parentMatch(n.parent),
 		};
 	}
 	return null;
@@ -250,12 +257,12 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 function walkDescendant(left: any, right: any, isExit: boolean): FastDispatchInfo | null {
 	const rightInfo = walkTypeMatcher(right, isExit);
 	if (!rightInfo || rightInfo.types === 'all') return null;
-	const parentTypes = collectTypes(left);
-	if (!parentTypes) return null;
+	const ancestorMatch = collectMatcher(left);
+	if (!ancestorMatch) return null;
 	const ancestorFilter = (n: any) => {
 		let cur = n.parent;
 		while (cur) {
-			if (parentTypes.has(cur.type)) return true;
+			if (ancestorMatch(cur)) return true;
 			cur = cur.parent;
 		}
 		return false;
@@ -272,6 +279,23 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 			return { types: new Set([ast.value]), isExit };
 		case 'wildcard':
 			return { types: 'all', isExit };
+		case 'class': {
+			// Standalone class macro. `:function` expands to a fixed type
+			// set; suffix-based macros become wildcard + filter.
+			const name = String(ast.name).toLowerCase();
+			if (name === 'function') {
+				return { types: new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']), isExit };
+			}
+			const m = classMacroMatcher(name);
+			if (!m) return null;
+			return { types: 'all', isExit, filter: m };
+		}
+		case 'not': {
+			// `:not(X)` standalone — wildcard with negated inner matcher.
+			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors });
+			if (!inner) return null;
+			return { types: 'all', isExit, filter: n => !inner(n) };
+		}
 		case 'compound': {
 			const collected = new Set<string>();
 			let isAll = false;
@@ -285,16 +309,55 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					isAll = true;
 					sawType = true;
 				} else if (sub.type === 'matches') {
+					// Try as a type-contributing matches (union of identifier
+					// branches). If that fails, every branch must be a
+					// filter-only check (attribute or class macro), so
+					// treat the whole `:matches(...)` as a per-target
+					// filter via collectMatcher (OR-combines the branches).
 					const inner = walkTypeMatcher(sub, isExit);
-					if (!inner) return null;
-					if (inner.types === 'all') {
-						isAll = true;
+					if (inner) {
+						if (inner.types === 'all') {
+							isAll = true;
+						} else {
+							for (const t of inner.types) collected.add(t);
+						}
+						if (inner.filter) {
+							const prev = extraFilter;
+							const innerFilter = inner.filter;
+							extraFilter = prev ? n => prev(n) && innerFilter(n) : innerFilter;
+						}
+						sawType = true;
 					} else {
-						for (const t of inner.types) collected.add(t);
+						const m = collectMatcher(sub);
+						if (!m) return null;
+						const prev = extraFilter;
+						extraFilter = prev ? n => prev(n) && m(n) : m;
 					}
-					sawType = true;
 				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 					isExit = true;
+				} else if (sub.type === 'class') {
+					// `:function` etc. inside compound. Same as standalone,
+					// but composes with other constraints.
+					const name = String(sub.name).toLowerCase();
+					if (name === 'function') {
+						const fnTypes = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'];
+						for (const t of fnTypes) collected.add(t);
+						sawType = true;
+					} else {
+						const m = classMacroMatcher(name);
+						if (!m) return null;
+						isAll = true;
+						sawType = true;
+						const prev = extraFilter;
+						extraFilter = prev ? n => prev(n) && m(n) : m;
+					}
+				} else if (sub.type === 'not') {
+					// `Foo:not(Bar)` — types stay {Foo}, add filter inverting inner.
+					const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
+					if (!inner) return null;
+					const negFilter = (n: any) => !inner(n);
+					const prev = extraFilter;
+					extraFilter = prev ? n => prev(n) && negFilter(n) : negFilter;
 				} else if (sub.type === 'attribute') {
 					const attrFilter = makeAttributeFilter(sub);
 					if (!attrFilter) return null;
@@ -333,10 +396,152 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 	}
 }
 
-function collectTypes(ast: any): Set<string> | null {
-	const info = walkTypeMatcher(ast, false);
-	if (!info || info.types === 'all') return null;
-	return info.types;
+// A flexible matcher predicate. Used for the LEFT side of combinators
+// (parent / ancestor constraints) and for inverting via `:not`. Returns
+// null if the AST shape is something we can't reason about.
+//
+// Recognised shapes:
+//   identifier   → n.type === value
+//   wildcard     → always true
+//   matches      → OR of inner matchers
+//   not          → NOT of the OR-of-inners
+//   compound     → AND of inner matchers (skipping :exit class)
+//   attribute    → attribute predicate (reuses makeAttributeFilter)
+//   class macros → :function / :statement / :expression /
+//                  :declaration / :pattern (suffix-based)
+type NodePredicate = (node: any) => boolean;
+function collectMatcher(ast: any): NodePredicate | null {
+	if (!ast) return null;
+	switch (ast.type) {
+		case 'identifier': {
+			const v = ast.value;
+			return n => !!n && n.type === v;
+		}
+		case 'wildcard':
+			return _n => true;
+		case 'matches': {
+			const subs: NodePredicate[] = [];
+			for (const sub of ast.selectors) {
+				const m = collectMatcher(sub);
+				if (!m) return null;
+				subs.push(m);
+			}
+			return n => {
+				for (let i = 0; i < subs.length; i++) if (subs[i](n)) return true;
+				return false;
+			};
+		}
+		case 'not': {
+			const subs: NodePredicate[] = [];
+			for (const sub of ast.selectors) {
+				const m = collectMatcher(sub);
+				if (!m) return null;
+				subs.push(m);
+			}
+			return n => {
+				if (!n) return false;
+				for (let i = 0; i < subs.length; i++) if (subs[i](n)) return false;
+				return true;
+			};
+		}
+		case 'compound': {
+			const subs: NodePredicate[] = [];
+			for (const sub of ast.selectors) {
+				if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') continue;
+				const m = collectMatcher(sub);
+				if (!m) return null;
+				subs.push(m);
+			}
+			if (subs.length === 0) return _n => true;
+			return n => {
+				if (!n) return false;
+				for (let i = 0; i < subs.length; i++) if (!subs[i](n)) return false;
+				return true;
+			};
+		}
+		case 'attribute': {
+			const f = makeAttributeFilter(ast);
+			return f;
+		}
+		case 'class':
+			return classMacroMatcher(String(ast.name).toLowerCase());
+		case 'child': {
+			// `Left > Right` — n matches when n matches Right AND n.parent
+			// matches Left. Nested combinators bottom out here.
+			const leftMatch = collectMatcher(ast.left);
+			const rightMatch = collectMatcher(ast.right);
+			if (!leftMatch || !rightMatch) return null;
+			return n => !!n && rightMatch(n) && leftMatch(n.parent);
+		}
+		case 'descendant': {
+			// `Left Right` — n matches Right AND some ancestor matches Left.
+			const leftMatch = collectMatcher(ast.left);
+			const rightMatch = collectMatcher(ast.right);
+			if (!leftMatch || !rightMatch) return null;
+			return n => {
+				if (!n || !rightMatch(n)) return false;
+				let cur = n.parent;
+				while (cur) {
+					if (leftMatch(cur)) return true;
+					cur = cur.parent;
+				}
+				return false;
+			};
+		}
+		case 'field': {
+			// `.field` standalone in a compound, e.g. `Identifier.label`
+			// means "n is at parent[label]". The matcher needs reference
+			// equality with parent[field].
+			const fieldName = ast.name;
+			return n => !!n && !!n.parent && n.parent[fieldName] === n;
+		}
+		default:
+			return null;
+	}
+}
+
+// esquery's class macros (esquery.lite.js:3375). Suffix-based on node.type
+// (statement / declaration / pattern / expression) plus a hardcoded
+// expansion for `:function`. Mirrors handleClass() in trigger-set
+// analysis but returns a per-node predicate so it can compose with
+// other matchers (e.g. as a `:not(:function)` filter).
+function classMacroMatcher(name: string): NodePredicate | null {
+	switch (name) {
+		case 'function':
+			return n => n != null
+				&& (n.type === 'FunctionDeclaration'
+					|| n.type === 'FunctionExpression'
+					|| n.type === 'ArrowFunctionExpression');
+		case 'statement':
+			return n => {
+				if (!n) return false;
+				const t = n.type as string;
+				return t.endsWith('Statement') || t.endsWith('Declaration');
+			};
+		case 'declaration':
+			return n => !!n && (n.type as string).endsWith('Declaration');
+		case 'pattern':
+			return n => {
+				if (!n) return false;
+				const t = n.type as string;
+				return t.endsWith('Pattern')
+					|| t.endsWith('Expression')
+					|| t.endsWith('Literal')
+					|| t === 'Identifier'
+					|| t === 'MetaProperty';
+			};
+		case 'expression':
+			return n => {
+				if (!n) return false;
+				const t = n.type as string;
+				return t.endsWith('Expression')
+					|| t.endsWith('Literal')
+					|| t === 'Identifier'
+					|| t === 'MetaProperty';
+			};
+		default:
+			return null;
+	}
 }
 
 // Build a predicate from an esquery attribute selector AST.
