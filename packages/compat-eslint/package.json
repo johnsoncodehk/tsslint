@@ -15,11 +15,11 @@
 	"devDependencies": {
 		"@types/eslint": "^8.56.10",
 		"@typescript-eslint/scope-manager": "^8.16.0",
+		"@typescript-eslint/typescript-estree": "^8.16.0",
 		"typescript": "latest"
 	},
 	"dependencies": {
 		"@tsslint/types": "3.0.4",
-		"@typescript-eslint/typescript-estree": "^8.16.0",
 		"eslint": ">=9.0.0 <9.28.0"
 	}
 }
