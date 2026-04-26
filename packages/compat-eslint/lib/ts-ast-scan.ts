@@ -16,10 +16,6 @@
 // matches builds only a handful of LazyNodes. Bottom-up `materialize`
 // already lazy-builds the parent chain when a rule reads `.parent`, so we
 // don't pre-build ancestors either.
-//
-// Limitation: the predicate table must cover every ESTree type a rule
-// could trigger on. Caller probes via `predicateFor()`; if any trigger
-// type lacks a predicate, falls back to the existing selectorAware path.
 
 import * as ts from 'typescript';
 
@@ -36,10 +32,11 @@ const { VisitNodeStep } = require(pluginKitPath) as {
 
 type Predicate = (n: ts.Node) => boolean;
 
-// Pre-compiled binary-operator buckets — typescript-estree splits a single
-// `BinaryExpression` TS kind into BinaryExpression / LogicalExpression /
-// AssignmentExpression based on `operatorToken.kind`. Predicates for these
-// three need to filter accordingly.
+// --- Operator buckets ------------------------------------------------
+
+// typescript-estree splits a single SK.BinaryExpression into
+// BinaryExpression / LogicalExpression / AssignmentExpression based on
+// `operatorToken.kind`. Predicates filter accordingly.
 const LOGICAL_OPS = new Set<ts.SyntaxKind>([
 	SK.AmpersandAmpersandToken,
 	SK.BarBarToken,
@@ -63,6 +60,102 @@ const ASSIGN_OPS = new Set<ts.SyntaxKind>([
 	SK.BarBarEqualsToken,
 	SK.QuestionQuestionEqualsToken,
 ]);
+
+// --- Helpers ---------------------------------------------------------
+
+function isUnaryOp(op: ts.SyntaxKind): boolean {
+	return op === SK.PlusToken || op === SK.MinusToken
+		|| op === SK.TildeToken || op === SK.ExclamationToken;
+}
+function isUpdateOp(op: ts.SyntaxKind): boolean {
+	return op === SK.PlusPlusToken || op === SK.MinusMinusToken;
+}
+
+function hasModifier(n: ts.Node, kind: ts.SyntaxKind): boolean {
+	return !!(n as { modifiers?: ReadonlyArray<ts.ModifierLike> }).modifiers
+		?.some(m => m.kind === kind);
+}
+
+function hasExportModifier(n: ts.Node): boolean {
+	return hasModifier(n, SK.ExportKeyword);
+}
+function hasDefaultModifier(n: ts.Node): boolean {
+	return hasModifier(n, SK.DefaultKeyword);
+}
+function hasAbstractModifier(n: ts.Node): boolean {
+	return hasModifier(n, SK.AbstractKeyword);
+}
+function hasAccessorModifier(n: ts.Node): boolean {
+	return hasModifier(n, SK.AccessorKeyword);
+}
+
+// Class-constructor parameter property modifiers (`constructor(public x)`).
+function hasParameterPropertyModifier(n: ts.Node): boolean {
+	const ms = (n as { modifiers?: ReadonlyArray<ts.ModifierLike> }).modifiers;
+	if (!ms) return false;
+	for (const m of ms) {
+		if (m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword
+			|| m.kind === SK.ProtectedKeyword || m.kind === SK.ReadonlyKeyword
+			|| m.kind === SK.OverrideKeyword) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Set of TS kinds that lazy-estree's fixExports can wrap into
+// ExportNamedDeclaration / ExportDefaultDeclaration.
+const EXPORTABLE_KINDS = new Set<ts.SyntaxKind>([
+	SK.FunctionDeclaration,
+	SK.VariableStatement,
+	SK.ClassDeclaration,
+	SK.InterfaceDeclaration,
+	SK.TypeAliasDeclaration,
+	SK.EnumDeclaration,
+	SK.ModuleDeclaration,
+	SK.ImportEqualsDeclaration,
+]);
+
+// True when `tsNode` sits in a position where typescript-estree converts
+// expression-shaped TS nodes (ArrayLiteralExpression, ObjectLiteralExpression,
+// SpreadElement / SpreadAssignment) as their PATTERN counterparts (ArrayPattern,
+// ObjectPattern, RestElement). Walk up through pattern-transparent containers
+// (literals, spreads, property assignments, parens) until we hit the
+// determining ancestor: assignment LHS or for-of/for-in initializer.
+function isInPatternPosition(tsNode: ts.Node): boolean {
+	let cur: ts.Node = tsNode;
+	while (cur.parent) {
+		const p = cur.parent;
+		// Pattern-transparent: keep walking up. The shape of `cur` may
+		// itself be a literal/spread that hasn't yet decided whether it's
+		// expression or pattern — its ancestors decide.
+		if (p.kind === SK.ArrayLiteralExpression
+			|| p.kind === SK.ObjectLiteralExpression
+			|| p.kind === SK.SpreadElement
+			|| p.kind === SK.SpreadAssignment
+			|| p.kind === SK.PropertyAssignment
+			|| p.kind === SK.ShorthandPropertyAssignment
+			|| p.kind === SK.ParenthesizedExpression) {
+			cur = p;
+			continue;
+		}
+		if (p.kind === SK.BinaryExpression) {
+			const be = p as ts.BinaryExpression;
+			if (be.operatorToken.kind === SK.EqualsToken && be.left === cur) {
+				return true;
+			}
+			// `=` RHS or non-`=` operator: not pattern. Stop walking.
+			return false;
+		}
+		if (p.kind === SK.ForInStatement || p.kind === SK.ForOfStatement) {
+			return (p as ts.ForInStatement | ts.ForOfStatement).initializer === cur;
+		}
+		return false;
+	}
+	return false;
+}
+
+// --- Predicate registry ---------------------------------------------
 
 const PREDICATES: Record<string, Predicate> = {
 	// --- Program root --------------------------------------------------
@@ -99,18 +192,44 @@ const PREDICATES: Record<string, Predicate> = {
 	'ArrowFunctionExpression': n => n.kind === SK.ArrowFunction,
 	'ClassDeclaration': n => n.kind === SK.ClassDeclaration,
 	'ClassExpression': n => n.kind === SK.ClassExpression,
+	// MethodDeclaration / Constructor / GetAccessor / SetAccessor outside
+	// an object literal materialise as MethodDefinition; inside an object
+	// literal they become Property{method:true} or Property{kind:'get'/'set'}.
 	'MethodDefinition': n => (
 		n.kind === SK.MethodDeclaration || n.kind === SK.Constructor
 		|| n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
 	) && n.parent?.kind !== SK.ObjectLiteralExpression,
-	'PropertyDefinition': n => n.kind === SK.PropertyDeclaration,
 
-	// --- Expressions ---------------------------------------------------
+	// PropertyDeclaration without abstract/accessor modifiers materialises
+	// as PropertyDefinition. With modifiers it splits into AccessorProperty,
+	// TSAbstractPropertyDefinition, TSAbstractAccessorProperty.
+	'PropertyDefinition': n => n.kind === SK.PropertyDeclaration
+		&& !hasAbstractModifier(n) && !hasAccessorModifier(n),
+	'AccessorProperty': n => n.kind === SK.PropertyDeclaration
+		&& hasAccessorModifier(n) && !hasAbstractModifier(n),
+	'TSAbstractPropertyDefinition': n => n.kind === SK.PropertyDeclaration
+		&& hasAbstractModifier(n) && !hasAccessorModifier(n),
+	'TSAbstractAccessorProperty': n => n.kind === SK.PropertyDeclaration
+		&& hasAbstractModifier(n) && hasAccessorModifier(n),
+
+	// Class-constructor parameter properties (`constructor(public x: number)`)
+	// wrap the parameter into TSParameterProperty.
+	'TSParameterProperty': n => n.kind === SK.Parameter
+		&& hasParameterPropertyModifier(n),
+
+	// --- Decorators ---------------------------------------------------
+	'Decorator': n => n.kind === SK.Decorator,
+
+	// --- Expressions --------------------------------------------------
 	'BinaryExpression': n => n.kind === SK.BinaryExpression
 		&& !LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind)
 		&& !ASSIGN_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
 	'LogicalExpression': n => n.kind === SK.BinaryExpression
 		&& LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
+	// `=`-style assignment in expression position only — `=` inside a pattern
+	// destructure is AssignmentPattern, not AssignmentExpression. Compound
+	// assignments (`+=`, `||=`, …) are always AssignmentExpression — they
+	// don't appear in pattern position.
 	'AssignmentExpression': n => n.kind === SK.BinaryExpression
 		&& ASSIGN_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
 	// PrefixUnaryExpression with !/+/-/~  AND  TypeOfExpression /
@@ -134,9 +253,55 @@ const PREDICATES: Record<string, Predicate> = {
 	'Super': n => n.kind === SK.SuperKeyword,
 	'TemplateLiteral': n => n.kind === SK.TemplateExpression || n.kind === SK.NoSubstitutionTemplateLiteral,
 	'TaggedTemplateExpression': n => n.kind === SK.TaggedTemplateExpression,
-	'SpreadElement': n => n.kind === SK.SpreadElement || n.kind === SK.SpreadAssignment,
 
-	// --- Literals (typescript-estree collapses many TS kinds → Literal) -
+	// SpreadElement vs RestElement: same TS kinds (SK.SpreadElement /
+	// SpreadAssignment), split by pattern context. SpreadElement only in
+	// expression position; RestElement only in pattern position.
+	'SpreadElement': n => (n.kind === SK.SpreadElement || n.kind === SK.SpreadAssignment)
+		&& !isInPatternPosition(n),
+
+	// --- Array / Object — context-sensitive ---------------------------
+	// ArrayExpression / ObjectExpression: literal in expression position.
+	// ArrayPattern / ObjectPattern: BindingPattern (always pattern), or
+	// literal in pattern position.
+	'ArrayExpression': n => n.kind === SK.ArrayLiteralExpression && !isInPatternPosition(n),
+	'ObjectExpression': n => n.kind === SK.ObjectLiteralExpression && !isInPatternPosition(n),
+	'ArrayPattern': n => n.kind === SK.ArrayBindingPattern
+		|| (n.kind === SK.ArrayLiteralExpression && isInPatternPosition(n)),
+	'ObjectPattern': n => n.kind === SK.ObjectBindingPattern
+		|| (n.kind === SK.ObjectLiteralExpression && isInPatternPosition(n)),
+
+	// Property: PropertyAssignment / ShorthandPropertyAssignment / methods
+	// inside object literal / BindingElement inside ObjectBindingPattern
+	// (for `{a, b}` destructuring patterns).
+	'Property': n => n.kind === SK.PropertyAssignment
+		|| n.kind === SK.ShorthandPropertyAssignment
+		|| ((n.kind === SK.MethodDeclaration || n.kind === SK.GetAccessor || n.kind === SK.SetAccessor)
+			&& n.parent?.kind === SK.ObjectLiteralExpression)
+		|| (n.kind === SK.BindingElement && n.parent?.kind === SK.ObjectBindingPattern
+			&& !(n as ts.BindingElement).dotDotDotToken),
+
+	// AssignmentPattern: parameter with default value, and array-binding
+	// element with default value (`[a = 1] = …`). NOT emitted for
+	// destructure with `=` in the binary-expression form — lazy-estree
+	// keeps that as AssignmentExpression (existing parity gap).
+	'AssignmentPattern': n =>
+		(n.kind === SK.Parameter && (n as ts.ParameterDeclaration).initializer !== undefined
+			&& (n as ts.ParameterDeclaration).dotDotDotToken === undefined)
+		|| (n.kind === SK.BindingElement && n.parent?.kind === SK.ArrayBindingPattern
+			&& (n as ts.BindingElement).initializer !== undefined
+			&& !(n as ts.BindingElement).dotDotDotToken),
+
+	// RestElement: rest parameter, rest-style binding element in any
+	// binding pattern, and `...x` in pattern position.
+	'RestElement': n =>
+		(n.kind === SK.Parameter && (n as ts.ParameterDeclaration).dotDotDotToken !== undefined)
+		|| (n.kind === SK.BindingElement && (n as ts.BindingElement).dotDotDotToken !== undefined)
+		|| ((n.kind === SK.SpreadElement || n.kind === SK.SpreadAssignment)
+			&& isInPatternPosition(n)),
+
+	// --- Literals -----------------------------------------------------
+	// typescript-estree collapses these TS kinds into Literal.
 	'Literal': n =>
 		n.kind === SK.NumericLiteral
 		|| n.kind === SK.StringLiteral
@@ -146,16 +311,11 @@ const PREDICATES: Record<string, Predicate> = {
 		|| n.kind === SK.TrueKeyword
 		|| n.kind === SK.FalseKeyword,
 
-	// --- Identifiers ---------------------------------------------------
+	// --- Identifiers --------------------------------------------------
 	'Identifier': n => n.kind === SK.Identifier,
 	'PrivateIdentifier': n => n.kind === SK.PrivateIdentifier,
 
-	// --- Object/Array literals + patterns ------------------------------
-	// These predicates can't distinguish "literal" vs "pattern" without
-	// ancestor context; covering both shapes would require a side-channel.
-	// Skip them in v1 — falls back to selectorAware traverse.
-
-	// --- Imports / Exports --------------------------------------------
+	// --- Imports / Exports -------------------------------------------
 	'ImportDeclaration': n => n.kind === SK.ImportDeclaration,
 	'ImportSpecifier': n => n.kind === SK.ImportSpecifier,
 	// ImportClause becomes ImportDefaultSpecifier ONLY when it has a
@@ -165,6 +325,33 @@ const PREDICATES: Record<string, Predicate> = {
 	'ImportNamespaceSpecifier': n => n.kind === SK.NamespaceImport,
 	'ImportAttribute': n => n.kind === SK.ImportAttribute,
 	'ExportSpecifier': n => n.kind === SK.ExportSpecifier,
+
+	// ExportNamedDeclaration sources:
+	//   - SK.ExportDeclaration with `NamedExports` clause
+	//     (`export { foo }`, `export { foo } from 'x'`)
+	//   - top-level decl with `export` (and not `default`) — fixExports
+	//     wraps; materialize returns ExportNamedWrappingNode (handled by
+	//     unwrapChain below)
+	'ExportNamedDeclaration': n =>
+		(n.kind === SK.ExportDeclaration
+			&& (n as ts.ExportDeclaration).exportClause?.kind === SK.NamedExports)
+		|| (EXPORTABLE_KINDS.has(n.kind) && hasExportModifier(n) && !hasDefaultModifier(n)),
+	// ExportAllDeclaration: SK.ExportDeclaration with `*` —
+	// `export * from 'x'` (no exportClause) or
+	// `export * as ns from 'x'` (NamespaceExport clause).
+	'ExportAllDeclaration': n => {
+		if (n.kind !== SK.ExportDeclaration) return false;
+		const clause = (n as ts.ExportDeclaration).exportClause;
+		return !clause || clause.kind === SK.NamespaceExport;
+	},
+	// ExportDefaultDeclaration sources:
+	//   - SK.ExportAssignment (`export default <expr>` AND `export = <expr>`
+	//     — the latter materializes as TSExportAssignment, so guard here)
+	//   - top-level decl with `export default` (FunctionDeclaration,
+	//     ClassDeclaration, etc.)
+	'ExportDefaultDeclaration': n =>
+		(n.kind === SK.ExportAssignment && !(n as ts.ExportAssignment).isExportEquals)
+		|| (EXPORTABLE_KINDS.has(n.kind) && hasExportModifier(n) && hasDefaultModifier(n)),
 
 	// --- TS leaf keyword types (all 1:1) -------------------------------
 	'TSAnyKeyword': n => n.kind === SK.AnyKeyword,
@@ -188,7 +375,7 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSNonNullExpression': n => n.kind === SK.NonNullExpression,
 	'TSSatisfiesExpression': n => n.kind === SK.SatisfiesExpression,
 
-	// --- TS type composites (1:1) -------------------------------------
+	// --- TS type composites (1:1, with one wrapper case) --------------
 	'TSTypeReference': n => n.kind === SK.TypeReference,
 	'TSUnionType': n => n.kind === SK.UnionType,
 	'TSIntersectionType': n => n.kind === SK.IntersectionType,
@@ -199,7 +386,12 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSIndexedAccessType': n => n.kind === SK.IndexedAccessType,
 	'TSInferType': n => n.kind === SK.InferType,
 	'TSTypeOperator': n => n.kind === SK.TypeOperator,
-	'TSTypeQuery': n => n.kind === SK.TypeQuery,
+	// TSTypeQuery: regular `typeof X` — and lazy-estree wraps
+	// `typeof import('x')` in TSTypeQuery as well (TSImportType inner).
+	// Match both ts.SyntaxKinds; unwrapChain expands the wrapping case so
+	// listeners on the inner TSImportType still fire.
+	'TSTypeQuery': n => n.kind === SK.TypeQuery
+		|| (n.kind === SK.ImportType && (n as ts.ImportTypeNode).isTypeOf),
 	'TSImportType': n => n.kind === SK.ImportType,
 	'TSLiteralType': n => n.kind === SK.LiteralType,
 	'TSFunctionType': n => n.kind === SK.FunctionType,
@@ -212,14 +404,16 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSRestType': n => n.kind === SK.RestType,
 	'TSTypeParameter': n => n.kind === SK.TypeParameter,
 
-	// --- TS declarations (1:1) ----------------------------------------
+	// --- TS declarations (1:1, exportable) ----------------------------
 	'TSInterfaceDeclaration': n => n.kind === SK.InterfaceDeclaration,
 	'TSTypeAliasDeclaration': n => n.kind === SK.TypeAliasDeclaration,
 	'TSEnumDeclaration': n => n.kind === SK.EnumDeclaration,
 	'TSEnumMember': n => n.kind === SK.EnumMember,
 	'TSModuleDeclaration': n => n.kind === SK.ModuleDeclaration,
 	'TSImportEqualsDeclaration': n => n.kind === SK.ImportEqualsDeclaration,
-	'TSExportAssignment': n => n.kind === SK.ExportAssignment,
+	// TSExportAssignment: only `export = <expr>` (NOT `export default`).
+	'TSExportAssignment': n => n.kind === SK.ExportAssignment
+		&& !!(n as ts.ExportAssignment).isExportEquals,
 	'TSExternalModuleReference': n => n.kind === SK.ExternalModuleReference,
 	'TSNamespaceExportDeclaration': n => n.kind === SK.NamespaceExportDeclaration,
 
@@ -230,17 +424,6 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSConstructSignatureDeclaration': n => n.kind === SK.ConstructSignature,
 	'TSIndexSignature': n => n.kind === SK.IndexSignature,
 };
-
-function isUnaryOp(op: ts.SyntaxKind): boolean {
-	return op === SK.PlusToken
-		|| op === SK.MinusToken
-		|| op === SK.TildeToken
-		|| op === SK.ExclamationToken;
-}
-
-function isUpdateOp(op: ts.SyntaxKind): boolean {
-	return op === SK.PlusPlusToken || op === SK.MinusMinusToken;
-}
 
 // Returns null if any of the requested ESTree types lacks a predicate —
 // caller must fall back. Otherwise, returns a predicate that fires true
@@ -308,8 +491,14 @@ export function tsScanTraverse(
 //     declaration via `.declaration`. The wrapper's constructor overwrites
 //     the inner's `tsNodeToESTreeNodeMap` entry, so `materialize()` on an
 //     exported declaration's ts.Node returns the wrapper, not the inner.
-//   - ChainExpressionNode wraps the outermost optional chain via
+//   - ChainExpressionWrappingNode wraps the outermost optional chain via
 //     `.expression`.
+//   - TSParameterPropertyNode wraps a class-constructor parameter
+//     property (`constructor(public x)`) via `.parameter`.
+//   - TSTypeQueryWrappingNode wraps a `typeof import('x')` TSImportType
+//     via `.exprName` — only when the inner is a TSImportType (regular
+//     `typeof X` doesn't have this nesting).
+//
 // ESLint's full walk fires enter/leave for every layer (the wrapper, then
 // the inner). To match that, expand the materialised result into the full
 // layer chain so dispatchFast can fire each listener it has registered.
@@ -323,6 +512,16 @@ function unwrapChain(node: unknown): unknown[] {
 			cur = (cur as { declaration?: unknown }).declaration;
 		} else if (t === 'ChainExpression') {
 			cur = (cur as { expression?: unknown }).expression;
+		} else if (t === 'TSParameterProperty') {
+			cur = (cur as { parameter?: unknown }).parameter;
+		} else if (t === 'TSTypeQuery') {
+			const inner = (cur as { exprName?: { type?: string } }).exprName;
+			// Only the typeof-import wrapper case has TSImportType inside.
+			if (inner && inner.type === 'TSImportType') {
+				cur = inner;
+			} else {
+				break;
+			}
 		} else {
 			break;
 		}

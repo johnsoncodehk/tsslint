@@ -43,9 +43,10 @@ check('hasPredicate: ImportDeclaration', hasPredicate('ImportDeclaration'));
 check('hasPredicate: BinaryExpression', hasPredicate('BinaryExpression'));
 check('hasPredicate: Identifier', hasPredicate('Identifier'));
 check('hasPredicate: not real type returns false', !hasPredicate('NotARealType'));
-// Object/Array literals/patterns intentionally not in v1 — they need
-// ancestor context to distinguish literal vs pattern.
-check('hasPredicate: ObjectExpression skipped in v1', !hasPredicate('ObjectExpression'));
+check('hasPredicate: ObjectExpression', hasPredicate('ObjectExpression'));
+check('hasPredicate: ArrayPattern', hasPredicate('ArrayPattern'));
+check('hasPredicate: AccessorProperty', hasPredicate('AccessorProperty'));
+check('hasPredicate: Decorator', hasPredicate('Decorator'));
 
 // --- predicateForTriggerSet ------------------------------------------
 
@@ -279,24 +280,14 @@ check('hasPredicate: ObjectExpression skipped in v1', !hasPredicate('ObjectExpre
 }
 
 {
-	// Accessor property — `class C { accessor x = 1; }` materialises as
-	// AccessorProperty (not PropertyDefinition). Predicate over-fires
-	// (matches every PropertyDeclaration), but dispatchFast looks up by
-	// `target.type` so a PropertyDefinition listener correctly doesn't
-	// fire on accessor properties. Note: this test verifies the type of
-	// the materialised node, not just the predicate.
-	const code = `class C { accessor x = 1; foo = 2; }`;
-	const sf = parseTs(code);
-	const { context } = lazy.convertLazy(sf);
-	const pred = predicateForTriggerSet(['PropertyDefinition'])!;
-	const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
-	const types = (steps as any[]).filter(s => s.phase === 1).map(s => s.target.type);
-	// foo = 2 → PropertyDefinition (would fire listener)
-	check('PropertyDefinition: regular field materialises as PropertyDefinition',
-		types.includes('PropertyDefinition'));
-	// accessor x = 1 → AccessorProperty (would NOT fire PropertyDefinition listener)
-	check('PropertyDefinition: accessor field materialises as AccessorProperty (not PropertyDefinition)',
-		types.includes('AccessorProperty'));
+	// PropertyDefinition predicate now excludes accessor and abstract
+	// fields — they have their own ESTree types and predicates. The
+	// listener on PropertyDefinition only fires on plain class fields.
+	const code = `class C { accessor a = 1; abstract b: number; foo = 2; }`;
+	const types = scan(code, ['PropertyDefinition']).entered;
+	check('PropertyDefinition: only fires on plain class fields',
+		types.length === 1 && types[0] === 'PropertyDefinition',
+		`got: [${types.join(', ')}]`);
 }
 
 {
@@ -314,21 +305,338 @@ check('hasPredicate: ObjectExpression skipped in v1', !hasPredicate('ObjectExpre
 }
 
 {
-	// ObjectExpression predicate intentionally not in v1 — needs ancestor
-	// context to distinguish literal vs assignment-LHS pattern. Caller
-	// must fall back to selectorAware traverse.
-	const fallback = predicateForTriggerSet(['ObjectExpression']);
-	check('predicateForTriggerSet: ObjectExpression returns null (forces fallback)',
+	// Unknown ESTree types still force fallback.
+	const fallback = predicateForTriggerSet(['NotARealType']);
+	check('predicateForTriggerSet: unknown type returns null',
 		fallback === null);
 }
 
+// --- Array / Object — context-sensitive (literal vs pattern) ---------
+
 {
-	// AccessorProperty predicate intentionally not in v1 — adding a
-	// dedicated predicate is fine, but until then the caller must fall
-	// back so listeners on AccessorProperty get the slow path.
-	const fallback = predicateForTriggerSet(['AccessorProperty']);
-	check('predicateForTriggerSet: AccessorProperty returns null (forces fallback)',
-		fallback === null);
+	// Plain array/object literal in expression position.
+	const code = `let a = [1, 2]; let b = { x: 1 };`;
+	const types = scan(code, ['ArrayExpression', 'ObjectExpression']).entered;
+	check('ArrayExpression: fires for literal array', types.includes('ArrayExpression'));
+	check('ObjectExpression: fires for literal object', types.includes('ObjectExpression'));
+}
+
+{
+	// Array/object NOT in pattern position must NOT trip pattern listeners.
+	const code = `let a = [1, 2]; let b = { x: 1 };`;
+	const types = scan(code, ['ArrayPattern', 'ObjectPattern']).entered;
+	check('ArrayPattern: NOT fired for literal in expression position',
+		!types.includes('ArrayPattern'));
+	check('ObjectPattern: NOT fired for literal in expression position',
+		!types.includes('ObjectPattern'));
+}
+
+{
+	// BindingPattern always fires pattern listener.
+	const code = `function f([a, b]: number[], { x }: { x: number }) {}`;
+	const types = scan(code, ['ArrayPattern', 'ObjectPattern']).entered;
+	check('ArrayPattern: fires for ArrayBindingPattern in param',
+		types.includes('ArrayPattern'));
+	check('ObjectPattern: fires for ObjectBindingPattern in param',
+		types.includes('ObjectPattern'));
+}
+
+{
+	// Array/object literal in destructuring assignment LHS → pattern.
+	const code = `let r; [r] = [1]; ({ r } = { r: 1 });`;
+	const types = scan(code, ['ArrayPattern', 'ObjectPattern']).entered;
+	check('ArrayPattern: fires for ArrayLiteral on assignment LHS',
+		types.includes('ArrayPattern'));
+	check('ObjectPattern: fires for ObjectLiteral on assignment LHS',
+		types.includes('ObjectPattern'));
+}
+
+{
+	// for-of LHS → pattern.
+	const code = `for ([a, b] of items) {}`;
+	const types = scan(code, ['ArrayPattern', 'ArrayExpression']).entered;
+	check('for-of LHS: ArrayPattern fires', types.includes('ArrayPattern'));
+	check('for-of LHS: ArrayExpression does NOT fire', !types.includes('ArrayExpression'));
+}
+
+{
+	// Nested destructure: outer + inner literals are both pattern.
+	const code = `[[a], [b]] = [[1], [2]];`;
+	const types = scan(code, ['ArrayPattern', 'ArrayExpression']).entered;
+	const patterns = types.filter(t => t === 'ArrayPattern').length;
+	const exprs = types.filter(t => t === 'ArrayExpression').length;
+	// LHS: 1 outer + 2 inner ArrayPattern. RHS: 1 outer + 2 inner ArrayExpression.
+	check('Nested: 3 ArrayPattern (LHS) + 3 ArrayExpression (RHS)',
+		patterns === 3 && exprs === 3,
+		`got patterns=${patterns}, exprs=${exprs}`);
+}
+
+// --- Property predicate (5 sources) ----------------------------------
+
+{
+	// Object literal: PropertyAssignment + ShorthandPropertyAssignment + method.
+	const code = `let r = 1; let o = { a: 1, r, foo() {}, get g() { return 1; } };`;
+	const types = scan(code, ['Property']).entered;
+	const count = types.filter(t => t === 'Property').length;
+	// 4 properties: a:1 (PropertyAssignment), r (Shorthand), foo() (method), g (getter).
+	check('Property: fires for all 4 object-literal property forms',
+		count === 4, `got count=${count}, types=[${types.join(', ')}]`);
+}
+
+{
+	// Object binding pattern: BindingElement → Property{shorthand:true}.
+	const code = `function f({ a, b }) {}`;
+	const types = scan(code, ['Property']).entered;
+	const count = types.filter(t => t === 'Property').length;
+	check('Property: fires for object-binding-pattern elements',
+		count === 2, `got count=${count}`);
+}
+
+{
+	// MethodDefinition for class method, NOT for object-literal method.
+	const code = `class C { foo() {} } let o = { bar() {} };`;
+	const types = scan(code, ['MethodDefinition', 'Property']).entered;
+	const m = types.filter(t => t === 'MethodDefinition').length;
+	const p = types.filter(t => t === 'Property').length;
+	check('MethodDefinition vs Property: split correctly',
+		m === 1 && p === 1, `got M=${m}, P=${p}`);
+}
+
+// --- AssignmentPattern (parameter default + array binding default) ---
+
+{
+	// Parameter with default value.
+	const code = `function f(x = 1, y: string = 'a') {}`;
+	const types = scan(code, ['AssignmentPattern']).entered;
+	const count = types.filter(t => t === 'AssignmentPattern').length;
+	check('AssignmentPattern: fires for parameter defaults',
+		count === 2, `got count=${count}`);
+}
+
+{
+	// Array binding pattern with default: `[a = 1] = expr` (BindingElement
+	// path) — not the same as `function f([a = 1])` because that's also
+	// BindingElement.
+	const code = `function f([a = 1, b = 2]) {}`;
+	const types = scan(code, ['AssignmentPattern']).entered;
+	const count = types.filter(t => t === 'AssignmentPattern').length;
+	check('AssignmentPattern: fires for array-binding defaults',
+		count === 2, `got count=${count}`);
+}
+
+// --- RestElement (4 sources) -----------------------------------------
+
+{
+	// Rest parameter.
+	const code = `function f(...args: number[]) {}`;
+	const types = scan(code, ['RestElement']).entered;
+	check('RestElement: fires for rest parameter', types.includes('RestElement'));
+}
+
+{
+	// Array binding rest.
+	const code = `function f([a, ...rest]: number[]) {}`;
+	const types = scan(code, ['RestElement']).entered;
+	check('RestElement: fires for array-binding rest', types.includes('RestElement'));
+}
+
+{
+	// Object binding rest.
+	const code = `function f({ a, ...rest }: { a: number; b: number }) {}`;
+	const types = scan(code, ['RestElement']).entered;
+	check('RestElement: fires for object-binding rest', types.includes('RestElement'));
+}
+
+{
+	// Spread in pattern position (destructuring assignment with rest).
+	const code = `let r; [r, ...rest] = [1, 2, 3];`;
+	const types = scan(code, ['RestElement']).entered;
+	check('RestElement: fires for ...rest in array destructure',
+		types.includes('RestElement'));
+}
+
+{
+	// SpreadElement (NOT pattern): function call args, array literal spread.
+	const code = `f(...args); let a = [...items];`;
+	const types = scan(code, ['SpreadElement', 'RestElement']).entered;
+	const s = types.filter(t => t === 'SpreadElement').length;
+	const r = types.filter(t => t === 'RestElement').length;
+	check('SpreadElement vs RestElement: split correctly',
+		s === 2 && r === 0, `got S=${s}, R=${r}`);
+}
+
+// --- AssignmentExpression — `=` outside pattern position only -------
+
+{
+	const code = `let r; r = 1; r += 2;`;
+	const types = scan(code, ['AssignmentExpression']).entered;
+	const count = types.filter(t => t === 'AssignmentExpression').length;
+	check('AssignmentExpression: fires for plain `=` and `+=`',
+		count === 2, `got count=${count}`);
+}
+
+{
+	// `[a] = expr` — AssignmentExpression at the top, ArrayPattern as LHS.
+	// The outer `=` is still AssignmentExpression (not AssignmentPattern).
+	const code = `let a; [a] = [1];`;
+	const types = scan(code, ['AssignmentExpression', 'AssignmentPattern']).entered;
+	check('AssignmentExpression: outer destructure `=` is still AssignmentExpression',
+		types.includes('AssignmentExpression'));
+}
+
+// --- AccessorProperty / TSAbstractPropertyDefinition / TSAbstractAccessorProperty -
+
+{
+	const code = `abstract class C {
+		foo = 1;
+		accessor bar = 2;
+		abstract baz: number;
+		abstract accessor qux: number;
+	}`;
+	const types = scan(code, [
+		'PropertyDefinition',
+		'AccessorProperty',
+		'TSAbstractPropertyDefinition',
+		'TSAbstractAccessorProperty',
+	]).entered;
+	check('PropertyDefinition: fires for plain field only',
+		types.filter(t => t === 'PropertyDefinition').length === 1,
+		`PropertyDefinition count: ${types.filter(t => t === 'PropertyDefinition').length}`);
+	check('AccessorProperty: fires for accessor field',
+		types.includes('AccessorProperty'));
+	check('TSAbstractPropertyDefinition: fires for abstract field',
+		types.includes('TSAbstractPropertyDefinition'));
+	check('TSAbstractAccessorProperty: fires for abstract accessor',
+		types.includes('TSAbstractAccessorProperty'));
+}
+
+// --- Decorator -------------------------------------------------------
+
+{
+	const code = `
+		function dec(t: any) {}
+		@dec class C {
+			@dec foo: number = 1;
+			@dec bar() {}
+			method(@dec p: number) {}
+		}
+	`;
+	const types = scan(code, ['Decorator']).entered;
+	const count = types.filter(t => t === 'Decorator').length;
+	check('Decorator: fires for class / property / method / parameter decorators',
+		count === 4, `got count=${count}`);
+}
+
+// --- TSParameterProperty + wrapper unwrap ----------------------------
+
+{
+	// `constructor(public x: number)` wraps the parameter in
+	// TSParameterProperty. The wrapper's `.parameter` is the inner
+	// Identifier — listeners on TSParameterProperty AND the inner type
+	// must both fire (covered by unwrapChain).
+	const code = `class C { constructor(public x: number, private y = 1) {} }`;
+	const types = scan(code, ['TSParameterProperty', 'AssignmentPattern']).entered;
+	check('TSParameterProperty: fires for `public x`',
+		types.includes('TSParameterProperty'));
+	// `private y = 1` materialises as TSParameterProperty wrapping
+	// AssignmentPattern. unwrapChain dispatches both.
+	check('TSParameterProperty wrapper: inner AssignmentPattern fires too',
+		types.includes('AssignmentPattern'));
+}
+
+// --- ExportNamedDeclaration / ExportDefaultDeclaration / ExportAllDeclaration -
+
+{
+	// `export { a }` — SK.ExportDeclaration with NamedExports clause.
+	const code = `const a = 1; export { a };`;
+	const types = scan(code, ['ExportNamedDeclaration']).entered;
+	check('ExportNamedDeclaration: fires for `export { a }`',
+		types.includes('ExportNamedDeclaration'));
+}
+
+{
+	// `export function foo() {}` — fixExports wrapper.
+	const code = `export function foo() {}`;
+	const types = scan(code, ['ExportNamedDeclaration']).entered;
+	check('ExportNamedDeclaration: fires for `export function`',
+		types.includes('ExportNamedDeclaration'));
+}
+
+{
+	// `export * from 'x'` — ExportAllDeclaration.
+	const code = `export * from 'x';`;
+	const types = scan(code, ['ExportAllDeclaration', 'ExportNamedDeclaration']).entered;
+	check('ExportAllDeclaration: fires for `export * from`',
+		types.includes('ExportAllDeclaration'));
+	check('ExportNamedDeclaration: does NOT fire for `export *`',
+		!types.includes('ExportNamedDeclaration'));
+}
+
+{
+	// `export * as ns from 'x'` — also ExportAllDeclaration.
+	const code = `export * as ns from 'x';`;
+	const types = scan(code, ['ExportAllDeclaration']).entered;
+	check('ExportAllDeclaration: fires for `export * as ns`',
+		types.includes('ExportAllDeclaration'));
+}
+
+{
+	// `export default <expr>` — ExportDefaultDeclaration.
+	const code = `export default 42;`;
+	const types = scan(code, ['ExportDefaultDeclaration']).entered;
+	check('ExportDefaultDeclaration: fires for `export default <expr>`',
+		types.includes('ExportDefaultDeclaration'));
+}
+
+{
+	// `export default function foo() {}` — fixExports wrapper as default.
+	const code = `export default function foo() {}`;
+	const types = scan(code, ['ExportDefaultDeclaration', 'FunctionDeclaration']).entered;
+	check('ExportDefaultDeclaration: fires for `export default function`',
+		types.includes('ExportDefaultDeclaration'));
+	check('FunctionDeclaration: inner still fires under unwrapChain',
+		types.includes('FunctionDeclaration'));
+}
+
+{
+	// `export = expr` — TSExportAssignment, NOT ExportDefaultDeclaration.
+	const code = `export = { a: 1 };`;
+	const types = scan(code, ['ExportDefaultDeclaration', 'TSExportAssignment']).entered;
+	check('ExportDefaultDeclaration: does NOT fire for `export =`',
+		!types.includes('ExportDefaultDeclaration'));
+	check('TSExportAssignment: fires for `export =`',
+		types.includes('TSExportAssignment'));
+}
+
+// --- TSTypeQuery / TSImportType — `typeof import('x')` wrapper ------
+
+{
+	// Regular `typeof X` — TSTypeQuery.
+	const code = `let x: typeof Date;`;
+	const types = scan(code, ['TSTypeQuery', 'TSImportType']).entered;
+	check('TSTypeQuery: fires for `typeof X`', types.includes('TSTypeQuery'));
+	check('TSImportType: does NOT fire for `typeof X`', !types.includes('TSImportType'));
+}
+
+{
+	// `typeof import('x')` — TSTypeQuery wrapping TSImportType. Both
+	// listeners must fire (unwrapChain handles the wrap).
+	const code = `let x: typeof import('x');`;
+	const types = scan(code, ['TSTypeQuery', 'TSImportType']).entered;
+	check('TSTypeQuery: fires for `typeof import(...)` (wrapper)',
+		types.includes('TSTypeQuery'));
+	check('TSImportType: inner fires too via unwrapChain',
+		types.includes('TSImportType'));
+}
+
+{
+	// `import('x')` (in type position, no typeof) — just TSImportType.
+	const code = `let x: import('x');`;
+	const types = scan(code, ['TSTypeQuery', 'TSImportType']).entered;
+	check('TSImportType: fires for `import(...)` without typeof',
+		types.includes('TSImportType'));
+	check('TSTypeQuery: does NOT fire for plain `import(...)`',
+		!types.includes('TSTypeQuery'));
 }
 
 console.log();

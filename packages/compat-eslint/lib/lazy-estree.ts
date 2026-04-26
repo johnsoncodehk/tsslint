@@ -150,12 +150,129 @@ function unwrapInner(node: LazyNode): LazyNode {
 	return inner ?? node;
 }
 
+// True when `tsNode` is a destructuring-target literal — `[…]` / `{…}` on
+// the LHS of an `=` BinaryExpression, the init of for-of/for-in, or
+// nested inside another pattern-position container. Used by
+// findWrapperRoute to route pattern-position literals through the
+// parent's pattern getter so `materialize()` returns the ArrayPattern /
+// ObjectPattern variant rather than the expression variant.
+function isPatternLiteralTarget(tsNode: ts.Node): boolean {
+	if (tsNode.kind !== SK.ArrayLiteralExpression && tsNode.kind !== SK.ObjectLiteralExpression) {
+		return false;
+	}
+	let cur: ts.Node = tsNode;
+	while (cur.parent) {
+		const p = cur.parent;
+		if (p.kind === SK.ArrayLiteralExpression
+			|| p.kind === SK.ObjectLiteralExpression
+			|| p.kind === SK.SpreadElement
+			|| p.kind === SK.SpreadAssignment
+			|| p.kind === SK.PropertyAssignment
+			|| p.kind === SK.ShorthandPropertyAssignment
+			|| p.kind === SK.ParenthesizedExpression) {
+			cur = p;
+			continue;
+		}
+		if (p.kind === SK.BinaryExpression) {
+			const be = p as ts.BinaryExpression;
+			return be.operatorToken.kind === SK.EqualsToken && be.left === cur;
+		}
+		if (p.kind === SK.ForInStatement || p.kind === SK.ForOfStatement) {
+			return (p as ts.ForInStatement | ts.ForOfStatement).initializer === cur;
+		}
+		return false;
+	}
+	return false;
+}
+
 function findWrapperRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void; }
 	| null
 {
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
+
+	// Pattern-position literal: route through parent's pattern getter.
+	// `[…] = …` / `{…} = …`     — parent is BinaryExpression, owner.left is the pattern slot.
+	// `for ([…] of …)` / for-in — parent is ForOf/ForInStatement, owner.left.
+	// nested inside another literal/spread/property — parent's elements/properties getter.
+	if (isPatternLiteralTarget(tsNode)) {
+		if (tsParent.kind === SK.BinaryExpression) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { left?: unknown }).left;
+				},
+			};
+		}
+		if (tsParent.kind === SK.ForInStatement || tsParent.kind === SK.ForOfStatement) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { left?: unknown }).left;
+				},
+			};
+		}
+		if (tsParent.kind === SK.ArrayLiteralExpression) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { elements?: unknown }).elements;
+				},
+			};
+		}
+		if (tsParent.kind === SK.ObjectLiteralExpression) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { properties?: unknown }).properties;
+				},
+			};
+		}
+		if (tsParent.kind === SK.PropertyAssignment) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { value?: unknown }).value;
+				},
+			};
+		}
+		if (tsParent.kind === SK.ShorthandPropertyAssignment) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { value?: unknown }).value;
+				},
+			};
+		}
+		if (tsParent.kind === SK.SpreadElement || tsParent.kind === SK.SpreadAssignment) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					void (owner as unknown as { argument?: unknown }).argument;
+				},
+			};
+		}
+		if (tsParent.kind === SK.ParenthesizedExpression) {
+			// ParenthesizedExpression is collapsed by the converter — its
+			// child reuses the parent's slot. Walk up one more.
+			return findWrapperRoute(tsParent);
+		}
+	}
+	// SpreadElement / SpreadAssignment in pattern position: route through
+	// the enclosing pattern-position literal (its .elements / .properties
+	// getter uses convertChildAsPattern, which builds RestElementFromSpread).
+	if ((tsNode.kind === SK.SpreadElement || tsNode.kind === SK.SpreadAssignment)
+		&& (tsParent.kind === SK.ArrayLiteralExpression || tsParent.kind === SK.ObjectLiteralExpression)
+		&& isPatternLiteralTarget(tsParent)) {
+		const slot = tsParent.kind === SK.ArrayLiteralExpression ? 'elements' : 'properties';
+		return {
+			ownerTsNode: tsParent,
+			trigger: (owner) => {
+				void (owner as unknown as Record<string, unknown>)[slot];
+			},
+		};
+	}
 	// `let x: T = ...` — VariableDeclaration.type goes through Identifier.typeAnnotation
 	if (tsParent.kind === SK.VariableDeclaration && (tsParent as ts.VariableDeclaration).type === tsNode) {
 		return {
@@ -2040,7 +2157,8 @@ class ForInStatementNode extends LazyNode {
 	private _right?: LazyNode | null;
 	private _body?: LazyNode | null;
 	get left() {
-		return this._left ??= convertChild((this._ts as ts.ForInStatement).initializer, this);
+		// `for ([a, b] in obj)` — LHS is a destructuring pattern.
+		return this._left ??= convertChildAsPattern((this._ts as ts.ForInStatement).initializer, this);
 	}
 	get right() {
 		return this._right ??= convertChild((this._ts as ts.ForInStatement).expression, this);
@@ -2061,7 +2179,8 @@ class ForOfStatementNode extends LazyNode {
 		this.await = !!tsNode.awaitModifier;
 	}
 	get left() {
-		return this._left ??= convertChild((this._ts as ts.ForOfStatement).initializer, this);
+		// `for ([a, b] of items)` — LHS is a destructuring pattern.
+		return this._left ??= convertChildAsPattern((this._ts as ts.ForOfStatement).initializer, this);
 	}
 	get right() {
 		return this._right ??= convertChild((this._ts as ts.ForOfStatement).expression, this);
