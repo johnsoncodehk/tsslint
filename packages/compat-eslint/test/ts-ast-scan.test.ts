@@ -639,6 +639,98 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		!types.includes('TSTypeQuery'));
 }
 
+// --- ImportExpression (dynamic `import()` as expression) -------------
+
+{
+	const types = scan(`async function f() { return await import('x'); }`, ['ImportExpression']).entered;
+	check('ImportExpression: fires for dynamic import() as expression',
+		types.includes('ImportExpression'));
+}
+
+{
+	// CallExpression listener should NOT fire on dynamic import.
+	const types = scan(`f(); import('x');`, ['CallExpression', 'ImportExpression']).entered;
+	const calls = types.filter(t => t === 'CallExpression').length;
+	const imports = types.filter(t => t === 'ImportExpression').length;
+	check('CallExpression vs ImportExpression: split correctly',
+		calls === 1 && imports === 1, `got CE=${calls}, IE=${imports}`);
+}
+
+// --- TSDeclareFunction (body-less function declaration) -------------
+
+{
+	const code = `declare function foo(): void; function bar() {}`;
+	const types = scan(code, ['TSDeclareFunction', 'FunctionDeclaration']).entered;
+	check('TSDeclareFunction: fires for `declare function`',
+		types.includes('TSDeclareFunction'));
+	check('FunctionDeclaration: fires for body-having declaration',
+		types.includes('FunctionDeclaration'));
+}
+
+// --- ChainExpression — outermost only --------------------------------
+
+{
+	// Single-level optional chain: `a?.b` — ChainExpression on the only
+	// access.
+	const types = scan(`let r = a?.b;`, ['ChainExpression']).entered;
+	const count = types.filter(t => t === 'ChainExpression').length;
+	check('ChainExpression: fires once for `a?.b`',
+		count === 1, `got count=${count}`);
+}
+
+{
+	// Multi-level chain: `a?.b.c` — ChainExpression fires ONLY on outermost.
+	const types = scan(`let r = a?.b.c;`, ['ChainExpression']).entered;
+	const count = types.filter(t => t === 'ChainExpression').length;
+	check('ChainExpression: fires exactly once for `a?.b.c` (outermost only)',
+		count === 1, `got count=${count}`);
+}
+
+{
+	// Optional call: `a?.b()` — ChainExpression on the outermost
+	// (CallExpression).
+	const types = scan(`let r = a?.b();`, ['ChainExpression']).entered;
+	const count = types.filter(t => t === 'ChainExpression').length;
+	check('ChainExpression: fires once for `a?.b()` (outermost call)',
+		count === 1, `got count=${count}`);
+}
+
+{
+	// Two SEPARATE chains in one expression — each fires its own ChainExpression.
+	const types = scan(`let r = a?.b + c?.d;`, ['ChainExpression']).entered;
+	const count = types.filter(t => t === 'ChainExpression').length;
+	check('ChainExpression: fires twice for two separate chains',
+		count === 2, `got count=${count}`);
+}
+
+{
+	// Chain with non-null assertion: `a!.b?.c` — non-null assertion
+	// extends the chain.
+	const types = scan(`let r = a!.b?.c;`, ['ChainExpression']).entered;
+	const count = types.filter(t => t === 'ChainExpression').length;
+	check('ChainExpression: fires once for `a!.b?.c`',
+		count === 1, `got count=${count}`);
+}
+
+{
+	// No chain — non-optional access shouldn't fire ChainExpression.
+	const types = scan(`let r = a.b.c;`, ['ChainExpression']).entered;
+	check('ChainExpression: does NOT fire for non-optional access',
+		!types.includes('ChainExpression'));
+}
+
+{
+	// MemberExpression listener still fires inside chains.
+	const types = scan(`let r = a?.b.c;`, ['MemberExpression']).entered;
+	const count = types.filter(t => t === 'MemberExpression').length;
+	// `a?.b.c` has 2 MemberExpressions (.b and .c — outer materialises as
+	// ChainExpression wrapping outer MemberExpression; unwrapChain emits
+	// MemberExpression for it. Then inner ?.b is also visited as plain
+	// MemberExpression after outer's processing rewrote its cache.)
+	check('MemberExpression: fires for both .b and .c in `a?.b.c`',
+		count === 2, `got count=${count}`);
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');

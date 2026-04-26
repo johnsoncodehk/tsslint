@@ -71,6 +71,52 @@ function isUpdateOp(op: ts.SyntaxKind): boolean {
 	return op === SK.PlusPlusToken || op === SK.MinusMinusToken;
 }
 
+// ChainExpression detection. typescript-estree wraps the OUTERMOST node
+// of an optional-chain in ChainExpression — the inner accesses end up as
+// plain MemberExpression / CallExpression. Predicate only fires on the
+// outermost: a chain-shaped node (PropertyAccess / ElementAccess / Call)
+// where (a) some descendant in the chain has `?.`, and (b) the parent
+// doesn't extend this chain via `.expression` / `.callee`.
+function chainHasQuestionDot(n: ts.Node): boolean {
+	if (n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression) {
+		const acc = n as ts.PropertyAccessExpression | ts.ElementAccessExpression;
+		if (acc.questionDotToken) return true;
+		return chainHasQuestionDot(acc.expression);
+	}
+	if (n.kind === SK.CallExpression) {
+		const ce = n as ts.CallExpression;
+		if (ce.questionDotToken) return true;
+		return chainHasQuestionDot(ce.expression);
+	}
+	if (n.kind === SK.NonNullExpression) {
+		return chainHasQuestionDot((n as ts.NonNullExpression).expression);
+	}
+	return false;
+}
+function parentExtendsChainOf(parent: ts.Node, child: ts.Node): boolean {
+	if (parent.kind === SK.PropertyAccessExpression
+		|| parent.kind === SK.ElementAccessExpression) {
+		return (parent as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression === child;
+	}
+	if (parent.kind === SK.CallExpression) {
+		return (parent as ts.CallExpression).expression === child;
+	}
+	if (parent.kind === SK.NonNullExpression) {
+		return (parent as ts.NonNullExpression).expression === child;
+	}
+	return false;
+}
+function isOutermostOptionalChain(n: ts.Node): boolean {
+	if (n.kind !== SK.PropertyAccessExpression
+		&& n.kind !== SK.ElementAccessExpression
+		&& n.kind !== SK.CallExpression) {
+		return false;
+	}
+	if (!chainHasQuestionDot(n)) return false;
+	if (n.parent && parentExtendsChainOf(n.parent, n)) return false;
+	return true;
+}
+
 function hasModifier(n: ts.Node, kind: ts.SyntaxKind): boolean {
 	return !!(n as { modifiers?: ReadonlyArray<ts.ModifierLike> }).modifiers
 		?.some(m => m.kind === kind);
@@ -188,6 +234,9 @@ const PREDICATES: Record<string, Predicate> = {
 
 	// --- Functions / Classes ------------------------------------------
 	'FunctionDeclaration': n => n.kind === SK.FunctionDeclaration && (n as ts.FunctionDeclaration).body !== undefined,
+	// `declare function foo();` — body-less. lazy-estree's
+	// FunctionDeclarationNode emits TSDeclareFunction in this case.
+	'TSDeclareFunction': n => n.kind === SK.FunctionDeclaration && (n as ts.FunctionDeclaration).body === undefined,
 	'FunctionExpression': n => n.kind === SK.FunctionExpression,
 	'ArrowFunctionExpression': n => n.kind === SK.ArrowFunction,
 	'ClassDeclaration': n => n.kind === SK.ClassDeclaration,
@@ -243,7 +292,18 @@ const PREDICATES: Record<string, Predicate> = {
 	'UpdateExpression': n => (n.kind === SK.PrefixUnaryExpression
 		&& isUpdateOp((n as ts.PrefixUnaryExpression).operator))
 		|| n.kind === SK.PostfixUnaryExpression,
-	'CallExpression': n => n.kind === SK.CallExpression,
+	// Plain function call. Dynamic `import('x')` is also SK.CallExpression
+	// but lazy-estree converts it to ImportExpression — predicate matches
+	// either way; dispatchFast filters by `target.type` so a CallExpression
+	// listener won't fire on an ImportExpression node.
+	'CallExpression': n => n.kind === SK.CallExpression
+		&& (n as ts.CallExpression).expression.kind !== SK.ImportKeyword,
+	// Dynamic `import('x')` as expression — SK.CallExpression with
+	// ImportKeyword as expression.
+	'ImportExpression': n => n.kind === SK.CallExpression
+		&& (n as ts.CallExpression).expression.kind === SK.ImportKeyword,
+	// Outermost optional-chain root (lazy-estree wraps only the outermost).
+	'ChainExpression': isOutermostOptionalChain,
 	'NewExpression': n => n.kind === SK.NewExpression,
 	'MemberExpression': n => n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression,
 	'ConditionalExpression': n => n.kind === SK.ConditionalExpression,
