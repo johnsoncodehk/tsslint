@@ -449,8 +449,15 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		//   (folded into VariableDeclaration). When standalone (for-init in
 		//   `for (var x in y)` etc.) it maps to ESTree VariableDeclaration via
 		//   VariableDeclarationListAsNode — keep that mapping.
+		// - NamedImports / ImportClause: ImportSpecifier / ImportDefault-
+		//   Specifier / ImportNamespaceSpecifier all sit directly under
+		//   ImportDeclaration in ESTree (specifiers[]), so a bottom-up
+		//   walk from any specifier should land on the ImportDeclaration
+		//   wrapper rather than building intermediate generic nodes.
 		if (wk === SK.SyntaxList
 			|| wk === SK.CaseBlock
+			|| wk === SK.NamedImports
+			|| wk === SK.ImportClause
 			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)) {
 			walker = walker.parent;
 			continue;

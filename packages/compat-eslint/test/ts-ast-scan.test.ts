@@ -25,7 +25,6 @@ function scan(code: string, types: string[]): { entered: string[]; left: string[
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(types);
-	if (!pred) throw new Error('no predicate for ' + types.join(','));
 	const steps = tsScanTraverse(sf, pred, context);
 	const entered: string[] = [];
 	const left: string[] = [];
@@ -51,12 +50,21 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 // --- predicateForTriggerSet ------------------------------------------
 
 {
-	const p = predicateForTriggerSet(['TSAsExpression']);
-	check('predicateForTriggerSet: returns predicate', p !== null);
+	let returned = false;
+	try {
+		predicateForTriggerSet(['TSAsExpression']);
+		returned = true;
+	} catch {}
+	check('predicateForTriggerSet: returns predicate for known types', returned);
 }
 {
-	const p = predicateForTriggerSet(['TSAsExpression', 'NotARealType']);
-	check('predicateForTriggerSet: null when missing', p === null);
+	let threw = false;
+	try {
+		predicateForTriggerSet(['TSAsExpression', 'NotARealType']);
+	} catch (e) {
+		threw = (e as Error).name === 'UnsupportedSelectorError';
+	}
+	check('predicateForTriggerSet: throws UnsupportedSelectorError when missing', threw);
 }
 
 // --- Self-lint trigger set ------------------------------------------
@@ -305,10 +313,15 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 }
 
 {
-	// Unknown ESTree types still force fallback.
-	const fallback = predicateForTriggerSet(['NotARealType']);
-	check('predicateForTriggerSet: unknown type returns null',
-		fallback === null);
+	// Unknown ESTree types throw — same philosophy as decomposeSimple,
+	// surfaces coverage gaps as a hard error instead of a silent fallback.
+	let threw = false;
+	try {
+		predicateForTriggerSet(['NotARealType']);
+	} catch (e) {
+		threw = (e as Error).name === 'UnsupportedSelectorError';
+	}
+	check('predicateForTriggerSet: unknown type throws', threw);
 }
 
 // --- Array / Object — context-sensitive (literal vs pattern) ---------

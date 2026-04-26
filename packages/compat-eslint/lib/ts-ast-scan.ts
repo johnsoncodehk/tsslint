@@ -1,10 +1,10 @@
-// Phase B+: TS-AST-driven scan.
+// TS-AST-driven scan.
 //
-// Phase B (selectorAwareTraverse) walks the lazy ESTree, paying for one
-// LazyNode per visited node — even ones rules don't care about. For rule
-// sets with narrow trigger types (e.g. only TSAsExpression), most of those
-// builds are wasted: the rule never reads the node, but we materialised it
-// to learn its `.type` for selector dispatch.
+// Walking the lazy ESTree pays for one LazyNode per visited node — even
+// ones rules don't care about. For rule sets with narrow trigger types
+// (e.g. only TSAsExpression), most of those builds are wasted: the rule
+// never reads the node, but we materialised it to learn its `.type` for
+// selector dispatch.
 //
 // Smarter approach: walk the TS AST directly. TS nodes are plain objects
 // (TS compiler created them), no getters, no allocation. For each TS node,
@@ -19,6 +19,7 @@
 
 import * as ts from 'typescript';
 import { GENERIC_TS_NODE_MARKER, materialize, type ConvertContext } from './lazy-estree';
+import { UnsupportedSelectorError } from './selector-analysis';
 
 const SK = ts.SyntaxKind;
 // `import * as ts` lowers to a namespace object guarded by a getter on
@@ -45,6 +46,7 @@ const WRAPPER_HEAD_TYPES = new Set<string>([
 	'ExportNamedDeclaration', 'ExportDefaultDeclaration',
 	'ChainExpression', 'TSParameterProperty',
 	'TSTypeQuery', 'ClassDeclaration', 'ClassExpression',
+	'TSInterfaceDeclaration', 'TSEnumDeclaration',
 ]);
 
 type Predicate = (n: ts.Node) => boolean;
@@ -522,6 +524,32 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSCallSignatureDeclaration': n => n.kind === SK.CallSignature,
 	'TSConstructSignatureDeclaration': n => n.kind === SK.ConstructSignature,
 	'TSIndexSignature': n => n.kind === SK.IndexSignature,
+
+	// --- ts.ExpressionWithTypeArguments splits 3 ways in ESTree --------
+	// SK.ExpressionWithTypeArguments under a HeritageClause becomes
+	// TSClassImplements (`class C implements X`) or TSInterfaceHeritage
+	// (`interface I extends X`) depending on the grandparent. Outside a
+	// HeritageClause it's TSInstantiationExpression (`Foo<T>` as a value).
+	'TSInstantiationExpression': n => n.kind === SK.ExpressionWithTypeArguments
+		&& n.parent?.kind !== SK.HeritageClause,
+	'TSClassImplements': n => n.kind === SK.ExpressionWithTypeArguments
+		&& n.parent?.kind === SK.HeritageClause
+		&& (n.parent.parent?.kind === SK.ClassDeclaration
+			|| n.parent.parent?.kind === SK.ClassExpression),
+	'TSInterfaceHeritage': n => n.kind === SK.ExpressionWithTypeArguments
+		&& n.parent?.kind === SK.HeritageClause
+		&& n.parent.parent?.kind === SK.InterfaceDeclaration,
+
+	// --- Synthetic ESTree wrappers driven via WRAPPER_HEAD_TYPES -------
+	// These ESTree types have no own ts.SyntaxKind — they wrap a slot of
+	// their parent. Predicate fires on the head ts.Node; unwrapChain
+	// extends the dispatch chain into the wrapped slot so the listener
+	// gets called.
+	'TSInterfaceBody': n => n.kind === SK.InterfaceDeclaration,
+	'TSEnumBody': n => n.kind === SK.EnumDeclaration,
+
+	// --- Tuples / templates -------------------------------------------
+	'TSNamedTupleMember': n => n.kind === SK.NamedTupleMember,
 };
 
 // Sidecar table: ESTree types whose predicate is EXACTLY a TS-kind check
@@ -634,23 +662,32 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSCallSignatureDeclaration': [SK.CallSignature],
 	'TSConstructSignatureDeclaration': [SK.ConstructSignature],
 	'TSIndexSignature': [SK.IndexSignature],
+	// Synthetic wrappers — no own kind, but the head ts.Node IS a simple
+	// kind match. The wrapper listener fires via unwrapChain expansion.
+	'TSInterfaceBody': [SK.InterfaceDeclaration],
+	'TSEnumBody': [SK.EnumDeclaration],
+	'TSNamedTupleMember': [SK.NamedTupleMember],
 };
 
-// Returns null if any of the requested ESTree types lacks a predicate —
-// caller must fall back. Otherwise, returns a predicate that fires true
-// for any ts.Node that materialises to one of the requested types.
+// Throws UnsupportedSelectorError if any requested ESTree type has no TS
+// predicate — same philosophy as decomposeSimple: gaps surface immediately
+// rather than silently degrading to a slow path. Otherwise returns a
+// predicate that fires true for any ts.Node that materialises to one of
+// the requested types.
 //
 // Fast path: when ALL requested types are simple kind matches (most are),
 // build a Uint8Array bitmap indexed by ts.SyntaxKind and check
 // `bitmap[node.kind]` per visit — single array access, faster than Set.has
 // for the integer-keyed lookup.
 const SK_BITMAP_SIZE = 400; // ts.SyntaxKind max is currently ~360; round up.
-export function predicateForTriggerSet(estreeTypes: Iterable<string>): Predicate | null {
+export function predicateForTriggerSet(estreeTypes: Iterable<string>): Predicate {
 	const simpleBitmap = new Uint8Array(SK_BITMAP_SIZE);
 	let simpleCount = 0;
 	const conditional: Predicate[] = [];
 	for (const t of estreeTypes) {
-		if (!PREDICATES[t]) return null;
+		if (!PREDICATES[t]) {
+			throw new UnsupportedSelectorError(t, `no TS-AST predicate registered for ESTree type \`${t}\``);
+		}
 		const kinds = SIMPLE_KINDS[t];
 		if (kinds) {
 			for (const k of kinds) {
@@ -738,6 +775,24 @@ export function tsScanTraverse(
 	// time on the same target. Skip when materialise yields the same
 	// ESTree we just entered.
 	const visit = (node: ts.Node, parentTarget: unknown): void => {
+		// Structural-only TS kinds the ESTree shape collapses away. ESLint
+		// rules and CodePathAnalyzer never see them — visiting their
+		// materialised counterpart would either re-emit the parent's
+		// target (e.g. VariableDeclarationList inside VariableStatement
+		// maps back to the same `VariableDeclaration` ESTree) or fire on
+		// a positionally non-existent slot (NamedImports has no ESTree
+		// counterpart — its element ImportSpecifiers are direct children
+		// of ImportDeclaration in ESTree). Recurse into children with the
+		// parent's target unchanged.
+		const k = node.kind;
+		if (k === SK.SyntaxList
+			|| k === SK.CaseBlock
+			|| k === SK.NamedImports
+			|| (k === SK.VariableDeclarationList && node.parent?.kind === SK.VariableStatement)
+			|| (k === SK.ImportClause && (node as ts.ImportClause).name === undefined)) {
+			tsForEachChild(node, child => visit(child, parentTarget));
+			return;
+		}
 		// Two-state hit result: most hits produce a single-layer target
 		// (`single` set, `chain` null); wrapper kinds (Export*, Chain,
 		// TSParameterProperty, TSTypeQuery, Class*) expand into a 2+ layer
@@ -746,13 +801,13 @@ export function tsScanTraverse(
 		let single: unknown = null;
 		let chain: unknown[] | null = null;
 		let nextParent = parentTarget;
-		const hit = bitmap ? bitmap[node.kind] === 1 : match(node);
+		const hit = bitmap ? bitmap[k] === 1 : match(node);
 		if (hit) {
 			const target = materialize(node, ctx);
-			// `predicateAllKinds` visits modifier tokens, VariableDeclarationList,
-			// SyntaxList, and other TS-only kinds. Those materialise into
-			// GenericTSNode wrappers with no real ESTree counterpart —
-			// firing enter/leave on them would confuse downstream
+			// `predicateAllKinds` visits modifier tokens, NamedImports,
+			// HeritageClause, and other TS-only kinds. Those materialise
+			// into GenericTSNode wrappers with no real ESTree counterpart
+			// — firing enter/leave on them would confuse downstream
 			// dispatchers (e.g. CodePathAnalyzer's preprocess() asserts
 			// child nodes occupy known slots on their parent). Skip.
 			const isGeneric = (target as unknown as Record<symbol, unknown>)[GENERIC_TS_NODE_MARKER];
@@ -828,6 +883,13 @@ function unwrapChain(node: unknown): unknown[] {
 			// no own TS kind — it only exists as a wrapper around the
 			// class's members. Adding it to the chain lets a ClassBody
 			// listener fire between class enter and member visits.
+			cur = (cur as { body?: unknown }).body;
+		} else if (t === 'TSInterfaceDeclaration' || t === 'TSEnumDeclaration') {
+			// Same pattern as ClassBody: TSInterfaceBody / TSEnumBody have
+			// no own ts.SyntaxKind — synthetic ESTree wrappers around the
+			// declaration's members. Drill into `body` so listeners on
+			// those wrappers fire between the declaration enter and the
+			// member visits.
 			cur = (cur as { body?: unknown }).body;
 		} else {
 			break;

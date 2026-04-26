@@ -11,6 +11,11 @@ let eslintInternals: {
 	SourceCode: typeof ESLint.SourceCode;
 	NodeEventGenerator: any;
 	Traverser: { getKeys(node: object): string[] };
+	CodePathAnalyzer: new (eventGenerator: {
+		emitter: { emit(name: string, ...args: unknown[]): void };
+		enterNode(node: unknown): void;
+		leaveNode(node: unknown): void;
+	}) => { enterNode(node: unknown): void; leaveNode(node: unknown): void };
 } | undefined;
 function loadEslintInternals() {
 	if (!eslintInternals) {
@@ -19,6 +24,7 @@ function loadEslintInternals() {
 			SourceCode: require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js')),
 			NodeEventGenerator: require(path.join(eslintRoot, 'lib/linter/node-event-generator.js')),
 			Traverser: require(path.join(eslintRoot, 'lib/shared/traverser.js')),
+			CodePathAnalyzer: require(path.join(eslintRoot, 'lib/linter/code-path-analysis/code-path-analyzer.js')),
 		};
 	}
 	return eslintInternals;
@@ -55,16 +61,16 @@ let sharedCache: {
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 } | undefined;
 
-// sourceCode cache is per-file. eventQueue is built lazily after rule
-// listeners register so we can drive selector-aware traversal (Phase B).
-// Stable rule registry → eventQueue cached alongside sourceCode.
-// `convertContext` is kept around so the TS-scan path (Phase B+) can call
+// sourceCode cache is per-file. The eventQueue itself is no longer
+// cached — every call to `runSharedTraversal` rebuilds it from the TS
+// AST scan, since the path now serves both CPA and non-CPA modes
+// uniformly (CPA's per-walk state can't be replayed from a stale queue
+// anyway). `convertContext` is kept so the TS-scan path can call
 // `materialize(tsNode, context)` for each hit without rebuilding the
 // converter state.
 let cachedEstree: {
 	file: ts.SourceFile;
 	sourceCode: ESLint.SourceCode;
-	eventQueue: any[] | undefined;
 	convertContext: unknown;
 } | undefined;
 
@@ -187,7 +193,6 @@ function runSharedTraversal(
 	const cwd = program.getCurrentDirectory();
 
 	let currentNode: any;
-	const listenerKeys = new Set<string>();
 	// (rule, selector, listener) triples — used to build fast dispatch
 	// tables when every selector is simple. Parallel to emitter.on().
 	const allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]> = [];
@@ -314,7 +319,6 @@ function runSharedTraversal(
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
 			if (listener) {
-				listenerKeys.add(selector);
 				emitter.on(selector, listener as (...a: unknown[]) => void);
 				allListeners.push([eslintRule, selector, listener as (n: unknown) => void]);
 			}
@@ -328,21 +332,14 @@ function runSharedTraversal(
 	// — never silent NodeEventGenerator fallback. See `buildFastDispatch`.
 	const fast = buildFastDispatch(allListeners);
 
-	// Phase B+: when no rule registers an onCodePath* listener, scan
-	// the TS AST directly via tsScanTraverse and only materialise the
-	// LazyNodes that are actual trigger hits. With CPA listeners
-	// present, fall back to sourceCode.traverse() (still on lazy
-	// ESTree) — that path builds an eventQueue with both kind=1 (visit)
-	// and kind=2 (codePath emit) steps which dispatchFast handles
-	// uniformly. Either way, dispatch goes through dispatchFast — no
-	// NodeEventGenerator anywhere.
-	let eventQueue: any[] | undefined;
-	if (fast.codePath.size === 0) {
-		eventQueue = tryTsScanEventQueue(file, fast);
-	}
-	if (!eventQueue) {
-		eventQueue = getEventQueue(sourceCode, listenerKeys);
-	}
+	// Single TS-AST scan path produces the entire event queue. When any
+	// rule registers an onCodePath* listener, the walker's inline visitor
+	// is wrapped in a CodePathAnalyzer that emits onCodePath* events into
+	// the same queue (kind=2 steps); without CPA listeners we narrow the
+	// predicate to the union of trigger types so most ts.Nodes never get
+	// materialised. Either way `dispatchFast` consumes one queue — no
+	// NodeEventGenerator, no lazy-ESTree full traversal.
+	const eventQueue = buildTsScanEventQueue(file, fast);
 
 	dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
 }
@@ -419,33 +416,75 @@ function buildFastDispatch(
 	return { enter, exit, enterAll, exitAll, codePath };
 }
 
-// Try to build the eventQueue by scanning the TS AST instead of walking
-// the lazy ESTree. Works only if every trigger ESTree type has a TS
-// predicate registered in `lib/ts-ast-scan.ts`. Returns undefined to
-// signal fallback to the existing path.
-function tryTsScanEventQueue(
+// Build the eventQueue by scanning the TS AST instead of walking the lazy
+// ESTree. Three modes, picked by inspecting `fast`:
+//
+//  1. CPA mode (any onCodePath* listener present) — predicate fires on
+//     every ts.Node so the wrapped CodePathAnalyzer sees the full ESTree
+//     stream. CPA's `onCodePath*` emits become kind=2 steps; node visits
+//     become kind=1 steps. dispatchFast handles both uniformly.
+//
+//  2. Wildcard mode (`*` / `Parent > *` listener) — predicate fires on
+//     every ts.Node, no CPA wrapper. Same materialisation cost as CPA
+//     mode but no per-step CPA bookkeeping.
+//
+//  3. Narrow mode (default) — predicate is a Uint8Array bitmap built from
+//     the trigger ESTree types. The vast majority of ts.Nodes never get
+//     materialised. predicateForTriggerSet throws UnsupportedSelectorError
+//     if any type lacks a registered predicate (same philosophy as
+//     decomposeSimple — surface coverage gaps as hard errors).
+function buildTsScanEventQueue(
 	file: ts.SourceFile,
 	fast: FastDispatch,
-): any[] | undefined {
-	if (!cachedEstree) return undefined;
+): any[] {
+	if (!cachedEstree) {
+		throw new Error('buildTsScanEventQueue called without an active sourceCode cache');
+	}
 	const { predicateForTriggerSet, predicateAllKinds, tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
-	// If any wildcard-typed listener is registered, we have to visit every
-	// node — the bitmap predicate becomes "all kinds set". Otherwise build
-	// it from the type-keyed lists; bail to fallback if any type lacks a
-	// TS predicate.
+	const ctx = cachedEstree.convertContext;
+	const usesCodePath = fast.codePath.size > 0;
+	const usesWildcard = fast.enterAll.length > 0 || fast.exitAll.length > 0;
 	let match;
-	if (fast.enterAll.length > 0 || fast.exitAll.length > 0) {
+	if (usesCodePath || usesWildcard) {
 		match = predicateAllKinds();
 	} else {
 		const types = new Set<string>();
 		for (const t of fast.enter.keys()) types.add(t);
 		for (const t of fast.exit.keys()) types.add(t);
 		match = predicateForTriggerSet(types);
-		if (!match) return undefined;
 	}
 
-	const ctx = cachedEstree.convertContext;
-	return tsScanTraverse(file, match, ctx as any) as any[];
+	if (!usesCodePath) {
+		return tsScanTraverse(file, match, ctx as any) as any[];
+	}
+
+	// CPA mode: the walker's inline visitor wraps a CodePathAnalyzer.
+	// Steps are appended in the order CPA produces them (state-update
+	// emits first, then the node visit), exactly mirroring what ESLint's
+	// CodePathAnalyzer-wrapped traverser would emit — but on the lazy
+	// ESTree built bottom-up from the TS AST, no second walker.
+	const queue: any[] = [];
+	const fakeEmitter = {
+		emit(name: string, ...args: unknown[]) {
+			queue.push({ kind: 2, target: name, args });
+		},
+	};
+	const wrapped = {
+		emitter: fakeEmitter,
+		enterNode(target: unknown) {
+			queue.push({ kind: 1, target, phase: 1 });
+		},
+		leaveNode(target: unknown) {
+			queue.push({ kind: 1, target, phase: 2 });
+		},
+	};
+	const { CodePathAnalyzer } = loadEslintInternals();
+	const cpa = new CodePathAnalyzer(wrapped);
+	tsScanTraverse(file, match, ctx as any, {
+		enterNode(target) { cpa.enterNode(target); },
+		leaveNode(target) { cpa.leaveNode(target); },
+	});
+	return queue;
 }
 
 function dispatchFast(
@@ -693,58 +732,10 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
 			},
 		});
-		cachedEstree = { file, sourceCode, eventQueue: undefined, convertContext };
+		cachedEstree = { file, sourceCode, convertContext };
 	}
 	return {
 		sourceCode: cachedEstree.sourceCode,
 	};
 }
 
-// Build the eventQueue selector-aware (Phase B) when possible. Falls back
-// to ESLint's SourceCode.traverse() when rules need full CPA or a wildcard
-// listener forces every node to be considered. Cached on `cachedEstree`
-// alongside sourceCode (rules are stable across calls in TSSLint's flow,
-// so the queue stays valid for the lifetime of a single file's lint).
-function getEventQueue(
-	sourceCode: ESLint.SourceCode,
-	listenerKeys: ReadonlySet<string>,
-): any[] {
-	if (!cachedEstree) {
-		throw new Error('getEventQueue called without an active sourceCode cache');
-	}
-	if (cachedEstree.eventQueue) return cachedEstree.eventQueue;
-
-	const { buildTriggerSet, isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
-	let usesCodePath = false;
-	for (const key of listenerKeys) {
-		if (isCodePathListener(key)) {
-			usesCodePath = true;
-			break;
-		}
-	}
-
-	let eventQueue: any[];
-	if (usesCodePath) {
-		// CPA emit steps must be threaded through every node — ESLint's
-		// SourceCode.traverse() wraps the analyzer with CodePathAnalyzer
-		// to do this. Falling back to it preserves CPA correctness.
-		eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
-	} else {
-		const triggers = buildTriggerSet(listenerKeys);
-		if (triggers.isAll()) {
-			// At least one selector is a wildcard or unparseable — every
-			// node must be considered. ESLint's traverser is fine.
-			eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
-		} else {
-			const { Traverser } = loadEslintInternals();
-			const { selectorAwareTraverse } = require('./lib/selector-aware-traverse') as typeof import('./lib/selector-aware-traverse');
-			eventQueue = selectorAwareTraverse(sourceCode.ast as unknown as object, {
-				visitorKeys: sourceCode.visitorKeys as Record<string, readonly string[] | undefined>,
-				fallbackKeys: Traverser.getKeys,
-				triggers,
-			}) as any[];
-		}
-	}
-	cachedEstree.eventQueue = eventQueue;
-	return eventQueue;
-}

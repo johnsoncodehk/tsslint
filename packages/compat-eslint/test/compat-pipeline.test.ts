@@ -1,12 +1,11 @@
 // End-to-end integration tests for the compat-eslint pipeline.
 //
-// Each unit test file (lazy-estree, ts-ast-scan, selector-aware-traverse,
-// selector-analysis) covers one layer in isolation. This file drives the
-// full `runSharedTraversal` flow with mock ESLint rules and verifies:
+// Each unit test file (lazy-estree, ts-ast-scan, selector-analysis)
+// covers one layer in isolation. This file drives the full
+// `runSharedTraversal` flow with mock ESLint rules and verifies:
 //   - listener fire order and target shape (TS-scan / fast dispatch path)
 //   - `.parent` walking via bottom-up materialise after a TS-scan hit
 //   - CPA fallback (rule with `onCodePath*` listener forces ESLint traverser)
-//   - mixed simple + complex selectors fall back to selectorAware correctly
 //   - rule-level error isolation
 //
 // Run via:
@@ -230,9 +229,10 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 		cpaCalls.some(c => c.event === 'FunctionDeclaration'));
 }
 
-// 4. Mixed simple + complex selectors — when ANY selector is complex
-//    (descendant combinator, attribute), fast dispatch is skipped and
-//    selectorAwareTraverse + NodeEventGenerator handle everything.
+// 4. Mixed simple + complex selectors — descendant combinator selectors
+//    decompose into a (Right type, ancestor-walk filter) tuple via
+//    `decomposeSimple`, so fast dispatch handles them alongside the
+//    plain identifier selectors.
 {
 	const code = `
 		function outer() {
@@ -303,9 +303,9 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 }
 
 // 6. Bottom-up materialise after TS-scan dispatch — listener for an
-//    ESTree type that's NOT pre-materialised by selectorAwareTraverse
-//    (because TS-scan only built ImportDeclaration's wrapper) reads
-//    `.specifiers[0]` and walks `.parent` back to the import.
+//    ESTree type that the TS scan only entered at the wrapper level
+//    (ImportDeclaration) reads `.specifiers[0]` and walks `.parent`
+//    back to the import.
 {
 	const code = `import { a, b } from 'x';`;
 	const captured: { type: string; specifierType?: string; specifierParentType?: string }[] = [];
