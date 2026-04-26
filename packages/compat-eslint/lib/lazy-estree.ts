@@ -128,15 +128,6 @@ abstract class LazyNode {
 	}
 }
 
-// TS SyntaxKinds that don't map to an ESTree node — they're structural-only
-// in the TS AST and get folded away by typescript-estree's converter. When
-// walking up the TS parent chain in bottom-up materialisation, skip past
-// these to find the nearest ESTree ancestor.
-const TS_ONLY_KINDS = new Set<ts.SyntaxKind>([
-	SK.VariableDeclarationList,
-	SK.SyntaxList,
-]);
-
 // If `tsNode` sits in a slot where the ESTree path goes through a synthetic
 // wrapper (e.g. `VariableDeclaration.type` is exposed as
 // `VariableDeclarator.id.typeAnnotation` — a TSTypeAnnotation wrapper that
@@ -438,12 +429,16 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	const toBuild: ts.Node[] = [tsNode];
 	let walker: ts.Node | undefined = tsNode.parent;
 	let parent: LazyNode | null = null;
+	const tsCache = ctx.maps.tsNodeToESTreeNodeMap;
 	while (walker) {
-		if (TS_ONLY_KINDS.has(walker.kind)) {
+		const wk = walker.kind;
+		// Inlined TS_ONLY_KINDS — only VariableDeclarationList and SyntaxList,
+		// so two `===` beats a Set.has hop on every ancestor step.
+		if (wk === SK.VariableDeclarationList || wk === SK.SyntaxList) {
 			walker = walker.parent;
 			continue;
 		}
-		const cachedAnc = ctx.maps.tsNodeToESTreeNodeMap.get(walker);
+		const cachedAnc = tsCache.get(walker);
 		if (cachedAnc) {
 			parent = cachedAnc as LazyNode;
 			break;
