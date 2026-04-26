@@ -92,7 +92,10 @@ abstract class LazyNode {
 	get range(): [number, number] {
 		return this._range ??= [this._ts.getStart(this._ctx.ast), this._ts.getEnd()];
 	}
-	set range(v: [number, number]) { this._range = v; }
+	// Mutating range invalidates the cached loc — the lazy getter
+	// recomputes from the new range on next read. Constructors should
+	// only set `range`; `loc` is computed on demand.
+	set range(v: [number, number]) { this._range = v; this._loc = undefined; }
 	private _loc?: ReturnType<typeof getLocFor>;
 	get loc() {
 		return this._loc ??= getLocFor(this._ctx.ast, this.range[0], this.range[1]);
@@ -196,12 +199,31 @@ function isPatternLiteralTarget(tsNode: ts.Node): boolean {
 	return false;
 }
 
+// Bitmap of parent kinds that can possibly trigger a wrapper-route. If
+// tsParent.kind is NOT in this set, findWrapperRoute returns null without
+// running the if-chain. Most tree-walks land on parents like
+// SourceFile / Block / ReturnStatement / BinaryExpression-but-not-LHS — none
+// of which appear here — so this catches the vast majority of calls.
+const WRAPPER_ROUTE_PARENT_BITMAP = (() => {
+	const a = new Uint8Array(400);
+	for (const k of [
+		SK.BinaryExpression, SK.ForOfStatement, SK.ForInStatement,
+		SK.ArrayLiteralExpression, SK.ObjectLiteralExpression,
+		SK.PropertyAssignment, SK.ShorthandPropertyAssignment,
+		SK.SpreadElement, SK.SpreadAssignment, SK.ParenthesizedExpression,
+		SK.VariableDeclaration, SK.Parameter,
+		SK.FunctionDeclaration, SK.FunctionExpression, SK.ArrowFunction,
+	]) a[k] = 1;
+	return a;
+})();
+
 function findWrapperRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void; }
 	| null
 {
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
+	if (WRAPPER_ROUTE_PARENT_BITMAP[tsParent.kind] !== 1) return null;
 
 	// Pattern-position literal: route through parent's pattern getter.
 	// `[…] = …` / `{…} = …`     — parent is BinaryExpression, owner.left is the pattern slot.
@@ -455,10 +477,7 @@ function maybeFixExports(tsNode: ts.Node, inner: LazyNode, parent: LazyNode): La
 	let cursor = declStart;
 	const text = parent._ctx.ast.text;
 	while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
-	(inner as unknown as { range: [number, number]; loc: ReturnType<typeof getLocFor> })
-		.range = [cursor, inner.range[1]];
-	(inner as unknown as { loc: ReturnType<typeof getLocFor> })
-		.loc = getLocFor(parent._ctx.ast, cursor, inner.range[1]);
+	(inner as unknown as { range: [number, number] }).range = [cursor, inner.range[1]];
 
 	const wrapperRange: [number, number] = [exportKeyword.getStart(parent._ctx.ast), inner.range[1]];
 	if (isDefault) {
@@ -832,9 +851,9 @@ class ChainExpressionWrappingNode extends LazyNode {
 	readonly expression: LazyNode;
 	constructor(tsNode: ts.Node, parent: LazyNode, expression: LazyNode) {
 		super(tsNode, parent, undefined, false);
-		// Take the wrapped node's range/loc — eager createNode passes the same TS node.
+		// Take the wrapped node's range — eager createNode passes the same TS
+		// node, so loc is identical and the lazy getter recomputes when needed.
 		this.range = expression.range.slice() as [number, number];
-		this.loc = expression.loc;
 		// Wrap the inner: its parent becomes us, and the TS-node map is
 		// re-pointed to us (eager comment: "registered as the canonical
 		// mapping for this TS node").
@@ -863,7 +882,6 @@ class TSTypeParameterDeclarationNode extends LazyNode {
 		const start = typeParams.pos - 1;
 		const end = typeParams.end + 1;
 		this.range = [start, end];
-		this.loc = getLocFor(this._ctx.ast, start, end);
 	}
 	get params() {
 		return this._params ??= this._typeParams.map(t => convertChild(t, this));
@@ -896,7 +914,6 @@ class TSTypeParameterInstantiationNode extends LazyNode {
 		const end = closingGt >= 0 ? closingGt + 1 : typeArgs.end + 1;
 		const start = typeArgs.pos - 1;
 		this.range = [start, end];
-		this.loc = getLocFor(this._ctx.ast, start, end);
 	}
 	get params() {
 		return this._params ??= this._typeArgs.map(t => convertChild(t, this));
@@ -914,10 +931,22 @@ class ProgramNode extends LazyNode {
 
 	constructor(tsNode: ts.SourceFile, parent: LazyNode | null, context?: ConvertContext) {
 		super(tsNode, parent, context);
-		// Program range ends at endOfFileToken.end, not source file end.
-		this.range = [tsNode.getStart(this._ctx.ast), tsNode.endOfFileToken.end];
-		this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
 		this.sourceType = (tsNode as { externalModuleIndicator?: unknown }).externalModuleIndicator ? 'module' : 'script';
+	}
+
+	// Program range ends at endOfFileToken.end, not source file end. Override
+	// the lazy getter so we only compute the bounds when read.
+	get range(): [number, number] {
+		const cached = (this as unknown as { _range?: [number, number] })._range;
+		if (cached) return cached;
+		const ts_ = this._ts as ts.SourceFile;
+		const r: [number, number] = [ts_.getStart(this._ctx.ast), ts_.endOfFileToken.end];
+		(this as unknown as { _range: [number, number] })._range = r;
+		return r;
+	}
+	set range(v: [number, number]) {
+		(this as unknown as { _range?: [number, number]; _loc?: unknown })._range = v;
+		(this as unknown as { _loc?: unknown })._loc = undefined;
 	}
 
 	get body() {
@@ -1063,7 +1092,6 @@ class TSTypeAnnotationNode extends LazyNode {
 		// (e.g. TSNumberKeyword), which registers itself when materialised.
 		super(tsTypeNode, parent, undefined, false);
 		this.range = range;
-		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 	}
 
 	get typeAnnotation() {
@@ -1261,7 +1289,6 @@ class TSImportTypeNode extends LazyNode {
 			let cursor = typeofTokenStart + 'typeof'.length;
 			while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
 			this.range = [cursor, this.range[1]];
-			this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
 		}
 	}
 
@@ -1401,7 +1428,6 @@ class ClassBodyNode extends LazyNode {
 	constructor(classTsNode: ts.ClassDeclaration | ts.ClassExpression, parent: LazyNode, range: [number, number]) {
 		super(classTsNode, parent, undefined, false);
 		this.range = range;
-		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 	}
 	get body() {
 		if (this._body) return this._body;
@@ -1439,7 +1465,6 @@ class MethodFunctionExpressionNode extends LazyNode {
 			start = Math.min(start, tps.pos - 1);
 		}
 		this.range = [start, end];
-		this.loc = getLocFor(this._ctx.ast, start, end);
 		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
 		this.generator = !!(tsNode as ts.MethodDeclaration).asteriskToken;
 		this.type = (tsNode as ts.MethodDeclaration).body
@@ -1584,11 +1609,9 @@ class ConstructorKeyIdentifierNode extends LazyNode {
 		// Find the `constructor` keyword: it's the first token after any
 		// modifiers and before the `(`. Easiest: it ends one before the
 		// parameter list start.
-		const ast = this._ctx.ast;
 		const end = tsNode.parameters.pos - 1;
 		const start = end - 'constructor'.length;
 		this.range = [start, end];
-		this.loc = getLocFor(ast, start, end);
 	}
 }
 
@@ -1674,11 +1697,9 @@ class BindingAssignmentPatternNode extends LazyNode {
 	private _right?: LazyNode | null;
 	constructor(tsNode: ts.BindingElement, parent: LazyNode, left: LazyNode) {
 		super(tsNode, parent, undefined, false);
-		const ast = this._ctx.ast;
-		const start = tsNode.name.getStart(ast);
+		const start = tsNode.name.getStart(this._ctx.ast);
 		const end = tsNode.initializer!.end;
 		this.range = [start, end];
-		this.loc = getLocFor(ast, start, end);
 		this.left = left;
 	}
 	get right() {
@@ -1909,12 +1930,13 @@ class TSTypePredicateNode extends LazyNode {
 		const t = (this._ts as ts.TypePredicateNode).type;
 		if (!t) return this._typeAnnotation = null;
 		const wrapper = convertTypeAnnotation(t, this);
-		// Eager (line 1908) overrides the wrapper's range/loc to match the
-		// INNER type — type predicates drop the colon-prefixed range.
-		const inner = wrapper.typeAnnotation as { range: [number, number]; loc: ReturnType<typeof getLocFor> } | null;
+		// Eager (line 1908) overrides the wrapper's range to match the INNER
+		// type — type predicates drop the colon-prefixed range. The range
+		// setter invalidates loc, so the lazy getter recomputes from the
+		// new range when needed.
+		const inner = wrapper.typeAnnotation as { range: [number, number] } | null;
 		if (inner) {
-			(wrapper as unknown as { range: [number, number]; loc: ReturnType<typeof getLocFor> }).range = inner.range;
-			(wrapper as unknown as { loc: ReturnType<typeof getLocFor> }).loc = inner.loc;
+			(wrapper as unknown as { range: [number, number] }).range = inner.range;
 		}
 		return this._typeAnnotation = wrapper;
 	}
@@ -1989,7 +2011,6 @@ class TSEnumBodyNode extends LazyNode {
 	constructor(enumTsNode: ts.EnumDeclaration, parent: LazyNode, range: [number, number]) {
 		super(enumTsNode, parent, undefined, false);
 		this.range = range;
-		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 	}
 	get members() {
 		return this._members ??= convertChildren((this._ts as ts.EnumDeclaration).members, this);
@@ -2420,10 +2441,7 @@ class TSRestTypeWrappingNamedTupleMemberNode extends LazyNode {
 		// only extends; do a direct set instead.
 		const lbl = inner.label as { range: [number, number] } | null;
 		if (lbl) {
-			(inner as unknown as { range: [number, number]; loc: ReturnType<typeof getLocFor> })
-				.range = [lbl.range[0], inner.range[1]];
-			(inner as unknown as { loc: ReturnType<typeof getLocFor> })
-				.loc = getLocFor(this._ctx.ast, lbl.range[0], inner.range[1]);
+			(inner as unknown as { range: [number, number] }).range = [lbl.range[0], inner.range[1]];
 		}
 		return this._typeAnnotation = inner;
 	}
@@ -2722,7 +2740,6 @@ class ExportNamedWrappingNode extends LazyNode {
 	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
 		super(tsNode, parent, undefined, false);
 		this.range = range;
-		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 		// Inner gets re-pointed to us in the maps (eager registers the
 		// wrapper as the canonical mapping for the original TS node).
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
@@ -2741,7 +2758,6 @@ class ExportDefaultWrappingNode extends LazyNode {
 	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
 		super(tsNode, parent, undefined, false);
 		this.range = range;
-		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 		this.declaration = declaration;
 	}
@@ -2958,7 +2974,6 @@ class TSInterfaceBodyNode extends LazyNode {
 		// independent TS node, so don't pollute the maps.
 		super(interfaceTsNode, parent, undefined, false);
 		this.range = range;
-		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 	}
 	get body() {
 		return this._body ??= convertChildren((this._ts as ts.InterfaceDeclaration).members, this);
@@ -3157,7 +3172,6 @@ class ImportDefaultSpecifierNode extends LazyNode {
 			if (local) {
 				this._local = local;
 				this.range = [...local.range] as [number, number];
-				this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
 			}
 		}
 	}
@@ -3377,7 +3391,6 @@ class AssignmentPatternNode extends LazyNode {
 		const start = (tsNode.name as ts.Node).getStart(this._ctx.ast);
 		const end = tsNode.initializer!.end;
 		this.range = [start, end];
-		this.loc = getLocFor(this._ctx.ast, start, end);
 	}
 	get right() {
 		return this._right ??= convertChild((this._ts as ts.ParameterDeclaration).initializer, this);
