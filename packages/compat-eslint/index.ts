@@ -601,14 +601,27 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		const { astMaps, estree, context: convertContext } = convertLazy(file) as { astMaps: any; estree: any; context: unknown };
 
 		// tokens / comments come from typescript-estree's standalone scanner
-		// helpers — neither depends on its Converter. Rules like
-		// no-unnecessary-type-assertion call `sourceCode.getTokenAfter()`
-		// and need the tokens array.
+		// helpers. Rules like no-unnecessary-type-assertion call
+		// `sourceCode.getTokenAfter()` and need the tokens array — but most
+		// rules never touch tokens/comments. Defer the scan via lazy
+		// getters: cheap when no rule reads, ~80ms saved on large files.
 		const tseRoot = path.dirname(require.resolve('@typescript-eslint/typescript-estree/package.json'));
 		const { convertTokens } = require(tseRoot + '/dist/node-utils.js') as { convertTokens(ast: ts.SourceFile): unknown[] };
 		const { convertComments } = require(tseRoot + '/dist/convert-comments.js') as { convertComments(ast: ts.SourceFile): unknown[] };
-		estree.tokens = convertTokens(file);
-		estree.comments = convertComments(file);
+		let _tokens: unknown[] | undefined;
+		let _comments: unknown[] | undefined;
+		Object.defineProperty(estree, 'tokens', {
+			configurable: true,
+			enumerable: true,
+			get: () => _tokens ??= convertTokens(file),
+			set: (v: unknown[]) => { _tokens = v; },
+		});
+		Object.defineProperty(estree, 'comments', {
+			configurable: true,
+			enumerable: true,
+			get: () => _comments ??= convertComments(file),
+			set: (v: unknown[]) => { _comments = v; },
+		});
 
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'

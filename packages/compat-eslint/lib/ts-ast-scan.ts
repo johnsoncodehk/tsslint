@@ -508,6 +508,7 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSEnumDeclaration': n => n.kind === SK.EnumDeclaration,
 	'TSEnumMember': n => n.kind === SK.EnumMember,
 	'TSModuleDeclaration': n => n.kind === SK.ModuleDeclaration,
+	'TSModuleBlock': n => n.kind === SK.ModuleBlock,
 	'TSImportEqualsDeclaration': n => n.kind === SK.ImportEqualsDeclaration,
 	// TSExportAssignment: only `export = <expr>` (NOT `export default`).
 	'TSExportAssignment': n => n.kind === SK.ExportAssignment
@@ -624,6 +625,7 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSEnumDeclaration': [SK.EnumDeclaration],
 	'TSEnumMember': [SK.EnumMember],
 	'TSModuleDeclaration': [SK.ModuleDeclaration],
+	'TSModuleBlock': [SK.ModuleBlock],
 	'TSImportEqualsDeclaration': [SK.ImportEqualsDeclaration],
 	'TSExternalModuleReference': [SK.ExternalModuleReference],
 	'TSNamespaceExportDeclaration': [SK.NamespaceExportDeclaration],
