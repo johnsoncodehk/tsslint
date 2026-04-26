@@ -30,6 +30,89 @@
 const esqueryPath = require.resolve('esquery', { paths: [require.resolve('eslint/package.json')] });
 const esquery = require(esqueryPath) as { parse(selector: string): unknown };
 
+// Lazy-loaded visitor-keys table (`@typescript-eslint/visitor-keys`) —
+// used by sibling / `:nth-child` / `:has` filters at dispatch time to
+// walk a node's children without hard-coding keys per type. Falls back
+// to enumerating own enumerable properties if the package isn't on the
+// resolve path (some test harnesses).
+let _visitorKeys: Record<string, readonly string[] | undefined> | null = null;
+function visitorKeysFor(type: string): readonly string[] | null {
+	if (_visitorKeys === null) {
+		try {
+			const eslintRoot = (require('path') as typeof import('path')).dirname(require.resolve('eslint/package.json'));
+			_visitorKeys = require(require.resolve('@typescript-eslint/visitor-keys', {
+				paths: [eslintRoot],
+			})).visitorKeys;
+		} catch {
+			_visitorKeys = {};
+		}
+	}
+	return _visitorKeys![type] ?? null;
+}
+
+// Iterate every direct child node (or array element) under `node`. Used
+// by `:has(X)` (DFS) and structural filters that need the full child
+// list, not just specific named slots. When visitor-keys has no entry
+// for the type, fall back to enumerating own enumerable properties —
+// covers synthetic test fixtures and exotic node types.
+function* iterChildNodes(node: any): IterableIterator<any> {
+	const keys = visitorKeysFor(node.type) ?? Object.keys(node);
+	for (const key of keys) {
+		if (key === 'parent' || key === 'type') continue;
+		const child = node[key];
+		if (Array.isArray(child)) {
+			for (let i = 0; i < child.length; i++) {
+				const c = child[i];
+				if (c && typeof c === 'object' && typeof (c as { type?: unknown }).type === 'string') {
+					yield c;
+				}
+			}
+		} else if (child && typeof child === 'object' && typeof (child as { type?: unknown }).type === 'string') {
+			yield child;
+		}
+	}
+}
+
+// Find the array on `node.parent` that contains `node`, plus its index.
+// Returns null if the node sits in a non-array slot (e.g. parent.test
+// rather than parent.body[]) — `:nth-child` / sibling combinators only
+// have meaning inside an array slot.
+function locateInArraySlot(node: any): { siblings: any[]; index: number } | null {
+	const parent = node.parent;
+	if (!parent) return null;
+	const keys = visitorKeysFor(parent.type) ?? Object.keys(parent);
+	for (let i = 0; i < keys.length; i++) {
+		if (keys[i] === 'parent' || keys[i] === 'type') continue;
+		const child = parent[keys[i]];
+		if (Array.isArray(child)) {
+			const idx = child.indexOf(node);
+			if (idx >= 0) return { siblings: child, index: idx };
+		}
+	}
+	return null;
+}
+
+// True when any descendant of `node` matches `inner`. DFS pre-order; bails
+// on first hit. Used by `:has(X)` filter.
+function hasDescendantMatching(node: any, inner: NodePredicate): boolean {
+	for (const child of iterChildNodes(node)) {
+		if (inner(child)) return true;
+		if (hasDescendantMatching(child, inner)) return true;
+	}
+	return false;
+}
+
+// True when `node` is the `nth` element (1-indexed) of whichever array
+// slot it occupies on its parent. `fromEnd` flips the count to start
+// from the last sibling — used by `:nth-last-child` / `:last-child`.
+function isNthChild(node: any, n: number, fromEnd: boolean): boolean {
+	const loc = locateInArraySlot(node);
+	if (!loc) return false;
+	return fromEnd
+		? loc.index === loc.siblings.length - n
+		: loc.index === n - 1;
+}
+
 export interface TriggerSet {
 	matches(nodeType: string): boolean;
 	isAll(): boolean;
@@ -141,6 +224,11 @@ function walkSelector(ast: any, isExit: boolean): FastDispatchInfo[] | null {
 			const info = walkDescendant(ast.left, ast.right, isExit);
 			return info ? [info] : null;
 		}
+		case 'sibling':
+		case 'adjacent': {
+			const info = walkSibling(ast.left, ast.right, isExit, ast.type === 'adjacent');
+			return info ? [info] : null;
+		}
 		case 'matches': {
 			// Top-level `A, B` — each branch gets its own dispatch entry so
 			// branch-specific filters stay scoped to their own types.
@@ -157,6 +245,33 @@ function walkSelector(ast: any, isExit: boolean): FastDispatchInfo[] | null {
 			return info ? [info] : null;
 		}
 	}
+}
+
+// `Left ~ Right` (sibling, any earlier) and `Left + Right` (adjacent
+// previous). Trigger on Right type; filter checks earlier siblings in
+// whichever array slot the node occupies on its parent.
+function walkSibling(left: any, right: any, isExit: boolean, adjacent: boolean): FastDispatchInfo | null {
+	const rightInfo = walkTypeMatcher(right, isExit);
+	if (!rightInfo || rightInfo.types === 'all') return null;
+	const leftMatch = collectMatcher(left);
+	if (!leftMatch) return null;
+	const filter = adjacent
+		? (n: any) => {
+			const loc = locateInArraySlot(n);
+			if (!loc || loc.index === 0) return false;
+			return leftMatch(loc.siblings[loc.index - 1]);
+		}
+		: (n: any) => {
+			const loc = locateInArraySlot(n);
+			if (!loc) return false;
+			for (let i = 0; i < loc.index; i++) {
+				if (leftMatch(loc.siblings[i])) return true;
+			}
+			return false;
+		};
+	const prev = rightInfo.filter;
+	rightInfo.filter = prev ? n => filter(n) && prev(n) : filter;
+	return rightInfo;
 }
 
 // Right-hand of `Parent > X` or `Parent X`. Returns the trigger type set
@@ -182,6 +297,10 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 		let typeFilter: string | undefined;
 		let wildcard = false;
 		let extraFilter: ((t: any) => boolean) | undefined;
+		const addFilter = (f: NodePredicate) => {
+			const prev = extraFilter;
+			extraFilter = prev ? n => prev(n) && f(n) : f;
+		};
 		for (const sub of right.selectors) {
 			if (sub.type === 'wildcard') {
 				wildcard = true;
@@ -192,18 +311,37 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			} else if (sub.type === 'attribute') {
 				const attrFilter = makeAttributeFilter(sub);
 				if (!attrFilter) return null;
-				const prev = extraFilter;
-				extraFilter = prev ? n => prev(n) && attrFilter(n) : attrFilter;
+				addFilter(attrFilter);
 			} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 				isExit = true;
+			} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'scope') {
+				// no-op
+			} else if (sub.type === 'class') {
+				const m = classMacroMatcher(String(sub.name).toLowerCase());
+				if (!m) return null;
+				wildcard = wildcard || typeFilter === undefined;
+				addFilter(m);
 			} else if (sub.type === 'not') {
-				// `Foo > :not(Bar).field` — exclude target.type matching Bar.
 				const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
 				if (!inner) return null;
-				const negFilter = (n: any) => !inner(n);
-				const prev = extraFilter;
-				extraFilter = prev ? n => prev(n) && negFilter(n) : negFilter;
-				wildcard = wildcard || (typeFilter === undefined);
+				addFilter(n => !inner(n));
+				wildcard = wildcard || typeFilter === undefined;
+			} else if (sub.type === 'has') {
+				const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
+				if (!inner) return null;
+				addFilter(n => hasDescendantMatching(n, inner));
+			} else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
+				const idx = sub.index?.value;
+				if (typeof idx !== 'number') return null;
+				const fromEnd = sub.type === 'nth-last-child';
+				addFilter(n => isNthChild(n, idx, fromEnd));
+			} else if (sub.type === 'matches') {
+				// Inside `Parent > :matches(...)`, branches contribute either
+				// types (collapse into typeFilter — first one wins, others
+				// added as filter) or attribute-style filters.
+				const m = collectMatcher(sub);
+				if (!m) return null;
+				addFilter(m);
 			} else {
 				return null;
 			}
@@ -212,12 +350,21 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			// fieldFire path — trigger on Parent (left).
 			const parentInfo = walkTypeMatcher(left, isExit);
 			if (!parentInfo || parentInfo.types === 'all') return null;
+			// Parent-side filters (e.g. `[optional=true]`) check the
+			// triggering node, but `filter` runs on the post-fieldFire
+			// `actual` — wrap them as `actual.parent` checks.
+			const parentSideFilter = parentInfo.filter;
+			const composed = parentSideFilter && extraFilter
+				? (actual: any) => parentSideFilter(actual.parent) && extraFilter!(actual)
+				: parentSideFilter
+					? (actual: any) => parentSideFilter(actual.parent)
+					: extraFilter;
 			return {
 				types: parentInfo.types,
 				isExit,
 				fieldFire: fieldName,
 				typeFilter,
-				filter: extraFilter,
+				filter: composed,
 			};
 		}
 		// No field: `Parent > Type[attr]` / `Parent > Type:exit`. Trigger
@@ -286,6 +433,11 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 			if (name === 'function') {
 				return { types: new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']), isExit };
 			}
+			if (name === 'scope') {
+				// `:scope` only carries meaning inside `:has(...)`; standalone
+				// it matches every node.
+				return { types: 'all', isExit };
+			}
 			const m = classMacroMatcher(name);
 			if (!m) return null;
 			return { types: 'all', isExit, filter: m };
@@ -295,6 +447,24 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors });
 			if (!inner) return null;
 			return { types: 'all', isExit, filter: n => !inner(n) };
+		}
+		case 'has': {
+			// `:has(X)` standalone — wildcard, fires when the node has at
+			// least one descendant matching X.
+			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors });
+			if (!inner) return null;
+			return { types: 'all', isExit, filter: n => hasDescendantMatching(n, inner) };
+		}
+		case 'nth-child':
+		case 'nth-last-child': {
+			const idx = ast.index?.value;
+			if (typeof idx !== 'number') return null;
+			const fromEnd = ast.type === 'nth-last-child';
+			return {
+				types: 'all',
+				isExit,
+				filter: n => isNthChild(n, idx, fromEnd),
+			};
 		}
 		case 'compound': {
 			const collected = new Set<string>();
@@ -335,6 +505,9 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					}
 				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 					isExit = true;
+				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'scope') {
+					// `:scope` is a no-op identity marker outside `:has(...)`.
+					// Carry on without contributing types or filters.
 				} else if (sub.type === 'class') {
 					// `:function` etc. inside compound. Same as standalone,
 					// but composes with other constraints.
@@ -358,6 +531,22 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					const negFilter = (n: any) => !inner(n);
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && negFilter(n) : negFilter;
+				} else if (sub.type === 'has') {
+					// `Foo:has(Bar)` — types stay {Foo}, add filter checking
+					// descendants. The matcher captures the same scope as the
+					// trigger, so DFS starts from the dispatched node.
+					const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
+					if (!inner) return null;
+					const hasFilter = (n: any) => hasDescendantMatching(n, inner);
+					const prev = extraFilter;
+					extraFilter = prev ? n => prev(n) && hasFilter(n) : hasFilter;
+				} else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
+					const idx = sub.index?.value;
+					if (typeof idx !== 'number') return null;
+					const fromEnd = sub.type === 'nth-last-child';
+					const f = (n: any) => isNthChild(n, idx, fromEnd);
+					const prev = extraFilter;
+					extraFilter = prev ? n => prev(n) && f(n) : f;
 				} else if (sub.type === 'attribute') {
 					const attrFilter = makeAttributeFilter(sub);
 					if (!attrFilter) return null;
@@ -495,6 +684,43 @@ function collectMatcher(ast: any): NodePredicate | null {
 			const fieldName = ast.name;
 			return n => !!n && !!n.parent && n.parent[fieldName] === n;
 		}
+		case 'has': {
+			const inner = collectMatcher({ type: 'matches', selectors: ast.selectors });
+			if (!inner) return null;
+			return n => !!n && hasDescendantMatching(n, inner);
+		}
+		case 'nth-child':
+		case 'nth-last-child': {
+			const idx = ast.index?.value;
+			if (typeof idx !== 'number') return null;
+			const fromEnd = ast.type === 'nth-last-child';
+			return n => !!n && isNthChild(n, idx, fromEnd);
+		}
+		case 'sibling': {
+			const leftMatch = collectMatcher(ast.left);
+			const rightMatch = collectMatcher(ast.right);
+			if (!leftMatch || !rightMatch) return null;
+			return n => {
+				if (!n || !rightMatch(n)) return false;
+				const loc = locateInArraySlot(n);
+				if (!loc) return false;
+				for (let i = 0; i < loc.index; i++) {
+					if (leftMatch(loc.siblings[i])) return true;
+				}
+				return false;
+			};
+		}
+		case 'adjacent': {
+			const leftMatch = collectMatcher(ast.left);
+			const rightMatch = collectMatcher(ast.right);
+			if (!leftMatch || !rightMatch) return null;
+			return n => {
+				if (!n || !rightMatch(n)) return false;
+				const loc = locateInArraySlot(n);
+				if (!loc || loc.index === 0) return false;
+				return leftMatch(loc.siblings[loc.index - 1]);
+			};
+		}
 		default:
 			return null;
 	}
@@ -575,11 +801,17 @@ function makeAttributeFilter(attr: any): ((target: any) => boolean) | null {
 	const literal = want?.type === 'literal' ? want.value : undefined;
 	const wantType = want?.type === 'type' ? want.value : undefined; // unused: rare
 	if (literal === undefined && wantType === undefined) return null;
+	// esquery's grammar has no booleans / numbers — every literal is a
+	// string. To match nodes whose attribute is a boolean / number /
+	// string, esquery stringifies both sides before comparing
+	// (esquery.esm.js:3998). Mirror that exactly so `[optional=true]`
+	// matches `optional: true`, `[arity=2]` matches `arity: 2`, etc.
+	const wantStr = `${literal}`;
 	switch (op) {
 		case '=':
-			return target => get(target) === literal;
+			return target => `${get(target)}` === wantStr;
 		case '!=':
-			return target => get(target) !== literal;
+			return target => `${get(target)}` !== wantStr;
 		default:
 			return null;
 	}
