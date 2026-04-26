@@ -718,7 +718,20 @@ export function tsScanTraverse(
 // ESLint's full walk fires enter/leave for every layer (the wrapper, then
 // the inner). To match that, expand the materialised result into the full
 // layer chain so dispatchFast can fire each listener it has registered.
+// Common case: hit isn't a wrapper kind, chain has length 1. Peek the
+// type once and short-circuit; only enter the multi-layer loop when the
+// head is actually a wrapper. Saves the while-loop body for ~95% of hits.
+const WRAPPER_HEAD_TYPES = new Set<string>([
+	'ExportNamedDeclaration', 'ExportDefaultDeclaration',
+	'ChainExpression', 'TSParameterProperty',
+	'TSTypeQuery', 'ClassDeclaration', 'ClassExpression',
+]);
+
 function unwrapChain(node: unknown): unknown[] {
+	const headType = (node as { type?: string }).type;
+	if (!headType || !WRAPPER_HEAD_TYPES.has(headType)) {
+		return [node];
+	}
 	const chain: unknown[] = [];
 	let cur: unknown = node;
 	while (cur) {
