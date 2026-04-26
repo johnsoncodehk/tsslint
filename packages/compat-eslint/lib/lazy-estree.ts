@@ -550,6 +550,7 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ConditionalExpression: return new ConditionalExpressionNode(child as ts.ConditionalExpression, parent);
 		case SK.NewExpression: return new NewExpressionNode(child as ts.NewExpression, parent);
 		case SK.NoSubstitutionTemplateLiteral: return new NoSubstitutionTemplateNode(child as ts.NoSubstitutionTemplateLiteral, parent);
+		case SK.TaggedTemplateExpression: return new TaggedTemplateExpressionNode(child as ts.TaggedTemplateExpression, parent);
 		case SK.SpreadElement: return allowPattern
 			? new RestElementFromSpreadNode(child as ts.SpreadElement, parent)
 			: new SpreadElementNode(child as ts.SpreadElement, parent);
@@ -567,6 +568,7 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ShorthandPropertyAssignment: return new ShorthandPropertyNode(child as ts.ShorthandPropertyAssignment, parent);
 		case SK.ComputedPropertyName: return convertChild((child as ts.ComputedPropertyName).expression, parent);
 		case SK.TemplateExpression: return new TemplateLiteralNode(child as ts.TemplateExpression, parent);
+		case SK.TemplateLiteralType: return new TSTemplateLiteralTypeNode(child as ts.TemplateLiteralTypeNode, parent);
 		case SK.RegularExpressionLiteral: return new RegExpLiteralNode(child as ts.RegularExpressionLiteral, parent);
 		case SK.ThrowStatement: return new ThrowStatementNode(child as ts.ThrowStatement, parent);
 		case SK.TryStatement: return new TryStatementNode(child as ts.TryStatement, parent);
@@ -1307,7 +1309,6 @@ class ClassNode extends LazyNode {
 	readonly type: 'ClassDeclaration' | 'ClassExpression';
 	readonly abstract: boolean;
 	readonly declare: boolean;
-	readonly decorators: never[] = [];
 	readonly superTypeArguments = undefined;
 	readonly superTypeParameters = undefined;
 	private _typeParameters?: LazyNode | undefined;
@@ -1315,6 +1316,8 @@ class ClassNode extends LazyNode {
 	private _body?: ClassBodyNode;
 	private _superClass?: LazyNode | null;
 	private _implements?: (LazyNode | null)[];
+	private _decorators?: (LazyNode | null)[];
+	get decorators() { return this._decorators ??= convertDecorators(this._ts, this); }
 
 	constructor(
 		type: 'ClassDeclaration' | 'ClassExpression',
@@ -1373,7 +1376,9 @@ class ClassBodyNode extends LazyNode {
 // with `id: null`, `range: [parameters.pos - 1, end]`, and per-context kind.
 // Used as `value` for both class MethodDefinition and object Property.
 class MethodFunctionExpressionNode extends LazyNode {
-	readonly type = 'FunctionExpression' as const;
+	// Body-less methods (abstract or interface-style) emit
+	// TSEmptyBodyFunctionExpression instead of FunctionExpression.
+	readonly type: 'FunctionExpression' | 'TSEmptyBodyFunctionExpression';
 	readonly id = null;
 	readonly async: boolean;
 	readonly declare = false;
@@ -1399,6 +1404,9 @@ class MethodFunctionExpressionNode extends LazyNode {
 		this.loc = getLocFor(this._ctx.ast, start, end);
 		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
 		this.generator = !!(tsNode as ts.MethodDeclaration).asteriskToken;
+		this.type = (tsNode as ts.MethodDeclaration).body
+			? 'FunctionExpression'
+			: 'TSEmptyBodyFunctionExpression';
 	}
 	get params() {
 		return this._params ??= convertChildren((this._ts as ts.MethodDeclaration).parameters, this);
@@ -1477,9 +1485,10 @@ class MethodDefinitionNode extends LazyNode {
 	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
 	readonly computed: boolean;
 	readonly optional: boolean;
-	readonly decorators: never[] = [];
 	private _key?: LazyNode | null;
 	private _value?: MethodFunctionExpressionNode;
+	private _decorators?: (LazyNode | null)[];
+	get decorators() { return this._decorators ??= convertDecorators(this._ts, this); }
 
 	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
 		super(tsNode, parent);
@@ -1555,10 +1564,11 @@ class PropertyDefinitionNode extends LazyNode {
 	readonly computed: boolean;
 	readonly optional: boolean;
 	readonly definite: boolean;
-	readonly decorators: never[] = [];
 	private _key?: LazyNode | null;
 	private _value?: LazyNode | null;
 	private _typeAnnotation?: LazyNode | null | undefined;
+	private _decorators?: (LazyNode | null)[];
+	get decorators() { return this._decorators ??= convertDecorators(this._ts, this); }
 
 	constructor(tsNode: ts.PropertyDeclaration, parent: LazyNode, type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty' = 'PropertyDefinition') {
 		super(tsNode, parent);
@@ -1613,7 +1623,10 @@ class ObjectPatternNode extends LazyNode {
 	}
 }
 
-// Used when `[a = 1] = ...` — wraps the inner pattern with a default value.
+// Used when `[a = 1] = ...` and `{ b: c = 2 } = ...` — wraps the inner
+// pattern with a default value. typescript-estree's range covers from
+// the binding NAME (not the BindingElement's outer start, which would
+// include the property key in the object case) through the initializer.
 class BindingAssignmentPatternNode extends LazyNode {
 	readonly type = 'AssignmentPattern' as const;
 	readonly decorators: never[] = [];
@@ -1622,7 +1635,12 @@ class BindingAssignmentPatternNode extends LazyNode {
 	readonly left: LazyNode;
 	private _right?: LazyNode | null;
 	constructor(tsNode: ts.BindingElement, parent: LazyNode, left: LazyNode) {
-		super(tsNode, parent);
+		super(tsNode, parent, undefined, false);
+		const ast = this._ctx.ast;
+		const start = tsNode.name.getStart(ast);
+		const end = tsNode.initializer!.end;
+		this.range = [start, end];
+		this.loc = getLocFor(ast, start, end);
 		this.left = left;
 	}
 	get right() {
@@ -1655,9 +1673,17 @@ class BindingElementNode extends LazyNode {
 	}
 	// `value` only exists on the Property variant (RestElement has none).
 	// eager line 1015 sets value to convertPattern of the binding name.
+	// When the BindingElement carries a default (`{a = 1}`), eager wraps
+	// the value in an AssignmentPattern{left: <name>, right: <initializer>}.
 	get value() {
 		if (this.type !== 'Property') return undefined;
-		return this._value ??= convertChildAsPattern((this._ts as ts.BindingElement).name, this);
+		if (this._value !== undefined) return this._value;
+		const t = this._ts as ts.BindingElement;
+		const inner = convertChildAsPattern(t.name, this);
+		if (t.initializer) {
+			return this._value = new BindingAssignmentPatternNode(t, this, inner!);
+		}
+		return this._value = inner;
 	}
 	get argument() {
 		return this._argument ??= convertChild((this._ts as ts.BindingElement).name, this);
@@ -1891,6 +1917,7 @@ class TSEnumDeclarationNode extends LazyNode {
 	readonly const: boolean;
 	readonly declare: boolean;
 	private _id?: LazyNode | null;
+	private _body?: TSEnumBodyNode;
 	private _members?: (LazyNode | null)[];
 
 	constructor(tsNode: ts.EnumDeclaration, parent: LazyNode) {
@@ -1900,6 +1927,31 @@ class TSEnumDeclarationNode extends LazyNode {
 	}
 	get id() {
 		return this._id ??= convertChild((this._ts as ts.EnumDeclaration).name, this);
+	}
+	get body() {
+		if (this._body) return this._body;
+		const tsNode = this._ts as ts.EnumDeclaration;
+		// typescript-estree v8 wraps members in a TSEnumBody whose range
+		// covers the `{ … }` block. `members.pos` sits right after the `{`,
+		// so `pos - 1` is the open-brace position; `tsNode.end` covers
+		// past the closing `}`.
+		return this._body = new TSEnumBodyNode(tsNode, this, [tsNode.members.pos - 1, tsNode.end]);
+	}
+	get members() {
+		// Legacy field — typescript-estree still emits it alongside .body
+		// (suppressDeprecatedPropertyWarnings hides the deprecation
+		// notice). Keep mirror behaviour for parity.
+		return this._members ??= convertChildren((this._ts as ts.EnumDeclaration).members, this);
+	}
+}
+
+class TSEnumBodyNode extends LazyNode {
+	readonly type = 'TSEnumBody' as const;
+	private _members?: (LazyNode | null)[];
+	constructor(enumTsNode: ts.EnumDeclaration, parent: LazyNode, range: [number, number]) {
+		super(enumTsNode, parent, undefined, false);
+		this.range = range;
+		this.loc = getLocFor(this._ctx.ast, range[0], range[1]);
 	}
 	get members() {
 		return this._members ??= convertChildren((this._ts as ts.EnumDeclaration).members, this);
@@ -1929,6 +1981,21 @@ class DecoratorNode extends LazyNode {
 	get expression() {
 		return this._expression ??= convertChild((this._ts as ts.Decorator).expression, this);
 	}
+}
+
+// Pull `@dec` decorators out of a node's `modifiers` array. TS folds
+// decorators and modifiers into one list since 4.8; typescript-estree
+// emits them as a separate `decorators` slot on the owning ESTree node.
+function convertDecorators(tsNode: ts.Node, parent: LazyNode): (LazyNode | null)[] {
+	const modifiers = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
+	if (!modifiers) return [];
+	const out: (LazyNode | null)[] = [];
+	for (const m of modifiers) {
+		if (m.kind === SK.Decorator) {
+			out.push(convertChild(m, parent));
+		}
+	}
+	return out;
 }
 
 // Object/array literals + properties
@@ -2371,6 +2438,76 @@ class NewExpressionNode extends LazyNode {
 	get typeArguments() {
 		if (this._typeArguments !== undefined) return this._typeArguments;
 		return this._typeArguments = convertTypeArguments((this._ts as ts.NewExpression).typeArguments, this);
+	}
+}
+
+// Template literal types (`` `hello ${T}` `` in type position). Like
+// TemplateLiteralNode but the spans interleave with TYPE nodes (not
+// expressions). typescript-estree shape:
+//   { type: 'TSTemplateLiteralType', quasis: TemplateElement[], types: TypeNode[] }
+class TSTemplateLiteralTypeNode extends LazyNode {
+	readonly type = 'TSTemplateLiteralType' as const;
+	private _quasis?: object[];
+	private _types?: (LazyNode | null)[];
+	get quasis() {
+		if (this._quasis) return this._quasis;
+		const ts_ = this._ts as ts.TemplateLiteralTypeNode;
+		const ast = this._ctx.ast;
+		const out: object[] = [];
+		const headRange: [number, number] = [ts_.head.getStart(ast), ts_.head.getEnd()];
+		out.push({
+			type: 'TemplateElement',
+			tail: false,
+			range: headRange,
+			loc: getLocFor(ast, headRange[0], headRange[1]),
+			value: { cooked: ts_.head.text, raw: ts_.head.getText(ast).slice(1, -2) },
+		});
+		for (const span of ts_.templateSpans) {
+			const lit = span.literal;
+			const isTail = lit.kind === SK.TemplateTail;
+			const range: [number, number] = [lit.getStart(ast), lit.getEnd()];
+			const raw = lit.getText(ast);
+			out.push({
+				type: 'TemplateElement',
+				tail: isTail,
+				range,
+				loc: getLocFor(ast, range[0], range[1]),
+				value: {
+					cooked: lit.text,
+					raw: isTail ? raw.slice(1, -1) : raw.slice(1, -2),
+				},
+			});
+		}
+		return this._quasis = out;
+	}
+	get types() {
+		if (this._types) return this._types;
+		const ts_ = this._ts as ts.TemplateLiteralTypeNode;
+		return this._types = ts_.templateSpans.map(s => convertChild(s.type, this));
+	}
+}
+
+// `` tag`hello ${x}` `` — function call with template literal as argument.
+// typescript-estree shape: { type: 'TaggedTemplateExpression', tag, quasi,
+// typeArguments? }. quasi is the TemplateLiteral itself (re-using the
+// existing TemplateLiteralNode / NoSubstitutionTemplateNode classes).
+class TaggedTemplateExpressionNode extends LazyNode {
+	readonly type = 'TaggedTemplateExpression' as const;
+	private _tag?: LazyNode | null;
+	private _quasi?: LazyNode | null;
+	private _typeArguments?: LazyNode | undefined;
+	get tag() {
+		return this._tag ??= convertChild((this._ts as ts.TaggedTemplateExpression).tag, this);
+	}
+	get quasi() {
+		return this._quasi ??= convertChild((this._ts as ts.TaggedTemplateExpression).template, this);
+	}
+	get typeArguments() {
+		if (this._typeArguments !== undefined) return this._typeArguments;
+		return this._typeArguments = convertTypeArguments(
+			(this._ts as ts.TaggedTemplateExpression).typeArguments,
+			this,
+		);
 	}
 }
 
@@ -3148,6 +3285,12 @@ function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): La
 		(parameter as { typeAnnotation?: LazyNode | null }).typeAnnotation = annotation;
 		(parameter as unknown as { _extendRange: (r: [number, number]) => void })._extendRange(annotation.range);
 	}
+	if (parameter) {
+		const decorators = convertDecorators(tsNode, parameter);
+		if (decorators.length > 0) {
+			(parameter as { decorators?: (LazyNode | null)[] }).decorators = decorators;
+		}
+	}
 	if (parameter && tsNode.questionToken) {
 		(parameter as { optional?: boolean }).optional = true;
 		if (tsNode.questionToken.end > parameter.range[1]) {
@@ -3353,18 +3496,27 @@ class StaticBlockNode extends LazyNode {
 // `meta` Identifier is synthetic (TS has only the keyword tokens).
 class MetaPropertyNode extends LazyNode {
 	readonly type = 'MetaProperty' as const;
-	readonly meta: { type: 'Identifier'; name: string; range: [number, number]; loc: ReturnType<typeof getLocFor>; parent: LazyNode };
+	readonly meta: {
+		type: 'Identifier';
+		name: string;
+		decorators: never[];
+		optional: boolean;
+		range: [number, number];
+		loc: ReturnType<typeof getLocFor>;
+		parent: LazyNode;
+	};
 	private _property?: LazyNode | null;
 	constructor(tsNode: ts.MetaProperty, parent: LazyNode) {
 		super(tsNode, parent);
 		// `meta` is the keyword (`new` or `import`) — synthesize an Identifier.
-		const keywordEnd = tsNode.getStart(this._ctx.ast)
-			+ (tsNode.keywordToken === SK.NewKeyword ? 3 : 6); // 'new' or 'import'
 		const keywordStart = tsNode.getStart(this._ctx.ast);
+		const keywordEnd = keywordStart + (tsNode.keywordToken === SK.NewKeyword ? 3 : 6); // 'new' or 'import'
 		const range: [number, number] = [keywordStart, keywordEnd];
 		this.meta = {
 			type: 'Identifier',
 			name: tsNode.keywordToken === SK.NewKeyword ? 'new' : 'import',
+			decorators: [],
+			optional: false,
 			range,
 			loc: getLocFor(this._ctx.ast, range[0], range[1]),
 			parent: this,
