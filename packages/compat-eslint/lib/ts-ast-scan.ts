@@ -728,10 +728,19 @@ export function hasPredicate(estreeType: string): boolean {
 }
 
 // Predicate that fires on every node — used when a rule registers a
-// wildcard-typed listener (`*`, `Parent > *`, etc.) so the visit walker
-// must materialise everything.
+// wildcard-typed listener (`*`, `Parent > *`, etc.) or when CPA mode
+// needs CodePathAnalyzer to see every ts.Node. Stash an all-ones bitmap
+// on the function so tsScanTraverse takes the inline `bitmap[kind] === 1`
+// path instead of an indirect call per visited node.
+const ALL_KINDS_BITMAP = (() => {
+	const a = new Uint8Array(SK_BITMAP_SIZE);
+	a.fill(1);
+	return a;
+})();
 export function predicateAllKinds(): Predicate {
-	return () => true;
+	const fn: PredicateWithBitmap = () => true;
+	fn.__bitmap = ALL_KINDS_BITMAP;
+	return fn;
 }
 
 // Walks the TS AST in source order. For each ts.Node where `match`
