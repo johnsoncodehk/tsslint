@@ -113,8 +113,14 @@ const PREDICATES: Record<string, Predicate> = {
 		&& LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
 	'AssignmentExpression': n => n.kind === SK.BinaryExpression
 		&& ASSIGN_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
-	'UnaryExpression': n => n.kind === SK.PrefixUnaryExpression
-		&& isUnaryOp((n as ts.PrefixUnaryExpression).operator),
+	// PrefixUnaryExpression with !/+/-/~  AND  TypeOfExpression /
+	// DeleteExpression / VoidExpression all collapse to UnaryExpression in
+	// ESTree. The latter three are their own SyntaxKinds in TS AST.
+	'UnaryExpression': n => (n.kind === SK.PrefixUnaryExpression
+			&& isUnaryOp((n as ts.PrefixUnaryExpression).operator))
+		|| n.kind === SK.TypeOfExpression
+		|| n.kind === SK.DeleteExpression
+		|| n.kind === SK.VoidExpression,
 	'UpdateExpression': n => (n.kind === SK.PrefixUnaryExpression
 		&& isUpdateOp((n as ts.PrefixUnaryExpression).operator))
 		|| n.kind === SK.PostfixUnaryExpression,
@@ -152,7 +158,10 @@ const PREDICATES: Record<string, Predicate> = {
 	// --- Imports / Exports --------------------------------------------
 	'ImportDeclaration': n => n.kind === SK.ImportDeclaration,
 	'ImportSpecifier': n => n.kind === SK.ImportSpecifier,
-	'ImportDefaultSpecifier': n => n.kind === SK.ImportClause,
+	// ImportClause becomes ImportDefaultSpecifier ONLY when it has a
+	// `name` (i.e. `import a from 'x'`). Named-only `import { a } from 'x'`
+	// has no name on the clause — typescript-estree wouldn't emit one.
+	'ImportDefaultSpecifier': n => n.kind === SK.ImportClause && (n as ts.ImportClause).name !== undefined,
 	'ImportNamespaceSpecifier': n => n.kind === SK.NamespaceImport,
 	'ImportAttribute': n => n.kind === SK.ImportAttribute,
 	'ExportSpecifier': n => n.kind === SK.ExportSpecifier,
@@ -272,16 +281,51 @@ export function tsScanTraverse(
 	const steps: unknown[] = [];
 	const visit = (node: ts.Node): void => {
 		const hit = match(node);
-		let estreeNode: unknown = null;
+		let chain: unknown[] | null = null;
 		if (hit) {
-			estreeNode = materialize(node);
-			steps.push(new VisitNodeStep({ target: estreeNode, phase: 1, args: [estreeNode] }));
+			chain = unwrapChain(materialize(node));
+			// Outer-first enter (mirrors ESLint's pre-order: parent before children).
+			for (let i = 0; i < chain.length; i++) {
+				const t = chain[i];
+				steps.push(new VisitNodeStep({ target: t, phase: 1, args: [t] }));
+			}
 		}
 		ts.forEachChild(node, visit);
-		if (hit) {
-			steps.push(new VisitNodeStep({ target: estreeNode, phase: 2, args: [estreeNode] }));
+		if (chain) {
+			// Inner-first leave.
+			for (let i = chain.length - 1; i >= 0; i--) {
+				const t = chain[i];
+				steps.push(new VisitNodeStep({ target: t, phase: 2, args: [t] }));
+			}
 		}
 	};
 	visit(source);
 	return steps;
+}
+
+// Lazy-estree wraps certain materialised nodes:
+//   - ExportNamedWrappingNode / ExportDefaultWrappingNode wrap an exported
+//     declaration via `.declaration`. The wrapper's constructor overwrites
+//     the inner's `tsNodeToESTreeNodeMap` entry, so `materialize()` on an
+//     exported declaration's ts.Node returns the wrapper, not the inner.
+//   - ChainExpressionNode wraps the outermost optional chain via
+//     `.expression`.
+// ESLint's full walk fires enter/leave for every layer (the wrapper, then
+// the inner). To match that, expand the materialised result into the full
+// layer chain so dispatchFast can fire each listener it has registered.
+function unwrapChain(node: unknown): unknown[] {
+	const chain: unknown[] = [];
+	let cur: unknown = node;
+	while (cur) {
+		chain.push(cur);
+		const t = (cur as { type?: string }).type;
+		if (t === 'ExportNamedDeclaration' || t === 'ExportDefaultDeclaration') {
+			cur = (cur as { declaration?: unknown }).declaration;
+		} else if (t === 'ChainExpression') {
+			cur = (cur as { expression?: unknown }).expression;
+		} else {
+			break;
+		}
+	}
+	return chain;
 }

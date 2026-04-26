@@ -152,6 +152,117 @@ check('hasPredicate: ObjectExpression skipped in v1', !hasPredicate('ObjectExpre
 	check('materialised: target.typeAnnotation accessible', !!target.typeAnnotation);
 }
 
+// --- Soundness: export wrappers must dispatch BOTH wrapper and inner --
+// `export function foo() {}` materialises as ExportNamedWrappingNode whose
+// `.declaration` is the FunctionDeclarationNode. ESLint's full walk fires
+// enter for both nodes; rules that only listen for FunctionDeclaration
+// (the most common case) MUST still receive the event for an exported one.
+
+{
+	const types = scan(`export function foo() {}`, ['FunctionDeclaration']).entered;
+	check('export wrapper: FunctionDeclaration listener fires for `export function`',
+		types.includes('FunctionDeclaration'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`export const x = 1;`, ['VariableDeclaration']).entered;
+	check('export wrapper: VariableDeclaration listener fires for `export const`',
+		types.includes('VariableDeclaration'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`export class C {}`, ['ClassDeclaration']).entered;
+	check('export wrapper: ClassDeclaration listener fires for `export class`',
+		types.includes('ClassDeclaration'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`export interface I {}`, ['TSInterfaceDeclaration']).entered;
+	check('export wrapper: TSInterfaceDeclaration listener fires for `export interface`',
+		types.includes('TSInterfaceDeclaration'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`export type T = number;`, ['TSTypeAliasDeclaration']).entered;
+	check('export wrapper: TSTypeAliasDeclaration listener fires for `export type`',
+		types.includes('TSTypeAliasDeclaration'),
+		`got: [${types.join(', ')}]`);
+}
+
+// --- Soundness: ChainExpression must dispatch inner MemberExpression / CallExpression --
+// `a?.b` materialises as ChainExpression{expression: MemberExpression{optional:true}}.
+// Rule listening for MemberExpression should still receive the event.
+
+{
+	const types = scan(`let x = a?.b;`, ['MemberExpression']).entered;
+	check('chain: MemberExpression listener fires inside `a?.b`',
+		types.includes('MemberExpression'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`let x = a?.b();`, ['CallExpression']).entered;
+	check('chain: CallExpression listener fires inside `a?.b()`',
+		types.includes('CallExpression'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	// Nested chain: outer ChainExpression wraps a CallExpression whose
+	// callee is a MemberExpression. Both inner nodes need to dispatch.
+	const types = scan(`let x = a?.b();`, ['MemberExpression', 'CallExpression']).entered;
+	check('chain: nested — both MemberExpression and CallExpression fire',
+		types.includes('MemberExpression') && types.includes('CallExpression'),
+		`got: [${types.join(', ')}]`);
+}
+
+// --- Soundness: UnaryExpression covers typeof / delete / void --------
+// In TS AST these are SK.TypeOfExpression / SK.DeleteExpression /
+// SK.VoidExpression — separate kinds from PrefixUnaryExpression — but
+// typescript-estree converts all four to ESTree UnaryExpression.
+
+{
+	const types = scan(`let r = typeof x;`, ['UnaryExpression']).entered;
+	check('unary: typeof fires UnaryExpression',
+		types.includes('UnaryExpression'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`delete x.y;`, ['UnaryExpression']).entered;
+	check('unary: delete fires UnaryExpression',
+		types.includes('UnaryExpression'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	const types = scan(`void x;`, ['UnaryExpression']).entered;
+	check('unary: void fires UnaryExpression',
+		types.includes('UnaryExpression'),
+		`got: [${types.join(', ')}]`);
+}
+
+// --- Soundness: ImportDefaultSpecifier only for default-style imports -
+
+{
+	// Default + named: should fire ImportDefaultSpecifier
+	const types = scan(`import a from 'x';`, ['ImportDefaultSpecifier']).entered;
+	check('import-default: `import a from "x"` fires ImportDefaultSpecifier',
+		types.includes('ImportDefaultSpecifier'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	// Named-only: ImportClause exists but has no `name` — must NOT fire
+	// ImportDefaultSpecifier (typescript-estree wouldn't emit one).
+	const types = scan(`import { a } from 'x';`, ['ImportDefaultSpecifier']).entered;
+	check('import-default: `import { a } from "x"` does NOT fire ImportDefaultSpecifier',
+		!types.includes('ImportDefaultSpecifier'),
+		`got: [${types.join(', ')}]`);
+}
+{
+	// Bare side-effect: same — no default specifier
+	const types = scan(`import 'x';`, ['ImportDefaultSpecifier']).entered;
+	check('import-default: `import "x"` does NOT fire ImportDefaultSpecifier',
+		!types.includes('ImportDefaultSpecifier'),
+		`got: [${types.join(', ')}]`);
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');
