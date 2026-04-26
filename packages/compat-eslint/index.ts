@@ -284,17 +284,28 @@ function runSharedTraversal(
 	// `decomposeSimple`; if it can't, an UnsupportedSelectorError fires
 	// — never silent NodeEventGenerator fallback. See `buildFastDispatch`.
 	const fast = buildFastDispatch(allListeners);
+	const onTarget = (t: unknown) => { currentNode = t; };
 
-	// Single TS-AST scan path produces the entire event queue. When any
-	// rule registers an onCodePath* listener, the walker's inline visitor
-	// is wrapped in a CodePathAnalyzer that emits onCodePath* events into
-	// the same queue (kind=2 steps); without CPA listeners we narrow the
-	// predicate to the union of trigger types so most ts.Nodes never get
-	// materialised. Either way `dispatchFast` consumes one queue — no
-	// NodeEventGenerator, no lazy-ESTree full traversal.
-	const eventQueue = buildTsScanEventQueue(file, fast);
-
-	dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
+	// Two-mode dispatch path:
+	//
+	//  - CPA mode (any onCodePath* listener present): the walker's inline
+	//    visitor is wrapped in a CodePathAnalyzer that needs its emit /
+	//    enter / leave calls interleaved in source order. CPA's emits and
+	//    node visits both land in one queue, then `dispatchFast` walks it.
+	//    The queue is structurally necessary here because CPA emits arrive
+	//    OUT-of-band relative to the enter/leave stream.
+	//
+	//  - Non-CPA mode (narrow + wildcard): no CPA wrapper, so there's no
+	//    out-of-band emit interleaving. Skip the queue entirely — the
+	//    walker's inline visitor calls `dispatchTarget` per hit. Saves the
+	//    per-step object allocation (~28k on checker.ts) plus the second
+	//    array walk in dispatchFast.
+	if (fast.codePath.size > 0) {
+		const eventQueue = buildCpaEventQueue(file, fast);
+		dispatchFast(eventQueue, fast, errors, onTarget);
+	} else {
+		runTsScanInline(file, fast, errors, onTarget);
+	}
 }
 
 
@@ -369,13 +380,12 @@ function buildFastDispatch(
 	return { enter, exit, enterAll, exitAll, codePath };
 }
 
-// Build the eventQueue by scanning the TS AST instead of walking the lazy
-// ESTree. Three modes, picked by inspecting `fast`:
+// Build the predicate that decides which ts.Nodes get materialised.
+// Three shapes, picked by inspecting `fast`:
 //
 //  1. CPA mode (any onCodePath* listener present) — predicate fires on
 //     every ts.Node so the wrapped CodePathAnalyzer sees the full ESTree
-//     stream. CPA's `onCodePath*` emits become kind=2 steps; node visits
-//     become kind=1 steps. dispatchFast handles both uniformly.
+//     stream.
 //
 //  2. Wildcard mode (`*` / `Parent > *` listener) — predicate fires on
 //     every ts.Node, no CPA wrapper. Same materialisation cost as CPA
@@ -386,36 +396,58 @@ function buildFastDispatch(
 //     materialised. predicateForTriggerSet throws UnsupportedSelectorError
 //     if any type lacks a registered predicate (same philosophy as
 //     decomposeSimple — surface coverage gaps as hard errors).
-function buildTsScanEventQueue(
-	file: ts.SourceFile,
-	fast: FastDispatch,
-): any[] {
-	if (!cachedEstree) {
-		throw new Error('buildTsScanEventQueue called without an active sourceCode cache');
-	}
-	const { predicateForTriggerSet, predicateAllKinds, tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
-	const ctx = cachedEstree.convertContext;
+function buildScanPredicate(fast: FastDispatch) {
+	const { predicateForTriggerSet, predicateAllKinds } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
 	const usesCodePath = fast.codePath.size > 0;
 	const usesWildcard = fast.enterAll.length > 0 || fast.exitAll.length > 0;
-	let match;
 	if (usesCodePath || usesWildcard) {
-		match = predicateAllKinds();
-	} else {
-		const types = new Set<string>();
-		for (const t of fast.enter.keys()) types.add(t);
-		for (const t of fast.exit.keys()) types.add(t);
-		match = predicateForTriggerSet(types);
+		return predicateAllKinds();
 	}
+	const types = new Set<string>();
+	for (const t of fast.enter.keys()) types.add(t);
+	for (const t of fast.exit.keys()) types.add(t);
+	return predicateForTriggerSet(types);
+}
 
-	if (!usesCodePath) {
-		return tsScanTraverse(file, match, ctx as any) as any[];
+// Non-CPA fast path. The walker's inline visitor calls `dispatchTarget`
+// directly per hit — no intermediate event-queue array allocation, no
+// per-step object alloc. This is the hot path for narrow + wildcard mode
+// (every rule set without onCodePath* listeners).
+function runTsScanInline(
+	file: ts.SourceFile,
+	fast: FastDispatch,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	onTarget: (target: unknown) => void,
+): void {
+	if (!cachedEstree) {
+		throw new Error('runTsScanInline called without an active sourceCode cache');
 	}
+	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	const match = buildScanPredicate(fast);
+	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
+		enterNode(target) {
+			dispatchTarget(target, true, fast, errors, onTarget);
+		},
+		leaveNode(target) {
+			dispatchTarget(target, false, fast, errors, onTarget);
+		},
+	});
+}
 
-	// CPA mode: the walker's inline visitor wraps a CodePathAnalyzer.
-	// Steps are appended in the order CPA produces them (state-update
-	// emits first, then the node visit), exactly mirroring what ESLint's
-	// CodePathAnalyzer-wrapped traverser would emit — but on the lazy
-	// ESTree built bottom-up from the TS AST, no second walker.
+// CPA-mode event-queue producer. The walker's inline visitor wraps a
+// CodePathAnalyzer; CPA's onCodePath* emits arrive out-of-band relative
+// to the enter/leave stream and have to be replayed in CPA's own ordering
+// — that's why we materialise a queue here. Steps are appended in the
+// order CPA produces them (state-update emits first, then the node
+// visit), exactly mirroring what ESLint's CodePathAnalyzer-wrapped
+// traverser would emit — but on the lazy ESTree built bottom-up from the
+// TS AST, no second walker.
+function buildCpaEventQueue(file: ts.SourceFile, fast: FastDispatch): any[] {
+	if (!cachedEstree) {
+		throw new Error('buildCpaEventQueue called without an active sourceCode cache');
+	}
+	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	const match = buildScanPredicate(fast);
 	const queue: any[] = [];
 	const fakeEmitter = {
 		emit(name: string, ...args: unknown[]) {
@@ -433,11 +465,29 @@ function buildTsScanEventQueue(
 	};
 	const { CodePathAnalyzer } = loadEslintInternals();
 	const cpa = new CodePathAnalyzer(wrapped);
-	tsScanTraverse(file, match, ctx as any, {
+	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
 		enterNode(target) { cpa.enterNode(target); },
 		leaveNode(target) { cpa.leaveNode(target); },
 	});
 	return queue;
+}
+
+// Per-target dispatcher: type-keyed enter/exit list + wildcard list. Used
+// by both the inline non-CPA path and dispatchFast's kind=1 branch.
+// Updates `currentNode` (via `onTarget`) on enter so getScope/getAncestors
+// see the right node when rules call them from inside a listener.
+function dispatchTarget(
+	target: unknown,
+	isEnter: boolean,
+	fast: FastDispatch,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	onTarget: (target: unknown) => void,
+): void {
+	if (isEnter) onTarget(target);
+	const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
+	if (arr) runEntries(arr, target, errors);
+	const allArr = isEnter ? fast.enterAll : fast.exitAll;
+	if (allArr.length) runEntries(allArr, target, errors);
 }
 
 function dispatchFast(
@@ -449,13 +499,7 @@ function dispatchFast(
 	for (let i = 0; i < eventQueue.length; i++) {
 		const step = eventQueue[i];
 		if (step.kind === 1) {
-			const target = step.target;
-			const isEnter = step.phase === 1;
-			if (isEnter) onTarget(target);
-			const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
-			if (arr) runEntries(arr, target, errors);
-			const allArr = isEnter ? fast.enterAll : fast.exitAll;
-			if (allArr.length) runEntries(allArr, target, errors);
+			dispatchTarget(step.target, step.phase === 1, fast, errors, onTarget);
 		} else if (step.kind === 2) {
 			// CodePathAnalyzer emit step: target is the event name
 			// (`onCodePathStart`, `onCodePathSegmentEnd`, …) and args is
