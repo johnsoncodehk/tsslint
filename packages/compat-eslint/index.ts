@@ -417,9 +417,8 @@ function tryTsScanEventQueue(
 	const match = predicateForTriggerSet(types);
 	if (!match) return undefined;
 
-	const { materialize } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
 	const ctx = cachedEstree.convertContext;
-	return tsScanTraverse(file, match, n => materialize(n, ctx as any)) as any[];
+	return tsScanTraverse(file, match, ctx as any) as any[];
 }
 
 // eventQueue may still carry kind=2 emit steps (e.g., from CodePathAnalyzer

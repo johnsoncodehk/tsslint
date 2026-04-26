@@ -26,7 +26,7 @@ function scan(code: string, types: string[]): { entered: string[]; left: string[
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(types);
 	if (!pred) throw new Error('no predicate for ' + types.join(','));
-	const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+	const steps = tsScanTraverse(sf, pred, context);
 	const entered: string[] = [];
 	const left: string[] = [];
 	for (const step of steps as any[]) {
@@ -145,7 +145,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['TSAsExpression'])!;
-	const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+	const steps = tsScanTraverse(sf, pred, context);
 	check('materialised: 1 enter step', (steps as any[]).filter(s => s.phase === 1).length === 1);
 	const target = (steps as any[])[0].target;
 	check('materialised: target.type === TSAsExpression', target.type === 'TSAsExpression');
@@ -298,7 +298,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['FunctionDeclaration']);
 	if (pred) {
-		const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+		const steps = tsScanTraverse(sf, pred, context);
 		check('TSDeclareFunction: predicate skips body-less function declarations',
 			(steps as any[]).filter(s => s.phase === 1).length === 0);
 	}
@@ -808,7 +808,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['MetaProperty'])!;
-	const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+	const steps = tsScanTraverse(sf, pred, context);
 	const target = (steps as any[])[0]?.target;
 	check('MetaProperty: target.type === MetaProperty', target?.type === 'MetaProperty');
 	check('MetaProperty: target.meta is Identifier "import"',

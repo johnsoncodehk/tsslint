@@ -18,6 +18,7 @@
 // don't pre-build ancestors either.
 
 import * as ts from 'typescript';
+import { materialize, type ConvertContext } from './lazy-estree';
 
 const SK = ts.SyntaxKind;
 // `import * as ts` lowers to a namespace object guarded by a getter on
@@ -675,14 +676,14 @@ export function hasPredicate(estreeType: string): boolean {
 export function tsScanTraverse(
 	source: ts.SourceFile,
 	match: Predicate,
-	materialize: (n: ts.Node) => unknown,
+	ctx: ConvertContext,
 ): unknown[] {
 	const steps: unknown[] = [];
 	const visit = (node: ts.Node): void => {
 		const hit = match(node);
 		let chain: unknown[] | null = null;
 		if (hit) {
-			chain = unwrapChain(materialize(node));
+			chain = unwrapChain(materialize(node, ctx));
 			// Outer-first enter (mirrors ESLint's pre-order: parent before children).
 			for (let i = 0; i < chain.length; i++) {
 				const t = chain[i];
