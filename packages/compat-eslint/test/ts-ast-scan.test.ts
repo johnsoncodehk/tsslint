@@ -731,6 +731,92 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		count === 2, `got count=${count}`);
 }
 
+// --- TSAbstractMethodDefinition --------------------------------------
+
+{
+	const code = `abstract class C {
+		foo() {}
+		abstract bar(): void;
+	}`;
+	const types = scan(code, ['MethodDefinition', 'TSAbstractMethodDefinition']).entered;
+	check('MethodDefinition: fires for non-abstract method',
+		types.includes('MethodDefinition'));
+	check('TSAbstractMethodDefinition: fires for abstract method',
+		types.includes('TSAbstractMethodDefinition'));
+	check('MethodDefinition: does NOT also fire on abstract method',
+		types.filter(t => t === 'MethodDefinition').length === 1);
+}
+
+// --- ClassBody (drilled in via unwrapChain) -------------------------
+
+{
+	// ClassBody listener fires for both class declaration and expression.
+	const code = `class A {} const B = class {};`;
+	const types = scan(code, ['ClassBody']).entered;
+	const count = types.filter(t => t === 'ClassBody').length;
+	check('ClassBody: fires for ClassDeclaration AND ClassExpression',
+		count === 2, `got count=${count}`);
+}
+
+{
+	// Both ClassDeclaration and ClassBody listeners fire (chain order:
+	// ClassDeclaration first, then ClassBody).
+	const { entered } = scan(`class C { foo() {} }`, ['ClassDeclaration', 'ClassBody']);
+	const cdIdx = entered.indexOf('ClassDeclaration');
+	const cbIdx = entered.indexOf('ClassBody');
+	check('ClassDeclaration enters before ClassBody (parent → child)',
+		cdIdx >= 0 && cbIdx >= 0 && cdIdx < cbIdx,
+		`order: [${entered.join(', ')}]`);
+}
+
+// --- StaticBlock -----------------------------------------------------
+
+{
+	const code = `class C { static { console.log('init'); } }`;
+	const types = scan(code, ['StaticBlock']).entered;
+	check('StaticBlock: fires for `class C { static {} }`',
+		types.includes('StaticBlock'));
+}
+
+{
+	// StaticBlock should NOT fire for non-static class methods or fields.
+	const code = `class C { static foo = 1; static bar() {} }`;
+	const types = scan(code, ['StaticBlock']).entered;
+	check('StaticBlock: does NOT fire for `static` field/method',
+		!types.includes('StaticBlock'));
+}
+
+// --- MetaProperty ----------------------------------------------------
+
+{
+	const code = `function f() { return new.target; }`;
+	const types = scan(code, ['MetaProperty']).entered;
+	check('MetaProperty: fires for `new.target`',
+		types.includes('MetaProperty'));
+}
+
+{
+	const code = `let x = import.meta.url;`;
+	const types = scan(code, ['MetaProperty']).entered;
+	check('MetaProperty: fires for `import.meta`',
+		types.includes('MetaProperty'));
+}
+
+{
+	// MetaProperty's materialised shape: meta + property.
+	const code = `let x = import.meta;`;
+	const sf = parseTs(code);
+	const { context } = lazy.convertLazy(sf);
+	const pred = predicateForTriggerSet(['MetaProperty'])!;
+	const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+	const target = (steps as any[])[0]?.target;
+	check('MetaProperty: target.type === MetaProperty', target?.type === 'MetaProperty');
+	check('MetaProperty: target.meta is Identifier "import"',
+		target?.meta?.type === 'Identifier' && target.meta.name === 'import');
+	check('MetaProperty: target.property is Identifier "meta"',
+		target?.property?.type === 'Identifier');
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');

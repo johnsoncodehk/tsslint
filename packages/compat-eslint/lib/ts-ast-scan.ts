@@ -241,13 +241,30 @@ const PREDICATES: Record<string, Predicate> = {
 	'ArrowFunctionExpression': n => n.kind === SK.ArrowFunction,
 	'ClassDeclaration': n => n.kind === SK.ClassDeclaration,
 	'ClassExpression': n => n.kind === SK.ClassExpression,
+	// ClassBody is a synthetic ESTree wrapper around a class's members
+	// (no own TS kind). Predicate fires for the class itself; unwrapChain
+	// pulls the materialised ClassNode's `.body` into the dispatch chain
+	// so a ClassBody listener fires after the class enters but before its
+	// members are visited.
+	'ClassBody': n => n.kind === SK.ClassDeclaration || n.kind === SK.ClassExpression,
+	// `class C { static {} }` — class static initialiser block.
+	'StaticBlock': n => n.kind === SK.ClassStaticBlockDeclaration,
+	// `new.target`, `import.meta`.
+	'MetaProperty': n => n.kind === SK.MetaProperty,
 	// MethodDeclaration / Constructor / GetAccessor / SetAccessor outside
 	// an object literal materialise as MethodDefinition; inside an object
 	// literal they become Property{method:true} or Property{kind:'get'/'set'}.
 	'MethodDefinition': n => (
 		n.kind === SK.MethodDeclaration || n.kind === SK.Constructor
 		|| n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
-	) && n.parent?.kind !== SK.ObjectLiteralExpression,
+	) && n.parent?.kind !== SK.ObjectLiteralExpression
+		&& !hasModifier(n, SK.AbstractKeyword),
+	// `abstract foo();` (body-less abstract method) materialises as
+	// TSAbstractMethodDefinition.
+	'TSAbstractMethodDefinition': n => (
+		n.kind === SK.MethodDeclaration || n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
+	) && n.parent?.kind !== SK.ObjectLiteralExpression
+		&& hasModifier(n, SK.AbstractKeyword),
 
 	// PropertyDeclaration without abstract/accessor modifiers materialises
 	// as PropertyDefinition. With modifiers it splits into AccessorProperty,
@@ -582,6 +599,12 @@ function unwrapChain(node: unknown): unknown[] {
 			} else {
 				break;
 			}
+		} else if (t === 'ClassDeclaration' || t === 'ClassExpression') {
+			// Drill into the synthetic ClassBody child slot. ClassBody has
+			// no own TS kind — it only exists as a wrapper around the
+			// class's members. Adding it to the chain lets a ClassBody
+			// listener fire between class enter and member visits.
+			cur = (cur as { body?: unknown }).body;
 		} else {
 			break;
 		}

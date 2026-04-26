@@ -494,6 +494,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return wrapChainIfNeeded(new CallExpressionNode(ce, parent), ce, parent);
 		}
+		case SK.ClassStaticBlockDeclaration: return new StaticBlockNode(child as ts.ClassStaticBlockDeclaration, parent);
+		case SK.MetaProperty: return new MetaPropertyNode(child as ts.MetaProperty, parent);
 		case SK.TrueKeyword: return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
 		case SK.FalseKeyword: return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
 		case SK.FunctionDeclaration: return new FunctionDeclarationNode(child as ts.FunctionDeclaration, parent);
@@ -1468,7 +1470,7 @@ class ObjectMethodPropertyNode extends LazyNode {
 }
 
 class MethodDefinitionNode extends LazyNode {
-	readonly type = 'MethodDefinition' as const;
+	readonly type: 'MethodDefinition' | 'TSAbstractMethodDefinition';
 	readonly kind: 'method' | 'constructor' | 'get' | 'set';
 	readonly static: boolean;
 	readonly override: boolean;
@@ -1488,6 +1490,11 @@ class MethodDefinitionNode extends LazyNode {
 				: tsNode.kind === SK.SetAccessor
 					? 'set'
 					: 'method';
+		// `abstract foo();` (body-less method in an abstract class) becomes
+		// TSAbstractMethodDefinition; everything else stays MethodDefinition.
+		this.type = tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword)
+			? 'TSAbstractMethodDefinition'
+			: 'MethodDefinition';
 		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
 		this.override = !!tsNode.modifiers?.some(m => m.kind === SK.OverrideKeyword);
 		const accMod = tsNode.modifiers?.find(m =>
@@ -3325,6 +3332,46 @@ class ImportExpressionNode extends LazyNode {
 	get options() {
 		const args = (this._ts as ts.CallExpression).arguments;
 		return this._options ??= args[1] ? convertChild(args[1], this) : null;
+	}
+}
+
+// `class C { static { ... } }` — class static initialiser block.
+class StaticBlockNode extends LazyNode {
+	readonly type = 'StaticBlock' as const;
+	readonly decorators: never[] = [];
+	private _body?: (LazyNode | null)[];
+	get body() {
+		return this._body ??= convertChildren(
+			(this._ts as ts.ClassStaticBlockDeclaration).body.statements,
+			this,
+		);
+	}
+}
+
+// `new.target` and `import.meta`. typescript-estree emits
+// MetaProperty { meta: Identifier, property: Identifier } where the
+// `meta` Identifier is synthetic (TS has only the keyword tokens).
+class MetaPropertyNode extends LazyNode {
+	readonly type = 'MetaProperty' as const;
+	readonly meta: { type: 'Identifier'; name: string; range: [number, number]; loc: ReturnType<typeof getLocFor>; parent: LazyNode };
+	private _property?: LazyNode | null;
+	constructor(tsNode: ts.MetaProperty, parent: LazyNode) {
+		super(tsNode, parent);
+		// `meta` is the keyword (`new` or `import`) — synthesize an Identifier.
+		const keywordEnd = tsNode.getStart(this._ctx.ast)
+			+ (tsNode.keywordToken === SK.NewKeyword ? 3 : 6); // 'new' or 'import'
+		const keywordStart = tsNode.getStart(this._ctx.ast);
+		const range: [number, number] = [keywordStart, keywordEnd];
+		this.meta = {
+			type: 'Identifier',
+			name: tsNode.keywordToken === SK.NewKeyword ? 'new' : 'import',
+			range,
+			loc: getLocFor(this._ctx.ast, range[0], range[1]),
+			parent: this,
+		};
+	}
+	get property() {
+		return this._property ??= convertChild((this._ts as ts.MetaProperty).name, this);
 	}
 }
 
