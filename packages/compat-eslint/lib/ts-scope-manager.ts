@@ -853,16 +853,33 @@ export class TsScopeManager {
 		if (!tsNode) return undefined;
 		const real = this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 		if (real) return real;
-		return synthesizeStub(tsNode, this.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>) as T;
+		// Bottom-up materialise the missing node via the lazy ESTree shim.
+		// Builds a real ESTree counterpart with proper parent chain — same
+		// identity it would have if reached via top-down traversal,
+		// because materialize walks up the TS parent chain hitting the
+		// shared WeakMap cache.
+		const { materialize } = require(
+			'./lazy-estree',
+		) as typeof import('./lazy-estree');
+		try {
+			return materialize(tsNode, {
+				ast: this.tsFile,
+				maps: this.astMaps as unknown as { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> },
+			}) as unknown as T;
+		}
+		catch {
+			// Lazy can't materialise this kind (or hit an unhandled
+			// wrapper-route). Return a minimal synthetic stub so callers
+			// reading `.type === 'X'` still work.
+			return synthesizeStub(tsNode, this.astMaps.tsNodeToESTreeNodeMap as unknown as WeakMap<ts.Node, object>) as T;
+		}
 	}
 }
 
-// Synthetic stub for TS nodes whose ESTree counterpart hasn't been
-// materialised. Recursive parent chain so `.parent.type` walks work.
-// Critically, the recursion ALSO checks `tsNodeToESTreeNodeMap` at
-// every step — without this, `parent.parent` would be a stub even when
-// the real ESTree ancestor exists, breaking identity comparisons in
-// tests like "parent.parent === referencingNode".
+// Last-resort stub for TS nodes that lazy can't materialise. Recursive
+// parent chain so `.parent.type` walks work. Recursion checks the map
+// at every step so identity comparisons still match real ESTree
+// ancestors when those exist.
 const _stubCache = new WeakMap<ts.Node, object>();
 function synthesizeStub(tsNode: ts.Node, map: WeakMap<ts.Node, object>): object {
 	const real = map.get(tsNode);
@@ -1526,15 +1543,24 @@ export class TsReference {
 
 	get identifier(): TSESTree.Identifier {
 		if (this._estreeIdent) return this._estreeIdent;
-		// Materialise via tsToEstreeOrStub — same path as other rule-facing
-		// node lookups. Returns a real lazy ESTree Identifier in normal
-		// cases; falls back to a synthetic stub for unsupported kinds.
-		return this._estreeIdent = this.manager.tsToEstreeOrStub<TSESTree.Identifier>(this.tsIdentifier)
-			?? ({
-				type: 'Identifier',
-				name: this.tsIdentifier.text,
-				range: [this.tsIdentifier.getStart(), this.tsIdentifier.end],
-			} as TSESTree.Identifier);
+		const real = this.manager.tsToEstreeOrStub<TSESTree.Identifier>(this.tsIdentifier);
+		// Real lazy Identifier — has `name` and a proper parent chain.
+		if (real && (real as { name?: string }).name) {
+			return this._estreeIdent = real;
+		}
+		// Fallback: tsToEstreeOrStub returned a generic stub (e.g. when the
+		// identifier sits inside an unsupported kind and materialise fell
+		// through). Construct the Identifier shape directly with the text,
+		// and let the stub's parent chain (if any) attach.
+		const stub: TSESTree.Identifier = {
+			type: 'Identifier',
+			name: this.tsIdentifier.text,
+			range: [this.tsIdentifier.getStart(), this.tsIdentifier.end],
+		} as TSESTree.Identifier;
+		if (real && (real as { parent?: object }).parent) {
+			(stub as { parent?: object }).parent = (real as { parent?: object }).parent;
+		}
+		return this._estreeIdent = stub;
 	}
 
 	get from(): TsScope {

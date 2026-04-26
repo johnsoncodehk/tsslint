@@ -21,24 +21,12 @@ import * as path from 'path';
 import * as fs from 'fs';
 const Module = require('module') as typeof import('module');
 
-// Use typescript-estree's eager astConverter directly — upstream tests
-// do shape comparisons (`parent === referencingNode`) that need
-// identical node identity, which lazy mode breaks unless the entire
-// tree pre-materialises (defeats lazy). Production-wise compat-eslint
-// defaults to lazy via index.ts; this test runner uses eager to keep
-// parity tests reliable.
-const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk') as { astConverter: any; };
+// Use the same lazy converter as production (`compat-eslint/index.ts`).
+// TsScopeManager's tsToEstreeOrStub uses `materialize` (lazy) as fallback,
+// so identity comparisons work as long as both sides go through the same
+// WeakMap cache.
+const { convertLazy } = require('../lib/lazy-estree.js') as { convertLazy: (file: ts.SourceFile) => { astMaps: any; estree: any; context: any } };
 const { TsScopeManager } = require('../lib/ts-scope-manager.js') as typeof import('../lib/ts-scope-manager.js');
-
-const PARSE_SETTINGS = {
-	allowInvalidAST: false,
-	comment: true,
-	errorOnUnknownASTType: false,
-	loc: true,
-	range: true,
-	suppressDeprecatedPropertyWarnings: true,
-	tokens: true,
-};
 
 function buildHost(fileName: string, content: string): ts.CompilerHost {
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
@@ -70,12 +58,12 @@ function parseAndAnalyze(code: string, options?: any) {
 		host,
 	});
 	const sf = program.getSourceFile(fileName)!;
-	const { astMaps, estree } = astConverter(sf, PARSE_SETTINGS, true);
+	const { astMaps, estree } = convertLazy(sf);
 	let sourceType: 'module' | 'script' = 'script';
 	if (typeof options === 'string') sourceType = options as 'module' | 'script';
 	else if (options && typeof options === 'object' && options.sourceType) sourceType = options.sourceType;
-	estree.sourceType = sourceType;
-	const scopeManager = new TsScopeManager(sf, program, estree, astMaps, sourceType);
+	(estree as { sourceType: 'module' | 'script' }).sourceType = sourceType;
+	const scopeManager = new TsScopeManager(sf, program, estree as any, astMaps as any, sourceType);
 	return { ast: estree, scopeManager };
 }
 

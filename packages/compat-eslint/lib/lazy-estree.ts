@@ -860,7 +860,20 @@ class BlockStatementNode extends LazyNode {
 	readonly type = 'BlockStatement' as const;
 	private _body?: (LazyNode | null)[];
 	get body() {
-		return this._body ??= convertChildren((this._ts as ts.Block).statements, this);
+		if (this._body) return this._body;
+		const ts_ = this._ts as ts.Block;
+		// Function-like bodies allow leading-string directives ("use strict").
+		const pk = ts_.parent?.kind;
+		const allowsDirectives = pk === SK.FunctionDeclaration
+			|| pk === SK.FunctionExpression
+			|| pk === SK.ArrowFunction
+			|| pk === SK.MethodDeclaration
+			|| pk === SK.Constructor
+			|| pk === SK.GetAccessor
+			|| pk === SK.SetAccessor;
+		return this._body = allowsDirectives
+			? convertBodyWithDirectives(ts_.statements, this)
+			: convertChildren(ts_.statements, this);
 	}
 }
 
