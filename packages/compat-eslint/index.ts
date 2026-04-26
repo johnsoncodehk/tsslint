@@ -58,10 +58,14 @@ let sharedCache: {
 // sourceCode cache is per-file. eventQueue is built lazily after rule
 // listeners register so we can drive selector-aware traversal (Phase B).
 // Stable rule registry → eventQueue cached alongside sourceCode.
+// `convertContext` is kept around so the TS-scan path (Phase B+) can call
+// `materialize(tsNode, context)` for each hit without rebuilding the
+// converter state.
 let cachedEstree: {
 	file: ts.SourceFile;
 	sourceCode: ESLint.SourceCode;
 	eventQueue: any[] | undefined;
+	convertContext: unknown;
 } | undefined;
 
 export function convertRule(
@@ -318,8 +322,6 @@ function runSharedTraversal(
 	}
 	emitter.setCurrentRule(undefined);
 
-	const eventQueue = getEventQueue(sourceCode, listenerKeys);
-
 	// Fast dispatch: if every registered selector is simple (just type
 	// names + optional :exit), build per-type listener arrays and bypass
 	// NodeEventGenerator entirely. Saves the per-event ancestry shuffle
@@ -327,6 +329,20 @@ function runSharedTraversal(
 	// esquery `matches()` call. For self-lint with only type-name
 	// selectors this is the dominant per-event cost.
 	const fast = tryBuildFastDispatch(allListeners);
+
+	// Phase B+: when fast dispatch is available AND every trigger ESTree
+	// type has a TS-AST predicate, scan the TS AST directly and only
+	// materialise the LazyNodes that are actual trigger hits. The
+	// existing eventQueue (from selectorAwareTraverse / sourceCode.traverse)
+	// is bypassed entirely — most files with narrow rule sets visit a
+	// handful of nodes instead of thousands.
+	let eventQueue: any[] | undefined;
+	if (fast) {
+		eventQueue = tryTsScanEventQueue(file, fast);
+	}
+	if (!eventQueue) {
+		eventQueue = getEventQueue(sourceCode, listenerKeys);
+	}
 
 	if (fast && !eventQueueHasEmits(eventQueue)) {
 		dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
@@ -382,6 +398,28 @@ function tryBuildFastDispatch(
 		}
 	}
 	return { enter, exit };
+}
+
+// Try to build the eventQueue by scanning the TS AST instead of walking
+// the lazy ESTree. Works only if every trigger ESTree type has a TS
+// predicate registered in `lib/ts-ast-scan.ts`. Returns undefined to
+// signal fallback to the existing path.
+function tryTsScanEventQueue(
+	file: ts.SourceFile,
+	fast: FastDispatch,
+): any[] | undefined {
+	if (!cachedEstree) return undefined;
+	const types = new Set<string>();
+	for (const t of fast.enter.keys()) types.add(t);
+	for (const t of fast.exit.keys()) types.add(t);
+
+	const { predicateForTriggerSet, tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	const match = predicateForTriggerSet(types);
+	if (!match) return undefined;
+
+	const { materialize } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
+	const ctx = cachedEstree.convertContext;
+	return tsScanTraverse(file, match, n => materialize(n, ctx as any)) as any[];
 }
 
 // eventQueue may still carry kind=2 emit steps (e.g., from CodePathAnalyzer
@@ -561,7 +599,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// typescript-estree's eager Converter on every TS file under
 		// packages/, but materialises children on first read. Rules see
 		// real subtrees and can't null-deref into them.
-		const { astMaps, estree } = convertLazy(file) as { astMaps: any; estree: any };
+		const { astMaps, estree, context: convertContext } = convertLazy(file) as { astMaps: any; estree: any; context: unknown };
 
 		// tokens / comments come from typescript-estree's standalone scanner
 		// helpers — neither depends on its Converter. Rules like
@@ -595,7 +633,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
 			},
 		});
-		cachedEstree = { file, sourceCode, eventQueue: undefined };
+		cachedEstree = { file, sourceCode, eventQueue: undefined, convertContext };
 	}
 	return {
 		sourceCode: cachedEstree.sourceCode,
