@@ -337,14 +337,23 @@ function runSharedTraversal(
 	// is bypassed entirely — most files with narrow rule sets visit a
 	// handful of nodes instead of thousands.
 	let eventQueue: any[] | undefined;
-	if (fast) {
+	if (fast && fast.codePath.size === 0) {
+		// Skip tsScan when any onCodePath* listener is registered:
+		// CodePathAnalyzer needs to observe every node in canonical ESTree
+		// pre-order, but our TS-AST walk emits structural mismatches at
+		// CaseBlock / ParenthesizedExpression / VariableDeclarationList
+		// that CPA's per-kind state machine can't reconcile. Fall back
+		// to sourceCode.traverse() (still on lazy ESTree) — that path
+		// builds an eventQueue with both kind=1 (visit) and kind=2
+		// (codePath emit) steps, which dispatchFast now handles in one
+		// loop without going through NodeEventGenerator.
 		eventQueue = tryTsScanEventQueue(file, fast);
 	}
 	if (!eventQueue) {
 		eventQueue = getEventQueue(sourceCode, listenerKeys);
 	}
 
-	if (fast && !eventQueueHasEmits(eventQueue)) {
+	if (fast) {
 		dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
 	} else {
 		const { NodeEventGenerator, Traverser } = loadEslintInternals();
@@ -375,6 +384,7 @@ function runSharedTraversal(
 	}
 }
 
+
 interface DispatchEntry {
 	rule: ESLint.Rule.RuleModule;
 	listener: (n: unknown) => void;
@@ -393,6 +403,11 @@ interface FastDispatch {
 	// on every visited node, after the type-keyed lists.
 	enterAll: DispatchEntry[];
 	exitAll: DispatchEntry[];
+	// `onCodePathStart` / `onCodePathEnd` / `onCodePathSegment*` listeners
+	// gathered per event name. When non-empty, we have to drive every
+	// node through ESLint's CodePathAnalyzer so it can update internal
+	// state and emit these events.
+	codePath: Map<string, Array<[ESLint.Rule.RuleModule, (...args: unknown[]) => void]>>;
 }
 
 function tryBuildFastDispatch(
@@ -403,8 +418,14 @@ function tryBuildFastDispatch(
 	const exit = new Map<string, DispatchEntry[]>();
 	const enterAll: DispatchEntry[] = [];
 	const exitAll: DispatchEntry[] = [];
+	const codePath = new Map<string, Array<[ESLint.Rule.RuleModule, (...args: unknown[]) => void]>>();
 	for (const [rule, selector, listener] of allListeners) {
-		if (isCodePathListener(selector)) return null;
+		if (isCodePathListener(selector)) {
+			let arr = codePath.get(selector);
+			if (!arr) codePath.set(selector, arr = []);
+			arr.push([rule, listener as (...args: unknown[]) => void]);
+			continue;
+		}
 		const infos = decomposeSimple(selector);
 		if (!infos) return null;
 		for (const info of infos) {
@@ -427,7 +448,7 @@ function tryBuildFastDispatch(
 			}
 		}
 	}
-	return { enter, exit, enterAll, exitAll };
+	return { enter, exit, enterAll, exitAll, codePath };
 }
 
 // Try to build the eventQueue by scanning the TS AST instead of walking
@@ -459,16 +480,6 @@ function tryTsScanEventQueue(
 	return tsScanTraverse(file, match, ctx as any) as any[];
 }
 
-// eventQueue may still carry kind=2 emit steps (e.g., from CodePathAnalyzer
-// when ESLint's traverser was used). Fast dispatch only handles
-// enter/leave, so detect emit steps and fall back when present.
-function eventQueueHasEmits(eventQueue: any[]): boolean {
-	for (let i = 0; i < eventQueue.length; i++) {
-		if (eventQueue[i].kind === 2) return true;
-	}
-	return false;
-}
-
 function dispatchFast(
 	eventQueue: any[],
 	fast: FastDispatch,
@@ -477,14 +488,32 @@ function dispatchFast(
 ): void {
 	for (let i = 0; i < eventQueue.length; i++) {
 		const step = eventQueue[i];
-		// step.kind === 1 always (we filtered emit steps earlier).
-		const target = step.target;
-		const isEnter = step.phase === 1;
-		if (isEnter) onTarget(target);
-		const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
-		if (arr) runEntries(arr, target, errors);
-		const allArr = isEnter ? fast.enterAll : fast.exitAll;
-		if (allArr.length) runEntries(allArr, target, errors);
+		if (step.kind === 1) {
+			const target = step.target;
+			const isEnter = step.phase === 1;
+			if (isEnter) onTarget(target);
+			const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
+			if (arr) runEntries(arr, target, errors);
+			const allArr = isEnter ? fast.enterAll : fast.exitAll;
+			if (allArr.length) runEntries(allArr, target, errors);
+		} else if (step.kind === 2) {
+			// CodePathAnalyzer emit step: target is the event name
+			// (`onCodePathStart`, `onCodePathSegmentEnd`, …) and args is
+			// the payload. Dispatch directly to the per-event listener
+			// arrays we collected up front — no emitter, no NEG.
+			const listeners = fast.codePath.get(step.target);
+			if (listeners) {
+				for (let j = 0; j < listeners.length; j++) {
+					const [rule, fn] = listeners[j];
+					if (errors.has(rule)) continue;
+					try {
+						fn(...step.args);
+					} catch (err) {
+						errors.set(rule, err);
+					}
+				}
+			}
+		}
 	}
 }
 

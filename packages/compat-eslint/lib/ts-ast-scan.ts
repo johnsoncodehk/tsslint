@@ -18,7 +18,7 @@
 // don't pre-build ancestors either.
 
 import * as ts from 'typescript';
-import { materialize, type ConvertContext } from './lazy-estree';
+import { GENERIC_TS_NODE_MARKER, materialize, type ConvertContext } from './lazy-estree';
 
 const SK = ts.SyntaxKind;
 // `import * as ts` lowers to a namespace object guarded by a getter on
@@ -703,17 +703,41 @@ export function predicateAllKinds(): Predicate {
 //
 // This is a drop-in eventQueue producer for the existing dispatchFast
 // loop in index.ts.
+//
+// `inlineVisitor`: when provided, enter/leave fire as inline callbacks
+// during the walk instead of being collected into a steps array. This
+// is the path used when CodePathAnalyzer wraps the dispatcher — CPA
+// must observe enter/leave in real-time order to update its state and
+// emit code-path events. Returns an empty array in that mode.
+export interface InlineVisitor {
+	enterNode(target: unknown): void;
+	leaveNode(target: unknown): void;
+}
 export function tsScanTraverse(
 	source: ts.SourceFile,
 	match: Predicate,
 	ctx: ConvertContext,
+	inlineVisitor?: InlineVisitor,
 ): unknown[] {
 	const steps: unknown[] = [];
 	// Pure-bitmap predicates expose their Uint8Array; reading bitmap[kind]
 	// inline saves a closure call per visit (≈300k visits on checker.ts).
 	// Mixed/conditional predicates fall through to calling match() as before.
 	const bitmap = (match as PredicateWithBitmap).__bitmap;
-	const visit = (node: ts.Node): void => {
+	const enterCb = inlineVisitor
+		? (target: unknown) => inlineVisitor.enterNode(target)
+		: (target: unknown) => steps.push(makeStep(target, 1));
+	const leaveCb = inlineVisitor
+		? (target: unknown) => inlineVisitor.leaveNode(target)
+		: (target: unknown) => steps.push(makeStep(target, 2));
+	// `parentTarget` is the most recent ESTree target we entered on the
+	// way down. ParenthesizedExpression / ComputedPropertyName / ParenthesizedType
+	// are pass-through in convertChildInner — materialise on those returns
+	// the INNER ESTree, not a wrapper. Visit then recurses into the
+	// parens' child (the same inner) and would fire enter/leave a second
+	// time on the same target. Skip when materialise yields the same
+	// ESTree we just entered.
+	const visit = (node: ts.Node, parentTarget: unknown): void => {
 		// Two-state hit result: most hits produce a single-layer target
 		// (`single` set, `chain` null); wrapper kinds (Export*, Chain,
 		// TSParameterProperty, TSTypeQuery, Class*) expand into a 2+ layer
@@ -721,32 +745,40 @@ export function tsScanTraverse(
 		// array allocation on the >95% common path.
 		let single: unknown = null;
 		let chain: unknown[] | null = null;
+		let nextParent = parentTarget;
 		const hit = bitmap ? bitmap[node.kind] === 1 : match(node);
 		if (hit) {
 			const target = materialize(node, ctx);
-			const t = (target as { type?: string }).type;
-			if (t && WRAPPER_HEAD_TYPES.has(t)) {
-				chain = unwrapChain(target);
-				for (let i = 0; i < chain.length; i++) {
-					steps.push(makeStep(chain[i], 1));
+			// `predicateAllKinds` visits modifier tokens, VariableDeclarationList,
+			// SyntaxList, and other TS-only kinds. Those materialise into
+			// GenericTSNode wrappers with no real ESTree counterpart —
+			// firing enter/leave on them would confuse downstream
+			// dispatchers (e.g. CodePathAnalyzer's preprocess() asserts
+			// child nodes occupy known slots on their parent). Skip.
+			const isGeneric = (target as unknown as Record<symbol, unknown>)[GENERIC_TS_NODE_MARKER];
+			if (!isGeneric && target !== parentTarget) {
+				const t = (target as { type?: string }).type;
+				if (t && WRAPPER_HEAD_TYPES.has(t)) {
+					chain = unwrapChain(target);
+					for (let i = 0; i < chain.length; i++) enterCb(chain[i]);
+					nextParent = chain[chain.length - 1];
+				}
+				else {
+					single = target;
+					enterCb(target);
+					nextParent = target;
 				}
 			}
-			else {
-				single = target;
-				steps.push(makeStep(target, 1));
-			}
 		}
-		tsForEachChild(node, visit);
+		tsForEachChild(node, child => visit(child, nextParent));
 		if (chain) {
-			for (let i = chain.length - 1; i >= 0; i--) {
-				steps.push(makeStep(chain[i], 2));
-			}
+			for (let i = chain.length - 1; i >= 0; i--) leaveCb(chain[i]);
 		}
 		else if (single) {
-			steps.push(makeStep(single, 2));
+			leaveCb(single);
 		}
 	};
-	visit(source);
+	visit(source, null);
 	return steps;
 }
 

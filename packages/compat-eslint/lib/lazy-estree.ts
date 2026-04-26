@@ -439,9 +439,19 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	const tsCache = ctx.maps.tsNodeToESTreeNodeMap;
 	while (walker) {
 		const wk = walker.kind;
-		// Inlined TS_ONLY_KINDS — only VariableDeclarationList and SyntaxList,
-		// so two `===` beats a Set.has hop on every ancestor step.
-		if (wk === SK.VariableDeclarationList || wk === SK.SyntaxList) {
+		// Structural-only TS kinds with no ESTree counterpart in their
+		// usual position — walker skips past so the child's parent
+		// resolves to the next-level real ESTree ancestor.
+		// - SyntaxList: marker only.
+		// - CaseBlock: SwitchStatement.cases jumps directly to clauses
+		//   in ESTree, so SwitchCase's parent is SwitchStatement.
+		// - VariableDeclarationList: only structural inside a VariableStatement
+		//   (folded into VariableDeclaration). When standalone (for-init in
+		//   `for (var x in y)` etc.) it maps to ESTree VariableDeclaration via
+		//   VariableDeclarationListAsNode — keep that mapping.
+		if (wk === SK.SyntaxList
+			|| wk === SK.CaseBlock
+			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)) {
 			walker = walker.parent;
 			continue;
 		}
@@ -818,8 +828,13 @@ function convertChildren(children: ReadonlyArray<ts.Node>, parent: LazyNode): (L
 // minimal-viable so `.type === 'X'` and `.parent.type` checks work
 // without us having to choose accessors arbitrarily. Add a real
 // LazyNode subclass when a rule actually needs the children.
+// Marker so callers (e.g. CodePathAnalyzer-driving visit walker) can
+// detect a materialised node that has no real ESTree counterpart and
+// skip dispatching enter/leave on it.
+export const GENERIC_TS_NODE_MARKER: unique symbol = Symbol('GenericTSNode');
 class GenericTSNode extends LazyNode {
 	readonly type: string;
+	readonly [GENERIC_TS_NODE_MARKER] = true;
 	constructor(tsNode: ts.Node, parent: LazyNode | null) {
 		// Synthetic — don't claim the TS node's slot in the maps if a
 		// real subclass might be made for it later (avoid cache pollution).
