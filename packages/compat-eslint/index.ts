@@ -554,10 +554,40 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
 		const { SourceCode } = loadEslintInternals();
 		const { TsScopeManager } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
-		const { astConvertSkipTypes } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
-		ensureSelectorProbe();
 
-		const { astMaps, estree } = astConvertSkipTypes(file, PARSE_SETTINGS as any, true);
+		// `TSSLINT_LAZY_ESTREE=1` switches to the lazy ESTree shim
+		// (lib/lazy-estree.ts). It produces byte-identical output to
+		// typescript-estree's eager Converter on every file in our test
+		// sweep, but materialises children on first read instead of upfront.
+		// No selector probing needed (rules see real subtrees, can't
+		// null-deref). Default off until perf wins are measured.
+		let astMaps: { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> };
+		let estree: any;
+		if (process.env.TSSLINT_LAZY_ESTREE === '1') {
+			const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
+			const result = convertLazy(file);
+			astMaps = result.astMaps as any;
+			estree = result.estree;
+			// typescript-estree's astConverter populates `tokens` /
+			// `comments` via a separate scanner pass; rules like
+			// no-unnecessary-type-assertion call `sourceCode.getTokenAfter`
+			// and crash without them. Borrow eager's token/comment output
+			// without materialising its full AST.
+			const eager = require('@typescript-eslint/typescript-estree/use-at-your-own-risk').astConverter(
+				file,
+				PARSE_SETTINGS as any,
+				false,
+			);
+			estree.tokens = eager.estree.tokens;
+			estree.comments = eager.estree.comments;
+		}
+		else {
+			const { astConvertSkipTypes } = require('./lib/skip-type-converter') as typeof import('./lib/skip-type-converter');
+			ensureSelectorProbe();
+			const result = astConvertSkipTypes(file, PARSE_SETTINGS as any, true);
+			astMaps = result.astMaps as any;
+			estree = result.estree;
+		}
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';
@@ -575,9 +605,9 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 				experimentalDecorators: undefined,
 				isolatedDeclarations: undefined,
 				getSymbolAtLocation: (node: any) =>
-					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
 				getTypeAtLocation: (node: any) =>
-					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
 			},
 		});
 		const eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
