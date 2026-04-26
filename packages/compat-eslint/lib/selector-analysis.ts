@@ -116,7 +116,11 @@ export interface FastDispatchInfo {
 	filter?: (target: any) => boolean;
 }
 
-export function decomposeSimple(selector: string): FastDispatchInfo | null {
+// `decomposeSimple` returns an array of dispatch infos. A single
+// identifier / compound / child selector typically yields one entry, but
+// a top-level matches/`A, B` list with per-branch filters expands into
+// one entry per branch so each can carry its own filter.
+export function decomposeSimple(selector: string): FastDispatchInfo[] | null {
 	let ast: unknown;
 	try {
 		ast = esquery.parse(selector);
@@ -127,14 +131,31 @@ export function decomposeSimple(selector: string): FastDispatchInfo | null {
 }
 
 // Top-level selector entry. Handles combinators / attribute compounds.
-function walkSelector(ast: any, isExit: boolean): FastDispatchInfo | null {
+function walkSelector(ast: any, isExit: boolean): FastDispatchInfo[] | null {
 	switch (ast.type) {
-		case 'child':
-			return walkChild(ast.left, ast.right, isExit);
-		case 'descendant':
-			return walkDescendant(ast.left, ast.right, isExit);
-		default:
-			return walkTypeMatcher(ast, isExit);
+		case 'child': {
+			const info = walkChild(ast.left, ast.right, isExit);
+			return info ? [info] : null;
+		}
+		case 'descendant': {
+			const info = walkDescendant(ast.left, ast.right, isExit);
+			return info ? [info] : null;
+		}
+		case 'matches': {
+			// Top-level `A, B` — each branch gets its own dispatch entry so
+			// branch-specific filters stay scoped to their own types.
+			const out: FastDispatchInfo[] = [];
+			for (const sub of ast.selectors) {
+				const inner = walkSelector(sub, isExit);
+				if (!inner) return null;
+				out.push(...inner);
+			}
+			return out;
+		}
+		default: {
+			const info = walkTypeMatcher(ast, isExit);
+			return info ? [info] : null;
+		}
 	}
 }
 
@@ -142,6 +163,17 @@ function walkSelector(ast: any, isExit: boolean): FastDispatchInfo | null {
 // + optional structural extraction (fieldFire / typeFilter / additional filter).
 // Returns null if the right side is a shape we can't fast-dispatch.
 function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | null {
+	// `Parent > .field` — bare field selector, no type constraint on the
+	// child. Equivalent to `Parent > *.field` for our purposes.
+	if (right.type === 'field') {
+		const parentInfo = walkTypeMatcher(left, isExit);
+		if (!parentInfo || parentInfo.types === 'all') return null;
+		return {
+			types: parentInfo.types,
+			isExit,
+			fieldFire: right.name,
+		};
+	}
 	// `Parent > Right.field`  — compound on the right has wildcard or
 	// identifier + a field selector. Trigger on Parent; dispatch reads
 	// `target[field]`. Filter by Right.type if Right was an identifier.
@@ -213,9 +245,10 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 }
 
 // `Parent Right` (descendant). Trigger on right type, walk ancestors
-// at dispatch time looking for a Parent-typed node.
+// at dispatch time looking for a Parent-typed node. Right side must be
+// a plain type matcher (no nested combinators / matches).
 function walkDescendant(left: any, right: any, isExit: boolean): FastDispatchInfo | null {
-	const rightInfo = walkSelector(right, isExit);
+	const rightInfo = walkTypeMatcher(right, isExit);
 	if (!rightInfo || rightInfo.types === 'all') return null;
 	const parentTypes = collectTypes(left);
 	if (!parentTypes) return null;

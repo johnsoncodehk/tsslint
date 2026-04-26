@@ -405,23 +405,25 @@ function tryBuildFastDispatch(
 	const exitAll: DispatchEntry[] = [];
 	for (const [rule, selector, listener] of allListeners) {
 		if (isCodePathListener(selector)) return null;
-		const info = decomposeSimple(selector);
-		if (!info) return null;
-		const map = info.isExit ? exit : enter;
-		const allList = info.isExit ? exitAll : enterAll;
-		const entry: DispatchEntry = {
-			rule, listener,
-			fieldFire: info.fieldFire,
-			typeFilter: info.typeFilter,
-			filter: info.filter,
-		};
-		if (info.types === 'all') {
-			allList.push(entry);
-		} else {
-			for (const type of info.types) {
-				let arr = map.get(type);
-				if (!arr) map.set(type, arr = []);
-				arr.push(entry);
+		const infos = decomposeSimple(selector);
+		if (!infos) return null;
+		for (const info of infos) {
+			const map = info.isExit ? exit : enter;
+			const allList = info.isExit ? exitAll : enterAll;
+			const entry: DispatchEntry = {
+				rule, listener,
+				fieldFire: info.fieldFire,
+				typeFilter: info.typeFilter,
+				filter: info.filter,
+			};
+			if (info.types === 'all') {
+				allList.push(entry);
+			} else {
+				for (const type of info.types) {
+					let arr = map.get(type);
+					if (!arr) map.set(type, arr = []);
+					arr.push(entry);
+				}
 			}
 		}
 	}
