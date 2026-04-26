@@ -136,6 +136,20 @@ const TS_ONLY_KINDS = new Set<ts.SyntaxKind>([
 // slot. Without this, bottom-up of a node inside the wrapper produces a
 // `parent` reference pointing at the wrapper-less ESTree parent — a
 // silently-wrong shape.
+//
+// Owner unwrapping: bottom-up materialise looks up an owner ts.Node in the
+// cache, but a wrapper may sit at that key:
+//   - ExportNamedWrappingNode / ExportDefaultWrappingNode wrap an inner
+//     declaration via `.declaration`.
+//   - TSParameterPropertyNode wraps the parameter via `.parameter`.
+//   - AssignmentPatternNode wraps the binding name via `.left` (when a
+//     parameter has a default value).
+// Each wrapper-route trigger walks past these to reach the slot it needs.
+function unwrapInner(node: LazyNode): LazyNode {
+	const inner = (node as unknown as { declaration?: LazyNode }).declaration;
+	return inner ?? node;
+}
+
 function findWrapperRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void; }
 	| null
@@ -159,19 +173,30 @@ function findWrapperRoute(tsNode: ts.Node):
 		};
 	}
 	// `function f(x: T)` — Parameter.type goes through the Identifier
-	// returned by convertParameter, which carries `typeAnnotation`.
+	// returned by convertParameter, which carries `typeAnnotation`. The
+	// owner cache slot may hold AssignmentPatternNode (default value) or
+	// TSParameterPropertyNode (`private x: T`); drill through to the
+	// binding name to reach `.typeAnnotation`.
 	if (tsParent.kind === SK.Parameter && (tsParent as ts.ParameterDeclaration).type === tsNode) {
 		return {
 			ownerTsNode: tsParent,
 			trigger: (owner) => {
-				const ta = (owner as unknown as { typeAnnotation?: { typeAnnotation: unknown } }).typeAnnotation;
+				let cur = owner as unknown as {
+					parameter?: { left?: unknown; typeAnnotation?: unknown };
+					left?: unknown;
+					typeAnnotation?: unknown;
+				};
+				if (cur.parameter) cur = cur.parameter as typeof cur;
+				if (cur.left) cur = cur.left as typeof cur;
+				const ta = cur.typeAnnotation as { typeAnnotation: unknown } | undefined;
 				if (ta) void ta.typeAnnotation;
 			},
 		};
 	}
 	// `function f(): T` / `(): T => ...` — function-like return type goes
 	// through the function node's `returnType` getter (a TSTypeAnnotation
-	// wrapper).
+	// wrapper). Owner may be ExportNamedWrappingNode etc. when the
+	// declaration is exported (`export function f(): T`); unwrap first.
 	if (
 		(tsParent.kind === SK.FunctionDeclaration
 			|| tsParent.kind === SK.FunctionExpression
@@ -181,7 +206,8 @@ function findWrapperRoute(tsNode: ts.Node):
 		return {
 			ownerTsNode: tsParent,
 			trigger: (owner) => {
-				const rt = (owner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
+				const inner = unwrapInner(owner);
+				const rt = (inner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
 				if (rt) void rt.typeAnnotation;
 			},
 		};
@@ -497,17 +523,21 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ThisKeyword: return new ThisExpressionNode(child, parent);
 		case SK.TypeParameter: return new TSTypeParameterNode(child as ts.TypeParameterDeclaration, parent);
 		case SK.ExpressionWithTypeArguments: {
-			// Parent-aware shape (mirrors eager line 1858):
-			// - InterfaceDeclaration → TSInterfaceHeritage
-			// - HeritageClause (class extends/implements) → TSClassImplements
-			// - else → TSInstantiationExpression
+			// Parent-aware shape (mirrors eager line 1858). The TS parent
+			// chain — not our lazy parent — is what carries this signal:
+			// HeritageClause never has a LazyNode (it's collapsed into the
+			// owning class/interface), so `parent._ts.kind` would never be
+			// HeritageClause. Read directly off the ts.Node.
 			const ewta = child as ts.ExpressionWithTypeArguments;
-			const pk = parent._ts.kind;
-			const tag = pk === SK.InterfaceDeclaration
-				? 'TSInterfaceHeritage'
-				: pk === SK.HeritageClause
-					? 'TSClassImplements'
-					: 'TSInstantiationExpression';
+			const tsParent = ewta.parent;
+			let tag: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression';
+			if (tsParent?.kind === SK.HeritageClause) {
+				tag = (tsParent as ts.HeritageClause).parent?.kind === SK.InterfaceDeclaration
+					? 'TSInterfaceHeritage'
+					: 'TSClassImplements';
+			} else {
+				tag = 'TSInstantiationExpression';
+			}
 			return new ExpressionWithTypeArgumentsNode(ewta, parent, tag);
 		}
 		case SK.PrivateIdentifier: return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
