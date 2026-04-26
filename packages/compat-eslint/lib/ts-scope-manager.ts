@@ -80,6 +80,25 @@ type DefinitionType =
 	| 'TSEnumMember'
 	| 'TSModuleName';
 
+// Module-level caches keyed by ts.Program. Lib symbols (`Object`, `Array`,
+// `String` …) are stable per-program — IDEs share one program across all
+// files, so the same set of lib symbols gets queried over and over. Caching
+// per-instance (per-file) means every file rebuilds the same decisions.
+// WeakMap lets entries fall away when a program is GC'd.
+const _libDecisionByProgram = new WeakMap<ts.Program, Map<ts.Symbol, 0 | 1>>();
+const _libSourceFileByProgram = new WeakMap<ts.Program, WeakMap<ts.SourceFile, boolean>>();
+
+function _getLibDecisionMap(program: ts.Program): Map<ts.Symbol, 0 | 1> {
+	let m = _libDecisionByProgram.get(program);
+	if (!m) _libDecisionByProgram.set(program, m = new Map());
+	return m;
+}
+function _getLibSourceFileMap(program: ts.Program): WeakMap<ts.SourceFile, boolean> {
+	let m = _libSourceFileByProgram.get(program);
+	if (!m) _libSourceFileByProgram.set(program, m = new WeakMap());
+	return m;
+}
+
 export class TsScopeManager {
 	scopes: TsScope[] = [];
 	globalScope!: TsScope;
@@ -90,7 +109,8 @@ export class TsScopeManager {
 
 	_variableBySymbol = new Map<ts.Symbol, TsVariable>();
 	_libVariableBySymbol = new Map<ts.Symbol, TsVariable>();
-	_libDecisionBySymbol = new Map<ts.Symbol, 0 | 1>();
+	_libDecisionBySymbol: Map<ts.Symbol, 0 | 1>;
+	_libSourceFileCache: WeakMap<ts.SourceFile, boolean>;
 	_syntheticArguments = new Map<TsScope, TsVariable>();
 	readonly checker: ts.TypeChecker;
 
@@ -102,6 +122,11 @@ export class TsScopeManager {
 		readonly sourceType: 'module' | 'script',
 	) {
 		this.checker = program.getTypeChecker();
+		// Per-program caches — share lib decisions across every file in the
+		// same ts.Program (typical IDE setup is one program for the whole
+		// project). Per-file managers all hit the same Map / WeakMap.
+		this._libDecisionBySymbol = _getLibDecisionMap(program);
+		this._libSourceFileCache = _getLibSourceFileMap(program);
 		// Build scope tree by walking the TS AST.
 		this._buildScopeTree();
 	}
@@ -462,9 +487,12 @@ export class TsScopeManager {
 			// Cheap filter first: many identifiers (property names, label
 			// targets, decl names) are neither reference-eligible nor free —
 			// skip them before triggering the (expensive) symbol resolver.
-			const refUsage = this._isReferenceableUsage(node);
-			const freeRef = this._isFreeReference(node);
-			if (!refUsage && !freeRef) continue;
+			// One switch over `parent.kind` produces both flags as a 2-bit
+			// bitmap (bit 0 = freeRef, bit 1 = refUsage); 0 means skip.
+			const flags = this._classifyIdentifier(node);
+			if (flags === 0) continue;
+			const refUsage = (flags & 0b10) !== 0;
+			const freeRef = (flags & 0b01) !== 0;
 
 			// `arguments` inside a non-arrow function resolves to the
 			// function's synthetic arguments TsVariable. TS's checker gives
@@ -627,28 +655,37 @@ export class TsScopeManager {
 		return this._implicitGlobals = Array.from(byName.values()).map(x => x.v);
 	}
 
-	// Identifier is a reference position (NOT a declaration name, property
-	// access RHS, type/property name, label, etc.). Helper for ref-index walk.
-	_isFreeReference(id: ts.Identifier): boolean {
+	// Classify an Identifier in one switch over `parent.kind`, returning a
+	// 2-bit bitmap:
+	//   bit 0 (FREE_REF=1): identifier is in a reference position (NOT a
+	//     declaration name, property access RHS, label, etc.)
+	//   bit 1 (REF_USAGE=2): identifier should produce an ESLint Reference —
+	//     either a usage (free position) or a declaration with init/iter
+	//     binding that counts as an init Reference.
+	//
+	// Both flags get computed from the same `parent.kind` switch — previously
+	// we had two separate methods (`_isFreeReference`, `_isReferenceableUsage`)
+	// each doing the same switch and reading the same `parent.kind`. ~120k
+	// identifiers/file × 2 switches collapses to 1.
+	_classifyIdentifier(id: ts.Identifier): number {
 		const p = id.parent;
-		if (!p) return true;
-		// Switch on parent kind — single comparison vs the long ts.isXxx chain.
-		// Each case checks the specific child slot the identifier sits in.
+		if (!p) return 0b11;
 		const SK = ts.SyntaxKind;
 		switch (p.kind) {
+			// Pure name slots — both flags follow `name !== id`.
 			case SK.PropertyAccessExpression:
-				return (p as ts.PropertyAccessExpression).name !== id;
+				return (p as ts.PropertyAccessExpression).name === id ? 0 : 0b11;
 			case SK.QualifiedName:
-				return (p as ts.QualifiedName).right !== id;
+				return (p as ts.QualifiedName).right === id ? 0 : 0b11;
 			case SK.LabeledStatement:
-				return (p as ts.LabeledStatement).label !== id;
+				return (p as ts.LabeledStatement).label === id ? 0 : 0b11;
 			case SK.BreakStatement:
 			case SK.ContinueStatement:
-				return (p as ts.BreakStatement | ts.ContinueStatement).label !== id;
+				return (p as ts.BreakStatement | ts.ContinueStatement).label === id ? 0 : 0b11;
 			case SK.MetaProperty:
 				// `new.target` / `import.meta` — `target` / `meta` are syntactic
 				// markers, not real references.
-				return (p as ts.MetaProperty).name !== id;
+				return (p as ts.MetaProperty).name === id ? 0 : 0b11;
 			case SK.PropertyDeclaration:
 			case SK.PropertySignature:
 			case SK.PropertyAssignment:
@@ -657,8 +694,6 @@ export class TsScopeManager {
 			case SK.GetAccessor:
 			case SK.SetAccessor:
 			case SK.EnumMember:
-			case SK.VariableDeclaration:
-			case SK.Parameter:
 			case SK.FunctionDeclaration:
 			case SK.FunctionExpression:
 			case SK.ClassDeclaration:
@@ -673,145 +708,86 @@ export class TsScopeManager {
 			case SK.ImportEqualsDeclaration:
 			case SK.NamedTupleMember:
 			case SK.JsxAttribute:
-				return (p as { name?: ts.Node }).name !== id;
-			case SK.ImportSpecifier:
-			case SK.BindingElement: {
-				// Import binding / destructuring pattern — the names are
-				// declarations, not references.
-				const e = p as ts.ImportSpecifier | ts.BindingElement;
-				return e.name !== id && e.propertyName !== id;
+				return (p as { name?: ts.Node }).name === id ? 0 : 0b11;
+			case SK.ImportSpecifier: {
+				// Import binding — the names are declarations, not references.
+				const e = p as ts.ImportSpecifier;
+				return (e.name === id || e.propertyName === id) ? 0 : 0b11;
 			}
+
+			// Declaration name slot but with init/iter rules — name slot is
+			// not free, but may still produce an init Reference.
+			case SK.VariableDeclaration: {
+				const v = p as ts.VariableDeclaration;
+				if (v.name !== id) return 0b11;
+				// In the name slot: not free; refUsage if initializer or
+				// for-of/in binding.
+				if (v.initializer !== undefined) return 0b10;
+				const list = v.parent;
+				if (list && list.kind === SK.VariableDeclarationList) {
+					const stmt = list.parent;
+					if (stmt && (stmt.kind === SK.ForOfStatement || stmt.kind === SK.ForInStatement)) return 0b10;
+				}
+				return 0;
+			}
+			case SK.BindingElement: {
+				const e = p as ts.BindingElement;
+				if (e.name !== id && e.propertyName !== id) return 0b11;
+				// In a binding name slot: not free. refUsage walks up to the
+				// owning VariableDeclaration / Parameter to inherit init/iter
+				// semantics.
+				for (let cur: ts.Node | undefined = p; cur; cur = cur.parent) {
+					if (cur.kind === SK.VariableDeclaration) {
+						const v = cur as ts.VariableDeclaration;
+						if (v.initializer !== undefined) return 0b10;
+						const list = v.parent;
+						if (list && list.kind === SK.VariableDeclarationList) {
+							const stmt = list.parent;
+							if (stmt && (stmt.kind === SK.ForOfStatement || stmt.kind === SK.ForInStatement)) return 0b10;
+						}
+						return 0;
+					}
+					if (cur.kind === SK.Parameter) {
+						// `function f([a = 0] = [])` — outer Parameter init counts.
+						return (cur as ts.ParameterDeclaration).initializer !== undefined ? 0b10 : 0;
+					}
+				}
+				return 0;
+			}
+			case SK.Parameter: {
+				const param = p as ts.ParameterDeclaration;
+				if (param.name !== id) return 0b11;
+				// In the name slot: not free; refUsage iff initializer.
+				return param.initializer !== undefined ? 0b10 : 0;
+			}
+
 			case SK.ExportSpecifier: {
 				// `export {x} from "mod";` — re-export, no local reference.
 				const e = p as ts.ExportSpecifier;
 				const decl = e.parent.parent as ts.ExportDeclaration;
-				if (decl.moduleSpecifier) return false;
+				if (decl.moduleSpecifier) return 0;
 				// `export {x}` — `x` references the local. `export {x as v}` —
 				// `x` (propertyName) references the local; `v` (name) is the
 				// public export name (not a local reference).
-				if (e.propertyName) return e.name !== id;
-				return true;
+				if (e.propertyName) return e.name === id ? 0 : 0b11;
+				return 0b11;
 			}
+
 			case SK.TypeReference:
-				// `expr as const` — `const` is a syntactic marker, not a reference.
+				// `expr as const` — `const` is a syntactic marker. _isFreeReference
+				// returned false; _isReferenceableUsage left it on the default
+				// `return true` path → REF_USAGE only.
 				if (
 					id.text === 'const'
 					&& (p as ts.TypeReferenceNode).typeName === id
 					&& p.parent
 					&& (p.parent.kind === SK.AsExpression || p.parent.kind === SK.TypeAssertionExpression)
 					&& (p.parent as ts.AsExpression | ts.TypeAssertion).type === p
-				) return false;
-				return true;
-			default:
-				return true;
-		}
-	}
+				) return 0b10;
+				return 0b11;
 
-	// Should this identifier produce a Reference in ESLint's model? True for
-	// usages and for VariableDeclaration-with-initializer (which counts as an
-	// init Reference). False for "pure declarations" — Parameter, function /
-	// class / interface / enum / module / type names, import bindings — those
-	// produce a Definition only.
-	_isReferenceableUsage(id: ts.Identifier): boolean {
-		const p = id.parent;
-		if (!p) return true;
-		const SK = ts.SyntaxKind;
-		switch (p.kind) {
-			case SK.VariableDeclaration: {
-				const v = p as ts.VariableDeclaration;
-				if (v.name !== id) return true;
-				// `let x = expr` → init reference. `let x;` → none.
-				// for-of / for-in binding → counts (iteration provides the value).
-				if (v.initializer !== undefined) return true;
-				const list = v.parent;
-				if (list && list.kind === SK.VariableDeclarationList) {
-					const stmt = list.parent;
-					if (stmt && (stmt.kind === SK.ForOfStatement || stmt.kind === SK.ForInStatement)) return true;
-				}
-				return false;
-			}
-			case SK.BindingElement: {
-				const b = p as ts.BindingElement;
-				if (b.name !== id && b.propertyName !== id) return true;
-				// Same rules as VariableDeclaration / Parameter with init or
-				// for-of/in bind.
-				for (let cur: ts.Node | undefined = p; cur; cur = cur.parent) {
-					if (cur.kind === SK.VariableDeclaration) {
-						const v = cur as ts.VariableDeclaration;
-						if (v.initializer !== undefined) return true;
-						const list = v.parent;
-						if (list && list.kind === SK.VariableDeclarationList) {
-							const stmt = list.parent;
-							if (stmt && (stmt.kind === SK.ForOfStatement || stmt.kind === SK.ForInStatement)) return true;
-						}
-						return false;
-					}
-					if (cur.kind === SK.Parameter) {
-						// `function f([a = 0] = [])` — outer Parameter has an
-						// initializer, count as init reference.
-						return (cur as ts.ParameterDeclaration).initializer !== undefined;
-					}
-				}
-				return false;
-			}
-			case SK.Parameter: {
-				// `function f(a, b = 0)` — `b` has an initializer, which counts
-				// as an init Reference for the parameter binding.
-				const param = p as ts.ParameterDeclaration;
-				if (param.name === id && param.initializer !== undefined) return true;
-				return param.name !== id;
-			}
-			case SK.FunctionDeclaration:
-			case SK.FunctionExpression:
-			case SK.ClassDeclaration:
-			case SK.ClassExpression:
-			case SK.EnumDeclaration:
-			case SK.EnumMember:
-			case SK.ModuleDeclaration:
-			case SK.InterfaceDeclaration:
-			case SK.TypeAliasDeclaration:
-			case SK.TypeParameter:
-			case SK.ImportClause:
-			case SK.NamespaceImport:
-			case SK.ImportEqualsDeclaration:
-			case SK.NamedTupleMember:
-			case SK.PropertyDeclaration:
-			case SK.PropertySignature:
-			case SK.PropertyAssignment:
-			case SK.MethodDeclaration:
-			case SK.MethodSignature:
-			case SK.GetAccessor:
-			case SK.SetAccessor:
-			case SK.JsxAttribute:
-				return (p as { name?: ts.Node }).name !== id;
-			case SK.ImportSpecifier: {
-				// Import binding — the names are declarations, not references.
-				const e = p as ts.ImportSpecifier;
-				return e.name !== id && e.propertyName !== id;
-			}
-			case SK.ExportSpecifier: {
-				// `export {x} from "mod";` — re-export, no local reference.
-				const e = p as ts.ExportSpecifier;
-				const decl = e.parent.parent as ts.ExportDeclaration;
-				if (decl.moduleSpecifier) return false;
-				// `export {x}` / `export {x as v}` — propertyName (or name when
-				// there is no propertyName) IS a reference to a local binding.
-				if (e.propertyName) return e.name !== id;
-				return true;
-			}
-			case SK.PropertyAccessExpression:
-				return (p as ts.PropertyAccessExpression).name !== id;
-			case SK.QualifiedName:
-				return (p as ts.QualifiedName).right !== id;
-			case SK.LabeledStatement:
-				return (p as ts.LabeledStatement).label !== id;
-			case SK.BreakStatement:
-			case SK.ContinueStatement:
-				return (p as ts.BreakStatement | ts.ContinueStatement).label !== id;
-			case SK.MetaProperty:
-				return (p as ts.MetaProperty).name !== id;
 			default:
-				return true;
+				return 0b11;
 		}
 	}
 
@@ -831,12 +807,24 @@ export class TsScopeManager {
 	// (`lib.es*.d.ts`). The caller decides whether the reference resolves —
 	// type-position refs always do; value-position refs only do for the names
 	// upstream marks as `isValueVariable: true` (LIB_VALUE_GLOBALS).
+	//
+	// `decl.getSourceFile()` walks `parent` to the SourceFile (5–20 hops), and
+	// `program.isSourceFileDefaultLibrary` does its own path check. Lib symbols
+	// commonly have multiple decls all landing in the same `lib.*.d.ts` file —
+	// cache by SourceFile so repeat lookups within a symbol (and across symbols
+	// within the same program) skip the rechecks.
 	_isLibGlobalSymbol(sym: ts.Symbol): boolean {
 		const decls = sym.declarations;
 		if (!decls || decls.length === 0) return false;
+		const sfCache = this._libSourceFileCache;
 		for (const d of decls) {
 			const sf = d.getSourceFile();
-			if (!this.program.isSourceFileDefaultLibrary(sf)) return false;
+			let isLib = sfCache.get(sf);
+			if (isLib === undefined) {
+				isLib = this.program.isSourceFileDefaultLibrary(sf);
+				sfCache.set(sf, isLib);
+			}
+			if (!isLib) return false;
 		}
 		return true;
 	}
