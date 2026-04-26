@@ -263,6 +263,74 @@ check('hasPredicate: ObjectExpression skipped in v1', !hasPredicate('ObjectExpre
 		`got: [${types.join(', ')}]`);
 }
 
+// --- Predicate context filters (must mirror lazy-estree dispatch) ----
+
+{
+	// MethodDefinition predicate excludes methods inside object literals
+	// (those materialise as Property{method:true}, not MethodDefinition).
+	const types = scan(
+		`class C { foo() {} } const o = { bar() {} };`,
+		['MethodDefinition'],
+	).entered;
+	const count = types.filter(t => t === 'MethodDefinition').length;
+	check('MethodDefinition: fires for class methods only (not object literal methods)',
+		count === 1,
+		`got count=${count}, types=[${types.join(', ')}]`);
+}
+
+{
+	// Accessor property — `class C { accessor x = 1; }` materialises as
+	// AccessorProperty (not PropertyDefinition). Predicate over-fires
+	// (matches every PropertyDeclaration), but dispatchFast looks up by
+	// `target.type` so a PropertyDefinition listener correctly doesn't
+	// fire on accessor properties. Note: this test verifies the type of
+	// the materialised node, not just the predicate.
+	const code = `class C { accessor x = 1; foo = 2; }`;
+	const sf = parseTs(code);
+	const { context } = lazy.convertLazy(sf);
+	const pred = predicateForTriggerSet(['PropertyDefinition'])!;
+	const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+	const types = (steps as any[]).filter(s => s.phase === 1).map(s => s.target.type);
+	// foo = 2 → PropertyDefinition (would fire listener)
+	check('PropertyDefinition: regular field materialises as PropertyDefinition',
+		types.includes('PropertyDefinition'));
+	// accessor x = 1 → AccessorProperty (would NOT fire PropertyDefinition listener)
+	check('PropertyDefinition: accessor field materialises as AccessorProperty (not PropertyDefinition)',
+		types.includes('AccessorProperty'));
+}
+
+{
+	// `declare function foo()` (no body) is TSDeclareFunction, not
+	// FunctionDeclaration.
+	const code = `declare function foo(): void;`;
+	const sf = parseTs(code);
+	const { context } = lazy.convertLazy(sf);
+	const pred = predicateForTriggerSet(['FunctionDeclaration']);
+	if (pred) {
+		const steps = tsScanTraverse(sf, pred, n => lazy.materialize(n, context as any));
+		check('TSDeclareFunction: predicate skips body-less function declarations',
+			(steps as any[]).filter(s => s.phase === 1).length === 0);
+	}
+}
+
+{
+	// ObjectExpression predicate intentionally not in v1 — needs ancestor
+	// context to distinguish literal vs assignment-LHS pattern. Caller
+	// must fall back to selectorAware traverse.
+	const fallback = predicateForTriggerSet(['ObjectExpression']);
+	check('predicateForTriggerSet: ObjectExpression returns null (forces fallback)',
+		fallback === null);
+}
+
+{
+	// AccessorProperty predicate intentionally not in v1 — adding a
+	// dedicated predicate is fine, but until then the caller must fall
+	// back so listeners on AccessorProperty get the slow path.
+	const fallback = predicateForTriggerSet(['AccessorProperty']);
+	check('predicateForTriggerSet: AccessorProperty returns null (forces fallback)',
+		fallback === null);
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');
