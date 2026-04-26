@@ -373,30 +373,57 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		}
 		return result as LazyNode;
 	}
-	// Find the nearest TS ancestor with an ESTree counterpart. Some TS-only
-	// shapes (VariableDeclarationList, SyntaxList) have no ESTree node and
-	// need to be skipped.
+	// Walk up the TS parent chain iteratively, collecting nodes that need
+	// building. Stops at the first cached ancestor (e.g. SourceFile, which
+	// convertLazy always pre-registers) — or at any ancestor that itself
+	// requires a wrapper route, in which case we fall back to the recursive
+	// path for that one node.
+	//
+	// One walk + one downward build replaces N recursive `materialize()`
+	// calls. Saves N-1 frame setups, N-1 redundant per-call cache lookups,
+	// and the parameter-passing overhead between layers.
+	const toBuild: ts.Node[] = [tsNode];
 	let walker: ts.Node | undefined = tsNode.parent;
-	while (walker && TS_ONLY_KINDS.has(walker.kind)) {
+	let parent: LazyNode | null = null;
+	while (walker) {
+		if (TS_ONLY_KINDS.has(walker.kind)) {
+			walker = walker.parent;
+			continue;
+		}
+		const cachedAnc = ctx.maps.tsNodeToESTreeNodeMap.get(walker);
+		if (cachedAnc) {
+			parent = cachedAnc as LazyNode;
+			break;
+		}
+		// Wrapper-routed ancestors need the slow recursive path so the
+		// trigger fires and registers the right wrapper. Hand off there.
+		if (findWrapperRoute(walker)) {
+			parent = materialize(walker, ctx);
+			break;
+		}
+		toBuild.push(walker);
 		walker = walker.parent;
 	}
-	const parent: LazyNode | null = walker ? materialize(walker, ctx) : null;
 	if (!parent) {
 		// No ESTree ancestor — should only happen for the SourceFile itself,
 		// which convertLazy() always pre-registers. As a last resort, hand
 		// back a generic node anchored to nothing.
 		return new GenericTSNode(tsNode, null);
 	}
-	const node = convertChild(tsNode, parent);
-	if (!node) {
-		// convertChild returns null for kinds with no ESTree counterpart
-		// (HeritageClause, OmittedExpression, JsxText). For top-down callers
-		// the null is meaningful; for bottom-up materialise we want SOMETHING
-		// rather than nothing — fall back to a generic stub so callers
-		// reading `.type === 'X'` etc. don't crash.
-		return new GenericTSNode(tsNode, parent);
+	// Build downward: innermost element of `toBuild` is the original
+	// tsNode, outermost is the closest ts.Node to the cached ancestor.
+	// Iterate from the outer end inward, threading `parent` through.
+	for (let i = toBuild.length - 1; i >= 0; i--) {
+		const node = convertChild(toBuild[i], parent);
+		if (!node) {
+			// convertChild returns null for kinds with no ESTree counterpart
+			// (HeritageClause, OmittedExpression, JsxText). Bottom-up
+			// materialise wants SOMETHING rather than nothing.
+			return new GenericTSNode(toBuild[i], parent);
+		}
+		parent = node;
 	}
-	return node;
+	return parent;
 }
 
 // Kinds whose top-level form (`export function f` etc.) gets wrapped in
