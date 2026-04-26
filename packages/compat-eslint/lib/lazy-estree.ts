@@ -77,8 +77,6 @@ function getLocFor(ast: ts.SourceFile, start: number, end: number) {
 abstract class LazyNode {
 	abstract readonly type: string;
 	parent: LazyNode | null;
-	range: [number, number];
-	loc: ReturnType<typeof getLocFor>;
 	_ts: ts.Node;
 	// Conversion context shared with descendants. Children created via getter
 	// inherit this from the parent — the root sets it from `convertLazy`.
@@ -86,12 +84,25 @@ abstract class LazyNode {
 	// signals "internal".
 	_ctx: ConvertContext;
 
+	// `range` and `loc` are lazy — TS's `getStart` (skipTrivia +
+	// getTokenPosOfNode) and `getLineAndCharacterOfPosition` are 5-7% of
+	// hot-path time per the profiler. Most rules never read `.loc`; many
+	// don't read `.range`. Defer until read.
+	private _range?: [number, number];
+	get range(): [number, number] {
+		return this._range ??= [this._ts.getStart(this._ctx.ast), this._ts.getEnd()];
+	}
+	set range(v: [number, number]) { this._range = v; }
+	private _loc?: ReturnType<typeof getLocFor>;
+	get loc() {
+		return this._loc ??= getLocFor(this._ctx.ast, this.range[0], this.range[1]);
+	}
+	set loc(v: ReturnType<typeof getLocFor>) { this._loc = v; }
+
 	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext, registerInMaps = true) {
 		this._ts = tsNode;
 		this.parent = parent;
 		this._ctx = context ?? parent!._ctx;
-		this.range = [tsNode.getStart(this._ctx.ast), tsNode.getEnd()];
-		this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
 		// Synthetic wrapper nodes (TSTypeAnnotation) shouldn't claim the TS
 		// node's map slot — that slot belongs to the inner converted node.
 		if (registerInMaps) {
@@ -103,14 +114,14 @@ abstract class LazyNode {
 	// Extend this node's range to cover `childRange`. Used by parent nodes
 	// that absorb a child's range (e.g. Identifier swallowing its
 	// typeAnnotation, matching typescript-estree's `fixParentLocation`).
+	// Forces range realisation, but if the child also has eager range
+	// (it usually does after a getter call), this stays cheap.
 	protected _extendRange(childRange: [number, number]) {
-		if (childRange[0] < this.range[0]) {
-			this.range[0] = childRange[0];
-		}
-		if (childRange[1] > this.range[1]) {
-			this.range[1] = childRange[1];
-		}
-		this.loc = getLocFor(this._ctx.ast, this.range[0], this.range[1]);
+		const r = this.range;
+		if (childRange[0] < r[0]) r[0] = childRange[0];
+		if (childRange[1] > r[1]) r[1] = childRange[1];
+		// Invalidate cached loc — will recompute next .loc read.
+		this._loc = undefined;
 	}
 }
 

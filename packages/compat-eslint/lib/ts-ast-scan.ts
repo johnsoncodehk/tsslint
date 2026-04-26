@@ -502,22 +502,154 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSIndexSignature': n => n.kind === SK.IndexSignature,
 };
 
+// Sidecar table: ESTree types whose predicate is EXACTLY a TS-kind check
+// (no operator filter, modifier check, ancestor check, etc.). The hot
+// path can replace 1+ function calls with a single `Set.has(node.kind)`
+// when every trigger type lives in this table. Types missing from here
+// fall back to their PREDICATES entry (still correct, just slower).
+const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
+	'Program': [SK.SourceFile],
+	'ExpressionStatement': [SK.ExpressionStatement],
+	'BlockStatement': [SK.Block],
+	'IfStatement': [SK.IfStatement],
+	'WhileStatement': [SK.WhileStatement],
+	'DoWhileStatement': [SK.DoStatement],
+	'ForStatement': [SK.ForStatement],
+	'ForInStatement': [SK.ForInStatement],
+	'ForOfStatement': [SK.ForOfStatement],
+	'ReturnStatement': [SK.ReturnStatement],
+	'ThrowStatement': [SK.ThrowStatement],
+	'TryStatement': [SK.TryStatement],
+	'CatchClause': [SK.CatchClause],
+	'SwitchStatement': [SK.SwitchStatement],
+	'SwitchCase': [SK.CaseClause, SK.DefaultClause],
+	'BreakStatement': [SK.BreakStatement],
+	'ContinueStatement': [SK.ContinueStatement],
+	'LabeledStatement': [SK.LabeledStatement],
+	'EmptyStatement': [SK.EmptyStatement],
+	'DebuggerStatement': [SK.DebuggerStatement],
+	'VariableDeclaration': [SK.VariableStatement],
+	'VariableDeclarator': [SK.VariableDeclaration],
+	'FunctionExpression': [SK.FunctionExpression],
+	'ArrowFunctionExpression': [SK.ArrowFunction],
+	'ClassDeclaration': [SK.ClassDeclaration],
+	'ClassExpression': [SK.ClassExpression],
+	'NewExpression': [SK.NewExpression],
+	'MemberExpression': [SK.PropertyAccessExpression, SK.ElementAccessExpression],
+	'ConditionalExpression': [SK.ConditionalExpression],
+	'AwaitExpression': [SK.AwaitExpression],
+	'YieldExpression': [SK.YieldExpression],
+	'ThisExpression': [SK.ThisKeyword],
+	'Super': [SK.SuperKeyword],
+	'TemplateLiteral': [SK.TemplateExpression, SK.NoSubstitutionTemplateLiteral],
+	'TaggedTemplateExpression': [SK.TaggedTemplateExpression],
+	'Literal': [
+		SK.NumericLiteral, SK.StringLiteral, SK.RegularExpressionLiteral,
+		SK.BigIntLiteral, SK.NullKeyword, SK.TrueKeyword, SK.FalseKeyword,
+	],
+	'Identifier': [SK.Identifier],
+	'PrivateIdentifier': [SK.PrivateIdentifier],
+	'ImportDeclaration': [SK.ImportDeclaration],
+	'ImportSpecifier': [SK.ImportSpecifier],
+	'ImportNamespaceSpecifier': [SK.NamespaceImport],
+	'ImportAttribute': [SK.ImportAttribute],
+	'ExportSpecifier': [SK.ExportSpecifier],
+	'Decorator': [SK.Decorator],
+	'StaticBlock': [SK.ClassStaticBlockDeclaration],
+	'MetaProperty': [SK.MetaProperty],
+	'ClassBody': [SK.ClassDeclaration, SK.ClassExpression],
+	// All TS leaf-keyword types — pure 1:1 with TS kinds.
+	'TSAnyKeyword': [SK.AnyKeyword],
+	'TSStringKeyword': [SK.StringKeyword],
+	'TSNumberKeyword': [SK.NumberKeyword],
+	'TSBooleanKeyword': [SK.BooleanKeyword],
+	'TSBigIntKeyword': [SK.BigIntKeyword],
+	'TSNullKeyword': [SK.NullKeyword],
+	'TSUndefinedKeyword': [SK.UndefinedKeyword],
+	'TSVoidKeyword': [SK.VoidKeyword],
+	'TSNeverKeyword': [SK.NeverKeyword],
+	'TSUnknownKeyword': [SK.UnknownKeyword],
+	'TSObjectKeyword': [SK.ObjectKeyword],
+	'TSSymbolKeyword': [SK.SymbolKeyword],
+	'TSIntrinsicKeyword': [SK.IntrinsicKeyword],
+	'TSThisType': [SK.ThisType],
+	'TSAsExpression': [SK.AsExpression],
+	'TSTypeAssertion': [SK.TypeAssertionExpression],
+	'TSNonNullExpression': [SK.NonNullExpression],
+	'TSSatisfiesExpression': [SK.SatisfiesExpression],
+	'TSTypeReference': [SK.TypeReference],
+	'TSUnionType': [SK.UnionType],
+	'TSIntersectionType': [SK.IntersectionType],
+	'TSArrayType': [SK.ArrayType],
+	'TSTupleType': [SK.TupleType],
+	'TSConditionalType': [SK.ConditionalType],
+	'TSMappedType': [SK.MappedType],
+	'TSIndexedAccessType': [SK.IndexedAccessType],
+	'TSInferType': [SK.InferType],
+	'TSTypeOperator': [SK.TypeOperator],
+	'TSImportType': [SK.ImportType],
+	'TSLiteralType': [SK.LiteralType],
+	'TSFunctionType': [SK.FunctionType],
+	'TSConstructorType': [SK.ConstructorType],
+	'TSTemplateLiteralType': [SK.TemplateLiteralType],
+	'TSTypePredicate': [SK.TypePredicate],
+	'TSTypeLiteral': [SK.TypeLiteral],
+	'TSQualifiedName': [SK.QualifiedName],
+	'TSOptionalType': [SK.OptionalType],
+	'TSRestType': [SK.RestType],
+	'TSTypeParameter': [SK.TypeParameter],
+	'TSInterfaceDeclaration': [SK.InterfaceDeclaration],
+	'TSTypeAliasDeclaration': [SK.TypeAliasDeclaration],
+	'TSEnumDeclaration': [SK.EnumDeclaration],
+	'TSEnumMember': [SK.EnumMember],
+	'TSModuleDeclaration': [SK.ModuleDeclaration],
+	'TSImportEqualsDeclaration': [SK.ImportEqualsDeclaration],
+	'TSExternalModuleReference': [SK.ExternalModuleReference],
+	'TSNamespaceExportDeclaration': [SK.NamespaceExportDeclaration],
+	'TSPropertySignature': [SK.PropertySignature],
+	'TSMethodSignature': [SK.MethodSignature],
+	'TSCallSignatureDeclaration': [SK.CallSignature],
+	'TSConstructSignatureDeclaration': [SK.ConstructSignature],
+	'TSIndexSignature': [SK.IndexSignature],
+};
+
 // Returns null if any of the requested ESTree types lacks a predicate —
 // caller must fall back. Otherwise, returns a predicate that fires true
 // for any ts.Node that materialises to one of the requested types.
+//
+// Fast path: when ALL requested types are simple kind matches (most are),
+// build one `Set<SyntaxKind>` and check `set.has(node.kind)` per visit —
+// no per-kind function calls. Hybrid path mixes Set membership with
+// remaining conditional predicates.
 export function predicateForTriggerSet(estreeTypes: Iterable<string>): Predicate | null {
-	const preds: Predicate[] = [];
+	const simpleKinds = new Set<ts.SyntaxKind>();
+	const conditional: Predicate[] = [];
 	for (const t of estreeTypes) {
-		const p = PREDICATES[t];
-		if (!p) return null;
-		preds.push(p);
-	}
-	if (preds.length === 0) return () => false;
-	if (preds.length === 1) return preds[0];
-	return n => {
-		for (let i = 0; i < preds.length; i++) {
-			if (preds[i](n)) return true;
+		if (!PREDICATES[t]) return null;
+		const kinds = SIMPLE_KINDS[t];
+		if (kinds) {
+			for (const k of kinds) simpleKinds.add(k);
+		} else {
+			conditional.push(PREDICATES[t]);
 		}
+	}
+	if (simpleKinds.size === 0 && conditional.length === 0) return () => false;
+	if (conditional.length === 0) {
+		// Pure simple-kind path — single Set lookup.
+		return n => simpleKinds.has(n.kind);
+	}
+	if (simpleKinds.size === 0) {
+		// All conditional — no Set fast path.
+		if (conditional.length === 1) return conditional[0];
+		return n => {
+			for (let i = 0; i < conditional.length; i++) if (conditional[i](n)) return true;
+			return false;
+		};
+	}
+	// Hybrid — Set hit short-circuits; otherwise try the conditionals.
+	return n => {
+		if (simpleKinds.has(n.kind)) return true;
+		for (let i = 0; i < conditional.length; i++) if (conditional[i](n)) return true;
 		return false;
 	};
 }
