@@ -375,29 +375,57 @@ function runSharedTraversal(
 	}
 }
 
+interface DispatchEntry {
+	rule: ESLint.Rule.RuleModule;
+	listener: (n: unknown) => void;
+	// When set, the listener receives `target[fieldFire]` instead of the
+	// triggering node (Parent > *.field selectors).
+	fieldFire?: string;
+	// Required type for the dispatched node (post fieldFire if any).
+	typeFilter?: string;
+	// Per-target predicate composing attribute / ancestry checks.
+	filter?: (target: any) => boolean;
+}
 interface FastDispatch {
-	enter: Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>;
-	exit: Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>;
+	enter: Map<string, DispatchEntry[]>;
+	exit: Map<string, DispatchEntry[]>;
+	// Listeners with wildcard-type triggers (`*` or `Parent > *`). Fire
+	// on every visited node, after the type-keyed lists.
+	enterAll: DispatchEntry[];
+	exitAll: DispatchEntry[];
 }
 
 function tryBuildFastDispatch(
 	allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]>,
 ): FastDispatch | null {
 	const { decomposeSimple, isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
-	const enter = new Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>();
-	const exit = new Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>();
+	const enter = new Map<string, DispatchEntry[]>();
+	const exit = new Map<string, DispatchEntry[]>();
+	const enterAll: DispatchEntry[] = [];
+	const exitAll: DispatchEntry[] = [];
 	for (const [rule, selector, listener] of allListeners) {
 		if (isCodePathListener(selector)) return null;
-		const decomp = decomposeSimple(selector);
-		if (!decomp) return null;
-		const map = decomp.isExit ? exit : enter;
-		for (const type of decomp.types) {
-			let arr = map.get(type);
-			if (!arr) map.set(type, arr = []);
-			arr.push([rule, listener]);
+		const info = decomposeSimple(selector);
+		if (!info) return null;
+		const map = info.isExit ? exit : enter;
+		const allList = info.isExit ? exitAll : enterAll;
+		const entry: DispatchEntry = {
+			rule, listener,
+			fieldFire: info.fieldFire,
+			typeFilter: info.typeFilter,
+			filter: info.filter,
+		};
+		if (info.types === 'all') {
+			allList.push(entry);
+		} else {
+			for (const type of info.types) {
+				let arr = map.get(type);
+				if (!arr) map.set(type, arr = []);
+				arr.push(entry);
+			}
 		}
 	}
-	return { enter, exit };
+	return { enter, exit, enterAll, exitAll };
 }
 
 // Try to build the eventQueue by scanning the TS AST instead of walking
@@ -409,13 +437,21 @@ function tryTsScanEventQueue(
 	fast: FastDispatch,
 ): any[] | undefined {
 	if (!cachedEstree) return undefined;
-	const types = new Set<string>();
-	for (const t of fast.enter.keys()) types.add(t);
-	for (const t of fast.exit.keys()) types.add(t);
-
-	const { predicateForTriggerSet, tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
-	const match = predicateForTriggerSet(types);
-	if (!match) return undefined;
+	const { predicateForTriggerSet, predicateAllKinds, tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	// If any wildcard-typed listener is registered, we have to visit every
+	// node — the bitmap predicate becomes "all kinds set". Otherwise build
+	// it from the type-keyed lists; bail to fallback if any type lacks a
+	// TS predicate.
+	let match;
+	if (fast.enterAll.length > 0 || fast.exitAll.length > 0) {
+		match = predicateAllKinds();
+	} else {
+		const types = new Set<string>();
+		for (const t of fast.enter.keys()) types.add(t);
+		for (const t of fast.exit.keys()) types.add(t);
+		match = predicateForTriggerSet(types);
+		if (!match) return undefined;
+	}
 
 	const ctx = cachedEstree.convertContext;
 	return tsScanTraverse(file, match, ctx as any) as any[];
@@ -441,22 +477,35 @@ function dispatchFast(
 		const step = eventQueue[i];
 		// step.kind === 1 always (we filtered emit steps earlier).
 		const target = step.target;
-		let arr;
-		if (step.phase === 1) {
-			onTarget(target);
-			arr = fast.enter.get(target.type);
-		} else {
-			arr = fast.exit.get(target.type);
+		const isEnter = step.phase === 1;
+		if (isEnter) onTarget(target);
+		const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
+		if (arr) runEntries(arr, target, errors);
+		const allArr = isEnter ? fast.enterAll : fast.exitAll;
+		if (allArr.length) runEntries(allArr, target, errors);
+	}
+}
+
+function runEntries(
+	arr: DispatchEntry[],
+	target: any,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+): void {
+	for (let j = 0; j < arr.length; j++) {
+		const e = arr[j];
+		if (errors.has(e.rule)) continue;
+		let actual = target;
+		if (e.fieldFire !== undefined) {
+			actual = target[e.fieldFire];
+			if (actual == null) continue;
+			if (Array.isArray(actual)) continue; // arrays aren't single targets
 		}
-		if (!arr) continue;
-		for (let j = 0; j < arr.length; j++) {
-			const rule = arr[j][0];
-			if (errors.has(rule)) continue;
-			try {
-				arr[j][1](target);
-			} catch (err) {
-				errors.set(rule, err);
-			}
+		if (e.typeFilter !== undefined && actual.type !== e.typeFilter) continue;
+		if (e.filter !== undefined && !e.filter(actual)) continue;
+		try {
+			e.listener(actual);
+		} catch (err) {
+			errors.set(e.rule, err);
 		}
 	}
 }

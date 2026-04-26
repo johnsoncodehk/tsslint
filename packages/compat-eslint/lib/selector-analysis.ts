@@ -82,64 +82,266 @@ class TriggerSetImpl implements TriggerSet {
 	}
 }
 
-// Decompose a selector into a `{ types, isExit }` shape if possible.
-// "Simple" means the selector can be dispatched by node-type lookup alone:
-//   - bare identifier:           Identifier
-//   - compound with :exit:       Identifier:exit / FunctionDeclaration:exit
-//   - matches/comma list:        TSAsExpression, TSTypeAssertion
-//   - matches with :exit:        TSAsExpression:exit, TSTypeAssertion:exit
-// Returns null for selectors with combinators (>, ' ', ~, +), attributes
-// ([name="x"]), pseudos (:not, :has, :nth-child, :function, :statement,
-// etc.), or anything that needs ancestor / matches-style traversal.
+// Decompose a selector into a fast-dispatch description, or null if the
+// selector can't be handled without an ESLint-style esquery walk.
 //
-// This unlocks a fast dispatch loop in the caller: skip
-// NodeEventGenerator (and its esquery match + ancestry maintenance) and
-// just look up listeners by node.type.
-export function decomposeSimple(selector: string): { types: Set<string>; isExit: boolean } | null {
+// Beyond pure type-name matching, we also handle:
+//   - `Type[attr=val]` / `Type[attr]` / `Type[attr!=val]` — attribute filter
+//     becomes a per-target predicate; trigger types remain the type set.
+//   - `Parent > Right.field` — trigger on Parent type, dispatch fires on
+//     `target[field]`. Optional Right type narrows via post-fire check.
+//   - `Parent > Right` (no field) — trigger on Right type, parent.type
+//     check filters at dispatch time.
+//   - `Parent Right` (descendant) — trigger on Right type; filter walks
+//     ancestors looking for a Parent-typed match.
+//
+// Returns null on `:not`, `:has`, sibling/adjacent (~ +), `:nth-child`,
+// `:scope`, raw class macros (`:statement`, `:expression`, …) or anything
+// else where a precise per-target predicate would be expensive.
+export interface FastDispatchInfo {
+	// Trigger types for the listener. The dispatch loop fires when a
+	// visited node's type is in this set. 'all' means visit every type.
+	types: Set<string> | 'all';
+	isExit: boolean;
+	// When set, the listener receives `target[fieldFire]` instead of the
+	// triggering target. Used for `Parent > *.field` / `Parent > Type.field`
+	// patterns — trigger on Parent, but the listener is interested in a
+	// specific child slot.
+	fieldFire?: string;
+	// Type that the dispatched node (post-fieldFire) must match. Set by
+	// `Parent > Type.field` (Type is the constraint on the field child).
+	typeFilter?: string;
+	// Additional per-target predicate. Composes attribute checks,
+	// ancestor walks, etc. Called after fieldFire / typeFilter resolve.
+	filter?: (target: any) => boolean;
+}
+
+export function decomposeSimple(selector: string): FastDispatchInfo | null {
 	let ast: unknown;
 	try {
 		ast = esquery.parse(selector);
 	} catch {
 		return null;
 	}
-	return walkSimple(ast, false);
+	return walkSelector(ast as any, false);
 }
 
-function walkSimple(ast: any, isExit: boolean): { types: Set<string>; isExit: boolean } | null {
+// Top-level selector entry. Handles combinators / attribute compounds.
+function walkSelector(ast: any, isExit: boolean): FastDispatchInfo | null {
+	switch (ast.type) {
+		case 'child':
+			return walkChild(ast.left, ast.right, isExit);
+		case 'descendant':
+			return walkDescendant(ast.left, ast.right, isExit);
+		default:
+			return walkTypeMatcher(ast, isExit);
+	}
+}
+
+// Right-hand of `Parent > X` or `Parent X`. Returns the trigger type set
+// + optional structural extraction (fieldFire / typeFilter / additional filter).
+// Returns null if the right side is a shape we can't fast-dispatch.
+function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | null {
+	// `Parent > Right.field`  — compound on the right has wildcard or
+	// identifier + a field selector. Trigger on Parent; dispatch reads
+	// `target[field]`. Filter by Right.type if Right was an identifier.
+	if (right.type === 'compound') {
+		let fieldName: string | undefined;
+		let typeFilter: string | undefined;
+		let wildcard = false;
+		let extraFilter: ((t: any) => boolean) | undefined;
+		for (const sub of right.selectors) {
+			if (sub.type === 'wildcard') {
+				wildcard = true;
+			} else if (sub.type === 'identifier') {
+				typeFilter = sub.value;
+			} else if (sub.type === 'field') {
+				fieldName = sub.name;
+			} else if (sub.type === 'attribute') {
+				const attrFilter = makeAttributeFilter(sub);
+				if (!attrFilter) return null;
+				const prev = extraFilter;
+				extraFilter = prev ? n => prev(n) && attrFilter(n) : attrFilter;
+			} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
+				isExit = true;
+			} else {
+				return null;
+			}
+		}
+		if (fieldName) {
+			// fieldFire path — trigger on Parent (left).
+			const parentInfo = walkTypeMatcher(left, isExit);
+			if (!parentInfo || parentInfo.types === 'all') return null;
+			return {
+				types: parentInfo.types,
+				isExit,
+				fieldFire: fieldName,
+				typeFilter,
+				filter: extraFilter,
+			};
+		}
+		// No field: `Parent > Type[attr]` / `Parent > Type:exit`. Trigger
+		// on Right type, filter parent.type === Parent.
+		if (typeFilter || wildcard) {
+			const types: Set<string> | 'all' = wildcard ? 'all' : new Set([typeFilter!]);
+			const parentTypes = collectTypes(left);
+			if (!parentTypes) return null;
+			const parentFilter = (n: any) =>
+				!!n.parent && parentTypes.has(n.parent.type);
+			return {
+				types,
+				isExit,
+				filter: extraFilter ? n => parentFilter(n) && extraFilter!(n) : parentFilter,
+			};
+		}
+		return null;
+	}
+	// `Parent > Right` plain identifier or wildcard
+	if (right.type === 'identifier' || right.type === 'wildcard') {
+		const types: Set<string> | 'all' = right.type === 'wildcard'
+			? 'all'
+			: new Set([right.value]);
+		const parentTypes = collectTypes(left);
+		if (!parentTypes) return null;
+		return {
+			types,
+			isExit,
+			filter: n => !!n.parent && parentTypes.has(n.parent.type),
+		};
+	}
+	return null;
+}
+
+// `Parent Right` (descendant). Trigger on right type, walk ancestors
+// at dispatch time looking for a Parent-typed node.
+function walkDescendant(left: any, right: any, isExit: boolean): FastDispatchInfo | null {
+	const rightInfo = walkSelector(right, isExit);
+	if (!rightInfo || rightInfo.types === 'all') return null;
+	const parentTypes = collectTypes(left);
+	if (!parentTypes) return null;
+	const ancestorFilter = (n: any) => {
+		let cur = n.parent;
+		while (cur) {
+			if (parentTypes.has(cur.type)) return true;
+			cur = cur.parent;
+		}
+		return false;
+	};
+	const prev = rightInfo.filter;
+	rightInfo.filter = prev ? n => ancestorFilter(n) && prev(n) : ancestorFilter;
+	return rightInfo;
+}
+
+// Compound of identifier(s) / wildcard / class(:exit) / attribute filters.
+function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 	switch (ast.type) {
 		case 'identifier':
 			return { types: new Set([ast.value]), isExit };
+		case 'wildcard':
+			return { types: 'all', isExit };
 		case 'compound': {
-			const types = new Set<string>();
-			let foundType = false;
+			const collected = new Set<string>();
+			let isAll = false;
+			let sawType = false;
+			let extraFilter: ((t: any) => boolean) | undefined;
 			for (const sub of ast.selectors) {
 				if (sub.type === 'identifier') {
-					types.add(sub.value);
-					foundType = true;
+					collected.add(sub.value);
+					sawType = true;
+				} else if (sub.type === 'wildcard') {
+					isAll = true;
+					sawType = true;
 				} else if (sub.type === 'matches') {
-					const inner = walkSimple(sub, isExit);
+					const inner = walkTypeMatcher(sub, isExit);
 					if (!inner) return null;
-					for (const t of inner.types) types.add(t);
-					foundType = true;
+					if (inner.types === 'all') {
+						isAll = true;
+					} else {
+						for (const t of inner.types) collected.add(t);
+					}
+					sawType = true;
 				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 					isExit = true;
+				} else if (sub.type === 'attribute') {
+					const attrFilter = makeAttributeFilter(sub);
+					if (!attrFilter) return null;
+					const prev = extraFilter;
+					extraFilter = prev ? n => prev(n) && attrFilter(n) : attrFilter;
 				} else {
 					return null;
 				}
 			}
-			if (!foundType) return null;
-			return { types, isExit };
+			if (!sawType) return null;
+			return { types: isAll ? 'all' : collected, isExit, filter: extraFilter };
 		}
 		case 'matches': {
-			const types = new Set<string>();
+			let types: Set<string> | null = null;
+			let mergedExit: boolean | null = null;
+			let extraFilter: ((t: any) => boolean) | undefined;
 			for (const sub of ast.selectors) {
-				const inner = walkSimple(sub, isExit);
-				if (!inner) return null;
-				if (inner.isExit !== isExit) return null;
+				const inner = walkTypeMatcher(sub, isExit);
+				if (!inner || inner.types === 'all') return null;
+				if (mergedExit === null) mergedExit = inner.isExit;
+				else if (mergedExit !== inner.isExit) return null;
+				types ??= new Set();
 				for (const t of inner.types) types.add(t);
+				if (inner.filter) {
+					// Inside a `matches(...)`, each branch's filter applies only
+					// to that branch's types — we can't represent per-branch
+					// filters in the flat Set + filter shape, so bail.
+					return null;
+				}
 			}
-			return { types, isExit };
+			if (!types) return null;
+			return { types, isExit: mergedExit ?? isExit, filter: extraFilter };
 		}
+		default:
+			return null;
+	}
+}
+
+function collectTypes(ast: any): Set<string> | null {
+	const info = walkTypeMatcher(ast, false);
+	if (!info || info.types === 'all') return null;
+	return info.types;
+}
+
+// Build a predicate from an esquery attribute selector AST.
+// Supports: name(.path), op (=, !=), value (literal/regexp/type).
+function makeAttributeFilter(attr: any): ((target: any) => boolean) | null {
+	const path = String(attr.name).split('.');
+	const get = (target: any) => {
+		let cur = target;
+		for (const seg of path) {
+			if (cur == null) return undefined;
+			cur = cur[seg];
+		}
+		return cur;
+	};
+	const op = attr.operator;
+	if (!op) {
+		// `[attr]` — exists & truthy
+		return target => {
+			const v = get(target);
+			return v != null && v !== false;
+		};
+	}
+	const want = attr.value;
+	if (want?.type === 'regexp') {
+		const re = want.value;
+		return target => {
+			const v = get(target);
+			return typeof v === 'string' && re.test(v);
+		};
+	}
+	const literal = want?.type === 'literal' ? want.value : undefined;
+	const wantType = want?.type === 'type' ? want.value : undefined; // unused: rare
+	if (literal === undefined && wantType === undefined) return null;
+	switch (op) {
+		case '=':
+			return target => get(target) === literal;
+		case '!=':
+			return target => get(target) !== literal;
 		default:
 			return null;
 	}

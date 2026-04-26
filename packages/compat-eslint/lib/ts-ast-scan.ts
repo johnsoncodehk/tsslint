@@ -690,6 +690,13 @@ export function hasPredicate(estreeType: string): boolean {
 	return PREDICATES[estreeType] !== undefined;
 }
 
+// Predicate that fires on every node — used when a rule registers a
+// wildcard-typed listener (`*`, `Parent > *`, etc.) so the visit walker
+// must materialise everything.
+export function predicateAllKinds(): Predicate {
+	return () => true;
+}
+
 // Walks the TS AST in source order. For each ts.Node where `match`
 // returns true, materialise its ESTree counterpart and emit
 // VisitNodeStep enter/leave events around the recursive descent.
