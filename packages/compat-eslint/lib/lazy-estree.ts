@@ -65,6 +65,13 @@ export interface ConvertContext {
 	maps: LazyAstMaps;
 }
 
+// Shared empty array used as the default for readonly array-typed fields
+// (Identifier.decorators, ImportDeclaration.attributes/specifiers, etc.).
+// Each `[]` literal is a fresh allocation; on hot paths like Identifier
+// (~120k per checker.ts lintOnce) those wasted empty arrays add up.
+// Frozen so callers can't mutate the shared instance.
+const EMPTY_ARRAY: never[] = Object.freeze([]) as never[];
+
 function getLocFor(ast: ts.SourceFile, start: number, end: number) {
 	const startLC = ast.getLineAndCharacterOfPosition(start);
 	const endLC = ast.getLineAndCharacterOfPosition(end);
@@ -1027,7 +1034,7 @@ function convertBodyWithDirectives(
 class IdentifierNode extends LazyNode {
 	readonly type = 'Identifier' as const;
 	readonly name: string;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 
@@ -1636,7 +1643,7 @@ class MethodDefinitionNode extends LazyNode {
 class ConstructorKeyIdentifierNode extends LazyNode {
 	readonly type = 'Identifier' as const;
 	readonly name = 'constructor' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	constructor(tsNode: ts.ConstructorDeclaration, parent: LazyNode) {
@@ -1698,7 +1705,7 @@ class PropertyDefinitionNode extends LazyNode {
 
 class ArrayPatternNode extends LazyNode {
 	readonly type = 'ArrayPattern' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	private _elements?: (LazyNode | null)[];
@@ -1710,7 +1717,7 @@ class ArrayPatternNode extends LazyNode {
 
 class ObjectPatternNode extends LazyNode {
 	readonly type = 'ObjectPattern' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	private _properties?: (LazyNode | null)[];
@@ -1725,7 +1732,7 @@ class ObjectPatternNode extends LazyNode {
 // include the property key in the object case) through the initializer.
 class BindingAssignmentPatternNode extends LazyNode {
 	readonly type = 'AssignmentPattern' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	readonly left: LazyNode;
@@ -1749,7 +1756,7 @@ class BindingElementNode extends LazyNode {
 	readonly method = false;
 	readonly optional = false;
 	readonly shorthand: boolean;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	private _key?: LazyNode | null;
 	private _value?: LazyNode | null;
 	private _argument?: LazyNode | null;
@@ -2098,7 +2105,7 @@ function convertDecorators(tsNode: ts.Node, parent: LazyNode): (LazyNode | null)
 // the LHS of an assignment or in another pattern context.
 class ArrayPatternFromLiteralNode extends LazyNode {
 	readonly type = 'ArrayPattern' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	private _elements?: (LazyNode | null)[];
@@ -2112,7 +2119,7 @@ class ArrayPatternFromLiteralNode extends LazyNode {
 
 class ObjectPatternFromLiteralNode extends LazyNode {
 	readonly type = 'ObjectPattern' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	private _properties?: (LazyNode | null)[];
@@ -2606,7 +2613,7 @@ class TaggedTemplateExpressionNode extends LazyNode {
 // TemplateLiteral with a single quasi.
 class NoSubstitutionTemplateNode extends LazyNode {
 	readonly type = 'TemplateLiteral' as const;
-	readonly expressions: never[] = [];
+	readonly expressions: never[] = EMPTY_ARRAY;
 	readonly quasis: object[];
 	constructor(tsNode: ts.NoSubstitutionTemplateLiteral, parent: LazyNode) {
 		super(tsNode, parent);
@@ -2624,7 +2631,7 @@ class NoSubstitutionTemplateNode extends LazyNode {
 
 class RestElementFromSpreadNode extends LazyNode {
 	readonly type = 'RestElement' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly value = undefined;
 	readonly typeAnnotation = undefined;
@@ -2766,10 +2773,10 @@ class ExpressionWithTypeArgumentsNode extends LazyNode {
 // re-converting from a TS node.
 class ExportNamedWrappingNode extends LazyNode {
 	readonly type = 'ExportNamedDeclaration' as const;
-	readonly attributes: never[] = [];
-	readonly assertions: never[] = [];
+	readonly attributes: never[] = EMPTY_ARRAY;
+	readonly assertions: never[] = EMPTY_ARRAY;
 	readonly source = null;
-	readonly specifiers: never[] = [];
+	readonly specifiers: never[] = EMPTY_ARRAY;
 	readonly exportKind: 'value' | 'type';
 	readonly declaration: LazyNode;
 	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
@@ -2802,8 +2809,8 @@ class ExportNamedDeclarationNode extends LazyNode {
 	readonly type = 'ExportNamedDeclaration' as const;
 	readonly declaration = null;
 	readonly exportKind: 'value' | 'type';
-	readonly attributes: never[] = [];
-	readonly assertions: never[] = [];
+	readonly attributes: never[] = EMPTY_ARRAY;
+	readonly assertions: never[] = EMPTY_ARRAY;
 	private _source?: LazyNode | null;
 	private _specifiers?: (LazyNode | null)[];
 
@@ -2827,8 +2834,8 @@ class ExportNamedDeclarationNode extends LazyNode {
 class ExportAllDeclarationNode extends LazyNode {
 	readonly type = 'ExportAllDeclaration' as const;
 	readonly exportKind: 'value' | 'type';
-	readonly attributes: never[] = [];
-	readonly assertions: never[] = [];
+	readonly attributes: never[] = EMPTY_ARRAY;
+	readonly assertions: never[] = EMPTY_ARRAY;
 	private _exported?: LazyNode | null;
 	private _source?: LazyNode | null;
 
@@ -3400,7 +3407,7 @@ function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): La
 
 class RestElementNode extends LazyNode {
 	readonly type = 'RestElement' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly value = undefined;
 	typeAnnotation: LazyNode | null | undefined = undefined;
@@ -3412,7 +3419,7 @@ class RestElementNode extends LazyNode {
 
 class AssignmentPatternNode extends LazyNode {
 	readonly type = 'AssignmentPattern' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	typeAnnotation: LazyNode | null | undefined = undefined;
 	readonly left: LazyNode;
@@ -3438,7 +3445,7 @@ class TSParameterPropertyNode extends LazyNode {
 	readonly override: boolean;
 	readonly readonly: boolean;
 	readonly static = false;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly parameter: LazyNode;
 	constructor(tsNode: ts.ParameterDeclaration, parent: LazyNode, parameter: LazyNode, mods: ReadonlyArray<ts.ModifierLike>) {
 		super(tsNode, parent);
@@ -3551,7 +3558,7 @@ class CallExpressionNode extends LazyNode {
 
 class ImportExpressionNode extends LazyNode {
 	readonly type = 'ImportExpression' as const;
-	readonly attributes: never[] = [];
+	readonly attributes: never[] = EMPTY_ARRAY;
 	private _source?: LazyNode | null;
 	private _options?: LazyNode | null;
 	get source() {
@@ -3567,7 +3574,7 @@ class ImportExpressionNode extends LazyNode {
 // `class C { static { ... } }` — class static initialiser block.
 class StaticBlockNode extends LazyNode {
 	readonly type = 'StaticBlock' as const;
-	readonly decorators: never[] = [];
+	readonly decorators: never[] = EMPTY_ARRAY;
 	private _body?: (LazyNode | null)[];
 	get body() {
 		return this._body ??= convertChildren(
