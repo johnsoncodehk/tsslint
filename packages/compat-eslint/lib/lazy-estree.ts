@@ -217,6 +217,36 @@ const WRAPPER_ROUTE_PARENT_BITMAP = (() => {
 	return a;
 })();
 
+// Bitmap of child kinds that can possibly be on the wrapper-routed side:
+// either a TypeNode (routed via VariableDecl/Parameter/FunctionLike `.type`)
+// or a pattern-target literal/spread (routed via parent's pattern getter).
+// Other kinds (statements, value expressions, declarations) cannot be
+// wrapper-routed and short-circuit immediately after the parent check.
+const WRAPPER_ROUTE_CHILD_BITMAP = (() => {
+	const a = new Uint8Array(400);
+	// TypeNode kinds — anything that can sit in a `.type` slot.
+	for (const k of [
+		// Keyword types
+		SK.AnyKeyword, SK.BigIntKeyword, SK.BooleanKeyword, SK.IntrinsicKeyword,
+		SK.NeverKeyword, SK.NumberKeyword, SK.ObjectKeyword, SK.StringKeyword,
+		SK.SymbolKeyword, SK.UndefinedKeyword, SK.UnknownKeyword, SK.VoidKeyword,
+		// Composite types
+		SK.TypeReference, SK.FunctionType, SK.ConstructorType, SK.TypeQuery,
+		SK.TypeLiteral, SK.ArrayType, SK.TupleType, SK.OptionalType, SK.RestType,
+		SK.UnionType, SK.IntersectionType, SK.ConditionalType, SK.InferType,
+		SK.ParenthesizedType, SK.ThisType, SK.TypeOperator, SK.IndexedAccessType,
+		SK.MappedType, SK.LiteralType, SK.NamedTupleMember,
+		SK.TemplateLiteralType, SK.TemplateLiteralTypeSpan, SK.ImportType,
+		SK.TypePredicate,
+	]) a[k] = 1;
+	// Pattern-target literals / spreads (`[…] = x`, `{…} = x`, `...x`).
+	for (const k of [
+		SK.ArrayLiteralExpression, SK.ObjectLiteralExpression,
+		SK.SpreadElement, SK.SpreadAssignment,
+	]) a[k] = 1;
+	return a;
+})();
+
 function findWrapperRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void; }
 	| null
@@ -224,6 +254,7 @@ function findWrapperRoute(tsNode: ts.Node):
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
 	if (WRAPPER_ROUTE_PARENT_BITMAP[tsParent.kind] !== 1) return null;
+	if (WRAPPER_ROUTE_CHILD_BITMAP[tsNode.kind] !== 1) return null;
 
 	// Pattern-position literal: route through parent's pattern getter.
 	// `[…] = …` / `{…} = …`     — parent is BinaryExpression, owner.left is the pattern slot.
