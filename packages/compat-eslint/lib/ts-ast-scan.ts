@@ -20,6 +20,9 @@
 import * as ts from 'typescript';
 
 const SK = ts.SyntaxKind;
+// `import * as ts` lowers to a namespace object guarded by a getter on
+// each access. Caching this once avoids the getter per visit (~2% hot path).
+const tsForEachChild = ts.forEachChild;
 
 // VisitNodeStep constructor (re-resolved here so this module doesn't
 // depend on the index.ts wiring).
@@ -618,37 +621,41 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 // for any ts.Node that materialises to one of the requested types.
 //
 // Fast path: when ALL requested types are simple kind matches (most are),
-// build one `Set<SyntaxKind>` and check `set.has(node.kind)` per visit —
-// no per-kind function calls. Hybrid path mixes Set membership with
-// remaining conditional predicates.
+// build a Uint8Array bitmap indexed by ts.SyntaxKind and check
+// `bitmap[node.kind]` per visit — single array access, faster than Set.has
+// for the integer-keyed lookup.
+const SK_BITMAP_SIZE = 400; // ts.SyntaxKind max is currently ~360; round up.
 export function predicateForTriggerSet(estreeTypes: Iterable<string>): Predicate | null {
-	const simpleKinds = new Set<ts.SyntaxKind>();
+	const simpleBitmap = new Uint8Array(SK_BITMAP_SIZE);
+	let simpleCount = 0;
 	const conditional: Predicate[] = [];
 	for (const t of estreeTypes) {
 		if (!PREDICATES[t]) return null;
 		const kinds = SIMPLE_KINDS[t];
 		if (kinds) {
-			for (const k of kinds) simpleKinds.add(k);
+			for (const k of kinds) {
+				if (!simpleBitmap[k]) { simpleBitmap[k] = 1; simpleCount++; }
+			}
 		} else {
 			conditional.push(PREDICATES[t]);
 		}
 	}
-	if (simpleKinds.size === 0 && conditional.length === 0) return () => false;
+	if (simpleCount === 0 && conditional.length === 0) return () => false;
 	if (conditional.length === 0) {
-		// Pure simple-kind path — single Set lookup.
-		return n => simpleKinds.has(n.kind);
+		// Pure simple-kind path — bitmap[kind] is truthy when kind triggers.
+		return n => simpleBitmap[n.kind] === 1;
 	}
-	if (simpleKinds.size === 0) {
-		// All conditional — no Set fast path.
+	if (simpleCount === 0) {
+		// All conditional — no bitmap fast path.
 		if (conditional.length === 1) return conditional[0];
 		return n => {
 			for (let i = 0; i < conditional.length; i++) if (conditional[i](n)) return true;
 			return false;
 		};
 	}
-	// Hybrid — Set hit short-circuits; otherwise try the conditionals.
+	// Hybrid — bitmap hit short-circuits; otherwise try the conditionals.
 	return n => {
-		if (simpleKinds.has(n.kind)) return true;
+		if (simpleBitmap[n.kind] === 1) return true;
 		for (let i = 0; i < conditional.length; i++) if (conditional[i](n)) return true;
 		return false;
 	};
@@ -682,7 +689,7 @@ export function tsScanTraverse(
 				steps.push(new VisitNodeStep({ target: t, phase: 1, args: [t] }));
 			}
 		}
-		ts.forEachChild(node, visit);
+		tsForEachChild(node, visit);
 		if (chain) {
 			// Inner-first leave.
 			for (let i = chain.length - 1; i >= 0; i--) {
