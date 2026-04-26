@@ -2248,9 +2248,10 @@ class TemplateLiteralNode extends LazyNode {
 
 class RegExpLiteralNode extends LazyNode {
 	readonly type = 'Literal' as const;
-	readonly value: RegExp | null;
 	readonly raw: string;
 	readonly regex: { pattern: string; flags: string };
+	private _value?: RegExp | null;
+	private _valueComputed = false;
 	constructor(tsNode: ts.RegularExpressionLiteral, parent: LazyNode) {
 		super(tsNode, parent);
 		this.raw = tsNode.text;
@@ -2258,11 +2259,18 @@ class RegExpLiteralNode extends LazyNode {
 		const pattern = m?.[1] ?? '';
 		const flags = m?.[2] ?? '';
 		this.regex = { pattern, flags };
+	}
+	get value(): RegExp | null {
+		// `new RegExp(pattern, flags)` parses + compiles — only worth paying
+		// for rules that actually evaluate the regex (rare; most read
+		// `.regex.pattern` / `.regex.flags`).
+		if (this._valueComputed) return this._value as RegExp | null;
+		this._valueComputed = true;
 		try {
-			this.value = new RegExp(pattern, flags);
+			return this._value = new RegExp(this.regex.pattern, this.regex.flags);
 		}
 		catch {
-			this.value = null;
+			return this._value = null;
 		}
 	}
 }
@@ -2636,10 +2644,15 @@ class TaggedTemplateExpressionNode extends LazyNode {
 class NoSubstitutionTemplateNode extends LazyNode {
 	readonly type = 'TemplateLiteral' as const;
 	readonly expressions: never[] = EMPTY_ARRAY;
-	readonly quasis: object[];
-	constructor(tsNode: ts.NoSubstitutionTemplateLiteral, parent: LazyNode) {
-		super(tsNode, parent);
-		this.quasis = [
+	private _quasis?: object[];
+	get quasis(): object[] {
+		// Defer: builds a synthesized TemplateElement that reads `range`/`loc`
+		// (each lazy on its own) and runs `getText(ast)` (scanner walk for
+		// the raw slice). Most rules look at `node.type` / `node.expressions`,
+		// not at the synthesized quasi.
+		if (this._quasis) return this._quasis;
+		const tsNode = this._ts as ts.NoSubstitutionTemplateLiteral;
+		return this._quasis = [
 			{
 				type: 'TemplateElement',
 				tail: true,
@@ -3483,6 +3496,27 @@ class TSParameterPropertyNode extends LazyNode {
 	}
 }
 
+// Operator-token-kind sets used by BinaryLikeExpressionNode to derive both
+// the ESTree type tag and the operator string from the token kind alone —
+// no scanner walk per BinaryExpression.
+const LOGICAL_OP_KINDS = new Set<ts.SyntaxKind>([
+	SK.AmpersandAmpersandToken,
+	SK.BarBarToken,
+	SK.QuestionQuestionToken,
+]);
+const ASSIGN_OP_KINDS = new Set<ts.SyntaxKind>([
+	SK.EqualsToken, SK.PlusEqualsToken, SK.MinusEqualsToken,
+	SK.AsteriskAsteriskEqualsToken, SK.AsteriskEqualsToken,
+	SK.SlashEqualsToken, SK.PercentEqualsToken,
+	SK.AmpersandEqualsToken, SK.BarEqualsToken, SK.CaretEqualsToken,
+	SK.LessThanLessThanEqualsToken,
+	SK.GreaterThanGreaterThanEqualsToken,
+	SK.GreaterThanGreaterThanGreaterThanEqualsToken,
+	SK.AmpersandAmpersandEqualsToken,
+	SK.BarBarEqualsToken,
+	SK.QuestionQuestionEqualsToken,
+]);
+
 // One class for all binary-shaped operators. typescript-estree splits the
 // shape into BinaryExpression / LogicalExpression / AssignmentExpression
 // based on the operator; we do the same in the constructor.
@@ -3494,12 +3528,15 @@ class BinaryLikeExpressionNode extends LazyNode {
 
 	constructor(tsNode: ts.BinaryExpression, parent: LazyNode) {
 		super(tsNode, parent);
-		const op = tsNode.operatorToken.getText(this._ctx.ast);
-		this.operator = op;
-		if (op === '&&' || op === '||' || op === '??') {
+		// `ts.tokenToString(kind)` is a kind→literal-text switch — no scanner
+		// walk, no source-text slice. About 5–10x faster than `getText(ast)`
+		// for BinaryExpression's hot constructor.
+		const opKind = tsNode.operatorToken.kind;
+		this.operator = ts.tokenToString(opKind)!;
+		if (LOGICAL_OP_KINDS.has(opKind)) {
 			this.type = 'LogicalExpression';
 		}
-		else if (op.endsWith('=') && op !== '==' && op !== '===' && op !== '!=' && op !== '!==' && op !== '<=' && op !== '>=') {
+		else if (ASSIGN_OP_KINDS.has(opKind)) {
 			this.type = 'AssignmentExpression';
 		}
 		else {
@@ -3658,11 +3695,14 @@ class BoolLiteralNode extends LazyNode {
 class LiteralNode extends LazyNode {
 	readonly type = 'Literal' as const;
 	readonly value: string | number | null;
-	readonly raw: string;
+	private _raw?: string;
 
 	constructor(tsNode: ts.LiteralExpression, parent: LazyNode) {
 		super(tsNode, parent);
-		this.raw = tsNode.getText(this._ctx.ast);
+		// `value` is cheap (`tsNode.text` is already parsed), set eagerly.
+		// `raw` would call `getText(ast)` (scanner trivia walk) — defer to a
+		// lazy getter. Most rules read `.value` or `.type`; `.raw` matters
+		// mainly for string-quote / regex-source rules.
 		if (tsNode.kind === SK.NumericLiteral) {
 			this.value = Number(tsNode.text);
 		}
@@ -3672,6 +3712,9 @@ class LiteralNode extends LazyNode {
 		else {
 			this.value = null;
 		}
+	}
+	get raw(): string {
+		return this._raw ??= (this._ts as ts.LiteralExpression).getText(this._ctx.ast);
 	}
 }
 
