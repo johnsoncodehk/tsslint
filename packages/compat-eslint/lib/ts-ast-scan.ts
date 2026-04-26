@@ -40,6 +40,16 @@ function makeStep(target: unknown, phase: 1 | 2): VisitStep {
 	return { type: 'visit', kind: 1, target, phase, args: undefined };
 }
 
+// Wrapper kinds whose `materialize()` result expands into multi-layer
+// chain (see unwrapChain comment at the bottom of the file). For >95% of
+// hits the head is none of these and the chain is just [target] — visit's
+// hot loop short-circuits that case to skip the array allocation.
+const WRAPPER_HEAD_TYPES = new Set<string>([
+	'ExportNamedDeclaration', 'ExportDefaultDeclaration',
+	'ChainExpression', 'TSParameterProperty',
+	'TSTypeQuery', 'ClassDeclaration', 'ClassExpression',
+]);
+
 type Predicate = (n: ts.Node) => boolean;
 
 // --- Operator buckets ------------------------------------------------
@@ -686,23 +696,35 @@ export function tsScanTraverse(
 ): unknown[] {
 	const steps: unknown[] = [];
 	const visit = (node: ts.Node): void => {
-		const hit = match(node);
+		// Two-state hit result: most hits produce a single-layer target
+		// (`single` set, `chain` null); wrapper kinds (Export*, Chain,
+		// TSParameterProperty, TSTypeQuery, Class*) expand into a 2+ layer
+		// chain (`chain` set, `single` null). Splitting saves the 1-element
+		// array allocation on the >95% common path.
+		let single: unknown = null;
 		let chain: unknown[] | null = null;
-		if (hit) {
-			chain = unwrapChain(materialize(node, ctx));
-			// Outer-first enter (mirrors ESLint's pre-order: parent before children).
-			for (let i = 0; i < chain.length; i++) {
-				const t = chain[i];
-				steps.push(makeStep(t, 1));
+		if (match(node)) {
+			const target = materialize(node, ctx);
+			const t = (target as { type?: string }).type;
+			if (t && WRAPPER_HEAD_TYPES.has(t)) {
+				chain = unwrapChain(target);
+				for (let i = 0; i < chain.length; i++) {
+					steps.push(makeStep(chain[i], 1));
+				}
+			}
+			else {
+				single = target;
+				steps.push(makeStep(target, 1));
 			}
 		}
 		tsForEachChild(node, visit);
 		if (chain) {
-			// Inner-first leave.
 			for (let i = chain.length - 1; i >= 0; i--) {
-				const t = chain[i];
-				steps.push(makeStep(t, 2));
+				steps.push(makeStep(chain[i], 2));
 			}
+		}
+		else if (single) {
+			steps.push(makeStep(single, 2));
 		}
 	};
 	visit(source);
@@ -728,17 +750,9 @@ export function tsScanTraverse(
 // Common case: hit isn't a wrapper kind, chain has length 1. Peek the
 // type once and short-circuit; only enter the multi-layer loop when the
 // head is actually a wrapper. Saves the while-loop body for ~95% of hits.
-const WRAPPER_HEAD_TYPES = new Set<string>([
-	'ExportNamedDeclaration', 'ExportDefaultDeclaration',
-	'ChainExpression', 'TSParameterProperty',
-	'TSTypeQuery', 'ClassDeclaration', 'ClassExpression',
-]);
-
+// The Set itself lives near the top of the file so visit() can use it for
+// its inline fast path.
 function unwrapChain(node: unknown): unknown[] {
-	const headType = (node as { type?: string }).type;
-	if (!headType || !WRAPPER_HEAD_TYPES.has(headType)) {
-		return [node];
-	}
 	const chain: unknown[] = [];
 	let cur: unknown = node;
 	while (cur) {
