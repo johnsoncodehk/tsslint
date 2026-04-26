@@ -184,6 +184,9 @@ function runSharedTraversal(
 
 	let currentNode: any;
 	const listenerKeys = new Set<string>();
+	// (rule, selector, listener) triples — used to build fast dispatch
+	// tables when every selector is simple. Parallel to emitter.on().
+	const allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]> = [];
 
 	for (const entry of ruleRegistry.values()) {
 		const eslintRule = entry.eslintRule;
@@ -309,36 +312,114 @@ function runSharedTraversal(
 			if (listener) {
 				listenerKeys.add(selector);
 				emitter.on(selector, listener as (...a: unknown[]) => void);
+				allListeners.push([eslintRule, selector, listener as (n: unknown) => void]);
 			}
 		}
 	}
 	emitter.setCurrentRule(undefined);
 
-	const { NodeEventGenerator, Traverser } = loadEslintInternals();
-	const eventGenerator = new NodeEventGenerator(emitter, {
-		visitorKeys: sourceCode.visitorKeys,
-		fallback: Traverser.getKeys,
-	});
-
 	const eventQueue = getEventQueue(sourceCode, listenerKeys);
-	for (const step of eventQueue) {
-		switch (step.kind) {
-			case 1: {
-				if (step.phase === 1) {
-					currentNode = step.target;
-					eventGenerator.enterNode(step.target);
+
+	// Fast dispatch: if every registered selector is simple (just type
+	// names + optional :exit), build per-type listener arrays and bypass
+	// NodeEventGenerator entirely. Saves the per-event ancestry shuffle
+	// (currentAncestry.unshift/shift), the applySelectors loop, and the
+	// esquery `matches()` call. For self-lint with only type-name
+	// selectors this is the dominant per-event cost.
+	const fast = tryBuildFastDispatch(allListeners);
+
+	if (fast && !eventQueueHasEmits(eventQueue)) {
+		dispatchFast(eventQueue, fast, errors, t => { currentNode = t; });
+	} else {
+		const { NodeEventGenerator, Traverser } = loadEslintInternals();
+		const eventGenerator = new NodeEventGenerator(emitter, {
+			visitorKeys: sourceCode.visitorKeys,
+			fallback: Traverser.getKeys,
+		});
+		for (const step of eventQueue) {
+			switch (step.kind) {
+				case 1: {
+					if (step.phase === 1) {
+						currentNode = step.target;
+						eventGenerator.enterNode(step.target);
+					}
+					else {
+						eventGenerator.leaveNode(step.target);
+					}
+					break;
 				}
-				else {
-					eventGenerator.leaveNode(step.target);
+				case 2: {
+					emitter.emit(step.target, ...step.args);
+					break;
 				}
-				break;
+				default:
+					throw new Error(`Invalid traversal step found: "${step.type}".`);
 			}
-			case 2: {
-				emitter.emit(step.target, ...step.args);
-				break;
+		}
+	}
+}
+
+interface FastDispatch {
+	enter: Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>;
+	exit: Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>;
+}
+
+function tryBuildFastDispatch(
+	allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]>,
+): FastDispatch | null {
+	const { decomposeSimple, isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
+	const enter = new Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>();
+	const exit = new Map<string, Array<[ESLint.Rule.RuleModule, (n: unknown) => void]>>();
+	for (const [rule, selector, listener] of allListeners) {
+		if (isCodePathListener(selector)) return null;
+		const decomp = decomposeSimple(selector);
+		if (!decomp) return null;
+		const map = decomp.isExit ? exit : enter;
+		for (const type of decomp.types) {
+			let arr = map.get(type);
+			if (!arr) map.set(type, arr = []);
+			arr.push([rule, listener]);
+		}
+	}
+	return { enter, exit };
+}
+
+// eventQueue may still carry kind=2 emit steps (e.g., from CodePathAnalyzer
+// when ESLint's traverser was used). Fast dispatch only handles
+// enter/leave, so detect emit steps and fall back when present.
+function eventQueueHasEmits(eventQueue: any[]): boolean {
+	for (let i = 0; i < eventQueue.length; i++) {
+		if (eventQueue[i].kind === 2) return true;
+	}
+	return false;
+}
+
+function dispatchFast(
+	eventQueue: any[],
+	fast: FastDispatch,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	onTarget: (target: unknown) => void,
+): void {
+	for (let i = 0; i < eventQueue.length; i++) {
+		const step = eventQueue[i];
+		// step.kind === 1 always (we filtered emit steps earlier).
+		const target = step.target;
+		let arr;
+		if (step.phase === 1) {
+			onTarget(target);
+			arr = fast.enter.get(target.type);
+		} else {
+			arr = fast.exit.get(target.type);
+		}
+		if (!arr) continue;
+		for (let j = 0; j < arr.length; j++) {
+			const rule = arr[j][0];
+			if (errors.has(rule)) continue;
+			try {
+				arr[j][1](target);
+			} catch (err) {
+				errors.set(rule, err);
 			}
-			default:
-				throw new Error(`Invalid traversal step found: "${step.type}".`);
 		}
 	}
 }
@@ -481,6 +562,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// packages/, but materialises children on first read. Rules see
 		// real subtrees and can't null-deref into them.
 		const { astMaps, estree } = convertLazy(file) as { astMaps: any; estree: any };
+
 		// tokens / comments come from typescript-estree's standalone scanner
 		// helpers — neither depends on its Converter. Rules like
 		// no-unnecessary-type-assertion call `sourceCode.getTokenAfter()`
@@ -490,6 +572,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		const { convertComments } = require(tseRoot + '/dist/convert-comments.js') as { convertComments(ast: ts.SourceFile): unknown[] };
 		estree.tokens = convertTokens(file);
 		estree.comments = convertComments(file);
+
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';

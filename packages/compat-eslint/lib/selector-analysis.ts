@@ -82,6 +82,69 @@ class TriggerSetImpl implements TriggerSet {
 	}
 }
 
+// Decompose a selector into a `{ types, isExit }` shape if possible.
+// "Simple" means the selector can be dispatched by node-type lookup alone:
+//   - bare identifier:           Identifier
+//   - compound with :exit:       Identifier:exit / FunctionDeclaration:exit
+//   - matches/comma list:        TSAsExpression, TSTypeAssertion
+//   - matches with :exit:        TSAsExpression:exit, TSTypeAssertion:exit
+// Returns null for selectors with combinators (>, ' ', ~, +), attributes
+// ([name="x"]), pseudos (:not, :has, :nth-child, :function, :statement,
+// etc.), or anything that needs ancestor / matches-style traversal.
+//
+// This unlocks a fast dispatch loop in the caller: skip
+// NodeEventGenerator (and its esquery match + ancestry maintenance) and
+// just look up listeners by node.type.
+export function decomposeSimple(selector: string): { types: Set<string>; isExit: boolean } | null {
+	let ast: unknown;
+	try {
+		ast = esquery.parse(selector);
+	} catch {
+		return null;
+	}
+	return walkSimple(ast, false);
+}
+
+function walkSimple(ast: any, isExit: boolean): { types: Set<string>; isExit: boolean } | null {
+	switch (ast.type) {
+		case 'identifier':
+			return { types: new Set([ast.value]), isExit };
+		case 'compound': {
+			const types = new Set<string>();
+			let foundType = false;
+			for (const sub of ast.selectors) {
+				if (sub.type === 'identifier') {
+					types.add(sub.value);
+					foundType = true;
+				} else if (sub.type === 'matches') {
+					const inner = walkSimple(sub, isExit);
+					if (!inner) return null;
+					for (const t of inner.types) types.add(t);
+					foundType = true;
+				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
+					isExit = true;
+				} else {
+					return null;
+				}
+			}
+			if (!foundType) return null;
+			return { types, isExit };
+		}
+		case 'matches': {
+			const types = new Set<string>();
+			for (const sub of ast.selectors) {
+				const inner = walkSimple(sub, isExit);
+				if (!inner) return null;
+				if (inner.isExit !== isExit) return null;
+				for (const t of inner.types) types.add(t);
+			}
+			return { types, isExit };
+		}
+		default:
+			return null;
+	}
+}
+
 // ESLint dispatches some listener keys outside the selector mechanism:
 // onCodePathStart / onCodePathEnd / onCodePathSegmentStart /
 // onCodePathSegmentEnd / onCodePathSegmentLoop /
