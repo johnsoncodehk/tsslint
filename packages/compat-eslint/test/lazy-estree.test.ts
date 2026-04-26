@@ -844,6 +844,180 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	);
 }
 
+// Focused parity fixtures for shapes the project's own .ts files don't
+// exercise. Split into two groups:
+//   - SUPPORTED: must match eager byte-for-byte; regression alarm if they
+//     stop matching.
+//   - KNOWN GAPS: lazy-estree currently diverges from eager. Each entry
+//     names the gap so we can revisit. If a gap fixture STARTS matching,
+//     the test fails so we know to re-classify it.
+{
+	const supportedFixtures: Array<{ name: string; code: string }> = [
+		// Destructuring (most common shapes)
+		{ name: 'array-destructure-with-default', code: `let [a = 1, b = 2] = [];` },
+		{ name: 'array-destructure-with-rest', code: `let [a, ...rest] = [1, 2, 3];` },
+		{ name: 'object-destructure-with-rest', code: `let { a, ...rest } = { a: 1, b: 2 };` },
+		{ name: 'nested-destructure', code: `let [[a], { b: { c } }] = [[1], { b: { c: 2 } }];` },
+		{ name: 'destructure-assignment-LHS', code: `let a, b; [a, b] = [1, 2]; ({ a, b } = { a: 1, b: 2 });` },
+		{ name: 'for-of-destructure', code: `for (const [k, v] of Object.entries({})) {}` },
+		// Type-only imports/exports
+		{ name: 'type-import-default', code: `import type T from 'x';` },
+		{ name: 'type-import-named', code: `import type { T } from 'x';` },
+		{ name: 'inline-type-import', code: `import { type T, foo } from 'x';` },
+		{ name: 'type-export', code: `type T = number; export type { T };` },
+		{ name: 'export-all-as', code: `export * as ns from 'x';` },
+		// Generic types and constraints
+		{ name: 'generic-with-constraint', code: `function foo<T extends number>(x: T): T { return x; }` },
+		{ name: 'generic-with-default', code: `function foo<T = number>(x: T): T { return x; }` },
+		{ name: 'conditional-type', code: `type Unwrap<T> = T extends Promise<infer U> ? U : T;` },
+		{ name: 'mapped-type', code: `type Readonly<T> = { readonly [K in keyof T]: T[K] };` },
+		// Modules / namespaces
+		{ name: 'namespace-decl', code: `namespace N { export const x = 1; }` },
+		{ name: 'ambient-module', code: `declare module 'foo' { export function bar(): void; }` },
+		{ name: 'declare-function', code: `declare function foo(x: number): string;` },
+		// Class features (subset that work)
+		{ name: 'class-static-block', code: `class C { static y = 1; static { console.log('init'); } }` },
+		{ name: 'class-accessor', code: `class C { accessor x = 1; }` },
+		{ name: 'class-parameter-property', code: `class C { constructor(public a: number, private b = 1, readonly c: string) {} }` },
+		{ name: 'class-private-field', code: `class C { #priv = 1; #method() { return this.#priv; } }` },
+		// Optional chaining + non-null + assertions
+		{ name: 'optional-chain-deep', code: `let r = a?.b.c?.d();` },
+		{ name: 'non-null-assertion', code: `function f(x?: number) { return x!.toString(); }` },
+		{ name: 'satisfies', code: `const x = { a: 1, b: 2 } satisfies Record<string, number>;` },
+		{ name: 'as-const', code: `const x = [1, 2, 3] as const;` },
+		// import equals (CJS interop)
+		{ name: 'import-equals', code: `import x = require('x');` },
+	];
+
+	// Each entry: known divergence between lazy and eager.
+	// `gap` documents the underlying lazy-estree limitation so a future
+	// fix can locate it. If a fixture starts matching, this test fails —
+	// move it to `supportedFixtures` and update the gap notes.
+	const knownGapFixtures: Array<{ name: string; code: string; gap: string }> = [
+		{
+			name: 'object-destructure-with-default',
+			code: `let { a = 1, b: c = 2 } = { a: 1 };`,
+			gap: 'BindingElementNode.value converts the .name only — initializer (default value) is dropped, missing AssignmentPattern wrapper',
+		},
+		{
+			name: 'decorator-class',
+			code: `function dec(t: any) {} @dec class C {}`,
+			gap: 'ClassNode.decorators slot not populated (decorators array always empty)',
+		},
+		{
+			name: 'decorator-method-property',
+			code: `function dec(t: any) {} class C { @dec foo: number = 1; @dec bar() {} }`,
+			gap: 'PropertyDefinitionNode.decorators / MethodDefinitionNode.decorators slots not populated',
+		},
+		{
+			name: 'decorator-parameter',
+			code: `function dec(t: any) {} class C { method(@dec p: number) {} }`,
+			gap: 'IdentifierNode (param) decorators slot not populated when used as parameter',
+		},
+		{
+			name: 'enum-numeric',
+			code: `enum E { A, B = 1, C }`,
+			gap: 'TSEnumDeclarationNode missing .body (TSEnumBody wrapper) — typescript-estree v8 wraps members',
+		},
+		{
+			name: 'enum-string',
+			code: `enum E { A = 'a', B = 'b' }`,
+			gap: 'same TSEnumBody wrapping issue',
+		},
+		{
+			name: 'enum-computed',
+			code: `enum E { A = 1 << 0, B = 1 << 1 }`,
+			gap: 'same TSEnumBody wrapping issue',
+		},
+		{
+			name: 'enum-export',
+			code: `export enum E { A }`,
+			gap: 'same TSEnumBody wrapping issue',
+		},
+		{
+			name: 'const-enum',
+			code: `const enum E { A, B }`,
+			gap: 'same TSEnumBody wrapping issue',
+		},
+		{
+			name: 'mapped-type-as',
+			code: `type Renamed<T> = { [K in keyof T as \`get_\${string & K}\`]: T[K] };`,
+			gap: 'TSMappedType.nameType / TSTemplateLiteralType.quasis not populated (template literal type interior)',
+		},
+		{
+			name: 'class-abstract',
+			code: `abstract class C { abstract foo(): void; abstract bar: number; }`,
+			gap: 'abstract method value materialises as FunctionExpression instead of TSEmptyBodyFunctionExpression',
+		},
+		{
+			name: 'tagged-template',
+			code: 'function tag(s: TemplateStringsArray, ...v: any[]) {} tag`hello ${1} world`;',
+			gap: 'No dedicated class for SK.TaggedTemplateExpression — falls through to GenericTSNode and emits "TSTaggedTemplateExpression"',
+		},
+		{
+			name: 'template-literal-type',
+			code: 'type Greeting<T extends string> = `hello ${T}`;',
+			gap: 'TSTemplateLiteralType.quasis not populated',
+		},
+		{
+			name: 'new-target',
+			code: `function F() { return new.target; }`,
+			gap: 'MetaPropertyNode synthetic .meta Identifier missing decorators field (eager has decorators=[])',
+		},
+		{
+			name: 'import-meta',
+			code: `let url = import.meta.url;`,
+			gap: 'same meta-Identifier decorators issue',
+		},
+	];
+
+	const runFixture = (fx: { name: string; code: string }, label: string): { matched: boolean; first?: string } => {
+		const sf = parseTs(fx.code);
+		const eagerSf = parseTs(fx.code);
+		try {
+			const { estree: lazyEstree } = lazy.convertLazy(sf);
+			const eagerEstree = eagerConvert(eagerSf);
+			const beforeFails = failures.length;
+			compare(lazyEstree, eagerEstree, `${label}:${fx.name}`);
+			const newFails = failures.slice(beforeFails);
+			// Pop these out — we report aggregate per-group below.
+			failures.length = beforeFails;
+			return newFails.length === 0
+				? { matched: true }
+				: { matched: false, first: newFails[0] };
+		}
+		catch (err) {
+			return { matched: false, first: `THREW: ${(err as Error).message.split('\n')[0]}` };
+		}
+	};
+
+	// Group 1: must match.
+	let supportedDiverged: Array<{ name: string; first: string }> = [];
+	for (const fx of supportedFixtures) {
+		const r = runFixture(fx, 'supported');
+		if (!r.matched) supportedDiverged.push({ name: fx.name, first: r.first ?? '' });
+	}
+	check(
+		`supported parity: ${supportedFixtures.length - supportedDiverged.length}/${supportedFixtures.length} fixtures match eager`,
+		supportedDiverged.length === 0,
+		supportedDiverged.length ? supportedDiverged.map(d => `${d.name}: ${d.first}`).join('; ') : '',
+	);
+
+	// Group 2: known gaps — must NOT match (regression alarm if a gap
+	// accidentally passes — that means lazy-estree was fixed and the
+	// fixture should be moved to supportedFixtures).
+	const unexpectedlyPassing: string[] = [];
+	for (const fx of knownGapFixtures) {
+		const r = runFixture(fx, 'gap');
+		if (r.matched) unexpectedlyPassing.push(fx.name);
+	}
+	check(
+		`known-gap fixtures still diverge (move to supportedFixtures if any pass): ${knownGapFixtures.length - unexpectedlyPassing.length}/${knownGapFixtures.length}`,
+		unexpectedlyPassing.length === 0,
+		unexpectedlyPassing.length ? `now passing: ${unexpectedlyPassing.join(', ')}` : '',
+	);
+}
+
 // --- Future / blocked --------------------------------------------------
 //
 // Edge cases NOT exercisable in current MVP scope. Each is annotated with
