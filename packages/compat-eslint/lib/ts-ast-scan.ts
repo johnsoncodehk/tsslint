@@ -317,10 +317,35 @@ const PREDICATES: Record<string, Predicate> = {
 
 	// --- Expressions --------------------------------------------------
 	'BinaryExpression': n => n.kind === SK.BinaryExpression
+		&& (n as ts.BinaryExpression).operatorToken.kind !== SK.CommaToken
 		&& !LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind)
 		&& !ASSIGN_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
 	'LogicalExpression': n => n.kind === SK.BinaryExpression
 		&& LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
+	// SequenceExpression matches `BinaryExpression(',')` BUT only the
+	// outermost: nested `1,2,3` parses as `BE(BE(1,2,','),3,',')` and
+	// SequenceExpressionNode flattens the inner into the outer's
+	// `expressions[]`. Firing enter/leave on the inner BE would
+	// double-emit the same logical SequenceExpression. ParenthesizedExpression
+	// preserves the inner — `(1,2),3` keeps both as separate
+	// SequenceExpressions because the inner isn't directly the parent's
+	// `left` slot. Match the typescript-estree shape: only fire on the
+	// outermost (or paren-wrapped) comma BE.
+	'SequenceExpression': n => {
+		if (n.kind !== SK.BinaryExpression) return false;
+		const be = n as ts.BinaryExpression;
+		if (be.operatorToken.kind !== SK.CommaToken) return false;
+		const p = n.parent;
+		if (
+			p
+			&& p.kind === SK.BinaryExpression
+			&& (p as ts.BinaryExpression).operatorToken.kind === SK.CommaToken
+			&& (p as ts.BinaryExpression).left === n
+		) {
+			return false;
+		}
+		return true;
+	},
 	// `=`-style assignment in expression position only — `=` inside a pattern
 	// destructure is AssignmentPattern, not AssignmentExpression. Compound
 	// assignments (`+=`, `||=`, …) are always AssignmentExpression — they
@@ -805,6 +830,30 @@ export function tsScanTraverse(
 			|| k === SK.NamedImports
 			|| (k === SK.VariableDeclarationList && node.parent?.kind === SK.VariableStatement)
 			|| (k === SK.ImportClause && (node as ts.ImportClause).name === undefined)) {
+			tsForEachChild(node, child => visit(child, parentTarget));
+			return;
+		}
+		// Comma-operator BinaryExpression that's flattened into the parent
+		// SequenceExpression: TS parses `a,b,c` as
+		// `BE(BE(a,b,','),c,',')` but typescript-estree emits ONE
+		// SequenceExpression with `expressions=[a,b,c]`. The inner BE
+		// has no ESTree counterpart of its own. In allKinds-predicate
+		// mode (CPA), where the SequenceExpression predicate filter
+		// doesn't gate visits, firing enter/leave on the inner BE's
+		// materialised SequenceExpression would double-emit. Skip the
+		// inner — but only when it sits directly in the parent's
+		// `.left` slot (matching SequenceExpressionNode's own flatten
+		// condition). `(a,b),c` and `a,b,(c,d)` keep the inner
+		// SequenceExpression as its own sub-expression because the
+		// inner is wrapped in `ParenthesizedExpression` or sits in
+		// `.right`.
+		if (
+			k === SK.BinaryExpression
+			&& (node as ts.BinaryExpression).operatorToken.kind === SK.CommaToken
+			&& node.parent?.kind === SK.BinaryExpression
+			&& (node.parent as ts.BinaryExpression).operatorToken.kind === SK.CommaToken
+			&& (node.parent as ts.BinaryExpression).left === node
+		) {
 			tsForEachChild(node, child => visit(child, parentTarget));
 			return;
 		}
