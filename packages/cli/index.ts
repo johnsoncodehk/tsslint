@@ -392,6 +392,28 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 
+				// Each diagnostic crosses the worker IPC boundary as its own
+				// `{ fileName, text }` POJO (fresh from JSON.parse).
+				// `ts.formatDiagnosticsWithColorAndContext` caches `lineMap`
+				// on the file instance via `getLineStarts`, but per-diagnostic
+				// distinct objects defeat that — 60k diagnostics on a 3MB
+				// `checker.ts` recompute lineStarts 60k times (87% of CLI
+				// wall time per `--prof`). Share one file object across all
+				// diagnostics on the same file so the cache hits after the
+				// first format call.
+				const sharedFile = diagnostics[0].file as ts.SourceFile;
+				for (const d of diagnostics) {
+					(d as { file: ts.SourceFile }).file = sharedFile;
+					const ri = (d as ts.DiagnosticWithLocation).relatedInformation;
+					if (ri) {
+						for (const info of ri) {
+							if (info.file && info.file.fileName === sharedFile.fileName) {
+								(info as { file: ts.SourceFile }).file = sharedFile;
+							}
+						}
+					}
+				}
+
 				for (const diagnostic of diagnostics) {
 					hasFix ||= !!fileCache[1][diagnostic.code]?.[0];
 
