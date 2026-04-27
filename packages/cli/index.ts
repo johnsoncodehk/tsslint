@@ -265,12 +265,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		process.exit(1);
 	}
 
-	if (process.stdout.isTTY) {
-		await startWorker(worker.create());
-	}
-	else {
-		await startWorker(worker.createLocal() as any);
-	}
+	await startWorker(worker.create());
 
 	renderer.status();
 
