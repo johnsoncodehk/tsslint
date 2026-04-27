@@ -165,7 +165,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 
 (async () => {
 	const renderer = render.createRenderer();
-	const processFiles = new Set<string>();
 	const tsconfigAndLanguages = new Map<string, string[]>();
 
 	function fail(msg: string): never {
@@ -267,8 +266,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 
 	await startWorker(worker.create());
 
-	renderer.status();
-
 	const summaryLines: string[] = [];
 
 	const counters: string[] = [];
@@ -355,14 +352,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		}
 
 		while (project.currentFileIndex < project.fileNames.length) {
-			// Yield to the event loop between files so the spinner's
-			// `setInterval` (and any other timers) can fire. The loop is
-			// otherwise fully synchronous now that lint runs in-process —
-			// without yielding, the spinner freezes for the entire run.
-			await new Promise<void>(r => setImmediate(r));
-
 			const fileName = project.fileNames[project.currentFileIndex++];
-			addProcessFile(fileName);
 
 			const fileStat = fs.statSync(fileName, { throwIfNoEntry: false });
 			if (!fileStat) {
@@ -442,48 +432,11 @@ const formatHost: ts.FormatDiagnosticsHost = {
 				passed++;
 			}
 			processed++;
-
-			removeProcessFile(
-				fileName,
-				project.currentFileIndex < project.fileNames.length
-					? project.fileNames[project.currentFileIndex]
-					: undefined,
-			);
 		}
 
 		cache.saveCache(project.tsconfig, project.configFile!, project.languages, project.cache, ts.sys.createHash);
 
 		await startWorker(linterWorker);
-	}
-
-	function addProcessFile(fileName: string) {
-		processFiles.add(fileName);
-		updateStatus();
-	}
-
-	function removeProcessFile(fileName: string, nextFileName?: string) {
-		processFiles.delete(fileName);
-		updateStatus(nextFileName);
-	}
-
-	function updateStatus(nextFileName?: string) {
-		let msg: string | undefined;
-		if (processFiles.size === 0) {
-			if (nextFileName) {
-				msg = colors.gray(
-					`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), nextFileName)}`,
-				);
-			}
-		}
-		else if (processFiles.size === 1) {
-			msg = colors.gray(
-				`[${processed + processFiles.size}/${allFilesNum}] ${path.relative(process.cwd(), [...processFiles][0])}`,
-			);
-		}
-		else {
-			msg = colors.gray(`[${processed + processFiles.size}/${allFilesNum}] Processing ${processFiles.size} files`);
-		}
-		renderer.status(msg);
 	}
 
 	function resolvePath(p: string) {
