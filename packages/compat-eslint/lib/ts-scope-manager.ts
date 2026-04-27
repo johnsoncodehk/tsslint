@@ -202,6 +202,7 @@ export class TsScopeManager {
 		// save/restore around the recursion so `forEachChild` can take a single
 		// stable callback (no per-call arrow allocation).
 		const SK_Identifier = ts.SyntaxKind.Identifier;
+		const SK_ConditionalType = ts.SyntaxKind.ConditionalType;
 		const idents = this._pendingIdentifiers;
 		let currentParent: TsScope = topScope;
 		const walk = (n: ts.Node) => {
@@ -209,7 +210,26 @@ export class TsScopeManager {
 			const created = this._createScopesFor(n, prevParent);
 			if (created) currentParent = created;
 			if (n.kind === SK_Identifier) idents.push(n as ts.Identifier);
-			ts.forEachChild(n, walk);
+			// Conditional type: only `trueType` lives inside the conditional-type
+			// scope (where `infer X` is accessible). `checkType`, `extendsType`,
+			// `falseType` walk in the OUTER scope. Without this split, a nested
+			// conditional in `falseType` becomes a child of the outer conditional-
+			// type scope, and its `infer X` shadows the outer's `infer X`.
+			// Repro: `type U<T> = T extends Array<infer U> ? U : T extends Promise<infer U> ? U : T;`
+			// — no-shadow incorrectly reported the second `infer U`.
+			if (n.kind === SK_ConditionalType) {
+				const cond = n as ts.ConditionalTypeNode;
+				currentParent = prevParent;
+				walk(cond.checkType);
+				walk(cond.extendsType);
+				if (created) currentParent = created;
+				walk(cond.trueType);
+				currentParent = prevParent;
+				walk(cond.falseType);
+			}
+			else {
+				ts.forEachChild(n, walk);
+			}
 			currentParent = prevParent;
 		};
 		ts.forEachChild(this.tsFile, walk);
@@ -393,6 +413,18 @@ export class TsScopeManager {
 			// empty array for any destructuring declaration.
 			if (ts_.isVariableDeclaration(decl) || ts_.isParameter(decl)) {
 				this._collectBinding(decl.name, out);
+				return;
+			}
+			// CatchClause holds the param via `variableDeclaration` (which is
+			// itself a VariableDeclaration with the param identifier or pattern
+			// as `.name`). Without this, getDeclaredVariables returns [] for
+			// catch clauses and rules like no-ex-assign / no-shadow can't
+			// enumerate the catch-bound name. Repro:
+			//   `catch (e) { e = new Error() }` — no-ex-assign must report.
+			if (ts_.isCatchClause(decl)) {
+				if (decl.variableDeclaration) {
+					this._collectBinding(decl.variableDeclaration.name, out);
+				}
 				return;
 			}
 			let sym: ts.Symbol | undefined = (decl as { symbol?: ts.Symbol }).symbol;
@@ -1271,7 +1303,39 @@ export class TsScope {
 				}
 				// Parameters next.
 				if (fn.parameters) {
-					for (const p of fn.parameters) pushBinding(p.name);
+					for (const p of fn.parameters) {
+						pushBinding(p.name);
+						// Parameter property (`constructor(public x: T)`): TS's
+						// binder produces TWO symbols on the same declaration —
+						// a Property symbol (flags=Property=4) returned by
+						// `getSymbolAtLocation(p.name)` and a function-scoped
+						// FunctionScopedVariable symbol (flags=1) returned by
+						// `getSymbolAtLocation` on a USE of the binding inside
+						// the constructor body. pushBinding registered the
+						// Property symbol; references inside the body resolve
+						// to the local symbol, miss `_variableBySymbol`, and
+						// fall through to `through` → no-undef false-positives
+						// every parameter-property binding. Alias the local
+						// symbol to the same TsVariable so resolution lands.
+						// Repro (real code): `class C { constructor(public
+						// readonly program: ts.Program) { program.x } }`.
+						const isParamProp = ts_.isParameter(p) && p.modifiers?.some(m =>
+							m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword
+							|| m.kind === SK.ProtectedKeyword || m.kind === SK.ReadonlyKeyword
+							|| m.kind === SK.OverrideKeyword
+						);
+						if (isParamProp && fn.body && ts_.isIdentifier(p.name)) {
+							const propSym = this.manager.checker.getSymbolAtLocation(p.name);
+							const localSym = this.manager.checker.getSymbolsInScope(
+								fn.body,
+								ts_.SymbolFlags.Variable,
+							).find(s => s.name === (p.name as ts.Identifier).text);
+							if (propSym && localSym && propSym !== localSym) {
+								const v = this.manager._variableBySymbol.get(propSym);
+								if (v) this.manager._variableBySymbol.set(localSym, v);
+							}
+						}
+					}
 				}
 				// Walk the body in source order to preserve declaration
 				// ordering (matches upstream's referencer). Body statements

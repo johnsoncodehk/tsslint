@@ -1,0 +1,31 @@
+{
+	"no-lone-blocks": {
+		"adversarial-dogfood.ts": {
+			"tsslintOnly": [
+				"/adversarial-dogfood.ts:44:2"
+			]
+		}
+	},
+	"no-loop-func": {
+		"adversarial-dogfood.ts": {
+			"eslintOnly": [
+				"/adversarial-dogfood.ts:20:16",
+				"/adversarial-dogfood.ts:23:12"
+			]
+		}
+	},
+	"no-useless-return": {
+		"adversarial-tryflow.ts": {
+			"eslintOnly": [
+				"/adversarial-tryflow.ts:39:3"
+			]
+		}
+	},
+	"prefer-const": {
+		"adversarial-dogfood.ts": {
+			"eslintOnly": [
+				"/adversarial-dogfood.ts:55:11"
+			]
+		}
+	}
+}
