@@ -80,6 +80,42 @@ type DefinitionType =
 	| 'TSEnumMember'
 	| 'TSModuleName';
 
+// _classifyIdentifier dispatch bitmaps. Hot path: ~120k identifiers/file
+// run through this method. Most identifiers (~90%) have a parent.kind that
+// falls through the switch's `default` returning `0b11` (both flags true)
+// — a single Uint8Array lookup short-circuits before entering the switch.
+// A second bitmap covers the large fall-through case body that just does
+// `name === id ? 0 : 0b11` — also collapses out of the switch.
+const _SK_CLASSIFY_BITMAP_SIZE = 400;
+const _CLASSIFY_HANDLED_KINDS = new Uint8Array(_SK_CLASSIFY_BITMAP_SIZE);
+const _CLASSIFY_NAME_SLOT_KINDS = new Uint8Array(_SK_CLASSIFY_BITMAP_SIZE);
+(() => {
+	const SK = ts.SyntaxKind;
+	// Fall-through "name slot" cases — body is `(p as { name }).name === id ? 0 : 0b11`.
+	const nameSlotKinds = [
+		SK.PropertyDeclaration, SK.PropertySignature, SK.PropertyAssignment,
+		SK.MethodDeclaration, SK.MethodSignature, SK.GetAccessor, SK.SetAccessor,
+		SK.EnumMember, SK.FunctionDeclaration, SK.FunctionExpression,
+		SK.ClassDeclaration, SK.ClassExpression, SK.EnumDeclaration,
+		SK.ModuleDeclaration, SK.TypeAliasDeclaration, SK.InterfaceDeclaration,
+		SK.TypeParameter, SK.ImportClause, SK.NamespaceImport,
+		SK.ImportEqualsDeclaration, SK.NamedTupleMember, SK.JsxAttribute,
+	];
+	for (const k of nameSlotKinds) {
+		_CLASSIFY_NAME_SLOT_KINDS[k] = 1;
+		_CLASSIFY_HANDLED_KINDS[k] = 1;
+	}
+	// All other kinds with a dedicated case body in the switch.
+	const otherHandled = [
+		SK.PropertyAccessExpression, SK.QualifiedName, SK.LabeledStatement,
+		SK.BreakStatement, SK.ContinueStatement, SK.MetaProperty,
+		SK.ImportSpecifier,
+		SK.VariableDeclaration, SK.BindingElement, SK.Parameter,
+		SK.ExportSpecifier, SK.TypeReference,
+	];
+	for (const k of otherHandled) _CLASSIFY_HANDLED_KINDS[k] = 1;
+})();
+
 // Module-level caches keyed by ts.Program. Lib symbols (`Object`, `Array`,
 // `String` …) are stable per-program — IDEs share one program across all
 // files, so the same set of lib symbols gets queried over and over. Caching
@@ -667,12 +703,24 @@ export class TsScopeManager {
 	// we had two separate methods (`_isFreeReference`, `_isReferenceableUsage`)
 	// each doing the same switch and reading the same `parent.kind`. ~120k
 	// identifiers/file × 2 switches collapses to 1.
+	//
+	// Hot-path layout:
+	//   1. parent.kind not in `_CLASSIFY_HANDLED_KINDS` → return 0b11 (most
+	//      identifiers, e.g. inside expression positions).
+	//   2. parent.kind in `_CLASSIFY_NAME_SLOT_KINDS` → fall-through "name
+	//      slot" body shared by ~22 declaration-shaped kinds.
+	//   3. otherwise enter the switch for one of ~10 special-shape cases.
 	_classifyIdentifier(id: ts.Identifier): number {
 		const p = id.parent;
 		if (!p) return 0b11;
+		const k = p.kind;
+		if (!_CLASSIFY_HANDLED_KINDS[k]) return 0b11;
+		if (_CLASSIFY_NAME_SLOT_KINDS[k]) {
+			return (p as { name?: ts.Node }).name === id ? 0 : 0b11;
+		}
 		const SK = ts.SyntaxKind;
-		switch (p.kind) {
-			// Pure name slots — both flags follow `name !== id`.
+		switch (k) {
+			// Single-slot kinds — each consults its own slot field.
 			case SK.PropertyAccessExpression:
 				return (p as ts.PropertyAccessExpression).name === id ? 0 : 0b11;
 			case SK.QualifiedName:
@@ -686,29 +734,6 @@ export class TsScopeManager {
 				// `new.target` / `import.meta` — `target` / `meta` are syntactic
 				// markers, not real references.
 				return (p as ts.MetaProperty).name === id ? 0 : 0b11;
-			case SK.PropertyDeclaration:
-			case SK.PropertySignature:
-			case SK.PropertyAssignment:
-			case SK.MethodDeclaration:
-			case SK.MethodSignature:
-			case SK.GetAccessor:
-			case SK.SetAccessor:
-			case SK.EnumMember:
-			case SK.FunctionDeclaration:
-			case SK.FunctionExpression:
-			case SK.ClassDeclaration:
-			case SK.ClassExpression:
-			case SK.EnumDeclaration:
-			case SK.ModuleDeclaration:
-			case SK.TypeAliasDeclaration:
-			case SK.InterfaceDeclaration:
-			case SK.TypeParameter:
-			case SK.ImportClause:
-			case SK.NamespaceImport:
-			case SK.ImportEqualsDeclaration:
-			case SK.NamedTupleMember:
-			case SK.JsxAttribute:
-				return (p as { name?: ts.Node }).name === id ? 0 : 0b11;
 			case SK.ImportSpecifier: {
 				// Import binding — the names are declarations, not references.
 				const e = p as ts.ImportSpecifier;
