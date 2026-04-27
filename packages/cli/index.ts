@@ -355,6 +355,12 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		}
 
 		while (project.currentFileIndex < project.fileNames.length) {
+			// Yield to the event loop between files so the spinner's
+			// `setInterval` (and any other timers) can fire. The loop is
+			// otherwise fully synchronous now that lint runs in-process —
+			// without yielding, the spinner freezes for the entire run.
+			await new Promise<void>(r => setImmediate(r));
+
 			const fileName = project.fileNames[project.currentFileIndex++];
 			addProcessFile(fileName);
 
