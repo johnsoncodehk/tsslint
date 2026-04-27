@@ -256,6 +256,41 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 		`got ${reports.length} reports, first at [${reports[0]?.start}, ${reports[0]?.end}]`);
 }
 
+// 3c. Wrapping nodes (ExportNamed / ExportDefault / TSParameterProperty) must
+//     re-point their inner's `.parent` to the wrapper. typescript-estree's
+//     ESTree shape is `Program → ExportNamedDeclaration → FunctionDeclaration`
+//     — inner FunctionDeclaration's parent is the wrapper, not Program.
+//     Many rules (padding-line-between-statements, no-redeclare, …) gate on
+//     `node.parent.type` being a statement-list parent and silently skip
+//     when it is not — so a wrong parent here causes silent rule misbehavior
+//     (false positives or negatives depending on the rule's intent).
+{
+	const code = `
+		function before() {}
+
+		/** @internal */
+		export function after() {}
+	`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const paddingRule = require(eslintRoot + '/lib/rules/padding-line-between-statements.js');
+	const reports: { start: number; end: number }[] = [];
+	const tsslintRule = compat.convertRule(
+		paddingRule,
+		[{ blankLine: 'always', prev: '*', next: 'function' }],
+		{ id: 'padding-line-between-statements' } as any,
+	);
+	const reportFn: any = (_msg: string, start: number, end: number) => {
+		reports.push({ start, end });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('padding-line: export-wrapped function inherits proper parent (no false positive on JSDoc-then-export)',
+		reports.length === 0,
+		`got ${reports.length} reports`);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the

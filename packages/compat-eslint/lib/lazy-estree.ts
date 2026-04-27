@@ -2818,7 +2818,15 @@ class ExportNamedWrappingNode extends LazyNode {
 		super(tsNode, parent, undefined, false);
 		this.range = range;
 		// Inner gets re-pointed to us in the maps (eager registers the
-		// wrapper as the canonical mapping for the original TS node).
+		// wrapper as the canonical mapping for the original TS node) AND
+		// inner.parent must point to us, not to the original Program /
+		// ModuleBlock — typescript-estree's shape is
+		// `Program → ExportNamedDeclaration → FunctionDeclaration`, so
+		// rules that gate on `node.parent.type` being a statement-list
+		// parent (padding-line-between-statements, no-redeclare, …) rely
+		// on this. ChainExpressionWrappingNode / TSTypeQueryWrappingNode
+		// already do the same.
+		(declaration as { parent: LazyNode }).parent = this;
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 		this.declaration = declaration;
 		const isType = declaration.type === 'TSInterfaceDeclaration'
@@ -2835,6 +2843,7 @@ class ExportDefaultWrappingNode extends LazyNode {
 	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
 		super(tsNode, parent, undefined, false);
 		this.range = range;
+		(declaration as { parent: LazyNode }).parent = this;
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 		this.declaration = declaration;
 	}
@@ -3492,6 +3501,10 @@ class TSParameterPropertyNode extends LazyNode {
 			: undefined;
 		this.override = mods.some(m => m.kind === SK.OverrideKeyword);
 		this.readonly = mods.some(m => m.kind === SK.ReadonlyKeyword);
+		// Re-point the inner parameter's parent to us — same reason as the
+		// Export wrappers above: rules that key off `node.parent.type` need
+		// to see TSParameterProperty here, not the underlying function.
+		(parameter as { parent: LazyNode }).parent = this;
 		this.parameter = parameter;
 	}
 }
