@@ -13,7 +13,9 @@
 		"directory": "packages/compat-eslint"
 	},
 	"scripts": {
-		"bench": "tsc --build && node test/bench/run.js"
+		"bench": "tsc --build && node test/bench/run.js",
+		"test:predicate-coverage": "tsc --build && node test/predicate-coverage.test.js",
+		"test:upstream": "tsc --build && node test/upstream-runner.js"
 	},
 	"devDependencies": {
 		"@types/eslint": "^8.56.10",
