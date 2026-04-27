@@ -291,6 +291,584 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 		`got ${reports.length} reports`);
 }
 
+// 3d. Scope-manager Definition.parent for for-of / for-in / for-init bindings
+//     must point at the standalone VariableDeclaration (ESTree), not at the
+//     enclosing ForOfStatement. ESLint's `no-loop-func` reads
+//     `definition.parent.kind` to skip `let`/`const` block-scoped bindings —
+//     wrong parent → kind === undefined → every block-scoped iteration var
+//     gets reported as unsafe.
+{
+	// `const` binding in a for-of: ESLint says safe, TSSLint must agree.
+	const code = `for (const x of arr) { items.filter(y => y === x); }`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noLoopFunc = require(eslintRoot + '/lib/rules/no-loop-func.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noLoopFunc, [], { id: 'no-loop-func' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('no-loop-func: const for-of binding is block-scoped (safe), no false positive',
+		reports.length === 0,
+		`got ${reports.length} reports`);
+}
+
+// 3e. `materialize()` fallback to GenericTSNode(parent=null) must pass
+//     ConvertContext explicitly. Reachable when bottom-up materialise
+//     gets a ts.Node whose parent chain doesn't reach the cached
+//     SourceFile — happens via scope-manager's `TsDefinition.get node()`
+//     calling `tsToEstreeOrStub(decl)` from inside `naming-convention`'s
+//     `collectUnusedVariables.isExported` helper. Without ctx, `LazyNode`
+//     reads `parent!._ctx` → `Cannot read properties of null (reading
+//     '_ctx')` → silently kills the rule on that file (per-rule error
+//     isolation). Originally surfaced on `src/lib/es5.d.ts` in TS repo.
+//
+//     Direct call into `materialize()` with a detached node — the only
+//     deterministic way to drive the walker into the no-cached-ancestor
+//     branch. (CLI repro depends on a long chain of rule + scope-manager
+//     state that's hard to reduce in-memory.)
+{
+	const lazy = require('../lib/lazy-estree.js') as typeof import('../lib/lazy-estree');
+	const code = `const x = 1;\n`;
+	const { file } = buildProgram(code);
+	const { context } = lazy.convertLazy(file);
+	// A factory-created Identifier has no parent — walking up
+	// `tsNode.parent` from it yields undefined immediately, so the
+	// materialize loop exits with `parent === null` and falls through to
+	// the GenericTSNode(parent=null) branch.
+	const detached = ts.factory.createIdentifier('detached');
+	let threw: unknown;
+	let result: unknown;
+	try {
+		result = lazy.materialize(detached, context);
+	}
+	catch (e) {
+		threw = e;
+	}
+	check('materialize: GenericTSNode fallback receives ctx (no parent!._ctx throw)',
+		threw === undefined,
+		threw ? `threw: ${(threw as Error).message}` : 'unexpected');
+	check('materialize: GenericTSNode fallback returns a usable node',
+		!!result && typeof (result as { type?: unknown }).type === 'string',
+		`got: ${result === undefined ? 'undefined' : typeof result}`);
+}
+
+// 3f. `prefer-const` with array destructuring + mixed reassign — under
+//     ESLint's default `destructuring: 'any'`, each binding is evaluated
+//     independently: bindings never reassigned report individually even
+//     if a sibling IS reassigned. Surfaced on TS repo
+//     `src/compiler/moduleSpecifiers.ts:407` where 4 of 5 bindings should
+//     report. Originally TSSLint reported 0 (acted like `'all'`).
+{
+	// `modulePaths` is reassigned via `||=`; `kind`, `specifiers`,
+	// `moduleSourceFile`, `cache` are read-only → 4 reports expected.
+	const code = `
+function f(): [number, string, object, number[], Set<number> | undefined] {
+	return [0, '', {}, [], undefined];
+}
+function g() {
+	let [kind, specifiers, moduleSourceFile, modulePaths, cache] = f();
+	if (specifiers) return kind;
+	if (!moduleSourceFile) return undefined;
+	modulePaths ||= [];
+	cache?.add(modulePaths.length);
+	return modulePaths.length;
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const preferConst = require(eslintRoot + '/lib/rules/prefer-const.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(preferConst, [], { id: 'prefer-const' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('prefer-const: array destructuring with mixed reassign reports each non-reassigned binding (destructuring: any default)',
+		reports.length === 4,
+		`got ${reports.length} reports: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3g. ECMAScript built-in globals (`undefined`, `Math`, `String`, etc.)
+//     must NOT be reported by `no-undef`. ESLint core registers them via
+//     `addDeclaredGlobals` from `conf/globals.js`'s per-ecmaVersion list;
+//     compat-eslint mirrors this by calling `scopeManager.addGlobals(...)`
+//     in `getEstree`. Without that step, every `undefined`/`Math`/`String`
+//     reference fires `no-undef` (5027 false positives on TS repo
+//     src/compiler before the fix).
+//
+//     `@typescript-eslint/scope-manager`'s lib data merges
+//     es5's `[Math, TYPE_VALUE]` with es2015.core's `[Math, TYPE]`,
+//     ending up TYPE-only — so `isValueVariable=false` and
+//     scope-manager wouldn't add it as a usable global. ESLint's
+//     hard-coded `conf/globals.js` is the source of truth for "which
+//     names should never be `no-undef`'d."
+{
+	const code = `
+const a = undefined;
+const b = Math.PI;
+const c = String(1);
+const d = Array.isArray([]);
+const e = JSON.stringify({});
+const f = parseInt('1', 10);
+const g = NOT_A_REAL_GLOBAL;
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('no-undef: built-in ECMAScript globals (undefined/Math/String/Array/JSON/parseInt) are recognised',
+		reports.length === 1,
+		`expected 1 report (NOT_A_REAL_GLOBAL); got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+	check('no-undef: the one report is for the truly undefined name',
+		reports.length === 1 && reports[0].msg.includes('NOT_A_REAL_GLOBAL'),
+		`got: ${reports[0]?.msg}`);
+}
+
+// 3h. `TsVariable.defs` must filter out declarations that aren't in the
+//     user's source file (e.g. TS lib `.d.ts` declarations for `Map`,
+//     `Set`, `Promise`). `materialize()` can't reach lib-source nodes
+//     because `convertLazy` only pre-registers the user's SourceFile,
+//     so they fall back to `GenericTSNode(parent=null)`. Rules that
+//     read `def.node.parent.type` (naming-convention's
+//     `collectVariables` → `isExported`, no-unused-vars, no-redeclare)
+//     crash on null parent. Upstream models the same symbols as
+//     `ImplicitLibVariable` with empty defs.
+//
+//     Originally surfaced when adding `addGlobals` made eager
+//     `_ensureRefIndex()` populate lib vars in globalScope before
+//     naming-convention's `collectVariables` walked them.
+{
+	// `Map<string>` is a type-only lib reference — scope-manager adds the
+	// Map symbol's TsVariable to globalScope. Without the filter, its
+	// defs[0].node materializes from lib.es2015.collection.d.ts and
+	// returns GenericTSNode(parent=null). naming-convention crashes on
+	// `def.node.parent.type.startsWith('Export')`.
+	const code = `
+const m: Map<string, number> = new Map();
+const x = m.size;
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const tsPlugin = require(require.resolve('@typescript-eslint/eslint-plugin', { paths: [eslintRoot] }));
+	const namingConvention = tsPlugin.rules['naming-convention'];
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(
+		namingConvention,
+		[{ selector: 'typeLike', format: ['PascalCase'] }],
+		{ id: 'naming-convention' } as any,
+	);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	let threw: unknown;
+	try {
+		tsslintRule({ file, report: reportFn, program } as any);
+	}
+	catch (e) {
+		threw = e;
+	}
+	check('TsVariable.defs: lib-source declarations are filtered (no naming-convention crash on def.node.parent.type)',
+		threw === undefined,
+		threw ? `threw: ${(threw as Error).message}` : 'unexpected');
+}
+
+// 3i. `addGlobals` must NOT trigger eager `materialize()` on through
+//     ref identifiers — doing so partially populates the lazy ESTree
+//     wrapper cache (ChainExpression / ExportNamedDeclaration /
+//     TSParameterProperty etc.) before ts-ast-scan walks the AST. The
+//     pre-built wrappers desync CPA's choice-context stack: enter fires
+//     for a wrapper that ts-ast-scan's source-order traversal didn't
+//     produce, so push/pop pair-up breaks and `popChoiceContext` reads
+//     null. Crashes 9 files in TS repo's `src/compiler` with
+//     `TypeError: Cannot read properties of null (reading
+//     'trueForkContext')`.
+//
+//     Fix: read `ref.tsIdentifier.text` directly (pure TS) instead of
+//     `ref.identifier.name` (lazy materialize).
+//
+//     Repro: a control-flow rule registers `onCodePath*` listeners,
+//     forcing the CPA dispatch path. The file contains a logical
+//     expression nested inside an optional chain (or any chain wrapper)
+//     where one operand references a global like `Math` — addGlobals's
+//     re-resolution loop materializes that operand's chain, the wrapper
+//     class registers itself in the cache, and the later traversal
+//     dispatches enter on it out of order.
+{
+	// Minimal pattern: optional chain + logical expression with global
+	// reference. consistent-return triggers CPA dispatch.
+	const code = `
+function f(obj?: { x: { y: string } | undefined }) {
+	if (obj?.x?.y && Math.random() > 0.5) {
+		return obj.x.y;
+	}
+	return undefined;
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const consistentReturn = require(eslintRoot + '/lib/rules/consistent-return.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(consistentReturn, [], { id: 'consistent-return' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	let threw: unknown;
+	try {
+		tsslintRule({ file, report: reportFn, program } as any);
+	}
+	catch (e) {
+		threw = e;
+	}
+	check('addGlobals: no eager materialize, CPA stack stays balanced (no popChoiceContext null crash)',
+		threw === undefined,
+		threw ? `threw: ${(threw as Error).message}` : 'unexpected');
+}
+
+// 3j. `BinaryExpression(operator=',')` must convert to ESTree
+//     `SequenceExpression`, not stay as BinaryExpression. typescript-
+//     estree's `convertBinaryExpression` checks the operator and emits
+//     SequenceExpression with `expressions[]`, flattening nested commas
+//     unless the left side is parenthesized. Without the conversion,
+//     `no-sequences` (listens on `SequenceExpression`) misses every
+//     comma-operator usage — 34 false negatives on TS repo's
+//     `src/compiler` before the fix.
+{
+	// `a, b` BARE (no parens) is reported. With `allowInParentheses`
+	// default-true, parens around the sequence skip the report — so the
+	// repro must avoid parens. `for (init; test; update)` pieces also
+	// need bare commas. The flatten case `a, b, c` ensures the
+	// SequenceExpression has 3 expressions (not nested).
+	const code = `
+let x: number;
+function f() {
+	for (let i = 0, j = 0; i < 10; i++, j++) { x = i, j; }
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noSequences = require(eslintRoot + '/lib/rules/no-sequences.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noSequences, [], { id: 'no-sequences' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	// `x = i, j` — bare comma in expression statement. Not in
+	// allowed-parens skip list, not for-update, no parens → reports.
+	check('SequenceExpression: BinaryExpression(",") converts to SequenceExpression so no-sequences fires',
+		reports.length === 1,
+		`expected 1 report; got ${reports.length}`);
+}
+
+// 3k. `convertRule` must DEEP-merge `meta.defaultOptions` with the
+//     user-supplied options (mirroring ESLint's
+//     `eslint/lib/shared/deep-merge-arrays.js`). Previous behaviour was
+//     element-wise nullish coalescing — when the user passed
+//     `{ functions: false, classes: false }` to `no-use-before-define`,
+//     the rule's other defaults (`enums: true`, `variables: true`,
+//     `ignoreTypeReferences: true`, …) ended up `undefined`. The
+//     `!options.enums && definitionType === 'TSEnumName'` guard then
+//     evaluated `!undefined` as truthy and SKIPPED every const-enum /
+//     type / variable use-before-define case (~376 false negatives on
+//     TS repo `src/compiler` before the fix).
+{
+	const code = `
+namespace M {
+	function f() { return Bar.A; }
+	const enum Bar { A, B }
+	f();
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUseBeforeDef = require(eslintRoot + '/lib/rules/no-use-before-define.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(
+		noUseBeforeDef,
+		// Partial user options — the merge must fill in `enums: true`
+		// from defaultOptions for the rule to fire on the const enum.
+		[{ functions: false, classes: false }],
+		{ id: 'no-use-before-define' } as any,
+	);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('convertRule: deep-merges meta.defaultOptions with user options (no-use-before-define enums fires on const enum)',
+		reports.length === 1 && reports[0].msg.includes("'Bar'"),
+		`expected 1 report for Bar; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3l. `TsVariable.isValueVariable` / `isTypeVariable` must mirror
+//     upstream's `Variable.isValueVariable = defs.some(d =>
+//     d.isVariableDefinition)`. Reading `symbol.flags & SymbolFlags.Value`
+//     directly misses ImportBinding (TS Alias symbols don't have the
+//     Value bit set until alias resolution). `no-shadow`'s
+//     `isTypeValueShadow` then sees the imported value as
+//     `isValueVariable=false`, the function param as
+//     `isValueVariable=true`, decides "type-value mismatch", and SKIPS
+//     the report — 147 false negatives on TS repo `src/compiler`.
+{
+	// Module-level `import { sys }` (value) vs function-param `sys` (value)
+	// — same value/value pair. ESLint reports the shadow. TSSLint
+	// must too.
+	const code = `
+import { sys } from './y.js';
+function f(sys: string) { return sys; }
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('TsVariable.isValueVariable: ImportBinding counts as value (no-shadow fires on import-vs-param value/value shadow)',
+		reports.length === 1 && reports[0].msg.includes("'sys'"),
+		`expected 1 sys shadow; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3m. `TsScope.block` and `TsDefinition.node` must unwrap
+//     `ExportNamedDeclaration` / `ExportDefaultDeclaration` wrappers.
+//     `materialize(FunctionDeclaration)` for an exported function returns
+//     the export wrapper (because it claims the cache slot). ESLint
+//     listens on `FunctionDeclaration` and tests `scope.block === node`
+//     to enter the scope; without unwrapping, comparison fails and
+//     `no-redeclare` skips the entire function body — 111 false
+//     negatives on overloaded exported functions in TS repo
+//     `src/compiler`.
+{
+	// Mirror TS repo's `factory/nodeFactory.ts` createToken pattern:
+	// exported function with overloaded inner function. ESLint reports
+	// the overloads as redeclarations.
+	const code = `
+export function outer() {
+	function inner(x: number): void;
+	function inner(x: string): void;
+	function inner(x: any): void {}
+	return inner;
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noRedecl = require(eslintRoot + '/lib/rules/no-redeclare.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noRedecl, [], { id: 'no-redeclare' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('scope.block / def.node: unwrap export wrappers (no-redeclare fires on overloads inside exported function)',
+		reports.length === 2,
+		`expected 2 inner overload redeclares; got ${reports.length}`);
+}
+
+// 3n. `scope.through` must use `_variableBySymbol` (alias-aware) instead
+//     of comparing `v.symbol === ref.symbol` directly. TS gives synthetic
+//     `arguments` two distinct ts.Symbol instances:
+//     `getSymbolsInScope(body, Variable)` returns one (stored on
+//     `argsVar.symbol`), `getSymbolAtLocation(node)` returns another
+//     (stored on `ref.symbol`). Both bound via `_variableBySymbol` to
+//     the same TsVariable. Without the alias-aware lookup, refs to
+//     `arguments` escape the function scope and report as undefined.
+//     Same shape applies to lib globals (Map / Set / Object): the ref's
+//     symbol differs from the stored lib var's symbol unless we register
+//     it in `_variableBySymbol` at the lib-add site.
+{
+	const code = `
+function f() {
+	if (arguments.length > 0) return 1;
+	const m = new Map<string, number>();
+	return m.size;
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('scope.through: alias-aware lookup resolves synthetic `arguments` and lib `Map` (no-undef false positives)',
+		reports.length === 0,
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3o. `export { foo }` (no `from`) must resolve `foo` to the LOCAL
+//     binding. TS produces an alias Symbol whose declaration is the
+//     ExportSpecifier — distinct from the local symbol. Without using
+//     `getExportSpecifierLocalTargetSymbol`, the ref doesn't resolve and
+//     reports as undefined. Originally surfaced on TS repo's
+//     `_namespaces/ts.ts` (`import * as performance; export
+//     { performance };` reported `performance` undefined).
+{
+	const code = `
+import * as foo from "./foo.js";
+export { foo };
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('export specifier: re-export resolves to local target via getExportSpecifierLocalTargetSymbol',
+		reports.length === 0,
+		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3p. `TsDefinition.parent` for `ImportSpecifier` / `NamespaceImport` /
+//     `ImportClause` must walk up past `NamedImports` / `ImportClause`
+//     to the `ImportDeclaration`. ESTree skips those wrappers — an
+//     `ImportSpecifier`'s parent IS `ImportDeclaration`. no-shadow's
+//     `isTypeValueShadow` reads
+//     `def.parent.specifiers.some(s => s.importKind === 'type')` to
+//     widen the type-value shadow filter when ANY specifier in the
+//     same import is type-only; without unwrapping we hand back
+//     `TSNamedImports`, the check silently fails, and the rule
+//     over-reports param/const shadows of imported names. Surfaced as
+//     19 false positives in TS repo's `src/compiler/utilities.ts`.
+{
+	// `import { length, type SomeType }` makes `length` a value but the
+	// import block has a type-only specifier — no-shadow should skip
+	// the `length` parameter shadow check.
+	const code = `
+import { length, type SomeType } from "./y.js";
+function f(start: number, length: number) { return start + length; }
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('TsDefinition.parent: ImportSpecifier walks to ImportDeclaration so no-shadow filter sees specifiers',
+		reports.length === 0,
+		`expected 0 (any-type-specifier widens skip); got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3q. `TSImportType` qualifier (`import("mod").Foo`,
+//     `import("mod").Foo.Bar`) must NOT be classified as a free
+//     reference. The qualifier names exports of the imported module,
+//     not locals. Upstream's TypeVisitor explicitly skips visiting
+//     them. Without the skip, every `Foo` ends up in
+//     `globalScope.through` → no-undef false positive.
+{
+	const code = `
+function f(): import("inspector").Profiler.Profile { return null as any; }
+function g(): import("inspector").Session { return null as any; }
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('TSImportType qualifier: not classified as a free reference (single + nested QualifiedName)',
+		reports.length === 0,
+		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3r. Conditional type's `infer X` must define `X` in the conditional's
+//     scope. Upstream's `TypeVisitor.TSConditionalType` opens a scope
+//     and `TSInferType` defines the inferred type parameter on it.
+//     Without this, refs to the inferred name escape to globalScope
+//     → no-undef false positive on patterns like
+//     `T extends { name: infer TName } ? TName : never`.
+{
+	const code = `
+type ExtractName<T> = T extends { name: infer TName } ? TName extends string ? TName : never : never;
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('infer type parameter: defined on the enclosing conditional-type scope',
+		reports.length === 0,
+		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+}
+
+// 3s. `BindingElement` with a `ComputedPropertyName` propertyName must
+//     mark the materialised Property as `computed: true`. Pattern:
+//     `const { ["foo-bar"]: x } = obj` — the propertyName is wrapped in
+//     `ComputedPropertyName`. no-useless-computed-key listens on
+//     `Property` and reads `node.computed`; without the flag it never
+//     fires on destructure-with-computed-key.
+{
+	const code = `
+const obj = { "foo-bar": 1 };
+const { ["foo-bar"]: x } = obj;
+console.log(x);
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUselessComputedKey = require(eslintRoot + '/lib/rules/no-useless-computed-key.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUselessComputedKey, [], { id: 'no-useless-computed-key' } as any);
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('BindingElement.computed: ComputedPropertyName propertyName produces Property with computed=true',
+		reports.length === 1,
+		`expected 1 useless-computed-key on the destructure key; got ${reports.length}`);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the
