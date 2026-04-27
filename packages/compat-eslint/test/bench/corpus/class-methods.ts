@@ -56,3 +56,25 @@ export class Container<T> {
 		return c;
 	}
 }
+
+// Getter-only accessor without paired setter — accessor-pairs MUST
+// report (when configured to require both halves).
+export class ReadOnly {
+	private _val = 0;
+	get val(): number { return this._val; }
+}
+
+// Setter-only without getter — same rule, opposite half.
+export class WriteOnly {
+	private _val = 0;
+	set val(v: number) { this._val = v; }
+}
+
+// Get/set interleaved with a method between — grouped-accessor-pairs
+// MUST report (the get and set should be adjacent).
+export class Mixed {
+	private _x = 0;
+	get x(): number { return this._x; }
+	noop(): void {}
+	set x(v: number) { this._x = v; }
+}

@@ -105,4 +105,17 @@ export const RULES: Array<[string, unknown[]?]> = [
 	['no-proto'],
 	['no-constant-condition', [{ checkLoops: false }]],
 	['no-constant-binary-expression'],
+
+	// === class / accessor surface ===
+	['class-methods-use-this'],
+	['accessor-pairs'],
+	['grouped-accessor-pairs'],
+	['constructor-super'],
+	['no-this-before-super'],
+	['no-invalid-this'],
+
+	// === generators / parameter / destructure ===
+	['require-yield'],
+	['no-param-reassign'],
+	['prefer-destructuring'],
 ];

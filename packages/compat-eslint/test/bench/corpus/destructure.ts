@@ -50,3 +50,35 @@ export function loopVar(items: number[]) {
 	}
 	return out;
 }
+
+// Destructure-able member access — prefer-destructuring MUST report
+// (`const x = obj.x` should be `const { x } = obj`).
+export function pickX(obj: { x: number, y: number }): number {
+	const x = obj.x; // prefer-destructuring
+	return x;
+}
+
+// Already destructured — MUST NOT report.
+export function pickY(obj: { x: number, y: number }): number {
+	const { y } = obj;
+	return y;
+}
+
+// Indexed array access — prefer-destructuring with `array: true` reports.
+export function firstOf(arr: number[]): number {
+	const first = arr[0]; // prefer-destructuring (array)
+	return first;
+}
+
+// Parameter reassignment — no-param-reassign MUST report.
+export function clamp(x: number, min: number, max: number): number {
+	if (x < min) x = min;        // no-param-reassign
+	else if (x > max) x = max;   // no-param-reassign
+	return x;
+}
+
+// Reassigning a destructured parameter — same rule, different shape.
+export function nudge({ x, y }: { x: number, y: number }): number {
+	x = x + 1; // no-param-reassign
+	return x + y;
+}
