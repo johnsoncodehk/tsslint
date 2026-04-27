@@ -136,6 +136,19 @@ function _getLibSourceFileMap(program: ts.Program): WeakMap<ts.SourceFile, boole
 	return m;
 }
 
+// Public surface mirrors `@typescript-eslint/scope-manager`'s
+// `ScopeManager` class (`scope-manager/dist/ScopeManager.js`):
+// `scopes`, `globalScope`, `getDeclaredVariables`, `acquire`,
+// plus the boolean accessors (`isGlobalReturn`, `isModule`, …)
+// that ESLint's `Linter` reads at scope-construction time.
+//
+// Construction is intentionally LAZY: the upstream `Referencer`
+// walks the entire AST eagerly to build the scope tree and
+// classify every reference. We split that into a single-pass
+// scope-tree walk (`_buildScopeTree`) plus a deferred reference
+// classification (`_ensureRefIndex`) triggered by the first
+// `scope.through` / `var.references` / `getReferencesFor` read.
+// Most rules only ever read a small subset of refs.
 export class TsScopeManager {
 	scopes: TsScope[] = [];
 	globalScope!: TsScope;
@@ -358,6 +371,12 @@ export class TsScopeManager {
 		}
 	}
 
+	// upstream: `@typescript-eslint/scope-manager/dist/ScopeManager.js`
+	// `getDeclaredVariables(node)`. Returns every variable declared
+	// directly in `node` — for `let [a, b] = ...` that's two vars
+	// (`a`, `b`); for `function f(x, { y }) {}` it's three (`f`, `x`,
+	// `y`). Critical for rules that walk declarations top-down
+	// (prefer-const, no-unused-vars, naming-convention).
 	getDeclaredVariables(node: TSESTree.Node): TsVariable[] {
 		const tsNode = this.astMaps.esTreeNodeToTSNodeMap.get(node);
 		if (!tsNode) return [];
@@ -458,8 +477,15 @@ export class TsScopeManager {
 	isModule() { return this.sourceType === 'module'; }
 	isStrictModeSupported() { return true; }
 
-	// Adds synthesized variables to globalScope and resolves matching through
-	// references against them. Used by ESLint configs that declare globals.
+	// upstream: `eslint-scope/lib/scope-manager.js` `ScopeManager.addGlobals`,
+	// invoked by `eslint/lib/languages/js/source-code/source-code.js`
+	// `addDeclaredGlobals` for every name in `conf/globals.js`'s
+	// `es${ecmaVersion}` set + user `globals` config. Synthesizes a
+	// Variable in globalScope per name and re-resolves any matching
+	// through-refs against it. Compat-eslint's entry point
+	// (`getEstree` in index.ts) calls this with the vendored
+	// `ESLINT_BUILTIN_GLOBALS` (es2026) so `no-undef` doesn't fire on
+	// `undefined` / `Math` / `Array` / etc.
 	addGlobals(names: string[]) {
 		// Skip names that already exist as declared globals — upstream's
 		// addGlobals is a no-op for already-known names (test name:
@@ -517,9 +543,17 @@ export class TsScopeManager {
 		this._implicitGlobals = undefined;
 	}
 
-	// Lazy: a single AST walk classifies every Identifier as either a known
-	// reference (symbol declared in our scope tree) or an unresolved "through"
-	// reference (escapes the file). Both indexes share the walk.
+	// upstream equivalent: `@typescript-eslint/scope-manager/dist/referencer/Referencer.js`
+	// running through every node and calling `currentScope().referenceValue(...)` /
+	// `referenceType(...)`. Upstream is eager — the entire reference graph
+	// is built during scope-tree construction. We split:
+	//   `_buildScopeTree` (constructor) — scopes + parented walk + collects
+	//      `_pendingIdentifiers`.
+	//   `_ensureRefIndex` (this method, lazy) — classifies each pending
+	//      Identifier into resolved references vs `_through` (escapes file).
+	// Triggered on first `scope.through` / `scope.references` /
+	// `var.references` / `getReferencesFor` access. Most rules read
+	// nothing from this graph, paying nothing.
 	_through?: TsReference[];
 	_refIndex?: Map<ts.Symbol, TsReference[]>;
 	_referencesByScope?: Map<TsScope, TsReference[]>;
@@ -734,18 +768,24 @@ export class TsScopeManager {
 		return this._implicitGlobals = Array.from(byName.values()).map(x => x.v);
 	}
 
-	// Classify an Identifier in one switch over `parent.kind`, returning a
-	// 2-bit bitmap:
+	// upstream equivalent: spread across `@typescript-eslint/scope-manager/dist/
+	// referencer/{Referencer,TypeVisitor,ExportVisitor,...}.js`. Each
+	// upstream visitor decides whether to emit `referenceValue`,
+	// `referenceType`, or skip (e.g. TypeVisitor.TSImportType skips the
+	// qualifier; PropertyAccessExpression visitor only descends into
+	// `.object`, never `.property`).
+	//
+	// We collapse those visitor decisions into one branchy switch
+	// keyed by `parent.kind`, returning a 2-bit bitmap:
 	//   bit 0 (FREE_REF=1): identifier is in a reference position (NOT a
 	//     declaration name, property access RHS, label, etc.)
 	//   bit 1 (REF_USAGE=2): identifier should produce an ESLint Reference —
 	//     either a usage (free position) or a declaration with init/iter
 	//     binding that counts as an init Reference.
 	//
-	// Both flags get computed from the same `parent.kind` switch — previously
-	// we had two separate methods (`_isFreeReference`, `_isReferenceableUsage`)
-	// each doing the same switch and reading the same `parent.kind`. ~120k
-	// identifiers/file × 2 switches collapses to 1.
+	// Adding a new case here requires reading the corresponding
+	// upstream visitor to understand whether the identifier should be
+	// classified as a value reference, type reference, or skipped.
 	//
 	// Hot-path layout:
 	//   1. parent.kind not in `_CLASSIFY_HANDLED_KINDS` → return 0b11 (most
@@ -922,10 +962,14 @@ export class TsScopeManager {
 		return this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 	}
 
-	// Like tsToEstree, but if the node hasn't been materialised yet,
-	// returns a synthetic stub with `parent` chained back to the nearest
-	// real ancestor. Used by rule-facing getters where returning undefined
-	// would crash rules that read `.parent.type`.
+	// Compat-eslint specific (no upstream equivalent — typescript-estree
+	// converts the WHOLE program eagerly, so every ts.Node has its
+	// ESTree counterpart from parse time). This is the bridge from
+	// scope-manager's TS-keyed state to the lazy ESTree shim. Every
+	// `def.node` / `def.parent` / `var.identifiers[]` / `ref.identifier`
+	// getter reads through here. Must always return a non-undefined
+	// value for non-undefined input — see `lazy-estree.ts`'s
+	// `materialize()` for the GenericTSNode fallback contract.
 	tsToEstreeOrStub<T extends TSESTree.Node = TSESTree.Node>(tsNode: ts.Node | undefined): T | undefined {
 		if (!tsNode) return undefined;
 		const real = this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
@@ -944,6 +988,14 @@ export class TsScopeManager {
 	}
 }
 
+// Public surface mirrors `@typescript-eslint/scope-manager/dist/scope/`'s
+// per-type Scope classes (BlockScope, FunctionScope, GlobalScope, …).
+// We collapse them into one class with a `type` discriminator.
+//
+// Rule-facing getters: `block`, `set`, `variables`, `references`,
+// `through`, `childScopes`, `upper`, `variableScope`, `isStrict`,
+// `functionExpressionScope`, `implicit`. Each has a corresponding
+// upstream method/getter on ScopeBase.js or one of its subclasses.
 export class TsScope {
 	_variables?: TsVariable[];
 	_childScopes: TsScope[] = [];
@@ -962,6 +1014,11 @@ export class TsScope {
 		if (register) manager._registerScope(tsNode, this);
 	}
 
+	// upstream: `eslint-scope/lib/scope.js` `Scope.block` — the AST
+	// node that owns this scope (FunctionDeclaration / Program /
+	// BlockStatement / etc.). Rules use `scope.block === node` to
+	// match a listener firing to the scope it should enter
+	// (no-redeclare's `checkForBlock`, no-shadow's stack walk).
 	get block(): TSESTree.Node | undefined {
 		const SK = ts.SyntaxKind;
 		const k = this.tsNode.kind;
@@ -1492,11 +1549,12 @@ export class TsScope {
 		return { variables: [], left: [], leftToBeResolved: [], set: new Map() };
 	}
 
+	// upstream: `eslint-scope/lib/scope.js` `Scope.through` — references
+	// that escape this scope after delegation up the parent chain.
+	// `no-undef` reads `globalScope.through` to report unresolved refs.
 	get through(): TsReference[] {
-		// References that escape THIS scope. Includes own refs that don't
-		// resolve to a local, plus child scopes' through refs that also don't
-		// resolve here. Computed lazily; not cached because scope.variables
-		// is mutable via addGlobals.
+		// Computed lazily; not cached because scope.variables is mutable
+		// via addGlobals.
 		// `isLocal` looks up the ref's ts.Symbol via `_variableBySymbol` →
 		// TsVariable, then checks if that var is in this scope. This handles
 		// alias symbols (e.g. synthetic `arguments`: ref.symbol from
@@ -1526,6 +1584,20 @@ export class TsScope {
 	}
 }
 
+// upstream: `@typescript-eslint/scope-manager/dist/variable/Variable.js`
+// (which extends `VariableBase.js`). Public API:
+//   `name`, `scope`, `defs[]`, `identifiers[]`, `references[]`,
+//   `writeable`, `isValueVariable`, `isTypeVariable`.
+//
+// Upstream's `defs` is populated eagerly during the Referencer walk —
+// each declaration occurrence pushes one Definition into `defs`.
+// We materialise on first access from `symbol.declarations` (TS
+// already stores them on the Symbol). The two paths diverge for:
+//   - lib-source declarations: filtered out (see `defs` getter); they
+//     materialise to `GenericTSNode(parent=null)` and crash rules
+//     reading `def.node.parent.type`.
+//   - declaration merging: TS merges multiple decls into one Symbol;
+//     upstream creates one Definition per visit. Same shape.
 export class TsVariable {
 	_defs?: TsDefinition[];
 	_references?: TsReference[];
@@ -1574,6 +1646,9 @@ export class TsVariable {
 	_defsOverride?: TsDefinition[];
 	_identifiersOverride?: TSESTree.Identifier[];
 
+	// upstream: `Variable.js` `defs` (populated eagerly in
+	// `ScopeBase.defineVariable`). One Definition per declaration
+	// occurrence.
 	get defs(): TsDefinition[] {
 		if (this._defsOverride) return this._defsOverride;
 		if (!this._defs) {
@@ -1654,6 +1729,17 @@ export class TsVariable {
 	}
 }
 
+// upstream: `@typescript-eslint/scope-manager/dist/referencer/Reference.js`.
+// Public API:
+//   `identifier` (the Identifier ESTree node), `from` (containing
+//   scope), `resolved` (Variable or null), `init` (declaration init?
+//   tristate true/false/undefined), `writeExpr`,
+//   `isWrite()` / `isRead()` / `isReadWrite()` / `isWriteOnly()` /
+//   `isReadOnly()`, `isValueReference` / `isTypeReference`.
+//
+// Constructed lazily during `_ensureRefIndex` (one per pending
+// Identifier with FREE_REF=1). Upstream constructs eagerly in the
+// Referencer's `referenceValue` / `referenceType` calls.
 export class TsReference {
 	_estreeIdent?: TSESTree.Identifier;
 
@@ -1880,6 +1966,20 @@ export class TsReference {
 	get isTypeReference(): boolean { return !this.isValueReference; }
 }
 
+// upstream: `@typescript-eslint/scope-manager/dist/definition/`'s
+// per-DefinitionType subclasses (VariableDefinition, ParameterDefinition,
+// ImportBindingDefinition, TypeDefinition, …). Each upstream subclass
+// hard-codes `isTypeDefinition` and `isVariableDefinition` booleans —
+// see `Variable.isValueVariable` / `isTypeVariable` for how those
+// flags compose.
+//
+// Public API: `type`, `name`, `node`, `parent`, `rest`,
+// `isTypeDefinition`, `isVariableDefinition`. `node` and `parent`
+// are the rule-facing accessors that flow through
+// `tsToEstreeOrStub` → `materialize`. Both must yield ESTree nodes
+// with proper `.parent` chains; rules read `def.node.parent.type`
+// (no-redeclare, naming-convention's collectVariables, no-shadow's
+// `isTypeValueShadow`) and a null parent here means a crash.
 export class TsDefinition {
 	constructor(
 		readonly manager: TsScopeManager,

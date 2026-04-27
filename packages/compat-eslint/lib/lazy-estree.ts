@@ -394,16 +394,28 @@ function findWrapperRoute(tsNode: ts.Node):
 	return null;
 }
 
-// Bottom-up materialisation: given any TS node anywhere in the source, return
-// (creating if needed) its ESTree counterpart. Walks up via `tsNode.parent`
-// to find / build the ESTree parent chain — at each step the cache lookup
-// keyed on TS node identity is what enables sibling reuse: child_b walking
-// up hits the same tsParent in the cache that child_a's walk-up registered,
-// so both end up with the same parent ESTree instance.
+// No upstream equivalent. typescript-estree converts the entire program
+// eagerly (`convertProgram`); every TS node has its ESTree counterpart
+// before any rule runs. Compat-eslint's lazy shim builds ESTree nodes
+// on demand, in two flows that must converge:
 //
-// The lookup-on-cache property is what makes top-down (parent.children
-// getter calls convertChild per child) and bottom-up (this function) coherent:
-// both paths converge on the same instance when they meet at a shared TS node.
+//   - Top-down: a parent's children getter calls `convertChild(tsChild,
+//     this)` per slot, which builds the child and registers it in
+//     `tsNodeToESTreeNodeMap`.
+//   - Bottom-up: scope-manager's `tsToEstreeOrStub(tsNode)` calls
+//     `materialize(tsNode, ctx)` to walk UP the parent chain looking
+//     for a cached ancestor, then builds DOWN to the requested node.
+//
+// The cache keyed on TS node identity is what makes the two flows
+// converge: child_b walking up hits the same tsParent in the cache
+// that child_a's walk-up (or the parent's top-down build) registered.
+// Both end up with the same parent ESTree instance.
+//
+// The contract: every input ts.Node yields a non-undefined LazyNode.
+// Unsupported kinds + null `convertChild` returns + parent-chain
+// exhaustion all fall back to GenericTSNode (synthetic, with
+// `type: 'TS<KindName>'` for diagnostic visibility). Without that
+// contract rules reading `def.node.parent.type` would crash.
 //
 // Wrapper-routed slots: see `findWrapperRoute`.
 export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
@@ -936,6 +948,12 @@ function wrapChainIfNeeded(
 	return new ChainExpressionWrappingNode(tsNode, parent, result);
 }
 
+// upstream: typescript-estree's `convertChainExpression` (called when
+// any link in the chain has `?.`). Wraps the outermost optional
+// chain in `ChainExpression { expression: <inner> }`. Like
+// ExportNamedWrappingNode this wrapper claims the TS slot in the
+// cache; `unwrapChain` in `ts-ast-scan.ts` re-expands the chain at
+// dispatch time so listeners on the inner type still fire.
 class ChainExpressionWrappingNode extends LazyNode {
 	readonly type = 'ChainExpression' as const;
 	readonly expression: LazyNode;
@@ -1797,6 +1815,12 @@ class BindingAssignmentPatternNode extends LazyNode {
 	}
 }
 
+// upstream: typescript-estree's `convertBindingElement` for
+// ObjectBindingPattern children. Maps to ESTree `Property` (with
+// `value`, optional default via `AssignmentPattern`) for normal
+// bindings, and `RestElement` for `...rest`. ArrayBindingPattern's
+// BindingElement is handled separately at the convertChildInner
+// dispatch (it collapses to the inner Identifier directly).
 class BindingElementNode extends LazyNode {
 	readonly type: 'Property' | 'RestElement';
 	readonly computed: boolean;
@@ -2837,9 +2861,18 @@ class ExpressionWithTypeArgumentsNode extends LazyNode {
 	}
 }
 
-// Wrapper variants used by maybeFixExports. They have an explicit
-// pre-built `declaration` field (the inner declaration) rather than
-// re-converting from a TS node.
+// upstream: `@typescript-eslint/typescript-estree/dist/ts-estree/.../convert.ts`
+// `convertExportDeclaration` creates an
+// `AST_NODE_TYPES.ExportNamedDeclaration` whose `.declaration` is the
+// converted inner statement, with `inner.parent = wrapper` re-pointed.
+//
+// We mirror the SAME shape but the wrapper claims the TS node's slot
+// in `tsNodeToESTreeNodeMap` (so `materialize(declaration_TsNode)`
+// returns the wrapper, not the inner). Rules that listen on the
+// inner type (FunctionDeclaration, ClassDeclaration) use
+// `scope.block === node` and `def.node === node` to identify their
+// scope — `TsScope.block` and `TsDefinition.node` unwrap the
+// wrapper there.
 class ExportNamedWrappingNode extends LazyNode {
 	readonly type = 'ExportNamedDeclaration' as const;
 	readonly attributes: never[] = EMPTY_ARRAY;
@@ -3517,6 +3550,10 @@ class AssignmentPatternNode extends LazyNode {
 	}
 }
 
+// upstream: typescript-estree wraps a class-constructor parameter
+// property (`constructor(public x)`) in `TSParameterProperty { parameter:
+// <Identifier> }`. Like the export wrappers, this wrapper claims the
+// TS slot in the cache.
 class TSParameterPropertyNode extends LazyNode {
 	readonly type = 'TSParameterProperty' as const;
 	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
@@ -3606,11 +3643,17 @@ class BinaryLikeExpressionNode extends LazyNode {
 	}
 }
 
-// `a, b, c` parses as nested `BinaryExpression(operator=',')` in TS but
-// flattens to a single ESTree SequenceExpression with expressions[a,b,c].
-// typescript-estree's convertBinaryExpression flattens left.expressions
-// into the result UNLESS the left side is parenthesized (which preserves
-// the user's grouping). Mirror that flattening here.
+// upstream: `typescript-estree/.../convert.ts` `convertBinaryExpression`
+// dispatches on `operatorToken.kind === SyntaxKind.CommaToken` to
+// `AST_NODE_TYPES.SequenceExpression` and flattens
+// `left.expressions` into the result UNLESS the left operand was
+// `ParenthesizedExpression` (preserves user grouping).
+//
+// `a, b, c` parses as nested `BinaryExpression(',')` in TS but
+// flattens to a single ESTree SequenceExpression with
+// `expressions=[a,b,c]`. ts-ast-scan has a matching predicate that
+// fires only on the outermost (or paren-wrapped) comma BE — see
+// `ts-ast-scan.ts` SequenceExpression predicate.
 class SequenceExpressionNode extends LazyNode {
 	readonly type = 'SequenceExpression' as const;
 	private _expressions?: (LazyNode | null)[];
