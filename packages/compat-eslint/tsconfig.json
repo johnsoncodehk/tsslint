@@ -1,7 +1,7 @@
 {
 	"extends": "../../tsconfig.base.json",
 	"include": ["*", "lib/**/*", "test/**/*"],
-	"exclude": ["test/upstream/**/*"],
+	"exclude": ["test/upstream/**/*", "test/bench/corpus/**/*"],
 	"references": [
 		{ "path": "../types/tsconfig.json" }
 	]

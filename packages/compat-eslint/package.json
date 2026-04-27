@@ -12,6 +12,9 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/compat-eslint"
 	},
+	"scripts": {
+		"bench": "tsc --build && node test/bench/run.js"
+	},
 	"devDependencies": {
 		"@types/eslint": "^8.56.10",
 		"@typescript-eslint/scope-manager": "^8.16.0",
