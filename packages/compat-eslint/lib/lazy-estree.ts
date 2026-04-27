@@ -541,6 +541,30 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 			walker = walker.parent;
 			continue;
 		}
+		// `class B extends A` — typescript-estree elides the
+		// HeritageClause + ExpressionWithTypeArguments wrappers and lifts
+		// the inner expression directly into ClassDeclaration.superClass.
+		// Without skipping these on the bottom-up walk, materialize trips
+		// on HeritageClause's null convertChild result and returns a
+		// GenericTSNode instead of building the inner Identifier — every
+		// rule that walks `parent.type` from a superclass identifier sees
+		// the wrong shape (id-length, no-shadow, etc.). `implements` clauses
+		// stay wrapped in TSClassImplements (typescript-estree's
+		// `convertHeritageClauses`), so we only skip when the heritage
+		// token is `extends`.
+		if (wk === SK.HeritageClause
+			&& (walker as ts.HeritageClause).token === SK.ExtendsKeyword
+		) {
+			walker = walker.parent;
+			continue;
+		}
+		if (wk === SK.ExpressionWithTypeArguments
+			&& walker.parent?.kind === SK.HeritageClause
+			&& (walker.parent as ts.HeritageClause).token === SK.ExtendsKeyword
+		) {
+			walker = walker.parent;
+			continue;
+		}
 		const cachedAnc = tsCache.get(walker);
 		if (cachedAnc) {
 			parent = cachedAnc as LazyNode;
@@ -580,6 +604,14 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 				drillFrom = decl;
 				drillType = (drillFrom as { type?: string }).type;
 			}
+			// Default after Export-unwrap: the child's parent is the inner
+			// declaration, not the Export wrapper. Without this, parameters of
+			// `export function f(x)` resolve `parent` as ExportNamedDeclaration
+			// instead of FunctionDeclaration — id-length, no-param-reassign,
+			// and any rule reading `param.parent.type === 'FunctionDeclaration'`
+			// silently miss. Specific further drills (class body, function
+			// value, etc.) override below.
+			if (drillFrom !== parent) parent = drillFrom;
 			if ((wk === SK.ClassDeclaration || wk === SK.ClassExpression)
 				&& CLASS_MEMBER_KINDS_SET[innermostChild.kind] === 1
 			) {
@@ -630,6 +662,26 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 				if (innermostChild !== namedChild) {
 					const value = (drillFrom as unknown as { value?: LazyNode }).value;
 					if (value) parent = value;
+				}
+			}
+			else if (wk === SK.BindingElement
+				&& (walker as ts.BindingElement).initializer !== undefined
+				&& walker.parent?.kind === SK.ObjectBindingPattern
+				&& innermostChild === (walker as ts.BindingElement).name
+			) {
+				// `const { x = 1 } = o` — typescript-estree wraps the
+				// BindingElement's name in AssignmentPattern when the element
+				// has a default. Top-down build does this via the value getter.
+				// Bottom-up materialize for the inner name lands on the
+				// BindingElement's Property wrapper directly without the
+				// AssignmentPattern between, so id-length /
+				// no-shadow-restricted-names / etc. read parent.type as
+				// 'Property' instead of 'AssignmentPattern' and miss. Trigger
+				// `Property.value` to force the wrapper build, then route
+				// parent through it.
+				const v = (drillFrom as unknown as { value?: LazyNode }).value;
+				if (v && (v as { type?: string }).type === 'AssignmentPattern') {
+					parent = v;
 				}
 			}
 			break;
@@ -706,6 +758,9 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 				inner = decl;
 				innerType = (inner as { type?: string }).type;
 			}
+			// Default after Export-unwrap: child's parent is the inner
+			// declaration, not the wrapper. Mirrors the cache-hit drill.
+			if (inner !== node) next = inner;
 			if ((innerType === 'ClassDeclaration' || innerType === 'ClassExpression')
 				&& CLASS_MEMBER_KINDS_SET[nextChildKind] === 1
 			) {
@@ -2035,6 +2090,14 @@ class BindingAssignmentPatternNode extends LazyNode {
 		const end = tsNode.initializer!.end;
 		this.range = [start, end];
 		this.left = left;
+		// Re-point the inner's parent to us — without this, the bound name
+		// keeps the parent the value getter passed to `convertChildAsPattern`
+		// (the surrounding BindingElement / ArrayPattern), and rules reading
+		// `parent.type === 'AssignmentPattern'` (id-length, no-shadow-
+		// restricted-names, …) for default-value destructure bindings see
+		// the wrapper layer skipped. Same pattern as TSParameterPropertyNode
+		// re-points its `parameter` slot.
+		(left as { parent: LazyNode }).parent = this;
 	}
 	get right() {
 		return this._right ??= convertChild((this._ts as ts.BindingElement).initializer, this);

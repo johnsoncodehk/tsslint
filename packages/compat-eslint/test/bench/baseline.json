@@ -1,4 +1,13 @@
 {
+	"no-redeclare": {
+		"adv2-redeclare.ts": {
+			"eslintOnly": [
+				"/adv2-redeclare.ts:39:5",
+				"/adv2-redeclare.ts:89:18",
+				"/adv2-redeclare.ts:98:8"
+			]
+		}
+	},
 	"no-useless-return": {
 		"adversarial-tryflow.ts": {
 			"eslintOnly": [

@@ -86,6 +86,76 @@ const ESLINT_BUILTIN_GLOBALS: readonly string[] = [
 	'toLocaleString', 'toString', 'undefined', 'unescape', 'valueOf',
 ];
 
+// TypeScript built-in lib type globals. Vendored union of every TYPE-tagged
+// name across `@typescript-eslint/scope-manager`'s `dist/lib/es*.js`
+// (es5 / es2015–es2025 / esnext, including sub-libs like
+// `es2015.collection`, `es2024.regexp`, etc.). Excludes DOM /
+// decorators / scripthost (environment-specific — opting in would
+// silence undef on browser-only names in pure-Node code, which over-
+// silences). Registering these via `addGlobals` makes type-position
+// references to lib utility types (`Record<K, V>`, `Promise<T>`,
+// `Awaited<T>`, …) resolve cleanly even when only a partial lib is
+// loaded — without this, our type-position guard had to silence ALL
+// type-position freeRefs, hiding ESLint's no-undef on real undeclared
+// type names (`NodeJS.ErrnoException`, `Visitor`).
+const TS_LIB_TYPE_GLOBALS: readonly string[] = [
+	'AggregateError', 'AggregateErrorConstructor', 'Array', 'ArrayBuffer',
+	'ArrayBufferConstructor', 'ArrayBufferLike', 'ArrayBufferTypes',
+	'ArrayBufferView', 'ArrayConstructor', 'ArrayIterator', 'ArrayLike',
+	'AsyncDisposable', 'AsyncDisposableStack', 'AsyncDisposableStackConstructor',
+	'AsyncGenerator', 'AsyncGeneratorFunction', 'AsyncGeneratorFunctionConstructor',
+	'AsyncIterable', 'AsyncIterableIterator', 'AsyncIterator', 'AsyncIteratorObject',
+	'Atomics', 'Awaited', 'BigInt', 'BigInt64Array', 'BigInt64ArrayConstructor',
+	'BigIntConstructor', 'BigIntToLocaleStringOptions', 'BigUint64Array',
+	'BigUint64ArrayConstructor', 'Boolean', 'BooleanConstructor',
+	'BuiltinIteratorReturn', 'CallableFunction', 'Capitalize', 'ConcatArray',
+	'ConstructorParameters', 'DataView', 'DataViewConstructor', 'Date',
+	'DateConstructor', 'Disposable', 'DisposableStack', 'DisposableStackConstructor',
+	'Error', 'ErrorConstructor', 'ErrorOptions', 'EvalError', 'EvalErrorConstructor',
+	'Exclude', 'Extract', 'FinalizationRegistry', 'FinalizationRegistryConstructor',
+	'FlatArray', 'Float16Array', 'Float16ArrayConstructor', 'Float32Array',
+	'Float32ArrayConstructor', 'Float64Array', 'Float64ArrayConstructor', 'Function',
+	'FunctionConstructor', 'Generator', 'GeneratorFunction',
+	'GeneratorFunctionConstructor', 'IArguments', 'ImportAssertions',
+	'ImportAttributes', 'ImportCallOptions', 'ImportMeta', 'InstanceType',
+	'Int16Array', 'Int16ArrayConstructor', 'Int32Array', 'Int32ArrayConstructor',
+	'Int8Array', 'Int8ArrayConstructor', 'Intl', 'Iterable', 'IterableIterator',
+	'Iterator', 'IteratorObject', 'IteratorObjectConstructor', 'IteratorResult',
+	'IteratorReturnResult', 'IteratorYieldResult', 'JSON', 'Lowercase', 'Map',
+	'MapConstructor', 'MapIterator', 'Math', 'NewableFunction', 'NoInfer',
+	'NonNullable', 'Number', 'NumberConstructor', 'Object', 'ObjectConstructor',
+	'Omit', 'OmitThisParameter', 'Parameters', 'Partial', 'Pick', 'Promise',
+	'PromiseConstructor', 'PromiseConstructorLike', 'PromiseFulfilledResult',
+	'PromiseLike', 'PromiseRejectedResult', 'PromiseSettledResult',
+	'PromiseWithResolvers', 'PropertyDescriptor', 'PropertyDescriptorMap',
+	'PropertyKey', 'ProxyConstructor', 'ProxyHandler', 'RangeError',
+	'RangeErrorConstructor', 'Readonly', 'ReadonlyArray', 'ReadonlyMap',
+	'ReadonlySet', 'ReadonlySetLike', 'Record', 'ReferenceError',
+	'ReferenceErrorConstructor', 'Reflect', 'RegExp', 'RegExpConstructor',
+	'RegExpExecArray', 'RegExpIndicesArray', 'RegExpMatchArray',
+	'RegExpStringIterator', 'Required', 'ReturnType', 'Set', 'SetConstructor',
+	'SetIterator', 'SharedArrayBuffer', 'SharedArrayBufferConstructor', 'String',
+	'StringConstructor', 'StringIterator', 'SuppressedError',
+	'SuppressedErrorConstructor', 'Symbol', 'SymbolConstructor', 'SyntaxError',
+	'SyntaxErrorConstructor', 'TemplateStringsArray', 'Temporal',
+	'ThisParameterType', 'ThisType', 'TypeError', 'TypeErrorConstructor',
+	'TypedPropertyDescriptor', 'URIError', 'URIErrorConstructor', 'Uint16Array',
+	'Uint16ArrayConstructor', 'Uint32Array', 'Uint32ArrayConstructor', 'Uint8Array',
+	'Uint8ArrayConstructor', 'Uint8ClampedArray', 'Uint8ClampedArrayConstructor',
+	'Uncapitalize', 'Uppercase', 'WeakKey', 'WeakKeyTypes', 'WeakMap',
+	'WeakMapConstructor', 'WeakRef', 'WeakRefConstructor', 'WeakSet',
+	'WeakSetConstructor',
+	// Decorator types (from `lib.decorators*.d.ts`). Includes both stage-3
+	// (ClassMethodDecoratorContext etc.) and legacy (ClassDecorator,
+	// MethodDecorator, PropertyDecorator, ParameterDecorator).
+	'ClassMemberDecoratorContext', 'DecoratorContext', 'DecoratorMetadataObject',
+	'DecoratorMetadata', 'ClassDecoratorContext', 'ClassMethodDecoratorContext',
+	'ClassGetterDecoratorContext', 'ClassSetterDecoratorContext',
+	'ClassAccessorDecoratorContext', 'ClassAccessorDecoratorTarget',
+	'ClassAccessorDecoratorResult', 'ClassFieldDecoratorContext',
+	'ClassDecorator', 'PropertyDecorator', 'MethodDecorator', 'ParameterDecorator',
+];
+
 interface RuleEntry {
 	id: string;
 	eslintRule: ESLint.Rule.RuleModule;
@@ -805,6 +875,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// `TsScopeManager.addGlobals` no-ops names already declared, so
 		// this is safe to always call.
 		scopeManager.addGlobals(ESLINT_BUILTIN_GLOBALS as string[]);
+		scopeManager.addGlobals(TS_LIB_TYPE_GLOBALS as string[]);
 		const sourceCode = new SourceCode({
 			text: file.text,
 			ast: estree as unknown as ESLint.AST.Program,

@@ -754,16 +754,17 @@ export class TsScopeManager {
 					}
 					}
 				}
-				else if (freeRef && this._isValueReferencePosition(node)) {
-					// Symbol present but unknown to lib globals. If the
-					// identifier sits in TYPE position (e.g. a lib utility
-					// type like `Record` or `TemplateStringsArray` when only
-					// a partial lib is loaded — symbol comes back as
-					// Transient with no declarations), upstream's
-					// @typescript-eslint scope-manager routes it through
-					// `referenceType`, not `referenceValue` — no-undef never
-					// sees it. Mirror by skipping the through.push for type
-					// position; only escape value-position refs.
+				else if (freeRef) {
+					// Symbol present but unknown to lib globals. The compat
+					// entry point pre-registers TS lib type names
+					// (Record / Promise / Awaited / …) via `addGlobals`,
+					// so any name that resolves cleanly with @typescript-
+					// eslint scope-manager already lands in
+					// `_variableBySymbol` after this point. Whatever falls
+					// through here is a genuinely unresolved value- or
+					// type-position reference — fire it (matches plain ESLint
+					// no-undef on `NodeJS.ErrnoException` / `Visitor` / typo
+					// names that aren't in the registered lib type set).
 					{
 						const ref = new TsReference(this, node, sym);
 						through.push(ref);
@@ -771,10 +772,8 @@ export class TsScopeManager {
 					}
 				}
 			}
-			else if (freeRef && this._isValueReferencePosition(node)) {
-				// Unresolved (no symbol). Through-only (e.g. typo). Same
-				// type-position guard as above — never fire no-undef on a
-				// type-only identifier.
+			else if (freeRef) {
+				// Unresolved (no symbol). Through-only.
 				const ref = new TsReference(this, node, undefined as any);
 				through.push(ref);
 				recordScope(ref);

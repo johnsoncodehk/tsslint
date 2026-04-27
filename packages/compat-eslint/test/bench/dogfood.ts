@@ -6,7 +6,8 @@
 //   pnpm tsc --build && node packages/compat-eslint/test/bench/dogfood.js
 //
 // What it does, vs. run.ts:
-// - Single ts.Program rooted at a curated set of real files.
+// - Single ts.Program rooted at all real production .ts files in the
+//   monorepo (~30 files).
 // - Same 87 rules from rules.config.ts, no per-file selection.
 // - Per-(rule, file) diff. Crashes are first-class — a thrown
 //   error in either runner is reported separately from a count diff.
@@ -23,21 +24,41 @@ const tsParser = require('@typescript-eslint/parser');
 
 const { RULES } = require('./rules.config.js') as { RULES: Array<[string, unknown[]?]> };
 
-// Repo-root-relative paths for the dogfood corpus. Picked for size /
-// pattern density: lazy-estree.ts is ~4k LOC and exercises every
-// ESTree variant; ts-scope-manager.ts is dense closure / hoisting
-// territory; the rest fill in JSDoc-heavy API surface, CLI flow,
-// and small-file edge shapes.
+// Repo-root-relative paths for the dogfood corpus. All real
+// production .ts files in the monorepo (excluding .d.ts, fixtures,
+// tests, bench, node_modules, worktrees).
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 const DOGFOOD_FILES = [
-	'packages/compat-eslint/lib/lazy-estree.ts',
-	'packages/compat-eslint/lib/ts-scope-manager.ts',
-	'packages/compat-eslint/lib/ts-ast-scan.ts',
-	'packages/compat-eslint/lib/selector-analysis.ts',
-	'packages/compat-eslint/index.ts',
+	'packages/cli/index.ts',
+	'packages/cli/lib/cache.ts',
+	'packages/cli/lib/colors.ts',
+	'packages/cli/lib/fs-cache.ts',
+	'packages/cli/lib/languagePlugins.ts',
+	'packages/cli/lib/render.ts',
 	'packages/cli/lib/worker.ts',
-	'packages/config/lib/tslint-gen.ts',
+	'packages/compat-eslint/index.ts',
+	'packages/compat-eslint/lib/lazy-estree.ts',
+	'packages/compat-eslint/lib/selector-analysis.ts',
+	'packages/compat-eslint/lib/tokens.ts',
+	'packages/compat-eslint/lib/ts-ast-scan.ts',
+	'packages/compat-eslint/lib/ts-scope-manager.ts',
+	'packages/compat-eslint/lib/visitor-keys.ts',
+	'packages/config/index.ts',
 	'packages/config/lib/eslint-gen.ts',
+	'packages/config/lib/eslint-types.ts',
+	'packages/config/lib/eslint.ts',
+	'packages/config/lib/plugins/category.ts',
+	'packages/config/lib/plugins/diagnostics.ts',
+	'packages/config/lib/plugins/ignore.ts',
+	'packages/config/lib/tsl.ts',
+	'packages/config/lib/tslint-gen.ts',
+	'packages/config/lib/tslint-types.ts',
+	'packages/config/lib/tslint.ts',
+	'packages/config/lib/utils.ts',
+	'packages/core/index.ts',
+	'packages/types/index.ts',
+	'packages/typescript-plugin/index.ts',
+	'tsslint.config.ts',
 ];
 
 interface DiagLoc { file: string; line: number; column: number; ruleId: string }

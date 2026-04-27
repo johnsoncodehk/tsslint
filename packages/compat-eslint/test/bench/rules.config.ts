@@ -118,4 +118,16 @@ export const RULES: Array<[string, unknown[]?]> = [
 	['require-yield'],
 	['no-param-reassign'],
 	['prefer-destructuring'],
+
+	// === round-2 adversarial: ES6+ listener-gated and new visit hits ===
+	['prefer-template'],
+	['no-mixed-operators'],
+	['no-class-assign'],
+	['no-import-assign'],
+	['id-length'],
+	['default-param-last'],
+	['no-empty-function'],
+	['no-multi-assign'],
+	['id-denylist', ['callback']],
+	['consistent-this'],
 ];
