@@ -76,7 +76,7 @@ export function createLocal() {
 			return setup(...args);
 		},
 		lint(...args: Parameters<typeof lint>) {
-			return lint(...args)[0];
+			return reattach(lint(...args)[0]);
 		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return hasCodeFixes(...args);
@@ -96,7 +96,7 @@ export function create() {
 		async lint(...[fileName, fix, cache]: Parameters<typeof lint>) {
 			const [res, newCache] = await sendRequest(lint, fileName, fix, cache);
 			Object.assign(cache, newCache); // Sync the cache
-			return res;
+			return reattach(res as { diagnostics: ts.DiagnosticWithLocation[]; texts: Record<string, string> });
 		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return sendRequest(hasCodeFixes, ...args);
@@ -297,52 +297,88 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 		diagnostics = linter.lint(fileName, fileCache);
 	}
 
+	// Strip ts.SourceFile down to a serializable shape AND dedupe the
+	// `text` field across diagnostics — for a checker.ts-sized file
+	// (3.2 MB) with hundreds of diagnostics, embedding `text` per
+	// diagnostic blows JSON.stringify past V8's max string length and
+	// crashes the worker IPC. Instead we send `texts` ONCE at the
+	// message level and let the receiver reattach.
+	const texts: Record<string, string> = {};
+	const getText = language
+		? (fn: string) => texts[fn] ??= getFileText(fn)
+		: (fn: string, srcText: string) => texts[fn] ??= srcText;
 	if (language) {
 		diagnostics = diagnostics
 			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
 			.filter(d => !!d);
-
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: getFileText(diagnostic.file.fileName),
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file
-					? {
-						fileName: info.file.fileName,
-						text: getFileText(info.file.fileName),
-					} as any
-					: undefined,
-			})),
-		}));
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => {
+			(getText as (f: string) => string)(diagnostic.file.fileName);
+			return {
+				...diagnostic,
+				file: { fileName: diagnostic.file.fileName } as any,
+				relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => {
+					if (info.file) (getText as (f: string) => string)(info.file.fileName);
+					return {
+						...info,
+						file: info.file ? { fileName: info.file.fileName } as any : undefined,
+					};
+				}),
+			};
+		});
 	}
 	else {
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: diagnostic.file.text,
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file
-					? {
-						fileName: info.file.fileName,
-						text: info.file.text,
-					} as any
-					: undefined,
-			})),
-		}));
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => {
+			(getText as (f: string, t: string) => string)(diagnostic.file.fileName, diagnostic.file.text);
+			return {
+				...diagnostic,
+				file: { fileName: diagnostic.file.fileName } as any,
+				relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => {
+					if (info.file) (getText as (f: string, t: string) => string)(info.file.fileName, info.file.text);
+					return {
+						...info,
+						file: info.file ? { fileName: info.file.fileName } as any : undefined,
+					};
+				}),
+			};
+		});
 	}
 
-	return [diagnostics, fileCache] as const;
+	return [{ diagnostics, texts }, fileCache] as const;
 }
 
 function getFileText(fileName: string) {
 	return originalHost.getScriptSnapshot(fileName)!.getText(0, Number.MAX_VALUE);
+}
+
+// Reattach `text` to each diagnostic's file from the deduped sidecar map,
+// AND share one file object per fileName so `ts.formatDiagnosticsWithColor-
+// AndContext`'s `lineMap` cache hits across diagnostics. Without sharing,
+// per-diagnostic fresh POJOs (from JSON.parse) defeat the cache and TS
+// recomputes line starts per diagnostic — 87% of CLI wall time on a
+// 3 MB checker.ts before this dedupe.
+function reattach(payload: { diagnostics: ts.DiagnosticWithLocation[]; texts: Record<string, string> }): ts.DiagnosticWithLocation[] {
+	const { diagnostics, texts } = payload;
+	const fileByName = new Map<string, { fileName: string; text: string }>();
+	const getFile = (fileName: string): { fileName: string; text: string } => {
+		let f = fileByName.get(fileName);
+		if (!f) {
+			f = { fileName, text: texts[fileName] ?? '' };
+			fileByName.set(fileName, f);
+		}
+		return f;
+	};
+	for (const d of diagnostics) {
+		(d as { file: ts.SourceFile }).file = getFile(d.file.fileName) as any;
+		const ri = d.relatedInformation;
+		if (ri) {
+			for (const info of ri) {
+				if (info.file) {
+					(info as { file: ts.SourceFile }).file = getFile(info.file.fileName) as any;
+				}
+			}
+		}
+	}
+	return diagnostics;
 }
 
 function hasCodeFixes(fileName: string) {
