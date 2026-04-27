@@ -112,6 +112,7 @@ const _CLASSIFY_NAME_SLOT_KINDS = new Uint8Array(_SK_CLASSIFY_BITMAP_SIZE);
 		SK.ImportSpecifier,
 		SK.VariableDeclaration, SK.BindingElement, SK.Parameter,
 		SK.ExportSpecifier, SK.TypeReference,
+		SK.ImportType,
 	];
 	for (const k of otherHandled) _CLASSIFY_HANDLED_KINDS[k] = 1;
 })();
@@ -361,8 +362,20 @@ export class TsScopeManager {
 		const tsNode = this.astMaps.esTreeNodeToTSNodeMap.get(node);
 		if (!tsNode) return [];
 		const out: TsVariable[] = [];
+		const ts_ = ts;
 		const collect = (decl: ts.Node | undefined) => {
 			if (!decl) return;
+			// VariableDeclaration / Parameter `.name` may be a binding pattern
+			// (`let [a, b] = ...`, `function f({ x, y }) {}`) — symbol lives on
+			// each leaf Identifier, not on the pattern container. Walk via
+			// `_collectBinding` so destructured bindings are emitted.
+			// `prefer-const` and friends call `getDeclaredVariables(letNode)`
+			// to enumerate scoped bindings; without this, the rule sees an
+			// empty array for any destructuring declaration.
+			if (ts_.isVariableDeclaration(decl) || ts_.isParameter(decl)) {
+				this._collectBinding(decl.name, out);
+				return;
+			}
 			let sym: ts.Symbol | undefined = (decl as { symbol?: ts.Symbol }).symbol;
 			if (!sym) {
 				const nameNode = (decl as { name?: ts.Node }).name;
@@ -370,7 +383,6 @@ export class TsScopeManager {
 			}
 			if (sym) out.push(this._getOrCreateVariable(sym));
 		};
-		const ts_ = ts;
 		if (ts_.isVariableStatement(tsNode)) {
 			for (const d of tsNode.declarationList.declarations) collect(d);
 		}
@@ -469,16 +481,26 @@ export class TsScopeManager {
 		this._ensureRefIndex();
 		const through = this._through!;
 		const refs = this._refIndex!;
+		// Build a name→fakeVar lookup once (was an O(N×M) scan inside the
+		// per-ref loop). Only the fake vars we just added qualify
+		// (declarations.length === 0); real lib vars stay as-is.
+		const fakeByName = new Map<string, TsVariable>();
+		for (const v of this.globalScope.variables) {
+			if (v.symbol.declarations?.length === 0) fakeByName.set(v.name, v);
+		}
 		const remaining: TsReference[] = [];
 		for (const ref of through) {
-			const name = ref.identifier.name;
-			let added: TsVariable | undefined;
-			for (const v of this.globalScope.variables) {
-				if (v.name === name && v.symbol.declarations?.length === 0) {
-					added = v;
-					break;
-				}
-			}
+			// Read name from the ts.Identifier directly — `ref.identifier.name`
+			// would trigger `tsToEstreeOrStub` → `materialize`, which walks
+			// up the parent chain and may eagerly construct wrapper-class
+			// ESTree nodes (ChainExpression, ExportNamedDeclaration). ts-ast-
+			// scan's later traversal then sees those wrappers in the lazy
+			// cache and dispatches enter/leave on them out of source order
+			// — desyncing CPA's choice-context stack and crashing
+			// `popChoiceContext` on null. Reading `tsIdentifier.text` is
+			// pure and avoids the eager materialize.
+			const name = ref.tsIdentifier.text;
+			const added = fakeByName.get(name);
 			if (!added) {
 				remaining.push(ref);
 				continue;
@@ -580,6 +602,20 @@ export class TsScopeManager {
 				const valSym = checker.getShorthandAssignmentValueSymbol(parent);
 				if (valSym) sym = valSym;
 			}
+			// `export { x }` (no `from`): TS produces an alias Symbol whose
+			// declaration is the ExportSpecifier itself — distinct from the
+			// LOCAL symbol the import / let / fn declared. `getSymbolAtLocation`
+			// returns the alias; the rule needs the local target so the ref
+			// resolves into module scope. `getExportSpecifierLocalTargetSymbol`
+			// follows the alias to the original local. Without this, every
+			// `export { foo }` re-export reports `foo` as undefined.
+			if (parent && pk === SK.ExportSpecifier && (parent as ts.ExportSpecifier).name === node) {
+				const exportDecl = parent.parent.parent as ts.ExportDeclaration;
+				if (!exportDecl.moduleSpecifier) {
+					const localSym = checker.getExportSpecifierLocalTargetSymbol(parent as ts.ExportSpecifier);
+					if (localSym) sym = localSym;
+				}
+			}
 			if (sym && variableBySymbol.has(sym)) {
 				// Resolved reference — add to per-symbol index (only when this
 				// position counts as a reference, e.g. usage or init).
@@ -611,6 +647,13 @@ export class TsScopeManager {
 						if (!v) {
 							v = new TsVariable(this, sym);
 							this._libVariableBySymbol.set(sym, v);
+							// Also register in `_variableBySymbol` so
+							// `scope.through`'s alias-aware lookup finds the
+							// var by ref.symbol. Without this, lib vars (Map,
+							// Set, ...) don't show up as local in
+							// globalScope and refs escape → no-undef false
+							// positives.
+							variableBySymbol.set(sym, v);
 							this.globalScope._addLibVariable(v);
 						}
 						let arr = refs.get(sym);
@@ -723,8 +766,18 @@ export class TsScopeManager {
 			// Single-slot kinds — each consults its own slot field.
 			case SK.PropertyAccessExpression:
 				return (p as ts.PropertyAccessExpression).name === id ? 0 : 0b11;
-			case SK.QualifiedName:
-				return (p as ts.QualifiedName).right === id ? 0 : 0b11;
+			case SK.QualifiedName: {
+				if ((p as ts.QualifiedName).right === id) return 0;
+				// `import("mod").A.B.C` — every identifier in the qualifier
+				// chain references an export of the imported module, NOT a
+				// local. Walk up through QualifiedName ancestors; if we hit
+				// an ImportType, skip the whole chain (matches upstream's
+				// `TypeVisitor.TSImportType` skipping the qualifier).
+				let cur: ts.Node | undefined = p;
+				while (cur && cur.kind === SK.QualifiedName) cur = cur.parent;
+				if (cur && cur.kind === SK.ImportType) return 0;
+				return 0b11;
+			}
 			case SK.LabeledStatement:
 				return (p as ts.LabeledStatement).label === id ? 0 : 0b11;
 			case SK.BreakStatement:
@@ -809,6 +862,17 @@ export class TsScopeManager {
 					&& (p.parent.kind === SK.AsExpression || p.parent.kind === SK.TypeAssertionExpression)
 					&& (p.parent as ts.AsExpression | ts.TypeAssertion).type === p
 				) return 0b10;
+				return 0b11;
+
+			case SK.ImportType:
+				// `import("module").Foo` — `Foo` is the qualifier of an
+				// EntityName referencing an export of the imported module,
+				// NOT a local reference. Upstream's TypeVisitor explicitly
+				// skips visiting the qualifier (see
+				// `@typescript-eslint/scope-manager/.../TypeVisitor.ts`
+				// `TSImportType`). Without this skip, the qualifier ends up
+				// in `globalScope.through` → `no-undef` reports it.
+				if ((p as ts.ImportTypeNode).qualifier === id) return 0;
 				return 0b11;
 
 			default:
@@ -925,7 +989,23 @@ export class TsScope {
 		if (this.type === 'with' && this.tsNode.parent) {
 			return this.manager.tsToEstreeOrStub(this.tsNode.parent);
 		}
-		return this.manager.tsToEstreeOrStub(this.tsNode);
+		const result = this.manager.tsToEstreeOrStub<TSESTree.Node>(this.tsNode);
+		// `export function f` / `export default function f` / `export class C`:
+		// materialize wraps the inner declaration in
+		// ExportNamedDeclaration / ExportDefaultDeclaration. ESLint listens
+		// on the inner FunctionDeclaration / ClassDeclaration and tests
+		// `scope.block === node` to decide whether to enter the scope —
+		// so scope.block must point at the inner, not the wrapper.
+		// Unwrap when this scope's tsNode is the inner declaration but
+		// materialize yielded the wrapper.
+		if (result && (
+			(result as { type?: string }).type === 'ExportNamedDeclaration'
+			|| (result as { type?: string }).type === 'ExportDefaultDeclaration'
+		)) {
+			const inner = (result as { declaration?: TSESTree.Node }).declaration;
+			if (inner) return inner;
+		}
+		return result;
 	}
 
 	get variableScope(): TsScope {
@@ -1185,12 +1265,28 @@ export class TsScope {
 				}
 				break;
 			}
-			case 'type':
-			case 'conditional-type': {
+			case 'type': {
 				const tps = (this.tsNode as { typeParameters?: ts.NodeArray<ts.TypeParameterDeclaration> }).typeParameters;
 				if (tps) {
 					for (const tp of tps) push(symOf(tp));
 				}
+				break;
+			}
+			case 'conditional-type': {
+				// `T extends ... infer U ...` — `infer U` introduces `U`
+				// into the conditional type's scope, accessible only from
+				// the trueType (and any nested conditionals therein).
+				// Upstream's TypeVisitor.TSInferType defines the type
+				// parameter on the enclosing conditional scope. Walk the
+				// extendsType and collect every InferTypeNode's name.
+				const cond = this.tsNode as ts.ConditionalTypeNode;
+				const collectInfer = (n: ts.Node) => {
+					if (ts_.isInferTypeNode(n)) {
+						push(symOf(n.typeParameter));
+					}
+					ts_.forEachChild(n, collectInfer);
+				};
+				if (cond.extendsType) collectInfer(cond.extendsType);
 				break;
 			}
 			case 'mapped-type': {
@@ -1401,17 +1497,29 @@ export class TsScope {
 		// resolve to a local, plus child scopes' through refs that also don't
 		// resolve here. Computed lazily; not cached because scope.variables
 		// is mutable via addGlobals.
+		// `isLocal` looks up the ref's ts.Symbol via `_variableBySymbol` →
+		// TsVariable, then checks if that var is in this scope. This handles
+		// alias symbols (e.g. synthetic `arguments`: ref.symbol from
+		// `getSymbolAtLocation` differs from `v.symbol` from
+		// `getSymbolsInScope`, but both map to the same var). Lib vars and
+		// the addGlobals fakes register in `_variableBySymbol` too, so
+		// type-position refs to `Map` / `Set` / `Object` resolve to global.
 		const out: TsReference[] = [];
-		const localSyms = new Set<ts.Symbol>();
-		for (const v of this.variables) localSyms.add(v.symbol);
+		const localVars = new Set<TsVariable>();
+		for (const v of this.variables) localVars.add(v);
+		const isLocal = (sym: ts.Symbol | undefined) => {
+			if (!sym) return false;
+			const v = this.manager._variableBySymbol.get(sym);
+			return v !== undefined && localVars.has(v);
+		};
 		for (const ref of this.references) {
-			if (!ref.symbol || !localSyms.has(ref.symbol)) out.push(ref);
+			if (!isLocal(ref.symbol)) out.push(ref);
 		}
 		for (const child of this.childScopes) {
 			// Skip function-expression-name (its lookup is the wrapped name's
 			// own scope and not really visible to ancestors).
 			for (const ref of child.through) {
-				if (!ref.symbol || !localSyms.has(ref.symbol)) out.push(ref);
+				if (!isLocal(ref.symbol)) out.push(ref);
 			}
 		}
 		return out;
@@ -1470,7 +1578,19 @@ export class TsVariable {
 		if (this._defsOverride) return this._defsOverride;
 		if (!this._defs) {
 			const decls = this.symbol.declarations ?? [];
-			this._defs = decls.map(d => new TsDefinition(this.manager, this, d));
+			// Filter out declarations that aren't in the user's source file
+			// (e.g. TS lib declarations for `Map`, `Set`, `Promise`).
+			// `materialize()` can't reach those — convertLazy only
+			// pre-registers the user's SourceFile — so they fall back to
+			// `GenericTSNode(parent=null)`. Rules that read
+			// `def.node.parent.type` (naming-convention's `collectVariables`,
+			// no-unused-vars, no-redeclare) crash on the null parent.
+			// Upstream models the same symbols as `ImplicitLibVariable` with
+			// no defs; mirror that for lib-sourced declarations.
+			const userFile = this.manager.tsFile;
+			this._defs = decls
+				.filter(d => d.getSourceFile() === userFile)
+				.map(d => new TsDefinition(this.manager, this, d));
 		}
 		return this._defs;
 	}
@@ -1507,13 +1627,30 @@ export class TsVariable {
 	}
 
 	get isValueVariable(): boolean {
-		const ts_ = ts;
-		return (this.symbol.flags & ts_.SymbolFlags.Value) !== 0;
+		// Match upstream's `Variable.isValueVariable`: `defs.some(d =>
+		// d.isVariableDefinition)`. Definition flags per upstream's
+		// per-DefinitionType subclasses:
+		//   ImportBinding / Variable / TSEnumName / FunctionName / Parameter /
+		//   CatchClause / TSModuleName / ClassName / TSEnumMember /
+		//   ImplicitGlobalVariable → isVariableDefinition = true
+		//   Type → isVariableDefinition = false
+		// Reading symbol.flags directly misses ImportBinding (TS marks aliases
+		// without `Value` until you resolve the alias); walking defs[] gives
+		// the same answer no-shadow's `isTypeValueShadow` expects.
+		if (this.defs.length === 0) return true; // implicit lib var (no static info)
+		return this.defs.some(d => d.type !== 'Type');
 	}
 
 	get isTypeVariable(): boolean {
-		const ts_ = ts;
-		return (this.symbol.flags & ts_.SymbolFlags.Type) !== 0;
+		// Match upstream's `Variable.isTypeVariable`: `defs.some(d =>
+		// d.isTypeDefinition)`. Per upstream:
+		//   ImportBinding / TSEnumName / Type / TSModuleName / ClassName /
+		//   TSEnumMember → isTypeDefinition = true
+		//   Variable / FunctionName / Parameter / CatchClause /
+		//   ImplicitGlobalVariable → isTypeDefinition = false
+		if (this.defs.length === 0) return true; // implicit lib var
+		const TYPE_DEF_TYPES = new Set(['ImportBinding', 'TSEnumName', 'Type', 'TSModuleName', 'ClassName', 'TSEnumMember']);
+		return this.defs.some(d => TYPE_DEF_TYPES.has(d.type));
 	}
 }
 
@@ -1824,7 +1961,20 @@ export class TsDefinition {
 		if (target && ts_.isVariableDeclaration(target) && target.parent && ts_.isCatchClause(target.parent)) {
 			target = target.parent;
 		}
-		return this.manager.tsToEstreeOrStub(target);
+		const result = this.manager.tsToEstreeOrStub<TSESTree.Node>(target);
+		// Unwrap export wrapper: `export function f` materializes to
+		// ExportNamedDeclaration containing the FunctionDeclaration. ESLint
+		// expects `def.node` to be the inner declaration so rules like
+		// `no-shadow` (`isFunctionTypeParameterNameValueShadow` checks
+		// `def.node.type === 'TSDeclareFunction'`) work on overload sigs.
+		if (result && (
+			(result as { type?: string }).type === 'ExportNamedDeclaration'
+			|| (result as { type?: string }).type === 'ExportDefaultDeclaration'
+		)) {
+			const inner = (result as { declaration?: TSESTree.Node }).declaration;
+			if (inner) return inner;
+		}
+		return result;
 	}
 
 	get parent(): TSESTree.Node | undefined {
@@ -1842,11 +1992,38 @@ export class TsDefinition {
 		}
 		// VariableDeclaration → parent is VariableDeclarationList → parent is
 		// VariableStatement (which corresponds to ESTree VariableDeclaration).
+		// In for-of / for-in / for-init position the VariableDeclarationList
+		// itself IS the ESTree VariableDeclaration (mapped via
+		// VariableDeclarationListAsNode), so the def's parent must point at
+		// the list — NOT at the enclosing ForOfStatement / ForInStatement /
+		// ForStatement. ESLint's no-loop-func reads `definition.parent.kind`
+		// to skip block-scoped `let` / `const` bindings; getting this wrong
+		// produces false positives on every block-scoped iteration variable.
 		if (target && ts_.isVariableDeclaration(target)) {
 			const list = target.parent;
 			if (list && ts_.isVariableDeclarationList(list)) {
-				return this.manager.tsToEstreeOrStub(list.parent);
+				const owner = list.parent;
+				if (owner && ts_.isVariableStatement(owner)) {
+					return this.manager.tsToEstreeOrStub(owner);
+				}
+				return this.manager.tsToEstreeOrStub(list);
 			}
+		}
+		// Import bindings: TS nests `ImportSpecifier → NamedImports →
+		// ImportClause → ImportDeclaration`, but ESTree skips NamedImports
+		// and ImportClause — `ImportSpecifier.parent` IS `ImportDeclaration`.
+		// no-shadow's `isTypeValueShadow` reads
+		// `def.parent.type === 'ImportDeclaration'` and
+		// `def.parent.specifiers.some(s => s.importKind === 'type')` to
+		// detect any-specifier-type imports; without unwrapping we hand
+		// back the synthetic `TSNamedImports` and the check silently
+		// fails → 19 no-shadow false positives in TS repo's
+		// `src/compiler/utilities.ts` whose import block has type-only
+		// specifiers.
+		if (target && (ts_.isImportSpecifier(target) || ts_.isNamespaceImport(target) || ts_.isImportClause(target))) {
+			let cur: ts.Node = target.parent;
+			while (cur && !ts_.isImportDeclaration(cur)) cur = cur.parent;
+			if (cur) return this.manager.tsToEstreeOrStub(cur);
 		}
 		return this.manager.tsToEstreeOrStub(target?.parent);
 	}
