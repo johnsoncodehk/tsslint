@@ -239,10 +239,21 @@ function runSharedTraversal(
 				return sourceCode;
 			},
 			settings: {},
-			parserOptions: {},
+			parserOptions: { ecmaVersion: 2026 as const, sourceType: 'module' as const },
 			// Provide nested parserOptions to avoid TypeError in rules that read
 			// `context.languageOptions.parserOptions.X` without a guard.
-			languageOptions: { parserOptions: {} },
+			// Set `ecmaVersion: 2026` (matches `ESLINT_BUILTIN_GLOBALS` set we
+			// register) and `sourceType: 'module'` — many rules gate listener
+			// registration on `ecmaVersion >= 2015` for ES6-only nodes
+			// (BlockStatement:exit + VariableDeclaration on no-lone-blocks,
+			// const/let detection, generator/async checks). Without this, those
+			// rules degrade to a pre-ES6 dispatch that misses block-scoped
+			// declarations and over-reports lone blocks.
+			languageOptions: {
+				parserOptions: {},
+				ecmaVersion: 2026 as const,
+				sourceType: 'module' as const,
+			},
 			parserPath: undefined,
 			id: entry.id,
 			options: entry.options,

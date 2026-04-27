@@ -258,7 +258,17 @@ const PREDICATES: Record<string, Predicate> = {
 	'DebuggerStatement': n => n.kind === SK.DebuggerStatement,
 
 	// --- Variables -----------------------------------------------------
-	'VariableDeclaration': n => n.kind === SK.VariableStatement, // ESTree flips the names
+	// ESTree flips the names: ESTree's `VariableDeclaration` corresponds
+	// to TS's `VariableStatement` (when used as a statement) OR to TS's
+	// `VariableDeclarationList` (when used as the init of a for-loop or
+	// the left of a for-in/of). The structural-skip above drops the
+	// VariableDeclarationList ONLY when its parent is a VariableStatement
+	// — in for-loop positions it has no VariableStatement wrapper, so
+	// fire here. Without this, `for (let key in obj)` doesn't dispatch a
+	// VariableDeclaration enter event, and prefer-const's
+	// `VariableDeclaration` listener never sees the for-in let binding.
+	'VariableDeclaration': n => n.kind === SK.VariableStatement
+		|| (n.kind === SK.VariableDeclarationList && n.parent?.kind !== SK.VariableStatement),
 	'VariableDeclarator': n => n.kind === SK.VariableDeclaration,
 
 	// --- Functions / Classes ------------------------------------------
@@ -266,7 +276,22 @@ const PREDICATES: Record<string, Predicate> = {
 	// `declare function foo();` — body-less. lazy-estree's
 	// FunctionDeclarationNode emits TSDeclareFunction in this case.
 	'TSDeclareFunction': n => n.kind === SK.FunctionDeclaration && (n as ts.FunctionDeclaration).body === undefined,
-	'FunctionExpression': n => n.kind === SK.FunctionExpression,
+	// FunctionExpression matches `SK.FunctionExpression` directly AND every
+	// TS kind whose chain expansion exposes a FunctionExpression inner —
+	// class members (MethodDeclaration / Constructor / GetAccessor /
+	// SetAccessor) materialize as MethodDefinition{value: FunctionExpression}
+	// (or TSAbstractMethodDefinition{value: TSEmptyBodyFunctionExpression}).
+	// Object-literal methods/accessors materialize as Property{value:
+	// FunctionExpression}. Without including these source kinds in the
+	// predicate, a rule that only registers `FunctionExpression` (e.g.
+	// no-loop-func, prefer-arrow-callback) gates visit() out and never
+	// fires on object/class method bodies — even though the chain expansion
+	// would emit the FunctionExpression enter event.
+	'FunctionExpression': n => n.kind === SK.FunctionExpression
+		|| n.kind === SK.MethodDeclaration
+		|| n.kind === SK.Constructor
+		|| n.kind === SK.GetAccessor
+		|| n.kind === SK.SetAccessor,
 	'ArrowFunctionExpression': n => n.kind === SK.ArrowFunction,
 	'ClassDeclaration': n => n.kind === SK.ClassDeclaration,
 	'ClassExpression': n => n.kind === SK.ClassExpression,
@@ -609,9 +634,10 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'LabeledStatement': [SK.LabeledStatement],
 	'EmptyStatement': [SK.EmptyStatement],
 	'DebuggerStatement': [SK.DebuggerStatement],
-	'VariableDeclaration': [SK.VariableStatement],
+	// VariableDeclaration is no longer simple (parent check on
+	// VariableDeclarationList). The function predicate above handles it.
 	'VariableDeclarator': [SK.VariableDeclaration],
-	'FunctionExpression': [SK.FunctionExpression],
+	'FunctionExpression': [SK.FunctionExpression, SK.MethodDeclaration, SK.Constructor, SK.GetAccessor, SK.SetAccessor],
 	'ArrowFunctionExpression': [SK.ArrowFunction],
 	'ClassDeclaration': [SK.ClassDeclaration],
 	'ClassExpression': [SK.ClassExpression],
