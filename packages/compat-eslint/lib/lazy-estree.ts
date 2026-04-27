@@ -488,15 +488,26 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	// tsNode, outermost is the closest ts.Node to the cached ancestor.
 	// Iterate from the outer end inward, threading `parent` through.
 	//
-	// Inline convertChild's body: every toBuild element is a confirmed
-	// cache miss (the ancestor walk above breaks on the first cache hit),
-	// so the cache lookup convertChild does on entry would always miss
-	// here. Skip it and call convertChildInner / maybeFixExports directly.
+	// Cache check between iterations: convertChildInner can collapse a
+	// wrapper kind into its inner (e.g. ArrayBindingPattern's
+	// `BindingElement` returns `convertChild(be.name, parent)`, which
+	// registers the inner Identifier in `tsNodeToESTreeNodeMap`). The
+	// next iteration's child IS that inner Identifier — without the
+	// cache check, we'd build a SECOND Identifier wrapping the first,
+	// breaking `ref.identifier.parent.type` (parent reads as 'Identifier'
+	// instead of 'ArrayPattern' / 'ObjectPattern'). prefer-const's
+	// `getDestructuringHost` walks `id.parent` looking for a Pattern
+	// type; the duplicate Identifier broke that walk and silently
+	// dropped every destructure-binding report.
+	const tsCache2 = ctx.maps.tsNodeToESTreeNodeMap;
 	for (let i = toBuild.length - 1; i >= 0; i--) {
 		const child = toBuild[i];
-		let node = convertChildInner(child, parent);
-		if (node && EXPORTABLE_KINDS.has(child.kind)) {
-			node = maybeFixExports(child, node, parent);
+		let node = tsCache2.get(child) as LazyNode | undefined;
+		if (!node) {
+			node = convertChildInner(child, parent) ?? undefined;
+			if (node && EXPORTABLE_KINDS.has(child.kind)) {
+				node = maybeFixExports(child, node, parent) ?? undefined;
+			}
 		}
 		if (!node) {
 			// convertChild returns null for kinds with no ESTree counterpart
