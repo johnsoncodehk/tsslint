@@ -814,7 +814,17 @@ export function tsScanTraverse(
 	// parens' child (the same inner) and would fire enter/leave a second
 	// time on the same target. Skip when materialise yields the same
 	// ESTree we just entered.
-	const visit = (node: ts.Node, parentTarget: unknown): void => {
+	// `embedAfter`: an extra TS child to visit INSIDE this node's enter/
+	// leave bracket, just before leaving. Used to inject typeAnnotation
+	// from a parent ts.ParameterDeclaration / ts.VariableDeclaration into
+	// the inner Identifier/Pattern's bracket — typescript-eslint visitor
+	// keys put `typeAnnotation` as a child of Identifier/ArrayPattern/
+	// ObjectPattern, but the TS layout has `type` as a sibling of `name`
+	// on the parent. Without re-ordering, CodePathAnalyzer's fork-context
+	// stack on AssignmentPattern (default value) goes negative when the
+	// parameter has both a type and a default — `popForkContext` reads a
+	// null `replaceHead`. Repro: `constructor(public x: number = 0)`.
+	const visit = (node: ts.Node, parentTarget: unknown, embedAfter?: ts.Node): void => {
 		// Structural-only TS kinds the ESTree shape collapses away. ESLint
 		// rules and CodePathAnalyzer never see them — visiting their
 		// materialised counterpart would either re-emit the parent's
@@ -829,7 +839,16 @@ export function tsScanTraverse(
 			|| k === SK.CaseBlock
 			|| k === SK.NamedImports
 			|| (k === SK.VariableDeclarationList && node.parent?.kind === SK.VariableStatement)
-			|| (k === SK.ImportClause && (node as ts.ImportClause).name === undefined)) {
+			|| (k === SK.ImportClause && (node as ts.ImportClause).name === undefined)
+			// A `ts.Block` directly inside `ts.ClassStaticBlockDeclaration` has
+			// no ESTree counterpart — typescript-estree's `StaticBlock` IS the
+			// block, with `body: Statement[]` directly. Without skipping, the
+			// inner Block fires a BlockStatement enter/leave whose ESTree
+			// `parent` reads as 'StaticBlock', which no-lone-blocks then
+			// reports as a redundant nested block. Recurse into the Block's
+			// children with the StaticBlock as the parent target so each
+			// statement appears as a direct child of StaticBlock.
+			|| (k === SK.Block && node.parent?.kind === SK.ClassStaticBlockDeclaration)) {
 			tsForEachChild(node, child => visit(child, parentTarget));
 			return;
 		}
@@ -900,7 +919,31 @@ export function tsScanTraverse(
 				}
 			}
 		}
-		tsForEachChild(node, child => visit(child, nextParent));
+		// Custom child iteration for kinds where typeAnnotation belongs
+		// inside the inner Identifier/Pattern (visitor-key shape) rather
+		// than as a sibling (TS-AST shape). For those, visit `name` with
+		// `type` embedded as a trailing child, and skip `type` at this
+		// level. Other slots iterate normally via tsForEachChild.
+		if (k === SK.Parameter && (node as ts.ParameterDeclaration).type && (node as ts.ParameterDeclaration).name) {
+			const param = node as ts.ParameterDeclaration;
+			if (param.modifiers) {
+				for (const m of param.modifiers) visit(m, nextParent);
+			}
+			if (param.dotDotDotToken) visit(param.dotDotDotToken, nextParent);
+			visit(param.name, nextParent, param.type);
+			if (param.questionToken) visit(param.questionToken, nextParent);
+			if (param.initializer) visit(param.initializer, nextParent);
+		}
+		else if (k === SK.VariableDeclaration && (node as ts.VariableDeclaration).type && (node as ts.VariableDeclaration).name) {
+			const vd = node as ts.VariableDeclaration;
+			visit(vd.name, nextParent, vd.type);
+			if (vd.exclamationToken) visit(vd.exclamationToken, nextParent);
+			if (vd.initializer) visit(vd.initializer, nextParent);
+		}
+		else {
+			tsForEachChild(node, child => visit(child, nextParent));
+		}
+		if (embedAfter) visit(embedAfter, nextParent);
 		if (chain) {
 			for (let i = chain.length - 1; i >= 0; i--) leaveCb(chain[i]);
 		}

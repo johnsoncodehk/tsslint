@@ -197,6 +197,29 @@ function isPatternLiteralTarget(tsNode: ts.Node): boolean {
 	return false;
 }
 
+// Class / interface / enum member kinds — used by `materialize` to
+// decide when to drill from a cached wrapper (ClassDeclaration,
+// TSInterfaceDeclaration, TSEnumDeclaration) into its synthetic body
+// container (ClassBody, TSInterfaceBody, TSEnumBody) so members'
+// `parent` resolves to the body rather than the declaration.
+const CLASS_MEMBER_KINDS_SET = (() => {
+	const a = new Uint8Array(400);
+	for (const k of [
+		SK.PropertyDeclaration, SK.MethodDeclaration, SK.Constructor,
+		SK.GetAccessor, SK.SetAccessor, SK.IndexSignature,
+		SK.SemicolonClassElement, SK.ClassStaticBlockDeclaration,
+	]) a[k] = 1;
+	return a;
+})();
+const INTERFACE_MEMBER_KINDS_SET = (() => {
+	const a = new Uint8Array(400);
+	for (const k of [
+		SK.PropertySignature, SK.MethodSignature, SK.IndexSignature,
+		SK.ConstructSignature, SK.CallSignature, SK.GetAccessor, SK.SetAccessor,
+	]) a[k] = 1;
+	return a;
+})();
+
 // Bitmap of parent kinds that can possibly trigger a wrapper-route. If
 // tsParent.kind is NOT in this set, findWrapperRoute returns null without
 // running the if-chain. Most tree-walks land on parents like
@@ -251,6 +274,50 @@ function findWrapperRoute(tsNode: ts.Node):
 {
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
+	// `<T>` generics — typescript-estree wraps the typeParameters array in a
+	// synthetic TSTypeParameterDeclaration, so a direct bottom-up build for
+	// the inner TypeParameter would set its parent to the function/class
+	// instead of the wrapper. Trigger the host's `typeParameters` getter
+	// (drilling past Method/Property/Export wrappers to reach the actual
+	// host slot) and then `.params` so each inner TypeParameter is registered
+	// in the cache. Without this, no-shadow's `isTypeParameterOfStaticMethod`
+	// reads `variable.identifiers[0].parent.parent` expecting
+	// TSTypeParameterDeclaration and fails (the missing wrapper layer means
+	// the static-method-generic shadow filter never fires).
+	if (tsNode.kind === SK.TypeParameter) {
+		// Hosts whose ESTree shape exposes `<T>` via a `typeParameters`
+		// TSTypeParameterDeclaration wrapper. ts.MappedType uses a singular
+		// `typeParameter` on a different shape; skip the route there so the
+		// regular bottom-up build runs.
+		const pk = tsParent.kind;
+		const isFunctionLike = pk === SK.FunctionDeclaration || pk === SK.FunctionExpression
+			|| pk === SK.ArrowFunction || pk === SK.MethodDeclaration || pk === SK.Constructor
+			|| pk === SK.GetAccessor || pk === SK.SetAccessor
+			|| pk === SK.CallSignature || pk === SK.ConstructSignature
+			|| pk === SK.MethodSignature || pk === SK.IndexSignature
+			|| pk === SK.FunctionType || pk === SK.ConstructorType;
+		const isDeclLike = pk === SK.ClassDeclaration || pk === SK.ClassExpression
+			|| pk === SK.InterfaceDeclaration || pk === SK.TypeAliasDeclaration;
+		if (isFunctionLike || isDeclLike) {
+			return {
+				ownerTsNode: tsParent,
+				trigger: (owner) => {
+					const inner = unwrapInner(owner);
+					let host = inner as unknown as { value?: unknown; typeParameters?: { params?: unknown } };
+					const innerType = (inner as { type?: string }).type;
+					if (innerType === 'MethodDefinition'
+						|| innerType === 'TSAbstractMethodDefinition'
+						|| innerType === 'Property'
+					) {
+						const v = (inner as { value?: { typeParameters?: { params?: unknown } } }).value;
+						if (v) host = v;
+					}
+					const tp = host.typeParameters;
+					if (tp) void tp.params;
+				},
+			};
+		}
+	}
 	if (WRAPPER_ROUTE_PARENT_BITMAP[tsParent.kind] !== 1) return null;
 	if (WRAPPER_ROUTE_CHILD_BITMAP[tsNode.kind] !== 1) return null;
 
@@ -477,6 +544,94 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		const cachedAnc = tsCache.get(walker);
 		if (cachedAnc) {
 			parent = cachedAnc as LazyNode;
+			// Wrapper drill-through: the cached ESTree may wrap the actual
+			// parent because the wrapper has synthetic intermediate slots
+			// without TS counterparts. The TS-up-walk lands on the wrapper;
+			// drill in based on which slot the child is in.
+			//
+			// 1. Class members (Method/Property/Static block etc.) under
+			//    ts.ClassDeclaration/Expression: ESTree puts them in
+			//    `ClassBody.body`. Without drill, `node.parent` reads as
+			//    ClassDeclaration, so `node.parent.parent` skips one level
+			//    and rules using `parent.parent.<class-prop>` (e.g.
+			//    no-useless-constructor: `parent.parent.superClass`) miss.
+			// 2. Interface / Enum members: same pattern via TSInterfaceBody /
+			//    TSEnumBody.
+			// 3. ts.Parameter cached as TSParameterProperty: AssignmentPattern
+			//    (default value) sits at `wrapper.parameter`, so a child
+			//    landing on the parameter's `initializer` slot must take
+			//    AssignmentPattern as its parent. Without this, CPA's
+			//    `processCodePathToEnter` for AssignmentPattern checks
+			//    `parent.right === node` to push a fork context, the check
+			//    fails (TSParameterProperty has no `.right`), the push is
+			//    skipped, and the matching pop on `AssignmentPattern:exit`
+			//    crashes in `popForkContext` reading null `replaceHead`.
+			//    Repro: `class A { constructor(public x: number = 0) {} }`.
+			const innermostChild = toBuild.length > 0 ? toBuild[toBuild.length - 1] : tsNode;
+			const wk = walker.kind;
+			// Unwrap Export wrappers first — for `export class Foo {}` the
+			// cache holds ExportNamedDeclaration { declaration: ClassDecl },
+			// and class members live inside the inner declaration's body.
+			let drillFrom: LazyNode = parent;
+			let drillType = (drillFrom as { type?: string }).type;
+			while (drillType === 'ExportNamedDeclaration' || drillType === 'ExportDefaultDeclaration') {
+				const decl = (drillFrom as unknown as { declaration?: LazyNode }).declaration;
+				if (!decl) break;
+				drillFrom = decl;
+				drillType = (drillFrom as { type?: string }).type;
+			}
+			if ((wk === SK.ClassDeclaration || wk === SK.ClassExpression)
+				&& CLASS_MEMBER_KINDS_SET[innermostChild.kind] === 1
+			) {
+				const body = (drillFrom as unknown as { body?: LazyNode }).body;
+				if (body) parent = body;
+			}
+			else if (wk === SK.InterfaceDeclaration
+				&& INTERFACE_MEMBER_KINDS_SET[innermostChild.kind] === 1
+			) {
+				const body = (drillFrom as unknown as { body?: LazyNode }).body;
+				if (body) parent = body;
+			}
+			else if (wk === SK.EnumDeclaration
+				&& innermostChild.kind === SK.EnumMember
+			) {
+				const body = (drillFrom as unknown as { body?: LazyNode }).body;
+				if (body) parent = body;
+			}
+			else if (wk === SK.Parameter
+				&& drillType === 'TSParameterProperty'
+				&& innermostChild === (walker as ts.ParameterDeclaration).initializer
+			) {
+				const ap = (drillFrom as unknown as { parameter?: LazyNode }).parameter;
+				if (ap && (ap as { type?: string }).type === 'AssignmentPattern') {
+					parent = ap;
+				}
+			}
+			else if ((drillType === 'MethodDefinition' || drillType === 'TSAbstractMethodDefinition')
+				&& (wk === SK.MethodDeclaration || wk === SK.Constructor
+					|| wk === SK.GetAccessor || wk === SK.SetAccessor)
+			) {
+				// Children of ts.MethodDeclaration/Constructor/GetAccessor/
+				// SetAccessor map onto FunctionExpression slots (params, body,
+				// returnType, typeParameters) EXCEPT for `name` (the method key).
+				// Drill into `value` for the function-expression slots.
+				const namedChild = wk !== SK.Constructor
+					? (walker as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
+					: undefined;
+				if (innermostChild !== namedChild) {
+					const value = (drillFrom as unknown as { value?: LazyNode }).value;
+					if (value) parent = value;
+				}
+			}
+			else if (drillType === 'Property'
+				&& (wk === SK.MethodDeclaration || wk === SK.GetAccessor || wk === SK.SetAccessor)
+			) {
+				const namedChild = (walker as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name;
+				if (innermostChild !== namedChild) {
+					const value = (drillFrom as unknown as { value?: LazyNode }).value;
+					if (value) parent = value;
+				}
+			}
 			break;
 		}
 		// Wrapper-routed ancestors need the slow recursive path so the
@@ -527,7 +682,78 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 			// materialise wants SOMETHING rather than nothing.
 			return new GenericTSNode(child, parent);
 		}
-		parent = node;
+		// Wrapper drill (downward variant): mirror the cache-hit drill above
+		// so the next iteration's `convertChildInner(nextChild, parent)`
+		// receives the synthetic body container as its parent. Hits when a
+		// rule listens only on a class member kind and the enclosing
+		// ts.ClassDeclaration was never materialised first — the member's
+		// parent walk pushes both onto toBuild, and without this drill the
+		// member's `parent` reads as ClassDeclaration, skipping ClassBody.
+		// Same fix needed for TSInterfaceBody / TSEnumBody / and the
+		// TSParameterProperty → AssignmentPattern case.
+		let next: LazyNode = node;
+		if (i > 0) {
+			const nextChild = toBuild[i - 1];
+			const nextChildKind = nextChild.kind;
+			// Unwrap Export wrappers first — for `export class Foo {}` the
+			// cache holds ExportNamedDeclaration { declaration: ClassDecl },
+			// and class members live inside the inner declaration's body.
+			let inner: LazyNode = node;
+			let innerType = (inner as { type?: string }).type;
+			while (innerType === 'ExportNamedDeclaration' || innerType === 'ExportDefaultDeclaration') {
+				const decl = (inner as unknown as { declaration?: LazyNode }).declaration;
+				if (!decl) break;
+				inner = decl;
+				innerType = (inner as { type?: string }).type;
+			}
+			if ((innerType === 'ClassDeclaration' || innerType === 'ClassExpression')
+				&& CLASS_MEMBER_KINDS_SET[nextChildKind] === 1
+			) {
+				const body = (inner as unknown as { body?: LazyNode }).body;
+				if (body) next = body;
+			}
+			else if (innerType === 'TSInterfaceDeclaration'
+				&& INTERFACE_MEMBER_KINDS_SET[nextChildKind] === 1
+			) {
+				const body = (inner as unknown as { body?: LazyNode }).body;
+				if (body) next = body;
+			}
+			else if (innerType === 'TSEnumDeclaration'
+				&& nextChildKind === SK.EnumMember
+			) {
+				const body = (inner as unknown as { body?: LazyNode }).body;
+				if (body) next = body;
+			}
+			else if (innerType === 'TSParameterProperty'
+				&& child.kind === SK.Parameter
+				&& nextChild === (child as ts.ParameterDeclaration).initializer
+			) {
+				const ap = (inner as unknown as { parameter?: LazyNode }).parameter;
+				if (ap && (ap as { type?: string }).type === 'AssignmentPattern') {
+					next = ap;
+				}
+			}
+			else if ((innerType === 'MethodDefinition' || innerType === 'TSAbstractMethodDefinition' || innerType === 'Property')
+				&& (child.kind === SK.MethodDeclaration || child.kind === SK.Constructor
+					|| child.kind === SK.GetAccessor || child.kind === SK.SetAccessor
+					|| child.kind === SK.PropertyAssignment || child.kind === SK.ShorthandPropertyAssignment)
+			) {
+				// Children of ts method/constructor/accessor map onto
+				// FunctionExpression slots EXCEPT for `name` (the key).
+				const namedChild = (child.kind === SK.MethodDeclaration || child.kind === SK.GetAccessor || child.kind === SK.SetAccessor)
+					? (child as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
+					: child.kind === SK.PropertyAssignment
+						? (child as ts.PropertyAssignment).name
+						: child.kind === SK.ShorthandPropertyAssignment
+							? (child as ts.ShorthandPropertyAssignment).name
+							: undefined;
+				if (nextChild !== namedChild) {
+					const value = (inner as unknown as { value?: LazyNode }).value;
+					if (value) next = value;
+				}
+			}
+		}
+		parent = next;
 	}
 	return parent;
 }

@@ -654,8 +654,21 @@ export class TsScopeManager {
 				// Resolved reference — add to per-symbol index (only when this
 				// position counts as a reference, e.g. usage or init).
 				if (refUsage) {
-					let arr = refs.get(sym);
-					if (!arr) refs.set(sym, arr = []);
+					// Key the bucket by the TsVariable's canonical symbol — for
+					// most cases that's the same as `sym`, but synthetic
+					// `arguments` is built before any reference is seen and
+					// uses a symbol from `getSymbolsInScope`, while
+					// `getSymbolAtLocation` on an actual `arguments`
+					// identifier returns a function-scoped synthetic symbol
+					// (the implicit `arguments` per non-arrow function). Both
+					// alias to the same TsVariable via `variableBySymbol`,
+					// but keying refs by `sym` would split them across two
+					// buckets — `getReferencesFor(argsVar.symbol)` then
+					// returns empty and prefer-rest-params reports nothing.
+					const v = variableBySymbol.get(sym)!;
+					const key = v.symbol;
+					let arr = refs.get(key);
+					if (!arr) refs.set(key, arr = []);
 					{
 						const ref = new TsReference(this, node, sym);
 						arr.push(ref);
@@ -709,7 +722,16 @@ export class TsScopeManager {
 					}
 					}
 				}
-				else if (freeRef) {
+				else if (freeRef && this._isValueReferencePosition(node)) {
+					// Symbol present but unknown to lib globals. If the
+					// identifier sits in TYPE position (e.g. a lib utility
+					// type like `Record` or `TemplateStringsArray` when only
+					// a partial lib is loaded — symbol comes back as
+					// Transient with no declarations), upstream's
+					// @typescript-eslint scope-manager routes it through
+					// `referenceType`, not `referenceValue` — no-undef never
+					// sees it. Mirror by skipping the through.push for type
+					// position; only escape value-position refs.
 					{
 						const ref = new TsReference(this, node, sym);
 						through.push(ref);
@@ -717,8 +739,10 @@ export class TsScopeManager {
 					}
 				}
 			}
-			else if (freeRef) {
-				// Unresolved (no symbol). Through-only (e.g. typo).
+			else if (freeRef && this._isValueReferencePosition(node)) {
+				// Unresolved (no symbol). Through-only (e.g. typo). Same
+				// type-position guard as above — never fire no-undef on a
+				// type-only identifier.
 				const ref = new TsReference(this, node, undefined as any);
 				through.push(ref);
 				recordScope(ref);
@@ -925,7 +949,25 @@ export class TsScopeManager {
 	// through-reference.
 	_isValueReferencePosition(id: ts.Identifier): boolean {
 		const ts_ = ts;
+		const SK = ts_.SyntaxKind;
 		for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
+			// `class Foo extends Base` — Base is a value reference (the
+			// superclass must be a constructor function). The wrapping
+			// ExpressionWithTypeArguments returns true from BOTH ts.isTypeNode
+			// AND ts.isExpression, so the generic isTypeNode-first check
+			// would short-circuit this position as "type only" and drop the
+			// reference. `implements I` (class) and `extends I` (interface)
+			// stay type-only and fall through to the generic logic.
+			if (cur.kind === SK.ExpressionWithTypeArguments) {
+				const hc = cur.parent;
+				if (hc?.kind === SK.HeritageClause
+					&& (hc as ts.HeritageClause).token === SK.ExtendsKeyword
+					&& hc.parent
+					&& (hc.parent.kind === SK.ClassDeclaration || hc.parent.kind === SK.ClassExpression)
+				) {
+					return true;
+				}
+			}
 			if (ts_.isTypeNode(cur)) return false;
 			if (ts_.isExpression(cur) || ts_.isStatement(cur)) return true;
 		}
