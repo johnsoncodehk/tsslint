@@ -479,8 +479,10 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	if (!parent) {
 		// No ESTree ancestor — should only happen for the SourceFile itself,
 		// which convertLazy() always pre-registers. As a last resort, hand
-		// back a generic node anchored to nothing.
-		return new GenericTSNode(tsNode, null);
+		// back a generic node anchored to nothing. ctx is required because
+		// the null parent gives the LazyNode constructor nothing to inherit
+		// _ctx from.
+		return new GenericTSNode(tsNode, null, ctx);
 	}
 	// Build downward: innermost element of `toBuild` is the original
 	// tsNode, outermost is the closest ts.Node to the cached ancestor.
@@ -592,7 +594,17 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		case SK.ReturnStatement: return new ReturnStatementNode(child as ts.ReturnStatement, parent);
 		case SK.Block: return new BlockStatementNode(child as ts.Block, parent);
 		case SK.IfStatement: return new IfStatementNode(child as ts.IfStatement, parent);
-		case SK.BinaryExpression: return new BinaryLikeExpressionNode(child as ts.BinaryExpression, parent);
+		case SK.BinaryExpression: {
+			// Comma operator becomes ESTree SequenceExpression (matches
+			// typescript-estree's `convertBinaryExpression`). All other
+			// operators stay BinaryExpression / LogicalExpression /
+			// AssignmentExpression via the BinaryLikeExpressionNode dispatch.
+			const be = child as ts.BinaryExpression;
+			if (be.operatorToken.kind === SK.CommaToken) {
+				return new SequenceExpressionNode(be, parent);
+			}
+			return new BinaryLikeExpressionNode(be, parent);
+		}
 		case SK.PropertyAccessExpression: return wrapChainIfNeeded(
 			new MemberExpressionNode(child as ts.PropertyAccessExpression, parent),
 			child as ts.PropertyAccessExpression,
@@ -842,7 +854,7 @@ export const GENERIC_TS_NODE_MARKER: unique symbol = Symbol('GenericTSNode');
 class GenericTSNode extends LazyNode {
 	readonly type: string;
 	readonly [GENERIC_TS_NODE_MARKER] = true;
-	constructor(tsNode: ts.Node, parent: LazyNode | null) {
+	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
 		// Synthetic — don't claim the TS node's slot in the maps if a
 		// real subclass might be made for it later (avoid cache pollution).
 		// But DO register so cache hits work for repeated lookups via
@@ -850,7 +862,10 @@ class GenericTSNode extends LazyNode {
 		// converter later wants this slot, we'd return the generic. For
 		// now the cases that hit GenericTSNode are unsupported kinds where
 		// no real subclass exists; safe.
-		super(tsNode, parent);
+		// `context` only needed when `parent` is null (no parent to inherit
+		// _ctx from) — happens when materialize() bottom-up exhausts the TS
+		// parent chain without hitting a cached ancestor.
+		super(tsNode, parent, context);
 		this.type = 'TS' + ts.SyntaxKind[tsNode.kind];
 	}
 }
@@ -1773,7 +1788,7 @@ class BindingAssignmentPatternNode extends LazyNode {
 
 class BindingElementNode extends LazyNode {
 	readonly type: 'Property' | 'RestElement';
-	readonly computed = false;
+	readonly computed: boolean;
 	readonly kind: 'init' = 'init';
 	readonly method = false;
 	readonly optional = false;
@@ -1788,6 +1803,14 @@ class BindingElementNode extends LazyNode {
 		this.type = tsNode.dotDotDotToken ? 'RestElement' : 'Property';
 		// shorthand iff no `propertyName` (just `name`).
 		this.shorthand = !tsNode.propertyName;
+		// `{ ["resolution-mode"]: res }` — TS wraps a computed-key
+		// destructure name in `ComputedPropertyName`. ESTree marks the
+		// surrounding Property `computed: true`. no-useless-computed-key
+		// reports computed keys whose value would be the same as the
+		// non-computed form — the rule listens on `Property` and reads
+		// `node.computed`.
+		this.computed = !!tsNode.propertyName
+			&& tsNode.propertyName.kind === SK.ComputedPropertyName;
 	}
 	get key() {
 		if (this._key !== undefined) return this._key;
@@ -3569,6 +3592,45 @@ class BinaryLikeExpressionNode extends LazyNode {
 
 	get right() {
 		return this._right ??= convertChild((this._ts as ts.BinaryExpression).right, this);
+	}
+}
+
+// `a, b, c` parses as nested `BinaryExpression(operator=',')` in TS but
+// flattens to a single ESTree SequenceExpression with expressions[a,b,c].
+// typescript-estree's convertBinaryExpression flattens left.expressions
+// into the result UNLESS the left side is parenthesized (which preserves
+// the user's grouping). Mirror that flattening here.
+class SequenceExpressionNode extends LazyNode {
+	readonly type = 'SequenceExpression' as const;
+	private _expressions?: (LazyNode | null)[];
+
+	constructor(tsNode: ts.BinaryExpression, parent: LazyNode) {
+		super(tsNode, parent);
+	}
+
+	get expressions() {
+		if (this._expressions !== undefined) return this._expressions;
+		const be = this._ts as ts.BinaryExpression;
+		const out: (LazyNode | null)[] = [];
+		const left = convertChild(be.left, this);
+		// Only flatten when the user didn't parenthesize the left side —
+		// `(a, b), c` keeps the inner SequenceExpression as a single
+		// expression entry. ParenthesizedExpression collapses in
+		// convertChildInner so we check the TS node directly.
+		if (
+			left
+			&& left.type === 'SequenceExpression'
+			&& be.left.kind !== SK.ParenthesizedExpression
+		) {
+			for (const e of (left as SequenceExpressionNode).expressions) {
+				out.push(e);
+			}
+		}
+		else {
+			out.push(left);
+		}
+		out.push(convertChild(be.right, this));
+		return this._expressions = out;
 	}
 }
 
