@@ -1638,7 +1638,15 @@ class TSIndexedAccessTypeNode extends LazyNode {
 // a LiteralType node, but we expose the bare TSNullKeyword to match eager.
 function convertLiteralType(tsNode: ts.LiteralTypeNode, parent: LazyNode): LazyNode {
 	if (tsNode.literal.kind === SK.NullKeyword) {
-		return new TypeKeywordNode('TSNullKeyword', tsNode.literal, parent);
+		const node = new TypeKeywordNode('TSNullKeyword', tsNode.literal, parent);
+		// Cache under BOTH the inner NullKeyword (set by the LazyNode
+		// constructor's registerInMaps) AND the outer LiteralType — without
+		// the outer entry, the Parameter.type wrapper route's
+		// `tsNodeToESTreeNodeMap.get(LiteralType)` post-check after `trigger`
+		// fails and throws "wrapper route did not register the inner node"
+		// on `function f(x: null = null)` and similar patterns.
+		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, node);
+		return node;
 	}
 	return new TSLiteralTypeNode(tsNode, parent);
 }
