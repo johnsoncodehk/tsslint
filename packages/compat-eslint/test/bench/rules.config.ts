@@ -130,4 +130,20 @@ export const RULES: Array<[string, unknown[]?]> = [
 	['no-multi-assign'],
 	['id-denylist', ['callback']],
 	['consistent-this'],
+
+	// === @typescript-eslint plugin (type-aware + syntactic) ===
+	// type-aware: read parserServices.program — TSSLint shares the
+	// IDE's program, ESLint side passes the same program via
+	// `parserOptions.programs` to avoid the duplicate-program problem.
+	['@typescript-eslint/no-floating-promises'],
+	['@typescript-eslint/no-misused-promises'],
+	['@typescript-eslint/await-thenable'],
+	['@typescript-eslint/no-unnecessary-condition'],
+	['@typescript-eslint/prefer-readonly'],
+	['@typescript-eslint/restrict-plus-operands'],
+	['@typescript-eslint/restrict-template-expressions'],
+	// syntactic but plugin-extended:
+	['@typescript-eslint/consistent-type-imports'],
+	['@typescript-eslint/consistent-type-definitions'],
+	['@typescript-eslint/naming-convention'],
 ];

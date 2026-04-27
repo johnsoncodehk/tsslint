@@ -1393,7 +1393,7 @@ class IdentifierNode extends LazyNode {
 
 class VariableDeclarationNode extends LazyNode {
 	readonly type = 'VariableDeclaration' as const;
-	readonly kind: 'var' | 'let' | 'const';
+	readonly kind: 'var' | 'let' | 'const' | 'using' | 'await using';
 	readonly declare: boolean;
 	private _declarations?: (LazyNode | null)[];
 
@@ -1401,7 +1401,16 @@ class VariableDeclarationNode extends LazyNode {
 		super(tsNode, parent);
 		const list = tsNode.declarationList;
 		const flags = list.flags;
-		this.kind = flags & ts.NodeFlags.Const ? 'const' : flags & ts.NodeFlags.Let ? 'let' : 'var';
+		// AwaitUsing = Using | Const overlaps with Const — check first.
+		this.kind = (flags & ts.NodeFlags.AwaitUsing) === ts.NodeFlags.AwaitUsing
+			? 'await using'
+			: (flags & ts.NodeFlags.Using) === ts.NodeFlags.Using
+				? 'using'
+				: flags & ts.NodeFlags.Const
+					? 'const'
+					: flags & ts.NodeFlags.Let
+						? 'let'
+						: 'var';
 		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
 	}
 
@@ -1742,13 +1751,25 @@ class DeleteExpressionNode extends LazyNode {
 // typescript-estree converts it to a VariableDeclaration with no `declare`.
 class VariableDeclarationListAsNode extends LazyNode {
 	readonly type = 'VariableDeclaration' as const;
-	readonly kind: 'var' | 'let' | 'const';
+	readonly kind: 'var' | 'let' | 'const' | 'using' | 'await using';
 	readonly declare = false;
 	private _declarations?: (LazyNode | null)[];
 	constructor(tsNode: ts.VariableDeclarationList, parent: LazyNode) {
 		super(tsNode, parent);
 		const flags = tsNode.flags;
-		this.kind = flags & ts.NodeFlags.Const ? 'const' : flags & ts.NodeFlags.Let ? 'let' : 'var';
+		// AwaitUsing = Using | Const overlaps with Const, so check it first.
+		// Without `'await using'` / `'using'` kinds, plugin rules listening
+		// on `VariableDeclaration[kind="await using"]` (await-thenable's
+		// async-disposable check) miss every stage-3 disposable.
+		this.kind = (flags & ts.NodeFlags.AwaitUsing) === ts.NodeFlags.AwaitUsing
+			? 'await using'
+			: (flags & ts.NodeFlags.Using) === ts.NodeFlags.Using
+				? 'using'
+				: flags & ts.NodeFlags.Const
+					? 'const'
+					: flags & ts.NodeFlags.Let
+						? 'let'
+						: 'var';
 	}
 	get declarations() {
 		return this._declarations ??= convertChildren((this._ts as ts.VariableDeclarationList).declarations, this);

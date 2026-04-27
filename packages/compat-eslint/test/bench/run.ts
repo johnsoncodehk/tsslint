@@ -46,16 +46,26 @@ function buildProgram(files: string[]) {
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.ES2020 });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
 	const realLib = ts.createSourceFile(realLibPath, ts.sys.readFile(realLibPath) ?? '', ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS);
+	// Root program files under `process.cwd()` so the path matches what
+	// `Linter.verify(code, configs, fullPath)` produces — without this,
+	// `@typescript-eslint/parser` (with `parserOptions.programs: [program]`)
+	// can't find the file in the program's source map and falls back to
+	// re-parsing without type info, breaking every type-aware plugin rule.
+	// Also makes ESLint's `files: ['**/*.ts']` glob match (an absolute
+	// path starting with `/_file.ts` doesn't match — produces "No matching
+	// configuration found").
+	const baseDir = process.cwd();
 	const sources = new Map<string, ts.SourceFile>();
 	for (const f of files) {
 		const text = fs.readFileSync(path.join(CORPUS_DIR, f), 'utf8');
-		sources.set('/' + f, ts.createSourceFile('/' + f, text, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS));
+		const absPath = path.join(baseDir, f);
+		sources.set(absPath, ts.createSourceFile(absPath, text, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS));
 	}
 	const host: ts.CompilerHost = {
 		getSourceFile: name => sources.get(name) ?? (name === realLibPath ? realLib : undefined),
 		getDefaultLibFileName: () => realLibName,
 		writeFile: () => {},
-		getCurrentDirectory: () => '/',
+		getCurrentDirectory: () => baseDir,
 		getDirectories: () => [],
 		fileExists: name => sources.has(name) || name === realLibPath,
 		readFile: name => {
@@ -86,7 +96,12 @@ function buildProgram(files: string[]) {
 			moduleResolution: ts.ModuleResolutionKind.NodeNext,
 			types: [],
 			noEmit: true,
-			strict: false,
+			// `strict: true` enables strictNullChecks which several
+			// type-aware @typescript-eslint plugin rules require
+			// (no-unnecessary-condition, strict-boolean-expressions).
+			// Without it the rule emits a warning at file:1:1 instead
+			// of running normally.
+			strict: true,
 			noImplicitAny: false,
 		},
 		host,
@@ -94,36 +109,72 @@ function buildProgram(files: string[]) {
 	return { program, sources };
 }
 
-function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
+// Cache plugin lookup; avoid reloading per-rule.
+let _tsPlugin: { rules: Record<string, unknown> } | undefined;
+function loadRule(ruleName: string): unknown {
+	// `@typescript-eslint/<name>` → load from `@typescript-eslint/eslint-plugin`'s
+	// `rules` registry. Plain `<name>` → load from ESLint core's `lib/rules`.
+	if (ruleName.startsWith('@typescript-eslint/')) {
+		_tsPlugin ??= require('@typescript-eslint/eslint-plugin');
+		const short = ruleName.slice('@typescript-eslint/'.length);
+		const rule = _tsPlugin!.rules[short];
+		if (!rule) throw new Error(`@typescript-eslint plugin has no rule '${short}'`);
+		return rule;
+	}
 	const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
-	const rule = require(path.join(eslintRoot, 'lib/rules', ruleName + '.js'));
+	return require(path.join(eslintRoot, 'lib/rules', ruleName + '.js'));
+}
+
+function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
+	const rule = loadRule(ruleName);
 	const out: DiagLoc[] = [];
-	const tsslintRule = compat.convertRule(rule, options as any[], { id: ruleName } as any);
-	const reportFn: any = (_msg: string, start: number, _end: number) => {
+	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName } as any);
+	const reportFn: any = (msg: string, start: number, _end: number) => {
 		const lc = sf.getLineAndCharacterOfPosition(start);
-		out.push({ file: sf.fileName, line: lc.line + 1, column: lc.character + 1, ruleId: ruleName });
+		if (process.env.BENCH_DEBUG && ruleName === process.env.BENCH_DEBUG) {
+			console.log(`[${ruleName}] ${sf.fileName}:${lc.line + 1}:${lc.character + 1} — ${msg}`);
+		}
+		out.push({ file: '/' + path.basename(sf.fileName), line: lc.line + 1, column: lc.character + 1, ruleId: ruleName });
 		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
 		return r;
 	};
-	tsslintRule({ file: sf, report: reportFn, program } as any);
+	try {
+		tsslintRule({ file: sf, report: reportFn, program } as any);
+	} catch (e) {
+		if (process.env.BENCH_DEBUG && ruleName === process.env.BENCH_DEBUG) {
+			console.log(`[${ruleName}] ${sf.fileName} CRASH: ${(e as Error).message}`);
+		}
+	}
 	return out;
 }
 
-function runEslint(linter: import('eslint').Linter, code: string, fileName: string, ruleName: string, options: unknown[]): DiagLoc[] {
-	// Linter.verify's `files` glob is matched against an absolute path,
-	// but it must be inside the basePath. Use a relative-to-cwd shape
-	// so `**/*.ts` matches.
-	const messages = linter.verify(code, [{
+function runEslint(linter: import('eslint').Linter, code: string, fileName: string, ruleName: string, options: unknown[], program: ts.Program): DiagLoc[] {
+	// For `@typescript-eslint/...` rules: register the plugin, pass our
+	// existing ts.Program via `parserOptions.programs` so the parser
+	// reuses it instead of building a duplicate (mirrors how TSSLint
+	// shares tsserver's program in production).
+	const isPluginRule = ruleName.startsWith('@typescript-eslint/');
+	const config: any = {
 		files: ['**/*.ts'],
 		languageOptions: {
 			parser: tsParser,
-			parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+			parserOptions: isPluginRule
+				? { ecmaVersion: 'latest', sourceType: 'module', programs: [program] }
+				: { ecmaVersion: 'latest', sourceType: 'module' },
 		},
 		rules: { [ruleName]: ['error', ...options] },
-	}], path.join(process.cwd(), fileName));
+	};
+	if (isPluginRule) {
+		_tsPlugin ??= require('@typescript-eslint/eslint-plugin');
+		config.plugins = { '@typescript-eslint': _tsPlugin };
+	}
+	const messages = linter.verify(code, [config], fileName);
+	if (process.env.BENCH_DEBUG_ESLINT && ruleName === process.env.BENCH_DEBUG_ESLINT) {
+		console.log(`[ESLINT ${ruleName}] ${fileName} → ${messages.length} messages`, messages.slice(0, 3));
+	}
 	return messages
 		.filter(m => m.ruleId === ruleName)
-		.map(m => ({ file: fileName, line: m.line ?? 0, column: m.column ?? 0, ruleId: ruleName }));
+		.map(m => ({ file: '/' + path.basename(fileName), line: m.line ?? 0, column: m.column ?? 0, ruleId: ruleName }));
 }
 
 function key(d: DiagLoc): string { return `${d.file}:${d.line}:${d.column}`; }
@@ -184,10 +235,10 @@ async function main() {
 	for (const [ruleName, options = []] of RULES) {
 		newBaseline[ruleName] = {};
 		for (const file of corpus) {
-			const sf = sources.get('/' + file)!;
+			const sf = sources.get(path.join(process.cwd(), file))!;
 			const code = sf.text;
 			const t = runTsslint(program, sf, ruleName, options);
-			const e = runEslint(linter, code, '/' + file, ruleName, options);
+			const e = runEslint(linter, code, path.join(process.cwd(), file), ruleName, options, program);
 			const d = diff(t, e);
 			const hasDiff = d.tsslintOnly.length > 0 || d.eslintOnly.length > 0;
 

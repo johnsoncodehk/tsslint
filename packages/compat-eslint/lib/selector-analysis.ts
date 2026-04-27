@@ -161,13 +161,27 @@ export class UnsupportedSelectorError extends Error {
 //     tryBuildFastDispatch) MUST propagate, never silently swallow —
 //     fallback to NodeEventGenerator was retired.
 export function decomposeSimple(selector: string): FastDispatchInfo[] {
+	// ESLint's selector parser strips `:exit` from the end of the raw source
+	// BEFORE handing off to esquery (see `eslint/lib/linter/esquery.js`).
+	// Without the strip, `'A, B:exit'` parses as `matches([A, B:exit])`,
+	// where esquery applies `:exit` only to the last branch — but ESLint's
+	// convention is that the `:exit` suffix on a comma-separated selector
+	// list applies to ALL branches. Mirrors:
+	//   const cleanSource = source.replace(/:exit$/u, "");
+	//   const isExit = source.endsWith(":exit");
+	// Without this, plugin rules like `@typescript-eslint/prefer-readonly`
+	// register `'ClassDeclaration, ClassExpression:exit'` and we'd only fire
+	// the exit listener for ClassExpression, breaking the rule's own
+	// stack invariants (classScopeStack push/pop) and crashing.
+	const isExit = selector.endsWith(':exit');
+	const cleanSource = isExit ? selector.slice(0, -':exit'.length) : selector;
 	let ast: unknown;
 	try {
-		ast = esquery.parse(selector);
+		ast = esquery.parse(cleanSource);
 	} catch (e) {
 		throw new Error(`Invalid esquery selector \`${selector}\`: ${(e as Error).message}`);
 	}
-	const infos = walkSelector(ast as any, false);
+	const infos = walkSelector(ast as any, isExit);
 	if (!infos) throw new UnsupportedSelectorError(selector);
 	return infos;
 }

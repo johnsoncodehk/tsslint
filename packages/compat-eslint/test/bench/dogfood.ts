@@ -101,7 +101,7 @@ function buildProgram(files: string[]) {
 			moduleResolution: ts.ModuleResolutionKind.NodeNext,
 			types: [],
 			noEmit: true,
-			strict: false,
+			strict: true,
 			noImplicitAny: false,
 			allowJs: false,
 			skipLibCheck: true,
@@ -111,11 +111,23 @@ function buildProgram(files: string[]) {
 	return { program, sources };
 }
 
-function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
+let _tsPlugin: { rules: Record<string, unknown> } | undefined;
+function loadRule(ruleName: string): unknown {
+	if (ruleName.startsWith('@typescript-eslint/')) {
+		_tsPlugin ??= require('@typescript-eslint/eslint-plugin');
+		const short = ruleName.slice('@typescript-eslint/'.length);
+		const rule = _tsPlugin!.rules[short];
+		if (!rule) throw new Error(`@typescript-eslint plugin has no rule '${short}'`);
+		return rule;
+	}
 	const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
-	const rule = require(path.join(eslintRoot, 'lib/rules', ruleName + '.js'));
+	return require(path.join(eslintRoot, 'lib/rules', ruleName + '.js'));
+}
+
+function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
+	const rule = loadRule(ruleName);
 	const out: DiagLoc[] = [];
-	const tsslintRule = compat.convertRule(rule, options as any[], { id: ruleName } as any);
+	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName } as any);
 	const reportFn: any = (_msg: string, start: number, _end: number) => {
 		const lc = sf.getLineAndCharacterOfPosition(start);
 		out.push({ file: sf.fileName, line: lc.line + 1, column: lc.character + 1, ruleId: ruleName });
@@ -126,15 +138,23 @@ function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, op
 	return out;
 }
 
-function runEslint(linter: import('eslint').Linter, code: string, fileName: string, ruleName: string, options: unknown[]): DiagLoc[] {
-	const messages = linter.verify(code, [{
+function runEslint(linter: import('eslint').Linter, code: string, fileName: string, ruleName: string, options: unknown[], program: ts.Program): DiagLoc[] {
+	const isPluginRule = ruleName.startsWith('@typescript-eslint/');
+	const config: any = {
 		files: ['**/*.ts'],
 		languageOptions: {
 			parser: tsParser,
-			parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+			parserOptions: isPluginRule
+				? { ecmaVersion: 'latest', sourceType: 'module', programs: [program] }
+				: { ecmaVersion: 'latest', sourceType: 'module' },
 		},
 		rules: { [ruleName]: ['error', ...options] },
-	}], path.join(process.cwd(), fileName));
+	};
+	if (isPluginRule) {
+		_tsPlugin ??= require('@typescript-eslint/eslint-plugin');
+		config.plugins = { '@typescript-eslint': _tsPlugin };
+	}
+	const messages = linter.verify(code, [config], fileName);
 	return messages
 		.filter(m => m.ruleId === ruleName)
 		.map(m => ({ file: fileName, line: m.line ?? 0, column: m.column ?? 0, ruleId: ruleName }));
@@ -153,7 +173,13 @@ interface DivergenceRecord {
 async function main() {
 	const corpus = DOGFOOD_FILES;
 	const { program, sources } = buildProgram(corpus);
-	const linter = new Linter();
+	// Linter's cwd defaults to process.cwd(); set it to REPO_ROOT so that
+	// absolute paths under the repo (e.g. /repo-root/packages/cli/index.ts)
+	// resolve to a relative form (`packages/cli/index.ts`) that matches
+	// `files: ['**/*.ts']`. Without this, ESLint silently emits "No matching
+	// configuration found" and the rules never run — every TSSLint report
+	// then shows up as a regression.
+	const linter = new Linter({ cwd: REPO_ROOT });
 
 	const crashes: CrashRecord[] = [];
 	const divergences: DivergenceRecord[] = [];
@@ -174,7 +200,11 @@ async function main() {
 				crashes.push({ rule: ruleName, file, runner: 'tsslint', message: err?.message ?? String(err) });
 			}
 			try {
-				e = runEslint(linter, code, file, ruleName, options);
+				// Use absolute path matching the program's rootNames so
+				// `parserOptions.programs` lookup succeeds (without it,
+				// type-aware plugin rules silently re-parse without type
+				// info and emit nothing).
+				e = runEslint(linter, code, abs, ruleName, options, program);
 			} catch (err: any) {
 				crashes.push({ rule: ruleName, file, runner: 'eslint', message: err?.message ?? String(err) });
 			}
