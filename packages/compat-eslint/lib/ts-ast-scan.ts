@@ -47,6 +47,12 @@ const WRAPPER_HEAD_TYPES = new Set<string>([
 	'ChainExpression', 'TSParameterProperty',
 	'TSTypeQuery', 'ClassDeclaration', 'ClassExpression',
 	'TSInterfaceDeclaration', 'TSEnumDeclaration',
+	// Method-shaped wrappers whose `.value` is a FunctionExpression /
+	// MethodFunctionExpressionNode that CodePathAnalyzer must enter to
+	// open a new code path. Without this, the inner method's `return`
+	// poisons reachability of the surrounding scope.
+	'Property',
+	'MethodDefinition', 'TSAbstractMethodDefinition',
 ]);
 
 type Predicate = (n: ts.Node) => boolean;
@@ -823,9 +829,20 @@ export function tsScanTraverse(
 			if (!isGeneric && target !== parentTarget) {
 				const t = (target as { type?: string }).type;
 				if (t && WRAPPER_HEAD_TYPES.has(t)) {
-					chain = unwrapChain(target);
-					for (let i = 0; i < chain.length; i++) enterCb(chain[i]);
-					nextParent = chain[chain.length - 1];
+					const expanded = unwrapChain(target);
+					if (expanded.length > 1) {
+						chain = expanded;
+						for (let i = 0; i < chain.length; i++) enterCb(chain[i]);
+						nextParent = chain[chain.length - 1];
+					}
+					else {
+						// `Property` is a wrapper-head only when method/get/set
+						// — plain `init` properties land here and degrade to
+						// the single-target path with no extra alloc.
+						single = target;
+						enterCb(target);
+						nextParent = target;
+					}
 				}
 				else {
 					single = target;
@@ -900,6 +917,24 @@ function unwrapChain(node: unknown): unknown[] {
 			// those wrappers fire between the declaration enter and the
 			// member visits.
 			cur = (cur as { body?: unknown }).body;
+		} else if (t === 'MethodDefinition' || t === 'TSAbstractMethodDefinition') {
+			// MethodDefinition's `.value` is a FunctionExpression /
+			// TSEmptyBodyFunctionExpression. CPA hooks `FunctionExpression`
+			// enter to push a new code path — without this, the method's
+			// return statement poisons the surrounding scope's reachability.
+			cur = (cur as { value?: unknown }).value;
+		} else if (t === 'Property') {
+			// Object-literal method shorthand (`{ m() {} }`) and accessors
+			// (`{ get foo() {} }` / `{ set foo(v) {} }`) materialise as
+			// Property{value: FunctionExpression}. Plain `key: value`
+			// properties have arbitrary expression values that the walker
+			// already visits as children — only descend on method/get/set.
+			const p = cur as { method?: boolean; kind?: string; value?: unknown };
+			if (p.method || p.kind === 'get' || p.kind === 'set') {
+				cur = p.value;
+			} else {
+				break;
+			}
 		} else {
 			break;
 		}

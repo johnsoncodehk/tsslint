@@ -229,6 +229,33 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 		cpaCalls.some(c => c.event === 'FunctionDeclaration'));
 }
 
+// 3b. CPA correctness — method shorthand inside object literal must open
+//     its own code path. ESLint's CodePathAnalyzer hooks `FunctionExpression`
+//     enter to push a new path; method shorthand's ESTree shape is
+//     `Property{method:true, value:FunctionExpression}` — two layers. If
+//     the walker enters `Property` without expanding into its `.value`
+//     FunctionExpression, CPA never sees the inner function and treats the
+//     method's `return` as terminating the OUTER scope's path, marking
+//     subsequent statements unreachable. Regression test for the
+//     no-unreachable false-positive seen on TS repo's checker.ts.
+{
+	const code = `const obj = { method() { return 1; } };\nvar x = 1;`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUnreachable = require(eslintRoot + '/lib/rules/no-unreachable.js');
+	const reports: { start: number; end: number }[] = [];
+	const tsslintRule = compat.convertRule(noUnreachable, [], { id: 'no-unreachable' } as any);
+	const reportFn: any = (_msg: string, start: number, end: number) => {
+		reports.push({ start, end });
+		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check('no-unreachable: method shorthand return does not poison outer scope reachability',
+		reports.length === 0,
+		`got ${reports.length} reports, first at [${reports[0]?.start}, ${reports[0]?.end}]`);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the
