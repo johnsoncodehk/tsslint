@@ -20,6 +20,6 @@
 	},
 	"dependencies": {
 		"@tsslint/types": "3.0.4",
-		"eslint": ">=9.0.0 <9.28.0"
+		"eslint": ">=9.39.0 <10.0.0"
 	}
 }

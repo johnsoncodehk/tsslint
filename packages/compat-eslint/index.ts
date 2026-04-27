@@ -14,7 +14,11 @@ import path = require('path');
 let eslintInternals: {
 	SourceCode: typeof ESLint.SourceCode;
 	CodePathAnalyzer: new (eventGenerator: {
-		emitter: { emit(name: string, ...args: unknown[]): void };
+		// ESLint 9.39+ uses `eventGenerator.emit` (function) directly;
+		// ESLint 9.0-9.38 called `eventGenerator.emitter.emit`. Provide
+		// both shapes so we work across the supported range.
+		emit?: (name: string, args: unknown[]) => void;
+		emitter?: { emit(name: string, ...args: unknown[]): void };
 		enterNode(node: unknown): void;
 		leaveNode(node: unknown): void;
 	}) => { enterNode(node: unknown): void; leaveNode(node: unknown): void };
@@ -29,6 +33,58 @@ function loadEslintInternals() {
 	}
 	return eslintInternals;
 }
+
+// Vendored from `eslint/lib/shared/deep-merge-arrays.js`. Public API
+// is `deepMergeArrays(defaults, userOptions)`. Array elements at the
+// same index are merged via `deepMergeObjects` (object spread + recurse
+// into shared keys); user values win on leaves.
+function isObjectNotArray(v: unknown): v is Record<string, unknown> {
+	return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+function deepMergeObjects(first: unknown, second: unknown): unknown {
+	if (second === undefined) return first;
+	if (!isObjectNotArray(first) || !isObjectNotArray(second)) return second;
+	const result: Record<string, unknown> = { ...first, ...second };
+	for (const key of Object.keys(second)) {
+		if (Object.prototype.propertyIsEnumerable.call(first, key)) {
+			result[key] = deepMergeObjects(first[key], second[key]);
+		}
+	}
+	return result;
+}
+function deepMergeArrays(first: unknown[] | undefined, second: unknown[] | undefined): unknown[] {
+	if (!first || !second) return second || first || [];
+	return [
+		...first.map((v, i) => deepMergeObjects(v, i < second.length ? second[i] : undefined)),
+		...second.slice(first.length),
+	];
+}
+
+// ECMAScript built-in globals, vendored from
+// `eslint/conf/globals.js`'s `es2026` (the latest superset). ESLint
+// core registers these via `addDeclaredGlobals` before rules run; we
+// match that step in `getEstree` so `no-undef` doesn't fire on
+// `undefined`, `Math`, `String`, `Array`, etc. — names that
+// `@typescript-eslint/scope-manager`'s lib data marks TYPE-only after
+// merging (`es2015.core` re-declares es5's `TYPE_VALUE Math` as `TYPE`,
+// etc.). Update if ESLint adds a new ES year.
+const ESLINT_BUILTIN_GLOBALS: readonly string[] = [
+	'AggregateError', 'Array', 'ArrayBuffer', 'AsyncDisposableStack',
+	'Atomics', 'BigInt', 'BigInt64Array', 'BigUint64Array', 'Boolean',
+	'DataView', 'Date', 'DisposableStack', 'Error', 'EvalError',
+	'FinalizationRegistry', 'Float16Array', 'Float32Array', 'Float64Array',
+	'Function', 'Infinity', 'Int16Array', 'Int32Array', 'Int8Array',
+	'Intl', 'Iterator', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object',
+	'Promise', 'Proxy', 'RangeError', 'ReferenceError', 'Reflect',
+	'RegExp', 'Set', 'SharedArrayBuffer', 'String', 'SuppressedError',
+	'Symbol', 'SyntaxError', 'Temporal', 'TypeError', 'URIError',
+	'Uint16Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray',
+	'WeakMap', 'WeakRef', 'WeakSet', 'constructor', 'decodeURI',
+	'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape',
+	'eval', 'globalThis', 'hasOwnProperty', 'isFinite', 'isNaN',
+	'isPrototypeOf', 'parseFloat', 'parseInt', 'propertyIsEnumerable',
+	'toLocaleString', 'toString', 'undefined', 'unescape', 'valueOf',
+];
 
 interface RuleEntry {
 	id: string;
@@ -80,10 +136,18 @@ export function convertRule(
 	context: Partial<ESLint.Rule.RuleContext> = {},
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
+	// ESLint deep-merges `meta.defaultOptions` into user options so each
+	// rule sees the FULL options object (with all defaults filled in).
+	// Element-wise nullish-coalescing isn't enough — when a user passes
+	// `{ functions: false, classes: false }`, ESLint merges in the rule's
+	// other defaults (`variables: true`, `enums: true`,
+	// `ignoreTypeReferences: true`, …) so the rule's `!options.enums`
+	// guards see `false`, not `undefined`. Without this merge, e.g.
+	// `no-use-before-define` skips every const-enum/Type/Variable ref
+	// because `!undefined` is true. Mirrors
+	// `eslint/lib/shared/deep-merge-arrays.js`.
 	if (eslintRule.meta?.defaultOptions) {
-		for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
-			options[i] ??= eslintRule.meta.defaultOptions[i];
-		}
+		options = deepMergeArrays(eslintRule.meta.defaultOptions, options);
 	}
 
 	const id = (context as { id?: string }).id ?? 'unknown';
@@ -157,7 +221,7 @@ function runSharedTraversal(
 		const eslintRule = entry.eslintRule;
 		// Lazy: rules that don't fire on this file pay no array allocation.
 		let myReports: DeferredReport[] | undefined;
-		const ruleListeners = eslintRule.create({
+		const ruleContext = ({
 			cwd,
 			getCwd() {
 				return cwd;
@@ -182,12 +246,12 @@ function runSharedTraversal(
 			parserPath: undefined,
 			id: entry.id,
 			options: entry.options,
-			report(descriptor) {
+			report(descriptor: ESLint.Rule.ReportDescriptor) {
 				let message = 'message' in descriptor
 					? descriptor.message
 					: eslintRule.meta?.messages?.[descriptor.messageId] ?? '';
-				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
-					return descriptor.data?.[key.slice(2, -2).trim()] ?? key;
+				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, (key: string) => {
+					return String(descriptor.data?.[key.slice(2, -2).trim()] ?? key);
 				});
 				let start = 0;
 				let end = 0;
@@ -236,7 +300,7 @@ function runSharedTraversal(
 						if ('messageId' in suggest) {
 							suggestMsg = eslintRule.meta?.messages?.[suggest.messageId] ?? '';
 							suggestMsg = suggestMsg.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
-								return suggest.data?.[key.slice(2, -2).trim()] ?? key;
+								return String(suggest.data?.[key.slice(2, -2).trim()] ?? key);
 							});
 						}
 						else {
@@ -259,17 +323,18 @@ function runSharedTraversal(
 			getAncestors() {
 				return sourceCode.getAncestors(currentNode);
 			},
-			getDeclaredVariables(node) {
-				return sourceCode.getDeclaredVariables(node);
+			getDeclaredVariables(node: unknown) {
+				return sourceCode.getDeclaredVariables(node as ESLint.Rule.Node);
 			},
 			getScope() {
 				return sourceCode.getScope(currentNode);
 			},
-			markVariableAsUsed(name) {
+			markVariableAsUsed(name: string) {
 				return sourceCode.markVariableAsUsed(name, currentNode);
 			},
 			...entry.context,
-		});
+		}) as unknown as ESLint.Rule.RuleContext;
+		const ruleListeners = eslintRule.create(ruleContext);
 
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
@@ -449,12 +514,20 @@ function buildCpaEventQueue(file: ts.SourceFile, fast: FastDispatch): any[] {
 	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
 	const match = buildScanPredicate(fast);
 	const queue: any[] = [];
+	// CPA's emit API: ESLint 9.39 calls `analyzer.emit(name, args)` directly
+	// (the analyzer copies `eventGenerator.emit` onto itself); older ESLint
+	// 9.x called `analyzer.emitter.emit(name, ...args)`. Provide both to
+	// stay forward and backward compatible.
+	const emit = (name: string, args: unknown[]) => {
+		queue.push({ kind: 2, target: name, args });
+	};
 	const fakeEmitter = {
 		emit(name: string, ...args: unknown[]) {
 			queue.push({ kind: 2, target: name, args });
 		},
 	};
 	const wrapped = {
+		emit,
 		emitter: fakeEmitter,
 		enterNode(target: unknown) {
 			queue.push({ kind: 1, target, phase: 1 });
@@ -711,6 +784,16 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 			? 'module'
 			: 'script';
 		const scopeManager = new TsScopeManager(file, program, estree as any, astMaps as any, estree.sourceType);
+		// ECMAScript built-in globals (es2026 set from ESLint's
+		// `conf/globals.js`). ESLint core injects these via
+		// `addDeclaredGlobals` in `SourceCode#getGlobalsForEcmaVersion`
+		// before any rule runs; without it, `no-undef` reports `undefined`,
+		// `Math`, `String`, etc. as undefined because `@typescript-eslint/
+		// scope-manager`'s lib data marks them TYPE-only after merging
+		// (es2015.core re-declares es5's `TYPE_VALUE Math` as `TYPE`).
+		// `TsScopeManager.addGlobals` no-ops names already declared, so
+		// this is safe to always call.
+		scopeManager.addGlobals(ESLINT_BUILTIN_GLOBALS as string[]);
 		const sourceCode = new SourceCode({
 			text: file.text,
 			ast: estree as unknown as ESLint.AST.Program,
