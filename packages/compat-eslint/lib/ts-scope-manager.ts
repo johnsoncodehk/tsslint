@@ -1106,7 +1106,36 @@ export class TsScopeManager {
 					if (inTypePosition || isValue) {
 						let v = this._libVariableBySymbol.get(sym);
 						if (!v) {
-							v = new TsVariable(this, sym);
+							// `addGlobals` (TS_LIB_TYPE_GLOBALS /
+							// ESLINT_BUILTIN_GLOBALS) may have already
+							// registered a fake-symbol var for this name.
+							// Reuse it instead of creating a fresh
+							// TsVariable so globalScope.variables stays
+							// stable: the `scope.through` getter snapshots
+							// localVars BEFORE triggering the ref-index
+							// build, so a fresh var added during the build
+							// isn't in the snapshot and `isLocal(realSym)`
+							// returns false, leaking the ref into
+							// `through`. Reusing the fake var maps the real
+							// ts.Symbol → fake TsVariable, which IS in the
+							// snapshot. Without this, no-undef false-fires
+							// on Record / Pick / Extract / etc. used in
+							// type-arg positions across module imports.
+							// Force `set` getter to populate the name-keyed
+							// lookup map (lazily built — _set is undefined
+							// until first access). addGlobals's
+							// `_addLibVariable` only updates _set when it
+							// already exists; rebuilding from variables is
+							// a one-time O(N) cost amortized across the
+							// entire ref scan.
+							const existing = this.globalScope.set.get(sym.name);
+							if (existing) {
+								v = existing;
+							}
+							else {
+								v = new TsVariable(this, sym);
+								this.globalScope._addLibVariable(v);
+							}
 							this._libVariableBySymbol.set(sym, v);
 							// Also register in `_variableBySymbol` so
 							// `scope.through`'s alias-aware lookup finds the
@@ -1115,7 +1144,6 @@ export class TsScopeManager {
 							// globalScope and refs escape → no-undef false
 							// positives.
 							variableBySymbol.set(sym, v);
-							this.globalScope._addLibVariable(v);
 						}
 						let arr = refs.get(sym);
 						if (!arr) refs.set(sym, arr = []);
@@ -1618,11 +1646,26 @@ export class TsScope {
 		};
 		const symOf = (decl: ts.Node | undefined): ts.Symbol | undefined => {
 			if (!decl) return undefined;
-			const direct = (decl as { symbol?: ts.Symbol }).symbol;
-			if (direct) return direct;
+			// Prefer `checker.getSymbolAtLocation(name)` over `decl.symbol`
+			// so declaration registration uses the SAME symbol identity
+			// reference resolution returns. TS merges symbols across:
+			//   - `.d.ts` redeclarations (lib types declared in both
+			//     bundled `lib.*.d.ts` and user-loaded `src/lib/*.d.ts`),
+			//   - `declare module "X" { ... }` augmentations referencing
+			//     imports from the host file's outer module scope,
+			//   - sibling declaration-merging (interface + namespace,
+			//     function + namespace).
+			// `decl.symbol` returns the local file/declaration symbol;
+			// `getSymbolAtLocation(name)` returns the merged symbol that
+			// `variableBySymbol.get(refSym)` will probe at use sites.
+			// Falling back to `decl.symbol` covers the rare cases where
+			// the name node is missing (e.g. anonymous default exports).
 			const nameNode = (decl as { name?: ts.Node }).name;
-			if (nameNode) return this.manager.checker.getSymbolAtLocation(nameNode);
-			return undefined;
+			if (nameNode) {
+				const sym = this.manager.checker.getSymbolAtLocation(nameNode);
+				if (sym) return sym;
+			}
+			return (decl as { symbol?: ts.Symbol }).symbol;
 		};
 		// Walk the binding pattern of a declarator/parameter, pushing every
 		// identifier's symbol into `out`.
@@ -1822,7 +1865,24 @@ export class TsScope {
 			case 'type': {
 				const tps = (this.tsNode as { typeParameters?: ts.NodeArray<ts.TypeParameterDeclaration> }).typeParameters;
 				if (tps) {
-					for (const tp of tps) push(symOf(tp));
+					for (const tp of tps) {
+						// Type parameters in `.d.ts` files can merge across
+						// redeclarations (TS lib types declared in both
+						// tsc's bundled `lib.*.d.ts` AND user-loaded
+						// `src/lib/*.d.ts` — TypeScript's own repo lints
+						// itself this way). Reference resolution at use-
+						// sites goes through `checker.getSymbolAtLocation`
+						// and returns the MERGED symbol. `tp.symbol` is the
+						// LOCAL one, so binding the var under `tp.symbol`
+						// makes `variableBySymbol.get(refSym)` miss and
+						// the ref leaks to `through` — no-undef false
+						// positive on the type parameter's own name.
+						// Resolving via the name node makes declaration
+						// and reference paths agree on the same symbol.
+						const sym = this.manager.checker.getSymbolAtLocation(tp.name)
+							?? (tp as { symbol?: ts.Symbol }).symbol;
+						push(sym);
+					}
 				}
 				break;
 			}
