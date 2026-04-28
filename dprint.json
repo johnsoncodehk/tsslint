@@ -10,7 +10,10 @@
 	"excludes": [
 		"**/node_modules",
 		"**/*-lock.json",
-		"packages/language-service/data"
+		"packages/language-service/data",
+		"packages/compat-eslint/lib/code-path-analysis",
+		"packages/compat-eslint/test/bench/corpus",
+		"packages/compat-eslint/test/upstream"
 	],
 	"plugins": [
 		"https://plugins.dprint.dev/typescript-0.95.7.wasm",
