@@ -26,6 +26,9 @@
 // returning undefined.
 
 import * as ts from 'typescript';
+import { buildCommentObject, walkInnerCommentsOf } from './tokens';
+
+const SK = ts.SyntaxKind;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -410,7 +413,7 @@ export class LazySourceCode {
 		}
 		ts.forEachLeadingCommentRange(this.text, scanStart, (pos, end, kind) => {
 			if (pos >= nodeOrToken.range[0]) return;
-			out.push(buildComment(this.text, pos, end, kind, this._tsFile));
+			out.push(buildCommentObject(this.text, pos, end, kind, this._tsFile));
 		});
 		return out;
 	}
@@ -424,19 +427,61 @@ export class LazySourceCode {
 		// emitting every comment in between — matches ESLint's
 		// "comments after node up to next token" semantics.
 		ts.forEachLeadingCommentRange(this.text, endPos, (pos, end, kind) => {
-			out.push(buildComment(this.text, pos, end, kind, this._tsFile));
+			out.push(buildCommentObject(this.text, pos, end, kind, this._tsFile));
 		});
 		return out;
 	}
 
+	private _innerScanner?: ts.Scanner;
 	getCommentsInside(node: NodeOrTokenLike): Comment[] {
-		// No matching TS API — need every comment strictly inside the
-		// node's range, and TS only exposes leading/trailing iteration
-		// off a single position. Walk children + collect leading of
-		// each + the parent's tail. Falls back to the full-comments
-		// array for now since this method has the lowest call count
-		// (24/107, mostly ts-plugin rules not in our config).
-		return this.commentsInRange(node.range[0], node.range[1]);
+		// AST-driven gap scan: walk the underlying ts.Node, emit each
+		// trivia gap's comments via the same `walkInnerCommentsOf`
+		// helper `convertComments` uses. No dependency on `this.comments`
+		// → no whole-file `convertComments` build is forced just to
+		// answer "what's inside this one node".
+		const tsNode = this.tsNodeOf(node);
+		if (!tsNode) {
+			// Plain ESLint Token (no underlying ts.Node). Fall back to
+			// the comments array — Tokens are leaves anyway, so they
+			// can't contain inner comments worth scanning, but ESLint
+			// API has it pass through.
+			return this.commentsInRange(node.range[0], node.range[1]);
+		}
+		const out: Comment[] = [];
+		const text = this.text;
+		const ast = this._tsFile;
+		const scanner = this._innerScanner ??= ts.createScanner(
+			ast.languageVersion,
+			/*skipTrivia*/ true,
+			ast.languageVariant,
+		);
+		scanner.setText(text);
+		const collect = (pos: number, end: number, kind: ts.CommentKind): void => {
+			out.push(buildCommentObject(text, pos, end, kind, ast));
+		};
+		const emitFrom = (scanFrom: number): void => {
+			if (scanFrom > 0) ts.forEachTrailingCommentRange(text, scanFrom, collect);
+			ts.forEachLeadingCommentRange(text, scanFrom, collect);
+		};
+		// `walkInnerCommentsOf` skips the entry node's first-child
+		// leading trivia (its outer "skip parent's leading" invariant),
+		// so we have to emit "the first inner trivia" ourselves. For
+		// SourceFile that's `shebangLen`; for any other node it's the
+		// position right after the open token (lex one token).
+		let innerStart: number;
+		if (tsNode.kind === SK.SourceFile) {
+			innerStart = (ts.getShebang(text) ?? '').length;
+		}
+		else {
+			const start = tsNode.getStart(ast);
+			if (start >= tsNode.end) return out;
+			scanner.setTextPos(start);
+			scanner.scan();
+			innerStart = scanner.getTokenEnd();
+		}
+		if (innerStart < tsNode.end) emitFrom(innerStart);
+		walkInnerCommentsOf(tsNode, ast, scanner, emitFrom);
+		return out;
 	}
 
 	commentsExistBetween(left: NodeOrTokenLike, right: NodeOrTokenLike): boolean {
@@ -498,31 +543,58 @@ export class LazySourceCode {
 	// ─── AST traversal helpers ─────────────────────────────────────────────
 
 	getNodeByRangeIndex(index: number): any | null {
-		// DFS the lazy ESTree finding the deepest node whose range contains
-		// `index`. Visit children via visitorKeys so synthetic wrappers
-		// (TSTypeAnnotation etc.) get traversed.
-		const ast = this.ast;
-		if (!ast || ast.range[0] > index || ast.range[1] <= index) return null;
-		let result: any = ast;
-		const visitorKeys = this.visitorKeys;
-		const stack: any[] = [ast];
-		while (stack.length) {
-			const node = stack.pop();
-			const keys = visitorKeys[node.type];
-			if (!keys) continue;
-			for (const k of keys) {
-				const child = node[k];
-				if (!child) continue;
-				const children = Array.isArray(child) ? child : [child];
-				for (const c of children) {
-					if (c && c.range && c.range[0] <= index && c.range[1] > index) {
-						result = c;
-						stack.push(c);
-					}
-				}
-			}
+		// First-principles: TS already has a parsed AST with O(log depth)
+		// position lookup (`ts.getTokenAtPosition`, internal). Use it
+		// instead of running a fresh DFS over the lazy ESTree on every
+		// call — that DFS forces wrapper materialisation along every
+		// branch it explores, which is the most expensive part.
+		if (index < 0 || index >= this.text.length) return null;
+		const getTokenAtPosition = (ts as unknown as {
+			getTokenAtPosition?: (sf: ts.SourceFile, pos: number) => ts.Node;
+		}).getTokenAtPosition;
+		if (!getTokenAtPosition) {
+			// API not available (older TS). Bail out.
+			return null;
 		}
-		return result;
+		// `getTokenAtPosition` returns a leaf token whose range strictly
+		// covers `index`. ESLint's `getNodeByRangeIndex` returns the
+		// deepest node whose `[range[0], range[1])` contains `index`.
+		// For a leaf token that's the token itself; nodes wrap their
+		// leaves so any ancestor whose range still covers `index` is
+		// shallower — the leaf is correct.
+		const tsNode: ts.Node = getTokenAtPosition(this._tsFile, index);
+		if (!tsNode) return null;
+		// Convert to ESTree wrapper. ESLint rules expect a node, not a
+		// token, so walk up to the first ts.Node that has a registered
+		// ESTree counterpart (lazy-estree only registers node-shaped
+		// kinds, not punctuator tokens).
+		const tsToEstree = this.parserServices?.tsNodeToESTreeNodeMap as
+			| WeakMap<ts.Node, any>
+			| undefined;
+		if (!tsToEstree) return null;
+		// Try to materialise via lazy-estree's `materialize` helper —
+		// it walks up the TS parent chain to find an already-converted
+		// ancestor and builds the path down. The Program node's `_ctx`
+		// holds the converter context.
+		const ctx = (this.ast as { _ctx?: unknown })._ctx;
+		if (!ctx) return null;
+		const { materialize } = require('./lazy-estree') as typeof import('./lazy-estree');
+		// Walk up to find a ts.Node that has an ESTree wrapper kind.
+		// Tokens / SyntaxList / etc. get folded into their parent's
+		// ESTree shape, so they don't have their own wrappers.
+		let cur: ts.Node | undefined = tsNode;
+		while (cur) {
+			try {
+				const wrapper = materialize(cur, ctx as any);
+				if (wrapper) return wrapper;
+			}
+			catch {
+				// `materialize` throws for kinds without an ESTree
+				// counterpart (e.g. tokens with no node form). Walk up.
+			}
+			cur = cur.parent;
+		}
+		return null;
 	}
 
 	getAncestors(node: any): any[] {
@@ -653,28 +725,6 @@ function advanceBackward(
 		if (remaining > 0 && --remaining === 0) break;
 	}
 	return matchOne ? null : out;
-}
-
-// ─── Comment construction helper ────────────────────────────────────────────
-
-// Builds an ESLint-shaped Comment object from a TS comment range. Mirrors
-// `convertComments`'s collect step (lib/tokens.ts) but used standalone in
-// the per-position query path so we don't need the whole comments array.
-function buildComment(text: string, pos: number, end: number, kind: ts.CommentKind, ast: ts.SourceFile): Comment {
-	const isLine = kind === ts.SyntaxKind.SingleLineCommentTrivia;
-	const raw = text.slice(pos, end);
-	const value = isLine ? raw.slice(2) : raw.slice(2, -2);
-	const startLC = ast.getLineAndCharacterOfPosition(pos);
-	const endLC = ast.getLineAndCharacterOfPosition(end);
-	return {
-		type: isLine ? 'Line' : 'Block',
-		value,
-		range: [pos, end],
-		loc: {
-			start: { line: startLC.line + 1, column: startLC.character },
-			end: { line: endLC.line + 1, column: endLC.character },
-		},
-	};
 }
 
 // ─── Sorted merge of tokens + comments ──────────────────────────────────────

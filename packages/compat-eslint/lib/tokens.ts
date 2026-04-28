@@ -219,107 +219,111 @@ export function convertTokens(ast: ts.SourceFile): Token[] {
 //      ordering wasn't guaranteed monotonic.
 // The new pass produces output already sorted by range[0] and never
 // scans the same byte twice.
+// Trivia gap layout (each ts.Node `n`):
+//   n.pos                  ← fullStart (leading trivia of `n`)
+//   ... leading trivia ...
+//   n.getStart()           ← first non-trivia char of `n`
+//   ... n's open token ...
+//   firstChildOrTail.pos   ← either firstChild.pos OR n.end
+//   ... children + sibling gaps ...
+//   lastChild.end
+//   ... inner trailing trivia ...
+//   n.end                  ← past close token
+//
+// `child.pos === prevSibling.end` (TS invariant), so each child's
+// leading trivia covers everything between the previous content and
+// that child's first non-trivia char. `walkInnerCommentsOf` scans
+// every sibling gap (= every non-first child's leading) and every
+// node's "tail" (between last child end and node.end), but
+// intentionally skips the FIRST child's leading: that range is
+// identical to the node's own leading and the caller (= node's
+// parent's per-child gap scan) is responsible for it.
+//
+// Tail handling has three cases:
+//   - leaf (isToken): no inner trivia possible, skip.
+//   - non-leaf with children: tail starts at lastChild.end.
+//   - non-leaf without children (empty `{ /* a */ }`, empty array,
+//     etc.): need inner-start position past the open token. Lex
+//     one token from `node.getStart()` to find it. Empty containers
+//     are rare, so the scanner cost is bounded.
+//
+// Per-gap scanning runs `forEachTrailingCommentRange`
+// (covers same-line comments after `scanFrom`, stops at first
+// newline) followed by `forEachLeadingCommentRange` (covers comments
+// after the first newline; `collecting` starts false so same-line
+// ones are skipped). The two emit sets are complementary — no dedupe
+// needed. `pos === 0` is a special case for leading: it sets
+// `collecting = true` upfront, so we skip the trailing pass to avoid
+// double-emit at the file head.
+//
+// Helper exported so `LazySourceCode.getCommentsInside` can drive the
+// same per-node walk without touching the full `convertComments`
+// array.
+export function walkInnerCommentsOf(
+	node: ts.Node,
+	ast: ts.SourceFile,
+	scanner: ts.Scanner,
+	emitCommentsFrom: (scanFrom: number) => void,
+): void {
+	if (isComment(node) || isJSDocComment(node)) return;
+	if (isToken(node) && node.kind !== SK.EndOfFileToken) return;
+	let firstSeen = false;
+	let lastEnd = -1;
+	ts.forEachChild(node, child => {
+		if (firstSeen) {
+			emitCommentsFrom(child.pos);
+		}
+		firstSeen = true;
+		walkInnerCommentsOf(child, ast, scanner, emitCommentsFrom);
+		lastEnd = child.end;
+	});
+	let tailFrom: number;
+	if (lastEnd >= 0) {
+		tailFrom = lastEnd;
+	}
+	else {
+		const start = node.getStart(ast);
+		if (start >= node.end) return;
+		scanner.setTextPos(start);
+		scanner.scan();
+		tailFrom = scanner.getTokenEnd();
+	}
+	if (tailFrom < node.end) {
+		emitCommentsFrom(tailFrom);
+	}
+}
+
+export function buildCommentObject(text: string, pos: number, end: number, kind: ts.CommentKind, ast: ts.SourceFile): Comment {
+	const isLine = kind === SK.SingleLineCommentTrivia;
+	const raw = text.slice(pos, end);
+	const value = isLine ? raw.slice(2) : raw.slice(2, -2);
+	const range: [number, number] = [pos, end];
+	return { type: isLine ? 'Line' : 'Block', value, range, loc: getLocFor(range, ast) };
+}
+
 export function convertComments(ast: ts.SourceFile): Comment[] {
 	const out: Comment[] = [];
 	const text = ast.text;
 	const shebangLen = (ts.getShebang(text) ?? '').length;
 	const collect = (pos: number, end: number, kind: ts.CommentKind): void => {
-		const isLine = kind === SK.SingleLineCommentTrivia;
-		const raw = text.slice(pos, end);
-		const value = isLine ? raw.slice(2) : raw.slice(2, -2);
-		const range: [number, number] = [pos, end];
-		out.push({ type: isLine ? 'Line' : 'Block', value, range, loc: getLocFor(range, ast) });
+		out.push(buildCommentObject(text, pos, end, kind, ast));
 	};
-	// Per-node trivia layout (each ts.Node `n`):
-	//   n.pos                  ← fullStart (leading trivia of `n`)
-	//   ... leading trivia ...
-	//   n.getStart()           ← first non-trivia char of `n`
-	//   ... n's open token ...
-	//   firstChildOrTail.pos   ← either firstChild.pos OR n.end
-	//   ... children + sibling gaps ...
-	//   lastChild.end
-	//   ... inner trailing trivia ...
-	//   n.end                  ← past close token
-	//
-	// `child.pos === prevSibling.end` (TS invariant), so each child's
-	// leading trivia covers everything between the previous content
-	// and that child's first non-trivia char. We scan only those leading
-	// trivia ranges + each node's "tail" (between last child end and
-	// node.end) — never scan a byte twice, no dedupe.
-	//
-	// Tail handling has three cases:
-	//   - leaf (isToken): no inner trivia possible, skip.
-	//   - non-leaf with children: tail starts at lastChild.end.
-	//   - non-leaf without children (empty `{ /* a */ }`, empty array,
-	//     etc.): need inner-start position past the open token. Lex
-	//     one token from `node.getStart()` to find it. Empty containers
-	//     are rare, so the scanner cost is bounded.
 	const scanner = ts.createScanner(
 		ast.languageVersion,
 		/*skipTrivia*/ true,
 		ast.languageVariant,
 	);
 	scanner.setText(text);
-	// Each trivia gap is scanned with BOTH `forEachTrailingCommentRange`
-	// (covers same-line comments after `scanFrom`, stops at first
-	// newline) and `forEachLeadingCommentRange` (covers comments after
-	// the first newline; `collecting` starts false so same-line ones
-	// are skipped). The two emit sets are complementary — no dedupe
-	// needed. `pos === 0` is a special case for leading: it sets
-	// `collecting = true` upfront, so we skip the trailing pass to
-	// avoid double-emit at the file head.
 	const emitCommentsFrom = (scanFrom: number): void => {
 		if (scanFrom > 0) {
 			ts.forEachTrailingCommentRange(text, scanFrom, collect);
 		}
 		ts.forEachLeadingCommentRange(text, scanFrom, collect);
 	};
-	const walk = (node: ts.Node): void => {
-		if (isComment(node) || isJSDocComment(node)) return;
-		// Leaf token — atomic span, no inner trivia.
-		if (isToken(node) && node.kind !== SK.EndOfFileToken) return;
-		// Skip the first child's leading trivia: TS guarantees
-		// `firstChild.pos === parent.pos`, so the first child's leading
-		// range is the SAME bytes as `node`'s own leading range. That
-		// outer range is emitted by `node`'s parent (or by the entry
-		// point's pre-walk for SourceFile). Re-scanning here would
-		// double-emit the same comments at every nesting level.
-		let firstSeen = false;
-		let lastEnd = -1;
-		ts.forEachChild(node, child => {
-			if (firstSeen) {
-				// Subsequent siblings: their leading trivia
-				// (= prevSibling.end → child.start) hasn't been
-				// scanned yet. `child.pos === prevSibling.end`.
-				emitCommentsFrom(child.pos);
-			}
-			firstSeen = true;
-			walk(child);
-			lastEnd = child.end;
-		});
-		// Tail gap: between last child / open-token and node.end.
-		let tailFrom: number;
-		if (lastEnd >= 0) {
-			tailFrom = lastEnd;
-		}
-		else {
-			// Childless non-leaf (empty `{ /* a */ }`, empty array
-			// literal, etc.). Find inner start past the open token by
-			// lexing one token from `node.getStart()`.
-			const start = node.getStart(ast);
-			if (start >= node.end) return;
-			scanner.setTextPos(start);
-			scanner.scan();
-			tailFrom = scanner.getTokenEnd();
-		}
-		if (tailFrom < node.end) {
-			emitCommentsFrom(tailFrom);
-		}
-	};
 	// SourceFile has no parent to emit its leading trivia for it; do
 	// it once here so the file-header comments aren't lost when the
 	// walk skips ast's first child's leading scan (= same range).
 	emitCommentsFrom(shebangLen);
-	walk(ast);
+	walkInnerCommentsOf(ast, ast, scanner, emitCommentsFrom);
 	return out;
 }
