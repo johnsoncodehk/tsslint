@@ -131,11 +131,20 @@ export interface FastDispatchInfo {
 	// patterns — trigger on Parent, but the listener is interested in a
 	// specific child slot.
 	fieldFire?: string;
-	// Type that the dispatched node (post-fieldFire) must match. Set by
-	// `Parent > Type.field` (Type is the constraint on the field child).
+	// Multi-level field walk for `A > B.f1 > C.f2 [> …]` chains. Each
+	// step extracts `actual[fieldChain[i]]` and (if `fieldChainTypes[i]`
+	// is set) checks the intermediate node's `.type`. The listener
+	// receives the FINAL extracted node. Mutually exclusive with
+	// `fieldFire`; uses one or the other.
+	fieldChain?: string[];
+	fieldChainTypes?: (string | undefined)[];
+	// Type that the dispatched node (post-fieldFire / post-fieldChain)
+	// must match. Set by `Parent > Type.field` (Type is the constraint
+	// on the deepest field child).
 	typeFilter?: string;
 	// Additional per-target predicate. Composes attribute checks,
-	// ancestor walks, etc. Called after fieldFire / typeFilter resolve.
+	// ancestor walks, etc. Called after fieldFire / fieldChain /
+	// typeFilter resolve. Receives the extracted node, not the trigger.
 	filter?: (target: any) => boolean;
 }
 
@@ -338,9 +347,9 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			}
 		}
 		if (fieldName) {
-			// Try the fast fieldFire path first — trigger on Parent (left).
-			// Only works when the left side is a leaf type matcher (we need
-			// a finite trigger type set, not a chain).
+			// 1. Fast fieldFire path — single-level. Trigger on Parent
+			//    (left), extract `target[fieldName]`. Only works when
+			//    `left` is a leaf type matcher (finite trigger types).
 			const parentInfo = walkTypeMatcher(left, isExit);
 			if (parentInfo && parentInfo.types !== 'all') {
 				// Parent-side filters (e.g. `[optional=true]`) check the
@@ -360,12 +369,49 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 					filter: composed,
 				};
 			}
-			// Slow path: left is itself a chain (`A > B.f1 > C.f2`) or a
-			// shape walkTypeMatcher couldn't decompose. Trigger on the
-			// compound's type (or wildcard) and add the field constraint
-			// + parent-chain match as filters. Used by selectors like
-			// `CallExpression > MemberExpression.callee > Identifier[name="join"].property`
-			// (eslint-plugin-prefer-string-starts-ends-with-style rules).
+			// 2. Multi-level fast path — when `left` is itself a chain
+			//    (`A > B.f1 > C.f2`), recursively decompose left to a
+			//    fieldFire/fieldChain entry and extend the chain with
+			//    the current `fieldName`. Triggers on the OUTERMOST
+			//    parent (smallest visit set), extracts step-by-step, and
+			//    type-checks intermediates inline. Strictly cheaper than
+			//    triggering on the (numerous) target type and walking up
+			//    the parent chain in a filter.
+			if (left.type === 'child' && (typeFilter || wildcard)) {
+				const leftInfo = walkChild(left.left, left.right, isExit);
+				const leftHasOnlyFastFields = leftInfo
+					&& leftInfo.types !== 'all'
+					&& !leftInfo.filter
+					&& (leftInfo.fieldFire !== undefined || leftInfo.fieldChain !== undefined);
+				if (leftHasOnlyFastFields) {
+					const chain = leftInfo.fieldChain
+						? [...leftInfo.fieldChain]
+						: [leftInfo.fieldFire!];
+					const chainTypes = leftInfo.fieldChainTypes
+						? [...leftInfo.fieldChainTypes]
+						: [leftInfo.typeFilter];
+					chain.push(fieldName);
+					// Final-step type check carried separately via
+					// `typeFilter` so dispatch's existing post-extraction
+					// type gate applies; intermediate types live in
+					// `chainTypes` (parallel to `chain`, last entry =
+					// the new typeFilter to preserve uniformity).
+					chainTypes.push(typeFilter);
+					return {
+						types: leftInfo.types,
+						isExit,
+						fieldChain: chain,
+						fieldChainTypes: chainTypes,
+						typeFilter,
+						filter: extraFilter,
+					};
+				}
+			}
+			// 3. Slow-path fallback: trigger on the compound's type and
+			//    add field constraint + parent-chain match as filters.
+			//    Used when the multi-level fast path can't decompose
+			//    (descendant combinator on the left, attribute filter
+			//    on intermediate, etc.).
 			if (typeFilter || wildcard) {
 				const types: Set<string> | 'all' = wildcard
 					? 'all'

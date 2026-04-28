@@ -1651,6 +1651,47 @@ type D = Awaited<Promise<number>>;
 	);
 }
 
+// 3x. Multi-level child chain with field-walk fast path — when a
+//     selector has the shape `A > B.f1 > C.f2`, dispatch should
+//     trigger on the OUTERMOST type (`A`, smallest visit set), walk
+//     the field chain step-by-step (`target[f1][f2]`), type-check
+//     intermediates inline, and pass the final extracted node to the
+//     listener. Repro: a real-world `CallExpression > MemberExpression
+//     .callee > Identifier[name="join"].property` selector.
+{
+	const code = `
+		const arr = [1, 2, 3];
+		arr.join(',');
+		arr.concat([4]);
+		arr.join();
+		arr.toString();
+	`;
+	const fired: { type: string; name: string }[] = [];
+	const rule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
+		create() {
+			return {
+				'CallExpression > MemberExpression.callee > Identifier[name="join"].property'(node: any) {
+					fired.push({ type: node.type, name: node.name });
+				},
+			};
+		},
+	};
+	const { program, file } = buildProgram(code);
+	const tsslintRule = compat.convertRule(rule, [], { id: 'chain-fast-path' });
+	tsslintRule({ file, program, report: () => ({} as any) } as any);
+	check(
+		'chain fast-path: listener fired exactly twice (on the two arr.join calls)',
+		fired.length === 2,
+		`got ${fired.length} fires`,
+	);
+	check(
+		'chain fast-path: listener received the property Identifier (not CallExpression)',
+		fired.every(f => f.type === 'Identifier' && f.name === 'join'),
+		`got: ${JSON.stringify(fired)}`,
+	);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the

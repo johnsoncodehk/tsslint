@@ -421,7 +421,14 @@ interface DispatchEntry {
 	// When set, the listener receives `target[fieldFire]` instead of the
 	// triggering node (Parent > *.field selectors).
 	fieldFire?: string;
-	// Required type for the dispatched node (post fieldFire if any).
+	// Multi-level field walk for chains like `A > B.f1 > C.f2`. Each
+	// step extracts `actual[fieldChain[i]]` and (if `fieldChainTypes[i]`
+	// is set) checks the intermediate node's `.type`. Listener receives
+	// the final extracted node. Mutually exclusive with `fieldFire`.
+	fieldChain?: string[];
+	fieldChainTypes?: (string | undefined)[];
+	// Required type for the dispatched node (post fieldFire / fieldChain
+	// if any).
 	typeFilter?: string;
 	// Per-target predicate composing attribute / ancestry checks.
 	filter?: (target: any) => boolean;
@@ -472,6 +479,8 @@ function buildFastDispatch(
 				rule,
 				listener,
 				fieldFire: info.fieldFire,
+				fieldChain: info.fieldChain,
+				fieldChainTypes: info.fieldChainTypes,
 				typeFilter: info.typeFilter,
 				filter: info.filter,
 			};
@@ -655,11 +664,33 @@ function runEntries(
 	for (let j = 0; j < arr.length; j++) {
 		const e = arr[j];
 		if (errors.has(e.rule)) continue;
-		let actual = target;
+		let actual: any = target;
 		if (e.fieldFire !== undefined) {
 			actual = target[e.fieldFire];
 			if (actual == null) continue;
 			if (Array.isArray(actual)) continue; // arrays aren't single targets
+		}
+		else if (e.fieldChain !== undefined) {
+			// Multi-level field walk for `A > B.f1 > C.f2 [> …]` chains.
+			// Each step extracts and (when fieldChainTypes[k] is set)
+			// type-checks the intermediate node before walking further.
+			// Final extracted node is passed to the listener.
+			let bail = false;
+			const chain = e.fieldChain;
+			const types = e.fieldChainTypes;
+			for (let k = 0; k < chain.length; k++) {
+				actual = actual[chain[k]];
+				if (actual == null || Array.isArray(actual)) {
+					bail = true;
+					break;
+				}
+				const t = types?.[k];
+				if (t !== undefined && actual.type !== t) {
+					bail = true;
+					break;
+				}
+			}
+			if (bail) continue;
 		}
 		if (e.typeFilter !== undefined && actual.type !== e.typeFilter) continue;
 		if (e.filter !== undefined && !e.filter(actual)) continue;

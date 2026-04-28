@@ -570,55 +570,51 @@ function wire(node: any): any {
 
 // --- Multi-level child chain with compound + field on the right ------
 //
-// `A > B.f1 > C[attr].f2` — left side is itself a `child` selector, not
-// a leaf type matcher. The fast fieldFire path requires a finite parent
-// type set (so it can trigger on Parent and extract `parent[field]`),
-// which a chain doesn't give. Slow path: trigger on Right's compound
-// type and add the field constraint + parent-chain match as filters.
+// `A > B.f1 > C[attr].f2` — left side is itself a `child` selector.
+// The proper fast path triggers on the OUTERMOST type (smallest visit
+// set, e.g. CallExpression vs every Identifier), walks the field
+// chain, and type-checks intermediates inline:
 //
-// Real-world repro: rules registering selectors like
-// `CallExpression > MemberExpression.callee > Identifier[name="join"].property`
-// (e.g. prefer-string-replace-all-style guidance).
+//   types = {A}  fieldChain = [f1, f2]  fieldChainTypes = [B, C]
+//   filter = compound's attribute checks (e.g. name="join")
+//
+// dispatch then extracts `target[f1] → must be B → [f2] → must be C →
+// pass to listener`. Strictly cheaper than triggering on the (numerous)
+// final type and walking up the parent chain via filter.
+//
+// Real-world repro:
+//   `CallExpression > MemberExpression.callee > Identifier[name="join"].property`
 {
 	const info = take(decomposeSimple(
 		'CallExpression > MemberExpression.callee > Identifier[name="join"].property',
 	));
-	check('chain+field: trigger types {Identifier}', info.types !== 'all' && info.types.has('Identifier'));
-	const tree = wire({
-		type: 'CallExpression',
-		callee: {
-			type: 'MemberExpression',
-			object: { type: 'Identifier', name: 'arr' },
-			property: { type: 'Identifier', name: 'join' },
-		},
-		arguments: [],
-	});
-	const joinId = tree.callee.property;
-	const objectId = tree.callee.object;
-	check('chain+field: fires on the property Identifier(name=join)', info.filter!(joinId));
-	check('chain+field: rejects the object Identifier(name=arr)', !info.filter!(objectId));
-	// Wrong attribute value — same shape, different name.
-	const tree2 = wire({
-		type: 'CallExpression',
-		callee: {
-			type: 'MemberExpression',
-			object: { type: 'Identifier', name: 'arr' },
-			property: { type: 'Identifier', name: 'concat' },
-		},
-		arguments: [],
-	});
-	check('chain+field: rejects property name=concat', !info.filter!(tree2.callee.property));
-	// Right-shaped Identifier(name=join) but parent isn't a CallExpression's MemberExpression.callee.
-	const tree3 = wire({
-		type: 'BinaryExpression',
-		left: {
-			type: 'MemberExpression',
-			object: { type: 'Identifier', name: 'arr' },
-			property: { type: 'Identifier', name: 'join' },
-		},
-		right: { type: 'Literal', value: 1 },
-	});
-	check('chain+field: rejects Identifier(name=join) in non-CallExpression chain', !info.filter!(tree3.left.property));
+	check(
+		'chain+field: trigger types {CallExpression} (outermost, not Identifier)',
+		info.types !== 'all' && info.types.has('CallExpression') && info.types.size === 1,
+	);
+	check(
+		'chain+field: fieldChain = [callee, property]',
+		!!info.fieldChain && info.fieldChain.length === 2
+			&& info.fieldChain[0] === 'callee'
+			&& info.fieldChain[1] === 'property',
+	);
+	check(
+		'chain+field: fieldChainTypes = [MemberExpression, Identifier]',
+		!!info.fieldChainTypes
+			&& info.fieldChainTypes[0] === 'MemberExpression'
+			&& info.fieldChainTypes[1] === 'Identifier',
+	);
+	check('chain+field: typeFilter = Identifier', info.typeFilter === 'Identifier');
+	// The compound attribute check (name === 'join') becomes the filter
+	// applied to the final extracted Identifier.
+	check(
+		'chain+field: attribute filter accepts Identifier(name=join)',
+		!!info.filter && info.filter({ type: 'Identifier', name: 'join' }),
+	);
+	check(
+		'chain+field: attribute filter rejects Identifier(name=concat)',
+		!!info.filter && !info.filter({ type: 'Identifier', name: 'concat' }),
+	);
 }
 
 // --- Standalone .field / standalone [attr] ---------------------------
