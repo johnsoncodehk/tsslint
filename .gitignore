@@ -5,6 +5,7 @@ node_modules
 *.vsix
 packages/*/index.js
 packages/*/lib/**/*.js
+!packages/compat-eslint/lib/code-path-analysis/*.js
 packages/*/test/**/*.js
 .tsslint/
 packages/compat-eslint/test/upstream-shim.js

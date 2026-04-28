@@ -2,17 +2,17 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
-import path = require('path');
 
 // ESLint internals — these reach into lib/ paths and may break on major
 // ESLint upgrades. Resolved on first use so warm runs that hit TSSLint's
 // per-rule cache for every file never have to load them. We only keep
-// We need exactly one ESLint internal: `CodePathAnalyzer` to drive
-// `onCodePath*` events from the inline visitor. `SourceCode` is replaced
-// by our own `LazySourceCode` (lib/lazy-source-code.ts) — we don't
-// instantiate ESLint's any more, so we don't import the file (saving the
-// transitive `TokenStore` / cursor / linebreak-regex chain). NodeEventGenerator
-// and Traverser are no longer used anywhere.
+// `CodePathAnalyzer` is vendored from ESLint's `lib/linter/code-path-analysis/`
+// (see `lib/code-path-analysis/`). ESLint doesn't expose CPA on any
+// public surface (`use-at-your-own-risk` only re-exports lint engines /
+// `builtinRules`), so we ship the source ourselves — that drops the
+// last runtime `eslint` package dependency. The vendored copy has its
+// `eslint/lib/shared/assert` reference replaced with a tiny inline ok()
+// and the `debug` package replaced with a no-op stub.
 let eslintInternals: {
 	CodePathAnalyzer: new (eventGenerator: {
 		// ESLint 9.39+ uses `eventGenerator.emit` (function) directly;
@@ -26,9 +26,8 @@ let eslintInternals: {
 } | undefined;
 function loadEslintInternals() {
 	if (!eslintInternals) {
-		const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
 		eslintInternals = {
-			CodePathAnalyzer: require(path.join(eslintRoot, 'lib/linter/code-path-analysis/code-path-analyzer.js')),
+			CodePathAnalyzer: require('./lib/code-path-analysis/code-path-analyzer.js'),
 		};
 	}
 	return eslintInternals;

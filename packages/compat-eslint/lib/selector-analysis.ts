@@ -24,10 +24,10 @@
 //   nth-child      :nth-child(N)
 //   nth-last-child :nth-last-child(N)
 
-// Resolved transitively through eslint (which depends on esquery).
-// Avoids adding a direct dep just for selector parsing.
-const esqueryPath = require.resolve('esquery', { paths: [require.resolve('eslint/package.json')] });
-const esquery = require(esqueryPath) as { parse(selector: string): unknown };
+// Direct dep on `esquery` (declared in compat-eslint's package.json).
+// Previously resolved through eslint's transitive dep; now self-owned
+// so we can drop the runtime eslint dependency.
+const esquery = require('esquery') as { parse(selector: string): unknown };
 
 // Vendored visitor-keys table (`./visitor-keys`) — used by sibling /
 // `:nth-child` / `:has` filters at dispatch time to walk a node's

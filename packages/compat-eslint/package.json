@@ -21,10 +21,14 @@
 		"@types/eslint": "^8.56.10",
 		"@typescript-eslint/scope-manager": "^8.16.0",
 		"@typescript-eslint/typescript-estree": "^8.16.0",
+		"eslint": ">=9.39.0 <10.0.0",
 		"typescript": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "*"
 	},
 	"dependencies": {
 		"@tsslint/types": "3.0.4",
-		"eslint": ">=9.39.0 <10.0.0"
+		"esquery": "^1.5.0"
 	}
 }
