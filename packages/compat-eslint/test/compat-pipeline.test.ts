@@ -1536,6 +1536,121 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 	);
 }
 
+// 3w. `var.references` for a lib-utility-type global (Pick / Record / …)
+//     must include every type-position usage. Bug: when `addGlobals`
+//     pre-registered a fake var and the lib-detection path reuses it,
+//     the FIRST hit was keyed under the real ts.Symbol while subsequent
+//     hits (which take the `variableBySymbol.has(sym)` branch with
+//     `sym=realSym, v=fakeVar`) keyed under `v.symbol` (the fake
+//     symbol). `getReferencesFor(fakeSym)` then returned only the
+//     subsequent refs — the first one was orphaned in a separate
+//     `refs.get(realSym)` bucket. Off-by-one on every lib-utility-type
+//     variable's reference list.
+//
+//     The bug only surfaces when the lib-detection path actually fires
+//     — `getSymbolAtLocation(Pick)` returns the real lib symbol. Repro
+//     needs every `lib.*.d.ts` pre-cached so cross-lib resolution sees
+//     them; the standard `buildProgram` only loads the default lib.
+{
+	const code = `
+type A1 = Pick<{ a: 1 }, 'a'>;
+type A2 = Pick<{ b: 2 }, 'b'>;
+type A3 = Pick<{ c: 3 }, 'c'>;
+type B1 = Omit<{ a: 1 }, 'a'>;
+type B2 = Omit<{ b: 2 }, 'b'>;
+type C = Record<string, number>;
+type D = Awaited<Promise<number>>;
+`;
+	const fileName = '/test.ts';
+	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
+	const libDir = realLibPath.replace(/[/\\][^/\\]+$/, '');
+	const fs = require('fs') as typeof import('fs');
+	const pathMod = require('path') as typeof import('path');
+	const libFiles = new Map<string, ts.SourceFile>();
+	for (const f of fs.readdirSync(libDir)) {
+		if (f.startsWith('lib.') && f.endsWith('.d.ts')) {
+			const p = pathMod.join(libDir, f);
+			libFiles.set(
+				p,
+				ts.createSourceFile(p, fs.readFileSync(p, 'utf-8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS),
+			);
+		}
+	}
+	const realLibName = realLibPath.split(/[\\/]/).pop()!;
+	const host: ts.CompilerHost = {
+		getSourceFile: n => n === fileName ? sf : libFiles.get(n),
+		getDefaultLibFileName: () => realLibName,
+		getDefaultLibLocation: () => libDir,
+		writeFile: () => {},
+		getCurrentDirectory: () => '/',
+		getDirectories: () => [],
+		fileExists: n => n === fileName || libFiles.has(n),
+		readFile: n => n === fileName ? code : libFiles.get(n)?.text,
+		getCanonicalFileName: n => n,
+		useCaseSensitiveFileNames: () => true,
+		getNewLine: () => '\n',
+	};
+	const program = ts.createProgram({
+		rootNames: [fileName, realLibPath],
+		options: { target: ts.ScriptTarget.Latest, strict: true, noEmit: true, noLib: false },
+		host,
+	});
+	const file = program.getSourceFile(fileName)!;
+	const refCounts = new Map<string, number>();
+	const inspectRule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
+		create(ctx) {
+			return {
+				'Program:exit'(node: any) {
+					// Walk up to globalScope — lib-utility-type fakes
+					// (`Pick` / `Omit` / `Record` / `Awaited`) are
+					// registered there via `addGlobals`, not in module scope.
+					let scope: any = ctx.sourceCode.getScope(node);
+					while (scope?.upper) scope = scope.upper;
+					for (const v of scope.variables) {
+						if (['Pick', 'Omit', 'Record', 'Awaited'].includes(v.name)) {
+							refCounts.set(v.name, v.references.length);
+						}
+					}
+				},
+			};
+		},
+	};
+	const tsslintRule = compat.convertRule(inspectRule, [], { id: 'inspect-refs' });
+	tsslintRule({
+		file,
+		program,
+		report: () => ({
+			at: () => ({} as any),
+			asWarning: () => ({} as any),
+			asError: () => ({} as any),
+			asSuggestion: () => ({} as any),
+			withFix: () => ({} as any),
+			withRefactor: () => ({} as any),
+			withDeprecated: () => ({} as any),
+			withUnnecessary: () => ({} as any),
+			withoutCache: () => ({} as any),
+		} as any),
+	} as any);
+	check(
+		`var.references: Pick has 3 refs (got ${refCounts.get('Pick') ?? 0})`,
+		refCounts.get('Pick') === 3,
+	);
+	check(
+		`var.references: Omit has 2 refs (got ${refCounts.get('Omit') ?? 0})`,
+		refCounts.get('Omit') === 2,
+	);
+	check(
+		`var.references: Record has 1 ref (got ${refCounts.get('Record') ?? 0})`,
+		refCounts.get('Record') === 1,
+	);
+	check(
+		`var.references: Awaited has 1 ref (got ${refCounts.get('Awaited') ?? 0})`,
+		refCounts.get('Awaited') === 1,
+	);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the

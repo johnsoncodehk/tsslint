@@ -1145,8 +1145,19 @@ export class TsScopeManager {
 							// positives.
 							variableBySymbol.set(sym, v);
 						}
-						let arr = refs.get(sym);
-						if (!arr) refs.set(sym, arr = []);
+						// Key the ref bucket by `v.symbol`, NOT `sym`. When the
+						// reused var is a fake-symbol global (the existing-var
+						// branch above), `v.symbol === fakeSym` while `sym ===
+						// realSym`. The follow-up branch
+						// (`variableBySymbol.has(sym)` → refUsage path) ALSO
+						// keys by `v.symbol`. Mismatching keys here would
+						// scatter refs across two buckets and `getReferencesFor
+						// (v.symbol)` would silently drop the first hit. Same
+						// reasoning as the synthetic `arguments` aliasing
+						// case in the upper branch.
+						const key = v.symbol;
+						let arr = refs.get(key);
+						if (!arr) refs.set(key, arr = []);
 						{
 							const ref = new TsReference(this, node, sym);
 							arr.push(ref);
