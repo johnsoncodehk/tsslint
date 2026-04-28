@@ -1885,9 +1885,11 @@ export class TsVariable {
 		return this.symbol.name;
 	}
 
+	private _scope?: TsScope;
 	get scope(): TsScope {
+		if (this._scope) return this._scope;
 		const decl = this.symbol.declarations?.[0];
-		if (!decl) return this.manager.globalScope;
+		if (!decl) return this._scope = this.manager.globalScope;
 		const ts_ = ts;
 		const SK = ts_.SyntaxKind;
 		// Walk parents until we hit a scope-creating node.
@@ -1896,12 +1898,12 @@ export class TsVariable {
 			if (arr && arr.length > 0) {
 				// Pick the innermost non-fn-expr-name scope.
 				for (let i = arr.length - 1; i >= 0; --i) {
-					if (arr[i].type !== 'function-expression-name') return arr[i];
+					if (arr[i].type !== 'function-expression-name') return this._scope = arr[i];
 				}
 			}
 			if (cur.kind === SK.SourceFile) break;
 		}
-		return this.manager.globalScope;
+		return this._scope = this.manager.globalScope;
 	}
 
 	_defsOverride?: TsDefinition[];
@@ -2032,7 +2034,9 @@ export class TsReference {
 		return this._estreeIdent = stub;
 	}
 
+	private _from?: TsScope;
 	get from(): TsScope {
+		if (this._from) return this._from;
 		const SK = ts.SyntaxKind;
 		// Computed property names (`class { [expr]() {} }`, `{ [expr]: … }`)
 		// are evaluated in the OUTER scope, not the method/property scope —
@@ -2059,12 +2063,12 @@ export class TsReference {
 						skipMethodScope = false;
 						continue;
 					}
-					return s;
+					return this._from = s;
 				}
 			}
 			if (cur.kind === SK.SourceFile) break;
 		}
-		return this.manager.globalScope;
+		return this._from = this.manager.globalScope;
 	}
 
 	get resolved(): TsVariable | null {
@@ -2078,8 +2082,11 @@ export class TsReference {
 	}
 
 	// Identifier IS the declaration name (binding position), not just a usage
-	// of the symbol. Used internally by `init` / `isWrite`.
+	// of the symbol. Used internally by `init` / `isWrite` — cached so
+	// the decl walk doesn't repeat.
+	private _isBindingIdent?: boolean;
 	get _isBindingIdentifier(): boolean {
+		if (this._isBindingIdent !== undefined) return this._isBindingIdent;
 		const decls = this.symbol?.declarations ?? [];
 		const SK = ts.SyntaxKind;
 		for (const d of decls) {
@@ -2088,9 +2095,9 @@ export class TsReference {
 			// declared variable; they aren't fresh bindings, so don't count
 			// them as init positions.
 			if (d.kind === SK.ExportSpecifier || d.kind === SK.ImportSpecifier) continue;
-			if ((d as { name?: ts.Node }).name === this.tsIdentifier) return true;
+			if ((d as { name?: ts.Node }).name === this.tsIdentifier) return this._isBindingIdent = true;
 		}
-		return false;
+		return this._isBindingIdent = false;
 	}
 
 	get init(): boolean | undefined {
