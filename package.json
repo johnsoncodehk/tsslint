@@ -21,6 +21,7 @@
 		"@types/node": "latest",
 		"@typescript-eslint/eslint-plugin": "latest",
 		"dprint": "latest",
+		"eslint-plugin-react-x": "^4.2.3",
 		"typescript": "latest"
 	}
 }

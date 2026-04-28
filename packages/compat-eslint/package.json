@@ -15,6 +15,7 @@
 	"scripts": {
 		"bench": "tsc --build && node test/bench/run.js",
 		"test:predicate-coverage": "tsc --build && node test/predicate-coverage.test.js",
+		"test:jsx-react-x": "tsc --build && node test/jsx-react-x.test.mjs",
 		"test:upstream": "tsc --build && node test/upstream-runner.js"
 	},
 	"devDependencies": {

@@ -26,6 +26,10 @@ function parseTs(code: string): ts.SourceFile {
 	return ts.createSourceFile('/test.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
+function parseTsx(code: string): ts.SourceFile {
+	return ts.createSourceFile('/test.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+}
+
 function eagerConvert(sf: ts.SourceFile): any {
 	return astConverter(sf, PARSE_SETTINGS as any, true).estree;
 }
@@ -959,6 +963,141 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		supportedDiverged.length === 0,
 		supportedDiverged.length ? supportedDiverged.map(d => `${d.name}: ${d.first}`).join('; ') : '',
 	);
+}
+
+// --- JSX parity fixtures -----------------------------------------------
+//
+// JSX shapes typescript-estree's Converter emits. lazy-estree must reach
+// byte-for-byte parity with eager on these. Parsed with ScriptKind.TSX so
+// `<` is interpreted as JSX, not as a TS type assertion.
+{
+	const jsxFixtures: Array<{ name: string; code: string }> = [
+		// Element shapes
+		{ name: 'jsx-self-closing', code: `let _ = <div />;` },
+		{ name: 'jsx-empty-children', code: `let _ = <div></div>;` },
+		{ name: 'jsx-text-child', code: `let _ = <div>hello</div>;` },
+		{ name: 'jsx-multi-text', code: `let _ = <div>a b c</div>;` },
+		{ name: 'jsx-nested', code: `let _ = <div><span /></div>;` },
+		{ name: 'jsx-deep-nested', code: `let _ = <a><b><c /></b></a>;` },
+		// Attributes
+		{ name: 'jsx-attr-string', code: `let _ = <div id="x" />;` },
+		{ name: 'jsx-attr-boolean', code: `let _ = <input disabled />;` },
+		{ name: 'jsx-attr-expr', code: `let _ = <div id={x} />;` },
+		{ name: 'jsx-attr-spread', code: `let _ = <div {...props} />;` },
+		{ name: 'jsx-attr-multiple', code: `let _ = <div id="a" className={c} {...rest} />;` },
+		// Element name forms
+		{ name: 'jsx-name-member', code: `let _ = <Foo.Bar />;` },
+		{ name: 'jsx-name-deep-member', code: `let _ = <a.b.c />;` },
+		{ name: 'jsx-name-namespace', code: `let _ = <svg:rect />;` },
+		// Expression containers
+		{ name: 'jsx-expr-child', code: `let _ = <div>{x}</div>;` },
+		{ name: 'jsx-expr-empty', code: `let _ = <div>{/* hi */}</div>;` },
+		{ name: 'jsx-expr-conditional', code: `let _ = <div>{x && <span />}</div>;` },
+		{ name: 'jsx-spread-child', code: `let _ = <div>{...arr}</div>;` },
+		// Fragments
+		{ name: 'jsx-fragment', code: `let _ = <></>;` },
+		{ name: 'jsx-fragment-children', code: `let _ = <><a /><b /></>;` },
+		{ name: 'jsx-fragment-text', code: `let _ = <>hello</>;` },
+		// Type arguments on opening element (TSX)
+		{ name: 'jsx-type-args', code: `function Generic<T>(p: { v: T }) { return null; } let _ = <Generic<number> v={1} />;` },
+		// Whitespace handling — JSXText collapse rules differ in eager:
+		{ name: 'jsx-whitespace', code: `let _ = <div>  hello  world  </div>;` },
+		{ name: 'jsx-newline-text', code: 'let _ = <div>\n  hello\n  world\n</div>;' },
+		// Mixed children
+		{ name: 'jsx-mixed-children', code: `let _ = <div>before {x} after</div>;` },
+		// HTML entity decoding (typescript-estree's unescapeStringLiteralText)
+		{ name: 'jsx-attr-entity-amp', code: `let _ = <div title="&amp;" />;` },
+		{ name: 'jsx-attr-entity-lt-gt', code: `let _ = <div data="&lt;a&gt;" />;` },
+		{ name: 'jsx-attr-entity-numeric', code: `let _ = <div data="&#65;&#x42;" />;` },
+		{ name: 'jsx-text-entity', code: `let _ = <div>&amp;</div>;` },
+		// Edge cases: JSX-as-attribute-value (typescript-estree allows
+		// elements + fragments as attribute values, not just strings).
+		{ name: 'jsx-attr-element-value', code: `let _ = <Foo prop=<Bar /> />;` },
+		{ name: 'jsx-attr-fragment-value', code: `let _ = <Foo prop=<></> />;` },
+		// `<this />` — ts.ThisKeyword as tag name materializes as
+		// JSXIdentifier{ name: 'this' }, matching upstream's
+		// convertJSXNamespaceOrIdentifier fallback.
+		{ name: 'jsx-this-tag', code: `let _ = <this />;` },
+	];
+	const runJsxFixture = (fx: { name: string; code: string }): { matched: boolean; first?: string } => {
+		const sf = parseTsx(fx.code);
+		const eagerSf = parseTsx(fx.code);
+		try {
+			const { estree: lazyEstree } = lazy.convertLazy(sf);
+			const eagerEstree = eagerConvert(eagerSf);
+			const beforeFails = failures.length;
+			compare(lazyEstree, eagerEstree, `jsx:${fx.name}`);
+			const newFails = failures.slice(beforeFails);
+			failures.length = beforeFails;
+			return newFails.length === 0
+				? { matched: true }
+				: { matched: false, first: newFails[0] };
+		}
+		catch (err) {
+			return { matched: false, first: `THREW: ${(err as Error).message.split('\n')[0]}` };
+		}
+	};
+	const jsxDiverged: Array<{ name: string; first: string }> = [];
+	for (const fx of jsxFixtures) {
+		const r = runJsxFixture(fx);
+		if (!r.matched) jsxDiverged.push({ name: fx.name, first: r.first ?? '' });
+	}
+	check(
+		`JSX parity: ${jsxFixtures.length - jsxDiverged.length}/${jsxFixtures.length} fixtures match eager`,
+		jsxDiverged.length === 0,
+		jsxDiverged.length ? jsxDiverged.slice(0, 3).map(d => `${d.name}: ${d.first}`).join('; ') : '',
+	);
+}
+
+// --- Bottom-up parent chain through type-arg wrapper -------------------
+//
+// `Foo<MyType>()` / `<Foo<MyType> />` / `new Foo<MyType>()` etc. wrap
+// the typeArguments in TSTypeParameterInstantiation. Bottom-up
+// materialize on the inner `MyType` must route through the wrapper,
+// not land on the call/new/JSX-opening directly.
+{
+	const cases: Array<{ name: string; code: string; locate(sf: ts.SourceFile): ts.Node }> = [
+		{
+			name: 'CallExpression typeArguments',
+			code: `function f<T>(x: T) {} f<number>(1);`,
+			locate(sf) {
+				// statements[1] = ExpressionStatement(CallExpression). typeArguments[0] = NumberKeyword.
+				const callStmt = sf.statements[1] as ts.ExpressionStatement;
+				const call = callStmt.expression as ts.CallExpression;
+				return call.typeArguments![0];
+			},
+		},
+		{
+			name: 'NewExpression typeArguments',
+			code: `class C<T> { v: T | null = null; } new C<string>();`,
+			locate(sf) {
+				const stmt = sf.statements[1] as ts.ExpressionStatement;
+				const ne = stmt.expression as ts.NewExpression;
+				return ne.typeArguments![0];
+			},
+		},
+		{
+			name: 'JsxOpeningElement typeArguments',
+			code: `function G<T>(p: { v: T }) { return null; } let _ = <G<number> v={1} />;`,
+			locate(sf) {
+				const stmt = sf.statements[1] as ts.VariableStatement;
+				const decl = stmt.declarationList.declarations[0];
+				const jsx = decl.initializer as ts.JsxSelfClosingElement;
+				return jsx.typeArguments![0];
+			},
+		},
+	];
+	for (const c of cases) {
+		const sf = c.code.includes('<G<') ? parseTsx(c.code) : parseTs(c.code);
+		const { context } = lazy.convertLazy(sf);
+		const tsTypeArg = c.locate(sf);
+		const inner = lazy.materialize(tsTypeArg, context);
+		check(
+			`bottom-up: ${c.name} inner.parent.type === 'TSTypeParameterInstantiation'`,
+			(inner as any).parent?.type === 'TSTypeParameterInstantiation',
+			`got: ${(inner as any).parent?.type}`,
+		);
+	}
 }
 
 // --- Future / blocked --------------------------------------------------

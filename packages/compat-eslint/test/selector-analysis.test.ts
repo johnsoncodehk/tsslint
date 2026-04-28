@@ -642,6 +642,101 @@ function wire(node: any): any {
 	check('unknown class macro throws UnsupportedSelectorError', threw && isUnsupported);
 }
 
+// --- JSX selectors used by real plugin rules -------------------------
+//
+// Patterns lifted from eslint-plugin-react / eslint-plugin-react-x /
+// eslint-plugin-jsx-a11y. These are the JSX selector shapes rule
+// listeners actually register; if `decomposeSimple` can't handle them,
+// fast dispatch falls over for any JSX-aware rule.
+
+{
+	const info = take(decomposeSimple('JSXElement'));
+	check('JSX: JSXElement type set', info.types !== 'all' && info.types.has('JSXElement') && info.types.size === 1);
+}
+{
+	const info = take(decomposeSimple('JSXFragment'));
+	check('JSX: JSXFragment type set', info.types !== 'all' && info.types.has('JSXFragment'));
+}
+{
+	const info = take(decomposeSimple('JSXOpeningElement'));
+	check('JSX: JSXOpeningElement type set', info.types !== 'all' && info.types.has('JSXOpeningElement'));
+}
+{
+	// react-x / react-jsx-no-leaked-conditional-rendering
+	const info = take(decomposeSimple('JSXExpressionContainer'));
+	check(
+		'JSX: JSXExpressionContainer type set',
+		info.types !== 'all' && info.types.has('JSXExpressionContainer'),
+	);
+}
+{
+	// jsx-a11y/anchor-has-content style — `JSXOpeningElement[name.name="a"]`
+	const info = take(decomposeSimple('JSXOpeningElement[name.name="div"]'));
+	check('JSX: opening-with-name-path attribute filter exists', !!info.filter);
+	check(
+		'JSX: opening-with-name-path matches name=div',
+		info.filter!({ type: 'JSXOpeningElement', name: { type: 'JSXIdentifier', name: 'div' } }),
+	);
+	check(
+		'JSX: opening-with-name-path rejects name=span',
+		!info.filter!({ type: 'JSXOpeningElement', name: { type: 'JSXIdentifier', name: 'span' } }),
+	);
+}
+{
+	// react/jsx-no-target-blank — `JSXAttribute[name.name="href"]`
+	const info = take(decomposeSimple('JSXAttribute[name.name="href"]'));
+	check(
+		'JSX: attribute-name filter matches href',
+		info.filter!({ type: 'JSXAttribute', name: { type: 'JSXIdentifier', name: 'href' } }),
+	);
+	check(
+		'JSX: attribute-name filter rejects id',
+		!info.filter!({ type: 'JSXAttribute', name: { type: 'JSXIdentifier', name: 'id' } }),
+	);
+}
+{
+	// `JSXSpreadAttribute` — registered by react/jsx-props-no-spreading and
+	// jsx-a11y/no-redundant-roles to detect `<Foo {...rest} />`.
+	const info = take(decomposeSimple('JSXSpreadAttribute'));
+	check('JSX: JSXSpreadAttribute type set', info.types !== 'all' && info.types.has('JSXSpreadAttribute'));
+}
+{
+	// Combinator: `JSXOpeningElement > JSXAttribute` — descendant of opening.
+	const info = take(decomposeSimple('JSXOpeningElement > JSXAttribute'));
+	check('JSX: combinator trigger is JSXAttribute', info.types !== 'all' && info.types.has('JSXAttribute'));
+	const tree = wire({
+		type: 'JSXOpeningElement',
+		name: { type: 'JSXIdentifier', name: 'div' },
+		attributes: [{ type: 'JSXAttribute', name: { type: 'JSXIdentifier', name: 'id' } }],
+	});
+	const attr = tree.attributes[0];
+	check('JSX: combinator fires when parent is JSXOpeningElement', info.filter!(attr));
+	const attrUnderOther = wire({
+		type: 'JSXClosingElement',
+		attributes: [{ type: 'JSXAttribute', name: { type: 'JSXIdentifier', name: 'id' } }],
+	}).attributes[0];
+	check('JSX: combinator rejects under JSXClosingElement', !info.filter!(attrUnderOther));
+}
+{
+	// Field-fire: `JSXOpeningElement > .name` — fires on the name slot.
+	// Used by rules that want to inspect the opening element's name as a
+	// Member/Identifier without listening on JSXIdentifier separately.
+	const info = take(decomposeSimple('JSXOpeningElement > .name'));
+	check('JSX: field-fire fires on JSXOpeningElement type', info.types !== 'all' && info.types.has('JSXOpeningElement'));
+	check('JSX: field-fire is name', info.fieldFire === 'name');
+}
+{
+	// :matches() expansion across JSX selector list — same pattern as the
+	// non-JSX version but with JSX type names.
+	const infos = decomposeSimple('JSXElement, JSXFragment');
+	check('JSX: matches list yields 2 entries', infos !== null && infos.length === 2);
+	check(
+		'JSX: matches list types',
+		infos !== null && infos[0].types !== 'all' && infos[0].types.has('JSXElement')
+			&& infos[1].types !== 'all' && infos[1].types.has('JSXFragment'),
+	);
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');

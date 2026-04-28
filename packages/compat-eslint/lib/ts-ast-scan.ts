@@ -59,6 +59,20 @@ const WRAPPER_HEAD_TYPES = new Set<string>([
 	'Property',
 	'MethodDefinition',
 	'TSAbstractMethodDefinition',
+	// Self-closing JSX (`<Foo />`) materializes the JsxSelfClosingElement
+	// TS node into a JSXElement that wraps a synthetic JSXOpeningElement{
+	// selfClosing:true } — both share the SAME ts node. unwrapChain drills
+	// into `openingElement` so a JSXOpeningElement listener fires alongside
+	// the JSXElement listener (matching ESLint's visitorKeys traversal).
+	// For non-self-closing, the JsxOpeningElement is its own ts.Node visit
+	// — no expansion needed; unwrapChain breaks immediately.
+	'JSXElement',
+	// Empty JsxExpression (`{}` / `{/* comment */}`) materializes to a
+	// JSXExpressionContainer whose `.expression` is a synthetic
+	// JSXEmptyExpression — no own TS kind. unwrapChain drills there so
+	// the JSXEmptyExpression listener fires; for `{x}` / `{...x}` the
+	// inner is a real TS node visited separately, so the chain breaks.
+	'JSXExpressionContainer',
 ]);
 
 type Predicate = (n: ts.Node) => boolean;
@@ -240,6 +254,68 @@ function isInPatternPosition(tsNode: ts.Node): boolean {
 			return (p as ts.ForInStatement | ts.ForOfStatement).initializer === cur;
 		}
 		return false;
+	}
+	return false;
+}
+
+// --- JSX context detection -------------------------------------------
+//
+// `ts.Identifier` and `ts.PropertyAccessExpression` materialize as
+// JSX-flavored ESTree nodes (JSXIdentifier / JSXMemberExpression) when
+// they sit on a JSX tag-name path, attribute name path, or inside a
+// JsxNamespacedName. For predicate-mode dispatch we need to gate the
+// JSX-only ESTree types on these context checks; convertChildInner
+// alone can't tell the difference.
+
+// True when this PropertyAccessExpression is part of a JSX tag-name
+// chain (e.g. `<Foo.Bar />`'s outer `Foo.Bar`, or `<a.b.c />`'s any
+// link). The chain ends at a JsxOpeningElement / JsxClosingElement /
+// JsxSelfClosingElement whose `tagName` is the outermost link.
+function isInJSXMemberExpressionChain(n: ts.Node): boolean {
+	let cur: ts.Node = n;
+	while (cur.parent) {
+		const p = cur.parent;
+		if (
+			p.kind === SK.JsxOpeningElement
+			|| p.kind === SK.JsxClosingElement
+			|| p.kind === SK.JsxSelfClosingElement
+		) {
+			return (p as ts.JsxOpeningElement).tagName === cur;
+		}
+		if (p.kind === SK.PropertyAccessExpression && (p as ts.PropertyAccessExpression).expression === cur) {
+			cur = p;
+			continue;
+		}
+		return false;
+	}
+	return false;
+}
+
+// True when this Identifier should materialize as JSXIdentifier rather
+// than plain Identifier. Covers tag names, attribute names, namespaced
+// name parts, and identifiers inside JSX member-expression chains.
+function isInJSXIdentifierPosition(n: ts.Node): boolean {
+	const p = n.parent;
+	if (!p) return false;
+	if (
+		p.kind === SK.JsxOpeningElement
+		|| p.kind === SK.JsxClosingElement
+		|| p.kind === SK.JsxSelfClosingElement
+	) {
+		return (p as ts.JsxOpeningElement).tagName === n;
+	}
+	if (p.kind === SK.JsxAttribute && (p as ts.JsxAttribute).name === n) {
+		return true;
+	}
+	if (p.kind === SK.JsxNamespacedName) {
+		// Both `namespace` and `name` slots are JSXIdentifier.
+		return true;
+	}
+	if (p.kind === SK.PropertyAccessExpression) {
+		// Both `.expression` (left, may be Identifier) and `.name`
+		// (right, always Identifier) materialize as JSXIdentifier when
+		// the PropertyAccessExpression is itself part of a JSX tag chain.
+		return isInJSXMemberExpressionChain(p);
 	}
 	return false;
 }
@@ -645,6 +721,44 @@ const PREDICATES: Record<string, Predicate> = {
 
 	// --- Tuples / templates -------------------------------------------
 	'TSNamedTupleMember': n => n.kind === SK.NamedTupleMember,
+
+	// --- JSX -----------------------------------------------------------
+	// JsxElement (regular `<a></a>`) and JsxSelfClosingElement (`<a />`)
+	// both materialize to JSXElement. The self-closing case bundles a
+	// synthetic JSXOpeningElement{selfClosing:true} inside it; non-self-
+	// closing has the JsxOpeningElement as a separate TS node.
+	'JSXElement': n => n.kind === SK.JsxElement || n.kind === SK.JsxSelfClosingElement,
+	'JSXFragment': n => n.kind === SK.JsxFragment,
+	// Self-closing materializes to JSXElement, then unwrapChain drills into
+	// the synthetic openingElement so the listener fires from the chain.
+	// Predicate must match BOTH ts kinds so narrow-trigger mode visits
+	// JsxSelfClosingElement when only JSXOpeningElement is registered.
+	'JSXOpeningElement': n => n.kind === SK.JsxOpeningElement || n.kind === SK.JsxSelfClosingElement,
+	'JSXClosingElement': n => n.kind === SK.JsxClosingElement,
+	'JSXOpeningFragment': n => n.kind === SK.JsxOpeningFragment,
+	'JSXClosingFragment': n => n.kind === SK.JsxClosingFragment,
+	'JSXAttribute': n => n.kind === SK.JsxAttribute,
+	'JSXSpreadAttribute': n => n.kind === SK.JsxSpreadAttribute,
+	// JsxExpression splits by `dotDotDotToken`: `{...x}` → JSXSpreadChild,
+	// `{x}` / `{}` → JSXExpressionContainer.
+	'JSXExpressionContainer': n =>
+		n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken === undefined,
+	'JSXSpreadChild': n =>
+		n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken !== undefined,
+	'JSXText': n => n.kind === SK.JsxText,
+	// JSXEmptyExpression has no own ts.SyntaxKind — it's synthesized by
+	// JSXExpressionContainer.expression when the JsxExpression has no
+	// expression (`{}` / `{/* comment */}`). Predicate matches the empty
+	// JsxExpression so narrow-trigger mode walks those nodes; dispatch
+	// goes through unwrapChain on JSXExpressionContainer which drills
+	// into the synthetic JSXEmptyExpression and fires its listener.
+	'JSXEmptyExpression': n =>
+		n.kind === SK.JsxExpression && (n as ts.JsxExpression).expression === undefined,
+	// Context-dependent — see isInJSXIdentifierPosition / chain helpers.
+	'JSXIdentifier': n => n.kind === SK.Identifier && isInJSXIdentifierPosition(n),
+	'JSXMemberExpression': n =>
+		n.kind === SK.PropertyAccessExpression && isInJSXMemberExpressionChain(n),
+	'JSXNamespacedName': n => n.kind === SK.JsxNamespacedName,
 };
 
 // Sidecar table: ESTree types whose predicate is EXACTLY a TS-kind check
@@ -768,6 +882,22 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSInterfaceBody': [SK.InterfaceDeclaration],
 	'TSEnumBody': [SK.EnumDeclaration],
 	'TSNamedTupleMember': [SK.NamedTupleMember],
+
+	// JSX simple-kind matches. JSXIdentifier / JSXMemberExpression are
+	// context-dependent (must look at parent), so they stay in the
+	// conditional PREDICATES path with no SIMPLE_KINDS entry. Same for
+	// JSXSpreadChild / JSXExpressionContainer (gated by dotDotDotToken)
+	// and JSXEmptyExpression (synthetic, no kind).
+	'JSXElement': [SK.JsxElement, SK.JsxSelfClosingElement],
+	'JSXFragment': [SK.JsxFragment],
+	'JSXOpeningElement': [SK.JsxOpeningElement, SK.JsxSelfClosingElement],
+	'JSXClosingElement': [SK.JsxClosingElement],
+	'JSXOpeningFragment': [SK.JsxOpeningFragment],
+	'JSXClosingFragment': [SK.JsxClosingFragment],
+	'JSXAttribute': [SK.JsxAttribute],
+	'JSXSpreadAttribute': [SK.JsxSpreadAttribute],
+	'JSXText': [SK.JsxText],
+	'JSXNamespacedName': [SK.JsxNamespacedName],
 };
 
 // Throws UnsupportedSelectorError if any requested ESTree type has no TS
@@ -1110,6 +1240,33 @@ function unwrapChain(node: unknown): unknown[] {
 			const p = cur as { method?: boolean; kind?: string; value?: unknown };
 			if (p.method || p.kind === 'get' || p.kind === 'set') {
 				cur = p.value;
+			}
+			else {
+				break;
+			}
+		}
+		else if (t === 'JSXElement') {
+			// Self-closing only — for non-self-closing, the JsxOpeningElement
+			// is a separate ts.Node visit and would double-fire if expanded.
+			// Detect via the underlying ts.Node kind (the openingElement
+			// child's `selfClosing` is also true, but reading it forces the
+			// getter; checking _ts.kind is one indirection and a bitmask
+			// compare).
+			const tsKind = (cur as { _ts?: { kind?: number } })._ts?.kind;
+			if (tsKind === SK.JsxSelfClosingElement) {
+				cur = (cur as { openingElement?: unknown }).openingElement;
+			}
+			else {
+				break;
+			}
+		}
+		else if (t === 'JSXExpressionContainer') {
+			// Drill into JSXEmptyExpression only when the JsxExpression has
+			// no inner expression. With an inner expression the inner is a
+			// real TS node visited separately — drilling would double-fire.
+			const ts = (cur as { _ts?: { expression?: unknown } })._ts;
+			if (ts && ts.expression === undefined) {
+				cur = (cur as { expression?: unknown }).expression;
 			}
 			else {
 				break;

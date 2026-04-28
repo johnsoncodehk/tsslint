@@ -68,9 +68,12 @@ function makeRule(listeners: Record<string, true>): MockRule {
 // `/test.ts` only; type-checker calls in our pipeline are best-effort
 // (parserServices.getSymbolAtLocation only fires if a rule explicitly
 // asks, which our mock rules don't).
-function buildProgram(code: string): { program: ts.Program; file: ts.SourceFile } {
-	const fileName = '/test.ts';
-	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function buildProgram(
+	code: string,
+	kind: ts.ScriptKind = ts.ScriptKind.TS,
+): { program: ts.Program; file: ts.SourceFile } {
+	const fileName = kind === ts.ScriptKind.TSX ? '/test.tsx' : '/test.ts';
+	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, kind);
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
 	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
@@ -96,7 +99,12 @@ function buildProgram(code: string): { program: ts.Program; file: ts.SourceFile 
 	};
 	const program = ts.createProgram({
 		rootNames: [fileName],
-		options: { target: ts.ScriptTarget.Latest, lib: [realLibName], noEmit: true },
+		options: {
+			target: ts.ScriptTarget.Latest,
+			lib: [realLibName],
+			noEmit: true,
+			jsx: kind === ts.ScriptKind.TSX ? ts.JsxEmit.Preserve : undefined,
+		},
 		host,
 	});
 	return { program, file: sf };
@@ -150,8 +158,12 @@ function runRule(
 	return { reports, threw };
 }
 
-function runMock(code: string, listeners: Record<string, true>): { calls: Recorded[]; threw?: unknown } {
-	const { program, file } = buildProgram(code);
+function runMock(
+	code: string,
+	listeners: Record<string, true>,
+	kind: ts.ScriptKind = ts.ScriptKind.TS,
+): { calls: Recorded[]; threw?: unknown } {
+	const { program, file } = buildProgram(code, kind);
 	const m = makeRule(listeners);
 	const r = runRule(m.rule, program, file);
 	return { calls: m.calls, threw: r.threw };
@@ -1562,6 +1574,189 @@ console.log(x);
 		'TS-scan narrow trigger: no FunctionDeclaration/CallExpression noise',
 		!calls.some(c => c.selector === 'FunctionDeclaration' || c.selector === 'CallExpression'),
 	);
+}
+
+// 8. JSX dispatch — TSX file parsed via ScriptKind.TSX. Listeners on
+//    JSX node types fire on the right shapes; .parent walks via
+//    bottom-up materialise reach JSXElement / JSXFragment correctly.
+{
+	const code = `
+		function App({ count }: { count: number }) {
+			return <div id="root" {...rest}>
+				<span>hello</span>
+				{count && <em>x</em>}
+				<></>
+			</div>;
+		}
+	`;
+	const { calls, threw } = runMock(code, {
+		'JSXElement': true,
+		'JSXFragment': true,
+		'JSXOpeningElement': true,
+		'JSXClosingElement': true,
+		'JSXAttribute': true,
+		'JSXSpreadAttribute': true,
+		'JSXExpressionContainer': true,
+		'JSXIdentifier': true,
+		'JSXText': true,
+	}, ts.ScriptKind.TSX);
+
+	check('JSX: dispatch does not throw', threw === undefined, threw ? String((threw as Error).message ?? threw) : '');
+	check(
+		'JSX: JSXElement listener fires on each element',
+		calls.filter(c => c.selector === 'JSXElement').length === 3, // div, span, em
+		`got: ${calls.filter(c => c.selector === 'JSXElement').length}`,
+	);
+	check(
+		'JSX: JSXFragment listener fires once',
+		calls.filter(c => c.selector === 'JSXFragment').length === 1,
+	);
+	check(
+		'JSX: JSXOpeningElement listener fires once per element',
+		calls.filter(c => c.selector === 'JSXOpeningElement').length === 3,
+	);
+	check(
+		'JSX: JSXClosingElement listener fires for non-self-closing',
+		// div, span, em — em is the inner of `count && <em>x</em>`, all closed.
+		calls.filter(c => c.selector === 'JSXClosingElement').length === 3,
+	);
+	check(
+		'JSX: JSXAttribute listener fires on `id="root"`',
+		calls.some(c => c.selector === 'JSXAttribute'),
+	);
+	check(
+		'JSX: JSXSpreadAttribute listener fires on `{...rest}`',
+		calls.filter(c => c.selector === 'JSXSpreadAttribute').length === 1,
+	);
+	check(
+		'JSX: JSXExpressionContainer listener fires on `{count && ...}`',
+		calls.some(c => c.selector === 'JSXExpressionContainer'),
+	);
+	const jsxIds = calls.filter(c => c.selector === 'JSXIdentifier');
+	check('JSX: JSXIdentifier listener fires on tag/attribute names', jsxIds.length > 0);
+	check(
+		'JSX: JSXIdentifier "div" reaches JSXOpeningElement→JSXElement via .parent',
+		jsxIds.some(c => c.name === 'div' && c.parents.includes('JSXOpeningElement') && c.parents.includes('JSXElement')),
+		`first id parents: [${jsxIds[0]?.parents.join(' → ')}]`,
+	);
+}
+
+// 8b. JSXEmptyExpression listener fires through unwrapChain — `{}` and
+//     `{/* comment */}` produce a JSXExpressionContainer whose synthetic
+//     `expression` is JSXEmptyExpression. Walker visits the JsxExpression
+//     once; unwrapChain expands the chain so both listeners enter.
+{
+	const code = `
+		let _ = <div>{}</div>;
+		let __ = <div>{/* hi */}</div>;
+		let ___ = <div>{x}</div>;
+	`;
+	const { calls } = runMock(code, {
+		'JSXEmptyExpression': true,
+		'JSXExpressionContainer': true,
+	}, ts.ScriptKind.TSX);
+	check(
+		'JSX-empty: JSXExpressionContainer fires for all 3 ({}, {/*…*/}, {x})',
+		calls.filter(c => c.selector === 'JSXExpressionContainer').length === 3,
+		`got ${calls.filter(c => c.selector === 'JSXExpressionContainer').length}`,
+	);
+	check(
+		'JSX-empty: JSXEmptyExpression fires for the 2 empty containers',
+		calls.filter(c => c.selector === 'JSXEmptyExpression').length === 2,
+		`got ${calls.filter(c => c.selector === 'JSXEmptyExpression').length}`,
+	);
+}
+
+// 8c. JSX in CPA mode — when a rule registers `onCodePath*` listeners,
+//     dispatch goes through the CPA event-queue path (predicateAllKinds).
+//     Verify JSX listeners still fire alongside CPA events on a TSX file.
+{
+	const code = `
+		function App({ count }: { count: number }) {
+			return <div id="x">{count && <span />}</div>;
+		}
+	`;
+	const { program, file } = buildProgram(code, ts.ScriptKind.TSX);
+	const events: string[] = [];
+	const rule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
+		create() {
+			return {
+				onCodePathStart() { events.push('cpa-start'); },
+				onCodePathEnd() { events.push('cpa-end'); },
+				JSXElement() { events.push('JSXElement'); },
+				JSXOpeningElement(n: any) { events.push(`open:${n.name?.name ?? '?'}`); },
+				JSXAttribute(n: any) { events.push(`attr:${n.name?.name ?? '?'}`); },
+			};
+		},
+	};
+	const r = runRule(rule, program, file);
+	check('JSX+CPA: dispatch did not throw', r.threw === undefined, r.threw ? String((r.threw as Error).message) : '');
+	check('JSX+CPA: onCodePathStart fires', events.includes('cpa-start'));
+	check('JSX+CPA: onCodePathEnd fires', events.includes('cpa-end'));
+	check(
+		'JSX+CPA: JSXElement fires for div + span',
+		events.filter(e => e === 'JSXElement').length === 2,
+		`got ${events.filter(e => e === 'JSXElement').length}`,
+	);
+	check(
+		'JSX+CPA: JSXOpeningElement fires for both div and self-closing span',
+		events.includes('open:div') && events.includes('open:span'),
+		`events: ${events.filter(e => e.startsWith('open:')).join(',')}`,
+	);
+	check('JSX+CPA: JSXAttribute fires on `id="x"`', events.includes('attr:id'));
+}
+
+// 9. JSX rule with real esquery selector + report mechanism — mirrors
+//    a typical plugin rule (selector + attribute name filter + node
+//    descriptor for `context.report`). Verifies the full path: selector
+//    decomposition → JSX dispatch → report-with-node → location resolution.
+{
+	const code = `
+		let _ = <img src="x" />;
+		let __ = <img src="y" alt="ok" />;
+	`;
+	const { program, file } = buildProgram(code, ts.ScriptKind.TSX);
+	const reports: { line: number; column: number; message: string }[] = [];
+	const rule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { missing: 'img missing alt' } } as any,
+		create(ctx) {
+			return {
+				'JSXOpeningElement[name.name="img"]'(node: any) {
+					const attrs = node.attributes ?? [];
+					const hasAlt = attrs.some((a: any) =>
+						a.type === 'JSXAttribute' && a.name?.type === 'JSXIdentifier' && a.name.name === 'alt'
+					);
+					if (!hasAlt) {
+						ctx.report({ messageId: 'missing', node });
+					}
+				},
+			};
+		},
+	};
+	const tsslintRule = compat.convertRule(rule, [], { id: 'jsx-img-alt' });
+	const reportFn: any = (msg: string, start: number) => {
+		const lc = file.getLineAndCharacterOfPosition(start);
+		reports.push({ line: lc.line + 1, column: lc.character + 1, message: msg });
+		const r: any = {
+			at() {return r}, asWarning(){return r}, asError(){return r}, asSuggestion(){return r},
+			withFix(){return r}, withRefactor(){return r}, withDeprecated(){return r},
+			withUnnecessary(){return r}, withoutCache(){return r},
+		};
+		return r;
+	};
+	let threw: unknown;
+	try {
+		tsslintRule({ file, report: reportFn, program } as any);
+	}
+	catch (e) {
+		threw = e;
+	}
+
+	check('JSX rule: dispatch did not throw', threw === undefined, threw ? String((threw as Error).message ?? threw) : '');
+	check('JSX rule: exactly one report (the img without alt)', reports.length === 1, `got ${reports.length}`);
+	check('JSX rule: report message is the missing-alt message', reports[0]?.message === 'img missing alt');
+	check('JSX rule: report points at the first <img />', reports[0]?.line === 2);
 }
 
 console.log();

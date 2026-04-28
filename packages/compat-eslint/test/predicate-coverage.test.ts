@@ -15,25 +15,6 @@ import { hasPredicate } from '../lib/ts-ast-scan';
 // ESTree types we deliberately don't support. Each entry needs a one-
 // line reason a future maintainer can act on.
 const IGNORED: Record<string, string> = {
-	// JSX — TSSLint targets non-JSX TS files; rules that listen on JSX
-	// are out of scope. If JSX support ever becomes interesting, port
-	// the upstream typescript-estree converters for SK.JsxElement et al.
-	JSXAttribute: 'JSX unsupported',
-	JSXClosingElement: 'JSX unsupported',
-	JSXClosingFragment: 'JSX unsupported',
-	JSXElement: 'JSX unsupported',
-	JSXEmptyExpression: 'JSX unsupported',
-	JSXExpressionContainer: 'JSX unsupported',
-	JSXFragment: 'JSX unsupported',
-	JSXIdentifier: 'JSX unsupported',
-	JSXMemberExpression: 'JSX unsupported',
-	JSXNamespacedName: 'JSX unsupported',
-	JSXOpeningElement: 'JSX unsupported',
-	JSXOpeningFragment: 'JSX unsupported',
-	JSXSpreadAttribute: 'JSX unsupported',
-	JSXSpreadChild: 'JSX unsupported',
-	JSXText: 'JSX unsupported',
-
 	// AST_NODE_TYPES enum members that are container types, not nodes
 	// rules can listen on as standalone targets.
 	Program: 'visited via tsScanTraverse root, never dispatched as a child target',

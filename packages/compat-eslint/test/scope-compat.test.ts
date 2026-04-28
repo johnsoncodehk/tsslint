@@ -26,6 +26,7 @@ interface Fixture {
 	name: string;
 	code: string;
 	sourceType?: 'module' | 'script';
+	tsx?: boolean;
 }
 
 const fixtures: Fixture[] = [
@@ -186,11 +187,77 @@ const fixtures: Fixture[] = [
 			console.log(counter);
 		`,
 	},
+	// JSX scope fixtures: `<Component />` (PascalCase) is a reference to a
+	// variable in scope. `<div />` (lowercase) is an HTML tag, not a
+	// reference. JSX expression containers are normal expression scopes;
+	// spread attributes and member-expression element names all resolve
+	// via the surrounding scope.
+	{
+		name: 'jsx-component-reference',
+		code: `
+			function Component() { return null; }
+			let _ = <Component />;
+		`,
+		sourceType: 'module',
+		tsx: true,
+	},
+	{
+		name: 'jsx-lowercase-element',
+		code: `
+			let used = 1;
+			let _ = <div data-x={used} />;
+		`,
+		sourceType: 'module',
+		tsx: true,
+	},
+	{
+		name: 'jsx-member-element',
+		code: `
+			const Lib = { Btn: function Btn() { return null; } };
+			let _ = <Lib.Btn />;
+		`,
+		sourceType: 'module',
+		tsx: true,
+	},
+	{
+		name: 'jsx-spread-attribute',
+		code: `
+			const props = { id: 'x' };
+			let _ = <div {...props} />;
+		`,
+		sourceType: 'module',
+		tsx: true,
+	},
+	{
+		name: 'jsx-expression-container-ref',
+		code: `
+			let count = 0;
+			let _ = <span>{count + 1}</span>;
+		`,
+		sourceType: 'module',
+		tsx: true,
+	},
+	{
+		name: 'jsx-fragment-children',
+		code: `
+			const a = 1;
+			const b = 2;
+			let _ = <><span>{a}</span><span>{b}</span></>;
+		`,
+		sourceType: 'module',
+		tsx: true,
+	},
 ];
 
-function makeProgram(code: string): { program: ts.Program; sourceFile: ts.SourceFile } {
-	const fileName = '/test.ts';
-	const sourceFile = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function makeProgram(code: string, tsx = false): { program: ts.Program; sourceFile: ts.SourceFile } {
+	const fileName = tsx ? '/test.tsx' : '/test.ts';
+	const sourceFile = ts.createSourceFile(
+		fileName,
+		code,
+		ts.ScriptTarget.Latest,
+		true,
+		tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+	);
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
 	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
@@ -214,7 +281,13 @@ function makeProgram(code: string): { program: ts.Program; sourceFile: ts.Source
 	};
 	const program = ts.createProgram({
 		rootNames: [fileName],
-		options: { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, allowJs: false, noLib: false },
+		options: {
+			target: ts.ScriptTarget.Latest,
+			module: ts.ModuleKind.ESNext,
+			allowJs: false,
+			noLib: false,
+			jsx: tsx ? ts.JsxEmit.Preserve : undefined,
+		},
 		host,
 	});
 	return { program, sourceFile: program.getSourceFile(fileName)! };
@@ -225,7 +298,7 @@ function names(arr: { name: string }[]): string {
 }
 
 function runFixture(fx: Fixture): string[] {
-	const { program, sourceFile } = makeProgram(fx.code);
+	const { program, sourceFile } = makeProgram(fx.code, fx.tsx);
 	const { estree, astMaps } = astConverter(sourceFile, PARSE_SETTINGS, true);
 	const sourceType = fx.sourceType ?? 'module';
 	estree.sourceType = sourceType;

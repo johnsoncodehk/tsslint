@@ -338,12 +338,154 @@ const WRAPPER_ROUTE_CHILD_BITMAP = (() => {
 	return a;
 })();
 
+// JSX tag-name / attribute-name route: walk up from a ts.Identifier (or
+// PropertyAccessExpression / JsxNamespacedName) looking for the JSX
+// container that owns the chain. Trigger drills into the JSX-aware
+// getter (`name`, `openingElement.name`, `namespace`/`name` for
+// JsxNamespacedName) which builds JSXIdentifier / JSXMemberExpression /
+// JSXNamespacedName and registers each inner ts.Node in the cache.
+function findJSXOwnerRoute(tsNode: ts.Node):
+	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void }
+	| null
+{
+	const k = tsNode.kind;
+	if (
+		k !== SK.Identifier
+		&& k !== SK.PropertyAccessExpression
+		&& k !== SK.JsxNamespacedName
+	) {
+		return null;
+	}
+	let cur: ts.Node = tsNode;
+	while (cur.parent) {
+		const p = cur.parent;
+		if (
+			p.kind === SK.JsxOpeningElement
+			|| p.kind === SK.JsxSelfClosingElement
+			|| p.kind === SK.JsxClosingElement
+		) {
+			if ((p as ts.JsxOpeningElement).tagName !== cur) return null;
+			return {
+				ownerTsNode: p,
+				trigger: owner => {
+					// JsxSelfClosingElement materializes to JSXElement; the
+					// JSXOpeningElement (which owns the `name` slot) lives
+					// inside it.
+					if (p.kind === SK.JsxSelfClosingElement) {
+						const opening = (owner as unknown as { openingElement?: { name?: unknown } }).openingElement;
+						if (opening) void opening.name;
+					}
+					else {
+						void (owner as unknown as { name?: unknown }).name;
+					}
+				},
+			};
+		}
+		if (p.kind === SK.JsxAttribute) {
+			if ((p as ts.JsxAttribute).name !== cur) return null;
+			return {
+				ownerTsNode: p,
+				trigger: owner => void (owner as unknown as { name?: unknown }).name,
+			};
+		}
+		if (p.kind === SK.PropertyAccessExpression) {
+			// Continue up the chain — outer link will hit the JSX owner.
+			// Only the `.expression` slot is part of the chain; `.name` is
+			// always a leaf (the property), so a node sitting there is
+			// inside the chain too — keep walking.
+			cur = p;
+			continue;
+		}
+		if (p.kind === SK.JsxNamespacedName) {
+			cur = p;
+			continue;
+		}
+		return null;
+	}
+	return null;
+}
+
+function findTypeArgRoute(tsNode: ts.Node):
+	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void }
+	| null
+{
+	const tsParent = tsNode.parent;
+	if (!tsParent) return null;
+	const k = tsParent.kind;
+	let typeArgs: ts.NodeArray<ts.TypeNode> | undefined;
+	switch (k) {
+		case SK.TypeReference:
+			typeArgs = (tsParent as ts.TypeReferenceNode).typeArguments;
+			break;
+		case SK.ImportType:
+			typeArgs = (tsParent as ts.ImportTypeNode).typeArguments;
+			break;
+		case SK.NewExpression:
+			typeArgs = (tsParent as ts.NewExpression).typeArguments;
+			break;
+		case SK.TaggedTemplateExpression:
+			typeArgs = (tsParent as ts.TaggedTemplateExpression).typeArguments;
+			break;
+		case SK.ExpressionWithTypeArguments:
+			typeArgs = (tsParent as ts.ExpressionWithTypeArguments).typeArguments;
+			break;
+		case SK.CallExpression:
+			typeArgs = (tsParent as ts.CallExpression).typeArguments;
+			break;
+		case SK.JsxOpeningElement:
+		case SK.JsxSelfClosingElement:
+			typeArgs = (tsParent as ts.JsxOpeningElement | ts.JsxSelfClosingElement).typeArguments;
+			break;
+		default:
+			return null;
+	}
+	if (!typeArgs || typeArgs.indexOf(tsNode as ts.TypeNode) < 0) return null;
+	return {
+		ownerTsNode: tsParent,
+		trigger: owner => {
+			// JsxSelfClosingElement materialises to JSXElement; the
+			// `typeArguments` slot lives on its inner JSXOpeningElement.
+			if (k === SK.JsxSelfClosingElement) {
+				const opening = (owner as unknown as { openingElement?: { typeArguments?: { params?: unknown } } }).openingElement;
+				const ta = opening?.typeArguments;
+				if (ta) void ta.params;
+				return;
+			}
+			const ta = (owner as unknown as { typeArguments?: { params?: unknown } }).typeArguments;
+			if (ta) void ta.params;
+		},
+	};
+}
+
 function findWrapperRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void }
 	| null
 {
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
+
+	// JSX: ts.Identifier / ts.PropertyAccessExpression / ts.JsxNamespacedName
+	// sitting on a JSX tag-name path or JsxAttribute name path must
+	// materialize via the parent's JSX-aware getter (which produces
+	// JSXIdentifier / JSXMemberExpression / JSXNamespacedName). The
+	// regular convertChildInner path produces plain Identifier /
+	// MemberExpression — wrong shape.
+	{
+		const jsx = findJSXOwnerRoute(tsNode);
+		if (jsx) return jsx;
+	}
+
+	// Type-arg wrapper: a TypeNode sitting in a `typeArguments` array on
+	// CallExpression / NewExpression / TaggedTemplate / TypeReference /
+	// ImportType / ExpressionWithTypeArguments / JsxOpeningElement /
+	// JsxSelfClosingElement. typescript-estree wraps these in
+	// TSTypeParameterInstantiation. Bottom-up materialize without this
+	// route lands `inner.parent` on the typeArgs-bearing host directly,
+	// missing the wrapper layer.
+	{
+		const typeArg = findTypeArgRoute(tsNode);
+		if (typeArg) return typeArg;
+	}
 	// `<T>` generics — typescript-estree wraps the typeParameters array in a
 	// synthetic TSTypeParameterDeclaration, so a direct bottom-up build for
 	// the inner TypeParameter would set its parent to the function/class
@@ -1325,8 +1467,29 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new VoidExpressionNode(child, parent);
 		case SK.DeleteExpression:
 			return new DeleteExpressionNode(child, parent);
+		case SK.JsxElement:
+		case SK.JsxSelfClosingElement:
+			return new JSXElementNode(child, parent);
+		case SK.JsxOpeningElement:
+			return new JSXOpeningElementNode(child as ts.JsxOpeningElement, parent);
+		case SK.JsxClosingElement:
+			return new JSXClosingElementNode(child, parent);
+		case SK.JsxFragment:
+			return new JSXFragmentNode(child, parent);
+		case SK.JsxOpeningFragment:
+			return new JSXOpeningFragmentNode(child, parent);
+		case SK.JsxClosingFragment:
+			return new JSXClosingFragmentNode(child, parent);
+		case SK.JsxAttribute:
+			return new JSXAttributeNode(child, parent);
+		case SK.JsxSpreadAttribute:
+			return new JSXSpreadAttributeNode(child, parent);
+		case SK.JsxExpression:
+			return (child as ts.JsxExpression).dotDotDotToken
+				? new JSXSpreadChildNode(child, parent)
+				: new JSXExpressionContainerNode(child, parent);
 		case SK.JsxText:
-			return null; // JSX not supported in MVP
+			return new JSXTextNode(child as ts.JsxText, parent);
 		case SK.AnyKeyword:
 			return new TypeKeywordNode('TSAnyKeyword', child, parent);
 		case SK.UnknownKeyword:
@@ -4436,7 +4599,16 @@ class LiteralNode extends LazyNode {
 			this.value = Number(tsNode.text);
 		}
 		else if (tsNode.kind === SK.StringLiteral) {
-			this.value = tsNode.text;
+			// JSX attribute string values get HTML entity decoding from
+			// typescript-estree (`unescapeStringLiteralText`). Apply when
+			// the StringLiteral's parent is JsxAttribute so `<x t="&amp;" />`
+			// reads `value === '&'` for parity with the eager converter.
+			if (parent._ts.kind === SK.JsxAttribute) {
+				this.value = unescapeJsxText(tsNode.text);
+			}
+			else {
+				this.value = tsNode.text;
+			}
 		}
 		else {
 			this.value = null;
@@ -4445,6 +4617,334 @@ class LiteralNode extends LazyNode {
 	get raw(): string {
 		return this._raw ??= (this._ts as ts.LiteralExpression).getText(this._ctx.ast);
 	}
+}
+
+// --- JSX nodes ---------------------------------------------------------
+//
+// typescript-estree shapes we replicate (see its convert.ts):
+//   - JsxElement → JSXElement{ openingElement, closingElement, children }
+//   - JsxSelfClosingElement → JSXElement{
+//       openingElement: JSXOpeningElement{ selfClosing: true, range = same },
+//       closingElement: null,
+//       children: [],
+//     }
+//     The same TS node owns BOTH the JSXElement and the inner
+//     JSXOpeningElement; the JSXOpeningElement is synthetic (we don't
+//     claim the cache slot — it stays mapped to the JSXElement).
+//   - JsxOpeningElement → JSXOpeningElement{ name, typeArguments, attributes, selfClosing: false }
+//   - JsxClosingElement → JSXClosingElement{ name }
+//   - JsxFragment → JSXFragment{ openingFragment, closingFragment, children }
+//   - JsxOpeningFragment / JsxClosingFragment → JSXOpeningFragment / JSXClosingFragment
+//   - JsxAttribute → JSXAttribute{ name, value }
+//   - JsxSpreadAttribute → JSXSpreadAttribute{ argument }
+//   - JsxExpression with dotDotDotToken → JSXSpreadChild{ expression }
+//   - JsxExpression with expression  → JSXExpressionContainer{ expression }
+//   - JsxExpression empty            → JSXExpressionContainer{
+//       expression: JSXEmptyExpression{ range: [start+1, end-1] }
+//     }
+//   - JsxText → JSXText{ value, raw }, range uses fullStart (so leading
+//     whitespace between sibling JSX nodes is part of the JSXText range).
+//   - JsxNamespacedName → JSXNamespacedName{ namespace, name } (used as
+//     JSXAttribute.name and as an opening-element's tag name).
+//
+// Tag name conversion (`<Foo />`, `<Foo.Bar />`, `<svg:rect />`,
+// `<this />`): handled by `convertJSXTagName`. ts.Identifier becomes a
+// JSXIdentifier; PropertyAccessExpression becomes JSXMemberExpression
+// with each link converted recursively; JsxNamespacedName becomes
+// JSXNamespacedName; ThisKeyword falls through to the regular converter.
+//
+// Attribute name conversion (`<Foo x="1" />` vs `<Foo svg:rect="1" />`):
+// handled by `convertJSXNamespaceOrIdentifier`.
+
+class JSXElementNode extends LazyNode {
+	readonly type = 'JSXElement' as const;
+	private _openingElement?: LazyNode;
+	private _closingElement?: LazyNode | null;
+	private _children?: (LazyNode | null)[];
+
+	get openingElement(): LazyNode {
+		if (this._openingElement) return this._openingElement;
+		const t = this._ts;
+		if (t.kind === SK.JsxSelfClosingElement) {
+			return this._openingElement = new JSXOpeningElementNode(t as ts.JsxSelfClosingElement, this, true);
+		}
+		return this._openingElement = convertChild((t as ts.JsxElement).openingElement, this) as LazyNode;
+	}
+
+	get closingElement(): LazyNode | null {
+		if (this._closingElement !== undefined) return this._closingElement;
+		const t = this._ts;
+		if (t.kind === SK.JsxSelfClosingElement) return this._closingElement = null;
+		return this._closingElement = convertChild((t as ts.JsxElement).closingElement, this);
+	}
+
+	get children(): (LazyNode | null)[] {
+		if (this._children) return this._children;
+		const t = this._ts;
+		if (t.kind === SK.JsxSelfClosingElement) return this._children = EMPTY_ARRAY;
+		return this._children = convertChildren((t as ts.JsxElement).children, this);
+	}
+}
+
+class JSXOpeningElementNode extends LazyNode {
+	readonly type = 'JSXOpeningElement' as const;
+	readonly selfClosing: boolean;
+	private _name?: LazyNode;
+	private _attributes?: (LazyNode | null)[];
+	private _typeArguments?: TSTypeParameterInstantiationNode | undefined;
+	private _typeArgsResolved = false;
+
+	constructor(
+		tsNode: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
+		parent: LazyNode | null,
+		synthetic = false,
+	) {
+		// `synthetic=true` for the inner opening element of a self-closing
+		// JsxSelfClosingElement — the JsxSelfClosingElement TS slot is owned
+		// by the outer JSXElement, not by this opening element.
+		super(tsNode, parent, undefined, !synthetic);
+		this.selfClosing = tsNode.kind === SK.JsxSelfClosingElement;
+	}
+
+	get name(): LazyNode {
+		if (this._name) return this._name;
+		const t = this._ts as ts.JsxOpeningElement | ts.JsxSelfClosingElement;
+		return this._name = convertJSXTagName(t.tagName, this);
+	}
+
+	get attributes(): (LazyNode | null)[] {
+		if (this._attributes) return this._attributes;
+		const t = this._ts as ts.JsxOpeningElement | ts.JsxSelfClosingElement;
+		return this._attributes = convertChildren(t.attributes.properties, this);
+	}
+
+	get typeArguments(): TSTypeParameterInstantiationNode | undefined {
+		if (this._typeArgsResolved) return this._typeArguments;
+		this._typeArgsResolved = true;
+		const t = this._ts as ts.JsxOpeningElement | ts.JsxSelfClosingElement;
+		return this._typeArguments = convertTypeArguments(t.typeArguments, this);
+	}
+}
+
+class JSXClosingElementNode extends LazyNode {
+	readonly type = 'JSXClosingElement' as const;
+	private _name?: LazyNode;
+	get name(): LazyNode {
+		if (this._name) return this._name;
+		const t = this._ts as ts.JsxClosingElement;
+		return this._name = convertJSXTagName(t.tagName, this);
+	}
+}
+
+class JSXFragmentNode extends LazyNode {
+	readonly type = 'JSXFragment' as const;
+	private _openingFragment?: LazyNode;
+	private _closingFragment?: LazyNode;
+	private _children?: (LazyNode | null)[];
+
+	get openingFragment(): LazyNode {
+		if (this._openingFragment) return this._openingFragment;
+		return this._openingFragment = convertChild((this._ts as ts.JsxFragment).openingFragment, this) as LazyNode;
+	}
+	get closingFragment(): LazyNode {
+		if (this._closingFragment) return this._closingFragment;
+		return this._closingFragment = convertChild((this._ts as ts.JsxFragment).closingFragment, this) as LazyNode;
+	}
+	get children(): (LazyNode | null)[] {
+		if (this._children) return this._children;
+		return this._children = convertChildren((this._ts as ts.JsxFragment).children, this);
+	}
+}
+
+class JSXOpeningFragmentNode extends LazyNode {
+	readonly type = 'JSXOpeningFragment' as const;
+}
+
+class JSXClosingFragmentNode extends LazyNode {
+	readonly type = 'JSXClosingFragment' as const;
+}
+
+class JSXAttributeNode extends LazyNode {
+	readonly type = 'JSXAttribute' as const;
+	private _name?: LazyNode;
+	private _value?: LazyNode | null;
+
+	get name(): LazyNode {
+		if (this._name) return this._name;
+		return this._name = convertJSXNamespaceOrIdentifier((this._ts as ts.JsxAttribute).name, this);
+	}
+	get value(): LazyNode | null {
+		if (this._value !== undefined) return this._value;
+		return this._value = convertChild((this._ts as ts.JsxAttribute).initializer, this);
+	}
+}
+
+class JSXSpreadAttributeNode extends LazyNode {
+	readonly type = 'JSXSpreadAttribute' as const;
+	private _argument?: LazyNode | null;
+	get argument(): LazyNode | null {
+		if (this._argument !== undefined) return this._argument;
+		return this._argument = convertChild((this._ts as ts.JsxSpreadAttribute).expression, this);
+	}
+}
+
+class JSXExpressionContainerNode extends LazyNode {
+	readonly type = 'JSXExpressionContainer' as const;
+	private _expression?: LazyNode;
+
+	get expression(): LazyNode {
+		if (this._expression) return this._expression;
+		const t = this._ts as ts.JsxExpression;
+		if (t.expression) {
+			return this._expression = convertChild(t.expression, this) as LazyNode;
+		}
+		return this._expression = new JSXEmptyExpressionNode(t, this);
+	}
+}
+
+class JSXEmptyExpressionNode extends LazyNode {
+	readonly type = 'JSXEmptyExpression' as const;
+	constructor(tsNode: ts.JsxExpression, parent: LazyNode) {
+		// Synthetic — the JsxExpression TS slot is owned by JSXExpressionContainerNode.
+		super(tsNode, parent, undefined, false);
+		// Range matches eager: `[start+1, end-1]` to exclude the `{` `}`.
+		this.range = [tsNode.getStart(this._ctx.ast) + 1, tsNode.getEnd() - 1];
+	}
+}
+
+class JSXSpreadChildNode extends LazyNode {
+	readonly type = 'JSXSpreadChild' as const;
+	private _expression?: LazyNode | null;
+	get expression(): LazyNode | null {
+		if (this._expression !== undefined) return this._expression;
+		return this._expression = convertChild((this._ts as ts.JsxExpression).expression, this);
+	}
+}
+
+class JSXTextNode extends LazyNode {
+	readonly type = 'JSXText' as const;
+	readonly value: string;
+	readonly raw: string;
+	constructor(tsNode: ts.JsxText, parent: LazyNode) {
+		super(tsNode, parent);
+		// JsxText doesn't own its leading trivia the way other TS nodes do —
+		// the gap between sibling JSX children IS the JsxText's content. Use
+		// fullStart to capture leading whitespace.
+		const start = tsNode.getFullStart();
+		const end = tsNode.getEnd();
+		this.range = [start, end];
+		const text = this._ctx.ast.text.slice(start, end);
+		this.raw = text;
+		this.value = unescapeJsxText(text);
+	}
+}
+
+// JSXIdentifier — synthetic in the sense that it has no own TS kind; it
+// wraps an Identifier (or sub-piece of a JsxNamespacedName). Tag-name
+// identifiers DO claim the cache slot (typescript-estree's
+// convertJSXIdentifier registers them); identifiers inside JsxNamespacedName
+// don't (the JSXNamespacedName owns that slot).
+class JSXIdentifierNode extends LazyNode {
+	readonly type = 'JSXIdentifier' as const;
+	readonly name: string;
+	constructor(
+		tsNode: ts.Node,
+		parent: LazyNode | null,
+		name: string,
+		registerInMaps = true,
+		range?: [number, number],
+	) {
+		super(tsNode, parent, undefined, registerInMaps);
+		this.name = name;
+		if (range) this.range = range;
+	}
+}
+
+class JSXMemberExpressionNode extends LazyNode {
+	readonly type = 'JSXMemberExpression' as const;
+	private _object?: LazyNode;
+	private _property?: JSXIdentifierNode;
+	get object(): LazyNode {
+		if (this._object) return this._object;
+		const t = this._ts as ts.PropertyAccessExpression;
+		return this._object = convertJSXTagName(t.expression, this);
+	}
+	get property(): JSXIdentifierNode {
+		if (this._property) return this._property;
+		const name = (this._ts as ts.PropertyAccessExpression).name as ts.Identifier;
+		// Inner identifier of a member-expression chain — slot is owned by
+		// the property's own ts.Identifier, so we DO register here (matches
+		// typescript-estree's convertJSXIdentifier behavior).
+		return this._property = new JSXIdentifierNode(name, this, name.text, true);
+	}
+}
+
+class JSXNamespacedNameNode extends LazyNode {
+	readonly type = 'JSXNamespacedName' as const;
+	private _namespace?: JSXIdentifierNode;
+	private _name?: JSXIdentifierNode;
+	get namespace(): JSXIdentifierNode {
+		if (this._namespace) return this._namespace;
+		const ns = (this._ts as ts.JsxNamespacedName).namespace;
+		// Inner — JSXNamespacedName owns the JsxNamespacedName slot, so the
+		// namespace JSXIdentifier doesn't register against namespace.parent
+		// (which would conflict). The namespace ts.Identifier itself has a
+		// distinct TS node, so we register that.
+		return this._namespace = new JSXIdentifierNode(ns, this, ns.text, true);
+	}
+	get name(): JSXIdentifierNode {
+		if (this._name) return this._name;
+		const nm = (this._ts as ts.JsxNamespacedName).name;
+		return this._name = new JSXIdentifierNode(nm, this, nm.text, true);
+	}
+}
+
+// JSX tag-name dispatch: translate the TS node that lives in `tagName`
+// (Identifier, PropertyAccessExpression, JsxNamespacedName, ThisKeyword)
+// into the right JSX-flavored ESTree node.
+function convertJSXTagName(node: ts.Node, parent: LazyNode): LazyNode {
+	if (node.kind === SK.PropertyAccessExpression) {
+		return new JSXMemberExpressionNode(node, parent);
+	}
+	if (node.kind === SK.JsxNamespacedName) {
+		return new JSXNamespacedNameNode(node, parent);
+	}
+	if (node.kind === SK.ThisKeyword) {
+		// `<this />` — typescript-estree falls back to convertJSXNamespaceOrIdentifier
+		// which then calls convertJSXIdentifier (treats it as a JSXIdentifier
+		// with name='this'). Mirror that.
+		return new JSXIdentifierNode(node, parent, 'this', true);
+	}
+	const id = node as ts.Identifier;
+	return new JSXIdentifierNode(id, parent, id.text, true);
+}
+
+// JSX attribute-name dispatch: a JsxNamespacedName (`<el ns:attr=… />`)
+// or a plain ts.Identifier (`<el attr=… />`).
+function convertJSXNamespaceOrIdentifier(node: ts.Node, parent: LazyNode): LazyNode {
+	if (node.kind === SK.JsxNamespacedName) {
+		return new JSXNamespacedNameNode(node, parent);
+	}
+	const id = node as ts.Identifier;
+	return new JSXIdentifierNode(id, parent, id.text, true);
+}
+
+// JsxText/string-literal entity decoding. typescript-estree calls into
+// `unescapeStringLiteralText` (lib/node-utils.ts) for both StringLiteral
+// inside JsxAttribute and JsxText. Rules read `.value` for the decoded
+// text and `.raw` for the verbatim source. Cover the common entities so
+// parity holds on text like `&amp;` / `&lt;` / `&#65;`.
+function unescapeJsxText(text: string): string {
+	if (!text.includes('&')) return text;
+	return text
+		.replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+		.replace(/&#x([0-9a-fA-F]+);/g, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, '\'')
+		.replace(/&nbsp;/g, ' ');
 }
 
 // --- Entry point --------------------------------------------------------
