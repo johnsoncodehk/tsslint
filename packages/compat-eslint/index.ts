@@ -58,13 +58,17 @@ function _getWrappers(ruleId: string) {
 	let pair = _wrapCache.get(ruleId);
 	if (pair) return pair;
 	const key = JSON.stringify(ruleId);
+	// `//# sourceURL=` directive gives the resulting SharedFunctionInfo a
+	// non-empty `url`, so Chrome DevTools surfaces these frames in
+	// flame graphs / Bottom-Up / search instead of hiding them as native.
+	// Different URL per rule so each frame is independently navigable.
 	const selectorWrap = new Function(
 		'fn',
-		`return ({ ${key}: function (node) { return fn(node); } })[${key}];`,
+		`return ({ ${key}: function (node) { return fn(node); } })[${key}];\n//# sourceURL=tsslint-listener/${ruleId}.js`,
 	) as any;
 	const variadicWrap = new Function(
 		'fn',
-		`return ({ ${key}: function () { return fn.apply(this, arguments); } })[${key}];`,
+		`return ({ ${key}: function () { return fn.apply(this, arguments); } })[${key}];\n//# sourceURL=tsslint-listener/${ruleId}.js`,
 	) as any;
 	pair = [selectorWrap, variadicWrap];
 	_wrapCache.set(ruleId, pair);

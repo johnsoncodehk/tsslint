@@ -82,9 +82,17 @@ function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName
 			// (`<pluginName>:init` shows up in the flame graph) and
 			// leaves every subsequent rule frame as pure rule-body
 			// load time.
+			//
+			// `//# sourceURL=` directive lets Chrome DevTools surface
+			// these `new Function`-derived frames in flame graphs /
+			// Bottom-Up / search; without it the SharedFunctionInfo
+			// has an empty url and DevTools hides the frame as native.
 			const initKey = JSON.stringify(pluginName + ':init');
 			const probeAbs = path.join(pkgRoot, dir, probeRuleName + ext);
-			(new Function('warm', `({ ${initKey}: () => warm() })[${initKey}]();`)(
+			(new Function(
+				'warm',
+				`({ ${initKey}: () => warm() })[${initKey}]();\n//# sourceURL=tsslint-rule-loader/${pluginName}/init.js`,
+			)(
 				() => { try { require(probeAbs); } catch {} },
 			));
 			// Per-rule named thunk. NamedEvaluation on a computed
@@ -99,7 +107,10 @@ function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName
 			return (ruleName) => {
 				const filePath = path.join(pkgRoot, dir, ruleName + ext);
 				const key = JSON.stringify(ruleName);
-				const thunk = new Function('requireFn', `return ({ ${key}: () => requireFn() })[${key}];`)(
+				const thunk = new Function(
+					'requireFn',
+					`return ({ ${key}: () => requireFn() })[${key}];\n//# sourceURL=tsslint-rule-loader/${pluginName}/${ruleName}.js`,
+				)(
 					() => {
 						try {
 							const m = require(filePath);
