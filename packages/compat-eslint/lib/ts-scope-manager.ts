@@ -27,21 +27,79 @@ type AstMaps = {
 // `TYPE_VALUE Math` as `TYPE`, etc.). Update if ESLint adds a new ES
 // year.
 const ESLINT_BUILTIN_GLOBALS: readonly string[] = [
-	'AggregateError', 'Array', 'ArrayBuffer', 'AsyncDisposableStack',
-	'Atomics', 'BigInt', 'BigInt64Array', 'BigUint64Array', 'Boolean',
-	'DataView', 'Date', 'DisposableStack', 'Error', 'EvalError',
-	'FinalizationRegistry', 'Float16Array', 'Float32Array', 'Float64Array',
-	'Function', 'Infinity', 'Int16Array', 'Int32Array', 'Int8Array',
-	'Intl', 'Iterator', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object',
-	'Promise', 'Proxy', 'RangeError', 'ReferenceError', 'Reflect',
-	'RegExp', 'Set', 'SharedArrayBuffer', 'String', 'SuppressedError',
-	'Symbol', 'SyntaxError', 'Temporal', 'TypeError', 'URIError',
-	'Uint16Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray',
-	'WeakMap', 'WeakRef', 'WeakSet', 'constructor', 'decodeURI',
-	'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape',
-	'eval', 'globalThis', 'hasOwnProperty', 'isFinite', 'isNaN',
-	'isPrototypeOf', 'parseFloat', 'parseInt', 'propertyIsEnumerable',
-	'toLocaleString', 'toString', 'undefined', 'unescape', 'valueOf',
+	'AggregateError',
+	'Array',
+	'ArrayBuffer',
+	'AsyncDisposableStack',
+	'Atomics',
+	'BigInt',
+	'BigInt64Array',
+	'BigUint64Array',
+	'Boolean',
+	'DataView',
+	'Date',
+	'DisposableStack',
+	'Error',
+	'EvalError',
+	'FinalizationRegistry',
+	'Float16Array',
+	'Float32Array',
+	'Float64Array',
+	'Function',
+	'Infinity',
+	'Int16Array',
+	'Int32Array',
+	'Int8Array',
+	'Intl',
+	'Iterator',
+	'JSON',
+	'Map',
+	'Math',
+	'NaN',
+	'Number',
+	'Object',
+	'Promise',
+	'Proxy',
+	'RangeError',
+	'ReferenceError',
+	'Reflect',
+	'RegExp',
+	'Set',
+	'SharedArrayBuffer',
+	'String',
+	'SuppressedError',
+	'Symbol',
+	'SyntaxError',
+	'Temporal',
+	'TypeError',
+	'URIError',
+	'Uint16Array',
+	'Uint32Array',
+	'Uint8Array',
+	'Uint8ClampedArray',
+	'WeakMap',
+	'WeakRef',
+	'WeakSet',
+	'constructor',
+	'decodeURI',
+	'decodeURIComponent',
+	'encodeURI',
+	'encodeURIComponent',
+	'escape',
+	'eval',
+	'globalThis',
+	'hasOwnProperty',
+	'isFinite',
+	'isNaN',
+	'isPrototypeOf',
+	'parseFloat',
+	'parseInt',
+	'propertyIsEnumerable',
+	'toLocaleString',
+	'toString',
+	'undefined',
+	'unescape',
+	'valueOf',
 ];
 
 // TypeScript built-in lib type globals. Vendored union of every TYPE-tagged
@@ -57,61 +115,202 @@ const ESLINT_BUILTIN_GLOBALS: readonly string[] = [
 // no-undef on real undeclared type names (`NodeJS.ErrnoException`,
 // `Visitor`).
 const TS_LIB_TYPE_GLOBALS: readonly string[] = [
-	'AggregateError', 'AggregateErrorConstructor', 'Array', 'ArrayBuffer',
-	'ArrayBufferConstructor', 'ArrayBufferLike', 'ArrayBufferTypes',
-	'ArrayBufferView', 'ArrayConstructor', 'ArrayIterator', 'ArrayLike',
-	'AsyncDisposable', 'AsyncDisposableStack', 'AsyncDisposableStackConstructor',
-	'AsyncGenerator', 'AsyncGeneratorFunction', 'AsyncGeneratorFunctionConstructor',
-	'AsyncIterable', 'AsyncIterableIterator', 'AsyncIterator', 'AsyncIteratorObject',
-	'Atomics', 'Awaited', 'BigInt', 'BigInt64Array', 'BigInt64ArrayConstructor',
-	'BigIntConstructor', 'BigIntToLocaleStringOptions', 'BigUint64Array',
-	'BigUint64ArrayConstructor', 'Boolean', 'BooleanConstructor',
-	'BuiltinIteratorReturn', 'CallableFunction', 'Capitalize', 'ConcatArray',
-	'ConstructorParameters', 'DataView', 'DataViewConstructor', 'Date',
-	'DateConstructor', 'Disposable', 'DisposableStack', 'DisposableStackConstructor',
-	'Error', 'ErrorConstructor', 'ErrorOptions', 'EvalError', 'EvalErrorConstructor',
-	'Exclude', 'Extract', 'FinalizationRegistry', 'FinalizationRegistryConstructor',
-	'FlatArray', 'Float16Array', 'Float16ArrayConstructor', 'Float32Array',
-	'Float32ArrayConstructor', 'Float64Array', 'Float64ArrayConstructor', 'Function',
-	'FunctionConstructor', 'Generator', 'GeneratorFunction',
-	'GeneratorFunctionConstructor', 'IArguments', 'ImportAssertions',
-	'ImportAttributes', 'ImportCallOptions', 'ImportMeta', 'InstanceType',
-	'Int16Array', 'Int16ArrayConstructor', 'Int32Array', 'Int32ArrayConstructor',
-	'Int8Array', 'Int8ArrayConstructor', 'Intl', 'Iterable', 'IterableIterator',
-	'Iterator', 'IteratorObject', 'IteratorObjectConstructor', 'IteratorResult',
-	'IteratorReturnResult', 'IteratorYieldResult', 'JSON', 'Lowercase', 'Map',
-	'MapConstructor', 'MapIterator', 'Math', 'NewableFunction', 'NoInfer',
-	'NonNullable', 'Number', 'NumberConstructor', 'Object', 'ObjectConstructor',
-	'Omit', 'OmitThisParameter', 'Parameters', 'Partial', 'Pick', 'Promise',
-	'PromiseConstructor', 'PromiseConstructorLike', 'PromiseFulfilledResult',
-	'PromiseLike', 'PromiseRejectedResult', 'PromiseSettledResult',
-	'PromiseWithResolvers', 'PropertyDescriptor', 'PropertyDescriptorMap',
-	'PropertyKey', 'ProxyConstructor', 'ProxyHandler', 'RangeError',
-	'RangeErrorConstructor', 'Readonly', 'ReadonlyArray', 'ReadonlyMap',
-	'ReadonlySet', 'ReadonlySetLike', 'Record', 'ReferenceError',
-	'ReferenceErrorConstructor', 'Reflect', 'RegExp', 'RegExpConstructor',
-	'RegExpExecArray', 'RegExpIndicesArray', 'RegExpMatchArray',
-	'RegExpStringIterator', 'Required', 'ReturnType', 'Set', 'SetConstructor',
-	'SetIterator', 'SharedArrayBuffer', 'SharedArrayBufferConstructor', 'String',
-	'StringConstructor', 'StringIterator', 'SuppressedError',
-	'SuppressedErrorConstructor', 'Symbol', 'SymbolConstructor', 'SyntaxError',
-	'SyntaxErrorConstructor', 'TemplateStringsArray', 'Temporal',
-	'ThisParameterType', 'ThisType', 'TypeError', 'TypeErrorConstructor',
-	'TypedPropertyDescriptor', 'URIError', 'URIErrorConstructor', 'Uint16Array',
-	'Uint16ArrayConstructor', 'Uint32Array', 'Uint32ArrayConstructor', 'Uint8Array',
-	'Uint8ArrayConstructor', 'Uint8ClampedArray', 'Uint8ClampedArrayConstructor',
-	'Uncapitalize', 'Uppercase', 'WeakKey', 'WeakKeyTypes', 'WeakMap',
-	'WeakMapConstructor', 'WeakRef', 'WeakRefConstructor', 'WeakSet',
+	'AggregateError',
+	'AggregateErrorConstructor',
+	'Array',
+	'ArrayBuffer',
+	'ArrayBufferConstructor',
+	'ArrayBufferLike',
+	'ArrayBufferTypes',
+	'ArrayBufferView',
+	'ArrayConstructor',
+	'ArrayIterator',
+	'ArrayLike',
+	'AsyncDisposable',
+	'AsyncDisposableStack',
+	'AsyncDisposableStackConstructor',
+	'AsyncGenerator',
+	'AsyncGeneratorFunction',
+	'AsyncGeneratorFunctionConstructor',
+	'AsyncIterable',
+	'AsyncIterableIterator',
+	'AsyncIterator',
+	'AsyncIteratorObject',
+	'Atomics',
+	'Awaited',
+	'BigInt',
+	'BigInt64Array',
+	'BigInt64ArrayConstructor',
+	'BigIntConstructor',
+	'BigIntToLocaleStringOptions',
+	'BigUint64Array',
+	'BigUint64ArrayConstructor',
+	'Boolean',
+	'BooleanConstructor',
+	'BuiltinIteratorReturn',
+	'CallableFunction',
+	'Capitalize',
+	'ConcatArray',
+	'ConstructorParameters',
+	'DataView',
+	'DataViewConstructor',
+	'Date',
+	'DateConstructor',
+	'Disposable',
+	'DisposableStack',
+	'DisposableStackConstructor',
+	'Error',
+	'ErrorConstructor',
+	'ErrorOptions',
+	'EvalError',
+	'EvalErrorConstructor',
+	'Exclude',
+	'Extract',
+	'FinalizationRegistry',
+	'FinalizationRegistryConstructor',
+	'FlatArray',
+	'Float16Array',
+	'Float16ArrayConstructor',
+	'Float32Array',
+	'Float32ArrayConstructor',
+	'Float64Array',
+	'Float64ArrayConstructor',
+	'Function',
+	'FunctionConstructor',
+	'Generator',
+	'GeneratorFunction',
+	'GeneratorFunctionConstructor',
+	'IArguments',
+	'ImportAssertions',
+	'ImportAttributes',
+	'ImportCallOptions',
+	'ImportMeta',
+	'InstanceType',
+	'Int16Array',
+	'Int16ArrayConstructor',
+	'Int32Array',
+	'Int32ArrayConstructor',
+	'Int8Array',
+	'Int8ArrayConstructor',
+	'Intl',
+	'Iterable',
+	'IterableIterator',
+	'Iterator',
+	'IteratorObject',
+	'IteratorObjectConstructor',
+	'IteratorResult',
+	'IteratorReturnResult',
+	'IteratorYieldResult',
+	'JSON',
+	'Lowercase',
+	'Map',
+	'MapConstructor',
+	'MapIterator',
+	'Math',
+	'NewableFunction',
+	'NoInfer',
+	'NonNullable',
+	'Number',
+	'NumberConstructor',
+	'Object',
+	'ObjectConstructor',
+	'Omit',
+	'OmitThisParameter',
+	'Parameters',
+	'Partial',
+	'Pick',
+	'Promise',
+	'PromiseConstructor',
+	'PromiseConstructorLike',
+	'PromiseFulfilledResult',
+	'PromiseLike',
+	'PromiseRejectedResult',
+	'PromiseSettledResult',
+	'PromiseWithResolvers',
+	'PropertyDescriptor',
+	'PropertyDescriptorMap',
+	'PropertyKey',
+	'ProxyConstructor',
+	'ProxyHandler',
+	'RangeError',
+	'RangeErrorConstructor',
+	'Readonly',
+	'ReadonlyArray',
+	'ReadonlyMap',
+	'ReadonlySet',
+	'ReadonlySetLike',
+	'Record',
+	'ReferenceError',
+	'ReferenceErrorConstructor',
+	'Reflect',
+	'RegExp',
+	'RegExpConstructor',
+	'RegExpExecArray',
+	'RegExpIndicesArray',
+	'RegExpMatchArray',
+	'RegExpStringIterator',
+	'Required',
+	'ReturnType',
+	'Set',
+	'SetConstructor',
+	'SetIterator',
+	'SharedArrayBuffer',
+	'SharedArrayBufferConstructor',
+	'String',
+	'StringConstructor',
+	'StringIterator',
+	'SuppressedError',
+	'SuppressedErrorConstructor',
+	'Symbol',
+	'SymbolConstructor',
+	'SyntaxError',
+	'SyntaxErrorConstructor',
+	'TemplateStringsArray',
+	'Temporal',
+	'ThisParameterType',
+	'ThisType',
+	'TypeError',
+	'TypeErrorConstructor',
+	'TypedPropertyDescriptor',
+	'URIError',
+	'URIErrorConstructor',
+	'Uint16Array',
+	'Uint16ArrayConstructor',
+	'Uint32Array',
+	'Uint32ArrayConstructor',
+	'Uint8Array',
+	'Uint8ArrayConstructor',
+	'Uint8ClampedArray',
+	'Uint8ClampedArrayConstructor',
+	'Uncapitalize',
+	'Uppercase',
+	'WeakKey',
+	'WeakKeyTypes',
+	'WeakMap',
+	'WeakMapConstructor',
+	'WeakRef',
+	'WeakRefConstructor',
+	'WeakSet',
 	'WeakSetConstructor',
 	// Decorator types (from `lib.decorators*.d.ts`). Includes both stage-3
 	// (ClassMethodDecoratorContext etc.) and legacy (ClassDecorator,
 	// MethodDecorator, PropertyDecorator, ParameterDecorator).
-	'ClassMemberDecoratorContext', 'DecoratorContext', 'DecoratorMetadataObject',
-	'DecoratorMetadata', 'ClassDecoratorContext', 'ClassMethodDecoratorContext',
-	'ClassGetterDecoratorContext', 'ClassSetterDecoratorContext',
-	'ClassAccessorDecoratorContext', 'ClassAccessorDecoratorTarget',
-	'ClassAccessorDecoratorResult', 'ClassFieldDecoratorContext',
-	'ClassDecorator', 'PropertyDecorator', 'MethodDecorator', 'ParameterDecorator',
+	'ClassMemberDecoratorContext',
+	'DecoratorContext',
+	'DecoratorMetadataObject',
+	'DecoratorMetadata',
+	'ClassDecoratorContext',
+	'ClassMethodDecoratorContext',
+	'ClassGetterDecoratorContext',
+	'ClassSetterDecoratorContext',
+	'ClassAccessorDecoratorContext',
+	'ClassAccessorDecoratorTarget',
+	'ClassAccessorDecoratorResult',
+	'ClassFieldDecoratorContext',
+	'ClassDecorator',
+	'PropertyDecorator',
+	'MethodDecorator',
+	'ParameterDecorator',
 ];
 
 // Lib globals that upstream's `analyze({ lib: ['esnext'] })` exposes as values
@@ -189,13 +388,28 @@ const _CLASSIFY_NAME_SLOT_KINDS = new Uint8Array(_SK_CLASSIFY_BITMAP_SIZE);
 	const SK = ts.SyntaxKind;
 	// Fall-through "name slot" cases — body is `(p as { name }).name === id ? 0 : 0b11`.
 	const nameSlotKinds = [
-		SK.PropertyDeclaration, SK.PropertySignature, SK.PropertyAssignment,
-		SK.MethodDeclaration, SK.MethodSignature, SK.GetAccessor, SK.SetAccessor,
-		SK.EnumMember, SK.FunctionDeclaration, SK.FunctionExpression,
-		SK.ClassDeclaration, SK.ClassExpression, SK.EnumDeclaration,
-		SK.ModuleDeclaration, SK.TypeAliasDeclaration, SK.InterfaceDeclaration,
-		SK.TypeParameter, SK.ImportClause, SK.NamespaceImport,
-		SK.ImportEqualsDeclaration, SK.NamedTupleMember, SK.JsxAttribute,
+		SK.PropertyDeclaration,
+		SK.PropertySignature,
+		SK.PropertyAssignment,
+		SK.MethodDeclaration,
+		SK.MethodSignature,
+		SK.GetAccessor,
+		SK.SetAccessor,
+		SK.EnumMember,
+		SK.FunctionDeclaration,
+		SK.FunctionExpression,
+		SK.ClassDeclaration,
+		SK.ClassExpression,
+		SK.EnumDeclaration,
+		SK.ModuleDeclaration,
+		SK.TypeAliasDeclaration,
+		SK.InterfaceDeclaration,
+		SK.TypeParameter,
+		SK.ImportClause,
+		SK.NamespaceImport,
+		SK.ImportEqualsDeclaration,
+		SK.NamedTupleMember,
+		SK.JsxAttribute,
 	];
 	for (const k of nameSlotKinds) {
 		_CLASSIFY_NAME_SLOT_KINDS[k] = 1;
@@ -203,11 +417,18 @@ const _CLASSIFY_NAME_SLOT_KINDS = new Uint8Array(_SK_CLASSIFY_BITMAP_SIZE);
 	}
 	// All other kinds with a dedicated case body in the switch.
 	const otherHandled = [
-		SK.PropertyAccessExpression, SK.QualifiedName, SK.LabeledStatement,
-		SK.BreakStatement, SK.ContinueStatement, SK.MetaProperty,
+		SK.PropertyAccessExpression,
+		SK.QualifiedName,
+		SK.LabeledStatement,
+		SK.BreakStatement,
+		SK.ContinueStatement,
+		SK.MetaProperty,
 		SK.ImportSpecifier,
-		SK.VariableDeclaration, SK.BindingElement, SK.Parameter,
-		SK.ExportSpecifier, SK.TypeReference,
+		SK.VariableDeclaration,
+		SK.BindingElement,
+		SK.Parameter,
+		SK.ExportSpecifier,
+		SK.TypeReference,
 		SK.ImportType,
 	];
 	for (const k of otherHandled) _CLASSIFY_HANDLED_KINDS[k] = 1;
@@ -429,7 +650,7 @@ export class TsScopeManager {
 					init
 					&& init.kind === SK.VariableDeclarationList
 					&& ((init as ts.VariableDeclarationList).flags
-						& (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0
+							& (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0
 				) {
 					return new TsScope(this, n, 'for', parent, true);
 				}
@@ -612,11 +833,21 @@ export class TsScopeManager {
 		return out;
 	}
 
-	isES6() { return true; }
-	isGlobalReturn() { return false; }
-	isImpliedStrict() { return this.sourceType === 'module'; }
-	isModule() { return this.sourceType === 'module'; }
-	isStrictModeSupported() { return true; }
+	isES6() {
+		return true;
+	}
+	isGlobalReturn() {
+		return false;
+	}
+	isImpliedStrict() {
+		return this.sourceType === 'module';
+	}
+	isModule() {
+		return this.sourceType === 'module';
+	}
+	isStrictModeSupported() {
+		return true;
+	}
 
 	// Fake globals registered by `addGlobals` whose through-ref reconciliation
 	// is still pending. Drained when `_ensureRefIndex` actually runs (i.e.
@@ -889,20 +1120,20 @@ export class TsScopeManager {
 						let arr = refs.get(sym);
 						if (!arr) refs.set(sym, arr = []);
 						{
-						const ref = new TsReference(this, node, sym);
-						arr.push(ref);
-						recordScope(ref);
-					}
+							const ref = new TsReference(this, node, sym);
+							arr.push(ref);
+							recordScope(ref);
+						}
 					}
 					else if (freeRef) {
 						// Value ref to a type-only lib global (e.g. Set, Map,
 						// Iterable in expression position) — upstream treats
 						// as undefined. Match.
 						{
-						const ref = new TsReference(this, node, sym);
-						through.push(ref);
-						recordScope(ref);
-					}
+							const ref = new TsReference(this, node, sym);
+							through.push(ref);
+							recordScope(ref);
+						}
 					}
 				}
 				else if (freeRef) {
@@ -960,7 +1191,7 @@ export class TsScopeManager {
 	getImplicitGlobals(): TsVariable[] {
 		if (this._implicitGlobals) return this._implicitGlobals;
 		const through = this.globalScope.through;
-		const byName = new Map<string, { v: TsVariable; firstWrite: TsReference; }>();
+		const byName = new Map<string, { v: TsVariable; firstWrite: TsReference }>();
 		for (const ref of through) {
 			if (!ref.isWrite()) continue;
 			const name = ref.identifier.name;
@@ -1093,7 +1324,7 @@ export class TsScopeManager {
 			case SK.ExportSpecifier: {
 				// `export {x} from "mod";` — re-export, no local reference.
 				const e = p as ts.ExportSpecifier;
-				const decl = e.parent.parent as ts.ExportDeclaration;
+				const decl = e.parent.parent;
 				if (decl.moduleSpecifier) return 0;
 				// `export {x}` — `x` references the local. `export {x as v}` —
 				// `x` (propertyName) references the local; `v` (name) is the
@@ -1147,7 +1378,8 @@ export class TsScopeManager {
 			// stay type-only and fall through to the generic logic.
 			if (cur.kind === SK.ExpressionWithTypeArguments) {
 				const hc = cur.parent;
-				if (hc?.kind === SK.HeritageClause
+				if (
+					hc?.kind === SK.HeritageClause
 					&& (hc as ts.HeritageClause).token === SK.ExtendsKeyword
 					&& hc.parent
 					&& (hc.parent.kind === SK.ClassDeclaration || hc.parent.kind === SK.ClassExpression)
@@ -1212,7 +1444,7 @@ export class TsScopeManager {
 		) as typeof import('./lazy-estree');
 		return materialize(tsNode, {
 			ast: this.tsFile,
-			maps: this.astMaps as unknown as { esTreeNodeToTSNodeMap: WeakMap<object, ts.Node>; tsNodeToESTreeNodeMap: WeakMap<ts.Node, object> },
+			maps: this.astMaps,
 		}) as unknown as T;
 	}
 }
@@ -1284,10 +1516,12 @@ export class TsScope {
 		// so scope.block must point at the inner, not the wrapper.
 		// Unwrap when this scope's tsNode is the inner declaration but
 		// materialize yielded the wrapper.
-		if (result && (
-			(result as { type?: string }).type === 'ExportNamedDeclaration'
-			|| (result as { type?: string }).type === 'ExportDefaultDeclaration'
-		)) {
+		if (
+			result && (
+				(result as { type?: string }).type === 'ExportNamedDeclaration'
+				|| (result as { type?: string }).type === 'ExportDefaultDeclaration'
+			)
+		) {
 			const inner = (result as { declaration?: TSESTree.Node }).declaration;
 			if (inner) return inner;
 		}
@@ -1474,11 +1708,12 @@ export class TsScope {
 						// symbol to the same TsVariable so resolution lands.
 						// Repro (real code): `class C { constructor(public
 						// readonly program: ts.Program) { program.x } }`.
-						const isParamProp = ts_.isParameter(p) && p.modifiers?.some(m =>
-							m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword
-							|| m.kind === SK.ProtectedKeyword || m.kind === SK.ReadonlyKeyword
-							|| m.kind === SK.OverrideKeyword
-						);
+						const isParamProp = ts_.isParameter(p)
+							&& p.modifiers?.some(m =>
+								m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword
+								|| m.kind === SK.ProtectedKeyword || m.kind === SK.ReadonlyKeyword
+								|| m.kind === SK.OverrideKeyword
+							);
 						if (isParamProp && fn.body && ts_.isIdentifier(p.name)) {
 							const propSym = this.manager.checker.getSymbolAtLocation(p.name);
 							const localSym = this.manager.checker.getSymbolsInScope(
@@ -1496,7 +1731,7 @@ export class TsScope {
 				// ordering (matches upstream's referencer). Body statements
 				// + var-hoisted decls collapse into the function scope.
 				if (fn.body && ts_.isBlock(fn.body)) {
-					for (const stmt of (fn.body as ts.Block).statements) {
+					for (const stmt of fn.body.statements) {
 						this._collectStatementBindings(stmt, push, pushBinding);
 					}
 				}
@@ -1538,7 +1773,8 @@ export class TsScope {
 			}
 			case 'for': {
 				const f = this.tsNode as ts.ForStatement | ts.ForInStatement | ts.ForOfStatement;
-				const initializer = (f as ts.ForStatement).initializer ?? (f as ts.ForInStatement | ts.ForOfStatement).initializer;
+				const initializer = (f as ts.ForStatement).initializer
+					?? (f as ts.ForInStatement | ts.ForOfStatement).initializer;
 				if (initializer && ts_.isVariableDeclarationList(initializer)) {
 					for (const d of initializer.declarations) pushBinding(d.name);
 				}
@@ -1987,7 +2223,14 @@ export class TsVariable {
 		//   Variable / FunctionName / Parameter / CatchClause /
 		//   ImplicitGlobalVariable → isTypeDefinition = false
 		if (this.defs.length === 0) return true; // implicit lib var
-		const TYPE_DEF_TYPES = new Set(['ImportBinding', 'TSEnumName', 'Type', 'TSModuleName', 'ClassName', 'TSEnumMember']);
+		const TYPE_DEF_TYPES = new Set([
+			'ImportBinding',
+			'TSEnumName',
+			'Type',
+			'TSModuleName',
+			'ClassName',
+			'TSEnumMember',
+		]);
 		return this.defs.some(d => TYPE_DEF_TYPES.has(d.type));
 	}
 }
@@ -2174,9 +2417,15 @@ export class TsReference {
 		return false;
 	}
 
-	isWriteOnly(): boolean { return this.isWrite() && !this.isRead(); }
-	isReadOnly(): boolean { return this.isRead() && !this.isWrite(); }
-	isReadWrite(): boolean { return this.isRead() && this.isWrite(); }
+	isWriteOnly(): boolean {
+		return this.isWrite() && !this.isRead();
+	}
+	isReadOnly(): boolean {
+		return this.isRead() && !this.isWrite();
+	}
+	isReadWrite(): boolean {
+		return this.isRead() && this.isWrite();
+	}
 
 	get writeExpr(): TSESTree.Node | null | undefined {
 		// For an init reference (`let x = expr`, `function f(b = expr)`),
@@ -2231,7 +2480,9 @@ export class TsReference {
 		return true;
 	}
 
-	get isTypeReference(): boolean { return !this.isValueReference; }
+	get isTypeReference(): boolean {
+		return !this.isValueReference;
+	}
 }
 
 // upstream: `@typescript-eslint/scope-manager/dist/definition/`'s
@@ -2296,7 +2547,9 @@ export class TsDefinition {
 		if (ts_.isEnumDeclaration(d)) return 'TSEnumName';
 		if (ts_.isEnumMember(d)) return 'TSEnumMember';
 		if (ts_.isModuleDeclaration(d)) return 'TSModuleName';
-		if (ts_.isTypeAliasDeclaration(d) || ts_.isInterfaceDeclaration(d) || ts_.isTypeParameterDeclaration(d)) return 'Type';
+		if (ts_.isTypeAliasDeclaration(d) || ts_.isInterfaceDeclaration(d) || ts_.isTypeParameterDeclaration(d)) {
+			return 'Type';
+		}
 		return 'Variable';
 	}
 
@@ -2335,10 +2588,12 @@ export class TsDefinition {
 		// expects `def.node` to be the inner declaration so rules like
 		// `no-shadow` (`isFunctionTypeParameterNameValueShadow` checks
 		// `def.node.type === 'TSDeclareFunction'`) work on overload sigs.
-		if (result && (
-			(result as { type?: string }).type === 'ExportNamedDeclaration'
-			|| (result as { type?: string }).type === 'ExportDefaultDeclaration'
-		)) {
+		if (
+			result && (
+				(result as { type?: string }).type === 'ExportNamedDeclaration'
+				|| (result as { type?: string }).type === 'ExportDefaultDeclaration'
+			)
+		) {
 			const inner = (result as { declaration?: TSESTree.Node }).declaration;
 			if (inner) return inner;
 		}
@@ -2396,22 +2651,36 @@ export class TsDefinition {
 		return this.manager.tsToEstreeOrStub(target?.parent);
 	}
 
-	get isVariableDefinition(): boolean { return this.type === 'Variable' || this.type === 'Parameter'; }
-	get isTypeDefinition(): boolean { return this.type === 'Type'; }
+	get isVariableDefinition(): boolean {
+		return this.type === 'Variable' || this.type === 'Parameter';
+	}
+	get isTypeDefinition(): boolean {
+		return this.type === 'Type';
+	}
 }
 
 // Synthetic def for implicit globals — `x = 1;` for an undeclared `x`.
 // `tsDeclaration` is the first write reference's identifier (a stand-in
 // for a real declaration node).
 export class TsImplicitGlobalDefinition extends TsDefinition {
-	get type(): DefinitionType { return 'ImplicitGlobalVariable'; }
+	get type(): DefinitionType {
+		return 'ImplicitGlobalVariable';
+	}
 	get name(): TSESTree.Identifier | undefined {
 		return this.manager.tsToEstreeOrStub<TSESTree.Identifier>(this.tsDeclaration);
 	}
-	get node(): TSESTree.Node | undefined { return this.name; }
-	get parent(): TSESTree.Node | undefined { return undefined; }
-	get isVariableDefinition(): boolean { return true; }
-	get isTypeDefinition(): boolean { return false; }
+	get node(): TSESTree.Node | undefined {
+		return this.name;
+	}
+	get parent(): TSESTree.Node | undefined {
+		return undefined;
+	}
+	get isVariableDefinition(): boolean {
+		return true;
+	}
+	get isTypeDefinition(): boolean {
+		return false;
+	}
 }
 
 // Declares ECMAScript built-ins (es2026 from ESLint's `conf/globals.js`)

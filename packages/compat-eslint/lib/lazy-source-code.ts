@@ -32,8 +32,14 @@ const SK = ts.SyntaxKind;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface Loc { line: number; column: number; }
-interface SourceLoc { start: Loc; end: Loc; }
+interface Loc {
+	line: number;
+	column: number;
+}
+interface SourceLoc {
+	start: Loc;
+	end: Loc;
+}
 
 interface Token {
 	type: string;
@@ -214,7 +220,9 @@ export class LazySourceCode {
 	getLocFromIndex(index: number): Loc {
 		if (typeof index !== 'number') throw new TypeError('Expected `index` to be a number.');
 		if (index < 0 || index > this.text.length) {
-			throw new RangeError(`Index out of range (requested index ${index}, but source text has length ${this.text.length}).`);
+			throw new RangeError(
+				`Index out of range (requested index ${index}, but source text has length ${this.text.length}).`,
+			);
 		}
 		// `ast.getLineAndCharacterOfPosition(index)` returns 0-indexed
 		// line/col; ESLint's loc convention is 1-indexed line, 0-indexed
@@ -317,7 +325,7 @@ export class LazySourceCode {
 			const afterArr = this.getTokensAfter(node, { count: afterCount });
 			return beforeArr.concat(insideArr, afterArr);
 		}
-		return this.getTokensInside(node, normOpts(options as TokenOption));
+		return this.getTokensInside(node, normOpts(options));
 	}
 
 	private getTokensInside(node: NodeOrTokenLike, o: NormOpts): AnyToken[] {
@@ -387,7 +395,7 @@ export class LazySourceCode {
 	// `convertComments` (~115 ms cold).
 	private tsNodeOf(nodeOrToken: NodeOrTokenLike): ts.Node | undefined {
 		const map = this.parserServices?.esTreeNodeToTSNodeMap as WeakMap<object, ts.Node> | undefined;
-		return map?.get(nodeOrToken as unknown as object);
+		return map?.get(nodeOrToken);
 	}
 
 	// Per-node WeakMap caches for idempotent queries. Multiple rules often
@@ -415,7 +423,8 @@ export class LazySourceCode {
 		let scanStart: number;
 		if (tsNode) {
 			scanStart = tsNode.pos;
-		} else {
+		}
+		else {
 			const tIdx = searchLastEndingAtOrBefore(this.tokens, nodeOrToken.range[0]);
 			scanStart = tIdx >= 0 ? this.tokens[tIdx].range[1] : 0;
 		}
@@ -730,9 +739,12 @@ function advanceForward(
 		const t = arr[i];
 		if (t.range[0] >= endLoc) break;
 		if (o.filter && !o.filter(t)) continue;
-		if (skip > 0) { skip--; continue; }
+		if (skip > 0) {
+			skip--;
+			continue;
+		}
 		if (matchOne) return t;
-		(out as AnyToken[]).push(t);
+		out.push(t);
 		if (remaining > 0 && --remaining === 0) break;
 	}
 	return matchOne ? null : out;
@@ -752,9 +764,12 @@ function advanceBackward(
 		const t = arr[i];
 		if (t.range[1] <= endLoc) break;
 		if (o.filter && !o.filter(t)) continue;
-		if (skip > 0) { skip--; continue; }
+		if (skip > 0) {
+			skip--;
+			continue;
+		}
 		if (matchOne) return t;
-		(out as AnyToken[]).push(t);
+		out.push(t);
 		if (remaining > 0 && --remaining === 0) break;
 	}
 	return matchOne ? null : out;

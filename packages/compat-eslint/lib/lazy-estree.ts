@@ -41,7 +41,11 @@ export interface LazyAstMaps {
 	// The other is a thin facade that just reads `lazyNode._ts` directly,
 	// avoiding ~9k WeakMap.set calls per file. Profile showed WeakMap was
 	// 18% of materialise time; halving the ops drops that to ~10%.
-	esTreeNodeToTSNodeMap: { get(node: object): ts.Node | undefined; has(node: object): boolean; set(node: object, tsNode: ts.Node): unknown };
+	esTreeNodeToTSNodeMap: {
+		get(node: object): ts.Node | undefined;
+		has(node: object): boolean;
+		set(node: object, tsNode: ts.Node): unknown;
+	};
 	tsNodeToESTreeNodeMap: WeakMap<ts.Node, object>;
 }
 
@@ -57,7 +61,9 @@ const ESTREE_TO_TS_FACADE = {
 	has(node: object): boolean {
 		return (node as { _ts?: ts.Node })._ts != null;
 	},
-	set() { return this; },
+	set() {
+		return this;
+	},
 };
 
 export interface ConvertContext {
@@ -102,12 +108,17 @@ abstract class LazyNode {
 	// Mutating range invalidates the cached loc — the lazy getter
 	// recomputes from the new range on next read. Constructors should
 	// only set `range`; `loc` is computed on demand.
-	set range(v: [number, number]) { this._range = v; this._loc = undefined; }
+	set range(v: [number, number]) {
+		this._range = v;
+		this._loc = undefined;
+	}
 	private _loc?: ReturnType<typeof getLocFor>;
 	get loc() {
 		return this._loc ??= getLocFor(this._ctx.ast, this.range[0], this.range[1]);
 	}
-	set loc(v: ReturnType<typeof getLocFor>) { this._loc = v; }
+	set loc(v: ReturnType<typeof getLocFor>) {
+		this._loc = v;
+	}
 
 	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext, registerInMaps = true) {
 		this._ts = tsNode;
@@ -175,13 +186,15 @@ function isPatternLiteralTarget(tsNode: ts.Node): boolean {
 	let cur: ts.Node = tsNode;
 	while (cur.parent) {
 		const p = cur.parent;
-		if (p.kind === SK.ArrayLiteralExpression
+		if (
+			p.kind === SK.ArrayLiteralExpression
 			|| p.kind === SK.ObjectLiteralExpression
 			|| p.kind === SK.SpreadElement
 			|| p.kind === SK.SpreadAssignment
 			|| p.kind === SK.PropertyAssignment
 			|| p.kind === SK.ShorthandPropertyAssignment
-			|| p.kind === SK.ParenthesizedExpression) {
+			|| p.kind === SK.ParenthesizedExpression
+		) {
 			cur = p;
 			continue;
 		}
@@ -204,19 +217,33 @@ function isPatternLiteralTarget(tsNode: ts.Node): boolean {
 // `parent` resolves to the body rather than the declaration.
 const CLASS_MEMBER_KINDS_SET = (() => {
 	const a = new Uint8Array(400);
-	for (const k of [
-		SK.PropertyDeclaration, SK.MethodDeclaration, SK.Constructor,
-		SK.GetAccessor, SK.SetAccessor, SK.IndexSignature,
-		SK.SemicolonClassElement, SK.ClassStaticBlockDeclaration,
-	]) a[k] = 1;
+	for (
+		const k of [
+			SK.PropertyDeclaration,
+			SK.MethodDeclaration,
+			SK.Constructor,
+			SK.GetAccessor,
+			SK.SetAccessor,
+			SK.IndexSignature,
+			SK.SemicolonClassElement,
+			SK.ClassStaticBlockDeclaration,
+		]
+	) a[k] = 1;
 	return a;
 })();
 const INTERFACE_MEMBER_KINDS_SET = (() => {
 	const a = new Uint8Array(400);
-	for (const k of [
-		SK.PropertySignature, SK.MethodSignature, SK.IndexSignature,
-		SK.ConstructSignature, SK.CallSignature, SK.GetAccessor, SK.SetAccessor,
-	]) a[k] = 1;
+	for (
+		const k of [
+			SK.PropertySignature,
+			SK.MethodSignature,
+			SK.IndexSignature,
+			SK.ConstructSignature,
+			SK.CallSignature,
+			SK.GetAccessor,
+			SK.SetAccessor,
+		]
+	) a[k] = 1;
 	return a;
 })();
 
@@ -227,14 +254,25 @@ const INTERFACE_MEMBER_KINDS_SET = (() => {
 // of which appear here — so this catches the vast majority of calls.
 const WRAPPER_ROUTE_PARENT_BITMAP = (() => {
 	const a = new Uint8Array(400);
-	for (const k of [
-		SK.BinaryExpression, SK.ForOfStatement, SK.ForInStatement,
-		SK.ArrayLiteralExpression, SK.ObjectLiteralExpression,
-		SK.PropertyAssignment, SK.ShorthandPropertyAssignment,
-		SK.SpreadElement, SK.SpreadAssignment, SK.ParenthesizedExpression,
-		SK.VariableDeclaration, SK.Parameter,
-		SK.FunctionDeclaration, SK.FunctionExpression, SK.ArrowFunction,
-	]) a[k] = 1;
+	for (
+		const k of [
+			SK.BinaryExpression,
+			SK.ForOfStatement,
+			SK.ForInStatement,
+			SK.ArrayLiteralExpression,
+			SK.ObjectLiteralExpression,
+			SK.PropertyAssignment,
+			SK.ShorthandPropertyAssignment,
+			SK.SpreadElement,
+			SK.SpreadAssignment,
+			SK.ParenthesizedExpression,
+			SK.VariableDeclaration,
+			SK.Parameter,
+			SK.FunctionDeclaration,
+			SK.FunctionExpression,
+			SK.ArrowFunction,
+		]
+	) a[k] = 1;
 	return a;
 })();
 
@@ -246,30 +284,62 @@ const WRAPPER_ROUTE_PARENT_BITMAP = (() => {
 const WRAPPER_ROUTE_CHILD_BITMAP = (() => {
 	const a = new Uint8Array(400);
 	// TypeNode kinds — anything that can sit in a `.type` slot.
-	for (const k of [
-		// Keyword types
-		SK.AnyKeyword, SK.BigIntKeyword, SK.BooleanKeyword, SK.IntrinsicKeyword,
-		SK.NeverKeyword, SK.NumberKeyword, SK.ObjectKeyword, SK.StringKeyword,
-		SK.SymbolKeyword, SK.UndefinedKeyword, SK.UnknownKeyword, SK.VoidKeyword,
-		// Composite types
-		SK.TypeReference, SK.FunctionType, SK.ConstructorType, SK.TypeQuery,
-		SK.TypeLiteral, SK.ArrayType, SK.TupleType, SK.OptionalType, SK.RestType,
-		SK.UnionType, SK.IntersectionType, SK.ConditionalType, SK.InferType,
-		SK.ParenthesizedType, SK.ThisType, SK.TypeOperator, SK.IndexedAccessType,
-		SK.MappedType, SK.LiteralType, SK.NamedTupleMember,
-		SK.TemplateLiteralType, SK.TemplateLiteralTypeSpan, SK.ImportType,
-		SK.TypePredicate,
-	]) a[k] = 1;
+	for (
+		const k of [
+			// Keyword types
+			SK.AnyKeyword,
+			SK.BigIntKeyword,
+			SK.BooleanKeyword,
+			SK.IntrinsicKeyword,
+			SK.NeverKeyword,
+			SK.NumberKeyword,
+			SK.ObjectKeyword,
+			SK.StringKeyword,
+			SK.SymbolKeyword,
+			SK.UndefinedKeyword,
+			SK.UnknownKeyword,
+			SK.VoidKeyword,
+			// Composite types
+			SK.TypeReference,
+			SK.FunctionType,
+			SK.ConstructorType,
+			SK.TypeQuery,
+			SK.TypeLiteral,
+			SK.ArrayType,
+			SK.TupleType,
+			SK.OptionalType,
+			SK.RestType,
+			SK.UnionType,
+			SK.IntersectionType,
+			SK.ConditionalType,
+			SK.InferType,
+			SK.ParenthesizedType,
+			SK.ThisType,
+			SK.TypeOperator,
+			SK.IndexedAccessType,
+			SK.MappedType,
+			SK.LiteralType,
+			SK.NamedTupleMember,
+			SK.TemplateLiteralType,
+			SK.TemplateLiteralTypeSpan,
+			SK.ImportType,
+			SK.TypePredicate,
+		]
+	) a[k] = 1;
 	// Pattern-target literals / spreads (`[…] = x`, `{…} = x`, `...x`).
-	for (const k of [
-		SK.ArrayLiteralExpression, SK.ObjectLiteralExpression,
-		SK.SpreadElement, SK.SpreadAssignment,
-	]) a[k] = 1;
+	for (
+		const k of [
+			SK.ArrayLiteralExpression,
+			SK.ObjectLiteralExpression,
+			SK.SpreadElement,
+			SK.SpreadAssignment,
+		]
+	) a[k] = 1;
 	return a;
 })();
 
 function findWrapperRoute(tsNode: ts.Node):
-	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void; }
+	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void }
 	| null
 {
 	const tsParent = tsNode.parent;
@@ -301,11 +371,12 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (isFunctionLike || isDeclLike) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					const inner = unwrapInner(owner);
 					let host = inner as unknown as { value?: unknown; typeParameters?: { params?: unknown } };
 					const innerType = (inner as { type?: string }).type;
-					if (innerType === 'MethodDefinition'
+					if (
+						innerType === 'MethodDefinition'
 						|| innerType === 'TSAbstractMethodDefinition'
 						|| innerType === 'Property'
 					) {
@@ -329,7 +400,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.BinaryExpression) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { left?: unknown }).left;
 				},
 			};
@@ -337,7 +408,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.ForInStatement || tsParent.kind === SK.ForOfStatement) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { left?: unknown }).left;
 				},
 			};
@@ -345,7 +416,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.ArrayLiteralExpression) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { elements?: unknown }).elements;
 				},
 			};
@@ -353,7 +424,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.ObjectLiteralExpression) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { properties?: unknown }).properties;
 				},
 			};
@@ -361,7 +432,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.PropertyAssignment) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { value?: unknown }).value;
 				},
 			};
@@ -369,7 +440,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.ShorthandPropertyAssignment) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { value?: unknown }).value;
 				},
 			};
@@ -377,7 +448,7 @@ function findWrapperRoute(tsNode: ts.Node):
 		if (tsParent.kind === SK.SpreadElement || tsParent.kind === SK.SpreadAssignment) {
 			return {
 				ownerTsNode: tsParent,
-				trigger: (owner) => {
+				trigger: owner => {
 					void (owner as unknown as { argument?: unknown }).argument;
 				},
 			};
@@ -391,13 +462,15 @@ function findWrapperRoute(tsNode: ts.Node):
 	// SpreadElement / SpreadAssignment in pattern position: route through
 	// the enclosing pattern-position literal (its .elements / .properties
 	// getter uses convertChildAsPattern, which builds RestElementFromSpread).
-	if ((tsNode.kind === SK.SpreadElement || tsNode.kind === SK.SpreadAssignment)
+	if (
+		(tsNode.kind === SK.SpreadElement || tsNode.kind === SK.SpreadAssignment)
 		&& (tsParent.kind === SK.ArrayLiteralExpression || tsParent.kind === SK.ObjectLiteralExpression)
-		&& isPatternLiteralTarget(tsParent)) {
+		&& isPatternLiteralTarget(tsParent)
+	) {
 		const slot = tsParent.kind === SK.ArrayLiteralExpression ? 'elements' : 'properties';
 		return {
 			ownerTsNode: tsParent,
-			trigger: (owner) => {
+			trigger: owner => {
 				void (owner as unknown as Record<string, unknown>)[slot];
 			},
 		};
@@ -406,7 +479,7 @@ function findWrapperRoute(tsNode: ts.Node):
 	if (tsParent.kind === SK.VariableDeclaration && (tsParent as ts.VariableDeclaration).type === tsNode) {
 		return {
 			ownerTsNode: tsParent,
-			trigger: (owner) => {
+			trigger: owner => {
 				// Chain through `id` (builds Identifier + TSTypeAnnotation
 				// wrapper) then `typeAnnotation` (the wrapper's own getter,
 				// which finally calls convertChild on the inner type and
@@ -426,14 +499,14 @@ function findWrapperRoute(tsNode: ts.Node):
 	if (tsParent.kind === SK.Parameter && (tsParent as ts.ParameterDeclaration).type === tsNode) {
 		return {
 			ownerTsNode: tsParent,
-			trigger: (owner) => {
+			trigger: owner => {
 				let cur = owner as unknown as {
 					parameter?: { left?: unknown; typeAnnotation?: unknown };
 					left?: unknown;
 					typeAnnotation?: unknown;
 				};
-				if (cur.parameter) cur = cur.parameter as typeof cur;
-				if (cur.left) cur = cur.left as typeof cur;
+				if (cur.parameter) cur = cur.parameter;
+				if (cur.left) cur = cur.left;
 				const ta = cur.typeAnnotation as { typeAnnotation: unknown } | undefined;
 				if (ta) void ta.typeAnnotation;
 			},
@@ -451,7 +524,7 @@ function findWrapperRoute(tsNode: ts.Node):
 	) {
 		return {
 			ownerTsNode: tsParent,
-			trigger: (owner) => {
+			trigger: owner => {
 				const inner = unwrapInner(owner);
 				const rt = (inner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
 				if (rt) void rt.typeAnnotation;
@@ -533,11 +606,13 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		//   ImportDeclaration in ESTree (specifiers[]), so a bottom-up
 		//   walk from any specifier should land on the ImportDeclaration
 		//   wrapper rather than building intermediate generic nodes.
-		if (wk === SK.SyntaxList
+		if (
+			wk === SK.SyntaxList
 			|| wk === SK.CaseBlock
 			|| wk === SK.NamedImports
 			|| wk === SK.ImportClause
-			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)) {
+			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)
+		) {
 			walker = walker.parent;
 			continue;
 		}
@@ -552,13 +627,15 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		// stay wrapped in TSClassImplements (typescript-estree's
 		// `convertHeritageClauses`), so we only skip when the heritage
 		// token is `extends`.
-		if (wk === SK.HeritageClause
+		if (
+			wk === SK.HeritageClause
 			&& (walker as ts.HeritageClause).token === SK.ExtendsKeyword
 		) {
 			walker = walker.parent;
 			continue;
 		}
-		if (wk === SK.ExpressionWithTypeArguments
+		if (
+			wk === SK.ExpressionWithTypeArguments
 			&& walker.parent?.kind === SK.HeritageClause
 			&& (walker.parent as ts.HeritageClause).token === SK.ExtendsKeyword
 		) {
@@ -612,25 +689,29 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 			// silently miss. Specific further drills (class body, function
 			// value, etc.) override below.
 			if (drillFrom !== parent) parent = drillFrom;
-			if ((wk === SK.ClassDeclaration || wk === SK.ClassExpression)
+			if (
+				(wk === SK.ClassDeclaration || wk === SK.ClassExpression)
 				&& CLASS_MEMBER_KINDS_SET[innermostChild.kind] === 1
 			) {
 				const body = (drillFrom as unknown as { body?: LazyNode }).body;
 				if (body) parent = body;
 			}
-			else if (wk === SK.InterfaceDeclaration
+			else if (
+				wk === SK.InterfaceDeclaration
 				&& INTERFACE_MEMBER_KINDS_SET[innermostChild.kind] === 1
 			) {
 				const body = (drillFrom as unknown as { body?: LazyNode }).body;
 				if (body) parent = body;
 			}
-			else if (wk === SK.EnumDeclaration
+			else if (
+				wk === SK.EnumDeclaration
 				&& innermostChild.kind === SK.EnumMember
 			) {
 				const body = (drillFrom as unknown as { body?: LazyNode }).body;
 				if (body) parent = body;
 			}
-			else if (wk === SK.Parameter
+			else if (
+				wk === SK.Parameter
 				&& drillType === 'TSParameterProperty'
 				&& innermostChild === (walker as ts.ParameterDeclaration).initializer
 			) {
@@ -639,7 +720,8 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 					parent = ap;
 				}
 			}
-			else if ((drillType === 'MethodDefinition' || drillType === 'TSAbstractMethodDefinition')
+			else if (
+				(drillType === 'MethodDefinition' || drillType === 'TSAbstractMethodDefinition')
 				&& (wk === SK.MethodDeclaration || wk === SK.Constructor
 					|| wk === SK.GetAccessor || wk === SK.SetAccessor)
 			) {
@@ -655,16 +737,19 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 					if (value) parent = value;
 				}
 			}
-			else if (drillType === 'Property'
+			else if (
+				drillType === 'Property'
 				&& (wk === SK.MethodDeclaration || wk === SK.GetAccessor || wk === SK.SetAccessor)
 			) {
-				const namedChild = (walker as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name;
+				const namedChild =
+					(walker as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name;
 				if (innermostChild !== namedChild) {
 					const value = (drillFrom as unknown as { value?: LazyNode }).value;
 					if (value) parent = value;
 				}
 			}
-			else if (wk === SK.BindingElement
+			else if (
+				wk === SK.BindingElement
 				&& (walker as ts.BindingElement).initializer !== undefined
 				&& walker.parent?.kind === SK.ObjectBindingPattern
 				&& innermostChild === (walker as ts.BindingElement).name
@@ -761,25 +846,29 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 			// Default after Export-unwrap: child's parent is the inner
 			// declaration, not the wrapper. Mirrors the cache-hit drill.
 			if (inner !== node) next = inner;
-			if ((innerType === 'ClassDeclaration' || innerType === 'ClassExpression')
+			if (
+				(innerType === 'ClassDeclaration' || innerType === 'ClassExpression')
 				&& CLASS_MEMBER_KINDS_SET[nextChildKind] === 1
 			) {
 				const body = (inner as unknown as { body?: LazyNode }).body;
 				if (body) next = body;
 			}
-			else if (innerType === 'TSInterfaceDeclaration'
+			else if (
+				innerType === 'TSInterfaceDeclaration'
 				&& INTERFACE_MEMBER_KINDS_SET[nextChildKind] === 1
 			) {
 				const body = (inner as unknown as { body?: LazyNode }).body;
 				if (body) next = body;
 			}
-			else if (innerType === 'TSEnumDeclaration'
+			else if (
+				innerType === 'TSEnumDeclaration'
 				&& nextChildKind === SK.EnumMember
 			) {
 				const body = (inner as unknown as { body?: LazyNode }).body;
 				if (body) next = body;
 			}
-			else if (innerType === 'TSParameterProperty'
+			else if (
+				innerType === 'TSParameterProperty'
 				&& child.kind === SK.Parameter
 				&& nextChild === (child as ts.ParameterDeclaration).initializer
 			) {
@@ -788,20 +877,22 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 					next = ap;
 				}
 			}
-			else if ((innerType === 'MethodDefinition' || innerType === 'TSAbstractMethodDefinition' || innerType === 'Property')
+			else if (
+				(innerType === 'MethodDefinition' || innerType === 'TSAbstractMethodDefinition' || innerType === 'Property')
 				&& (child.kind === SK.MethodDeclaration || child.kind === SK.Constructor
 					|| child.kind === SK.GetAccessor || child.kind === SK.SetAccessor
 					|| child.kind === SK.PropertyAssignment || child.kind === SK.ShorthandPropertyAssignment)
 			) {
 				// Children of ts method/constructor/accessor map onto
 				// FunctionExpression slots EXCEPT for `name` (the key).
-				const namedChild = (child.kind === SK.MethodDeclaration || child.kind === SK.GetAccessor || child.kind === SK.SetAccessor)
-					? (child as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
-					: child.kind === SK.PropertyAssignment
+				const namedChild =
+					(child.kind === SK.MethodDeclaration || child.kind === SK.GetAccessor || child.kind === SK.SetAccessor)
+						? (child as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
+						: child.kind === SK.PropertyAssignment
 						? (child as ts.PropertyAssignment).name
 						: child.kind === SK.ShorthandPropertyAssignment
-							? (child as ts.ShorthandPropertyAssignment).name
-							: undefined;
+						? (child as ts.ShorthandPropertyAssignment).name
+						: undefined;
 				if (nextChild !== namedChild) {
 					const value = (inner as unknown as { value?: LazyNode }).value;
 					if (value) next = value;
@@ -886,18 +977,30 @@ function convertChildAsPattern(child: ts.Node | undefined | null, parent: LazyNo
 
 function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 	switch (child.kind) {
-		case SK.SourceFile: return new ProgramNode(child as ts.SourceFile, parent);
-		case SK.Identifier: return new IdentifierNode(child as ts.Identifier, parent);
-		case SK.VariableStatement: return new VariableDeclarationNode(child as ts.VariableStatement, parent);
-		case SK.VariableDeclaration: return new VariableDeclaratorNode(child as ts.VariableDeclaration, parent);
-		case SK.AsExpression: return new TSAsExpressionNode(child as ts.AsExpression, parent);
-		case SK.TypeReference: return new TSTypeReferenceNode(child as ts.TypeReferenceNode, parent);
-		case SK.NumericLiteral: return new LiteralNode(child as ts.NumericLiteral, parent);
-		case SK.StringLiteral: return new LiteralNode(child as ts.StringLiteral, parent);
-		case SK.ExpressionStatement: return new ExpressionStatementNode(child as ts.ExpressionStatement, parent);
-		case SK.ReturnStatement: return new ReturnStatementNode(child as ts.ReturnStatement, parent);
-		case SK.Block: return new BlockStatementNode(child as ts.Block, parent);
-		case SK.IfStatement: return new IfStatementNode(child as ts.IfStatement, parent);
+		case SK.SourceFile:
+			return new ProgramNode(child as ts.SourceFile, parent);
+		case SK.Identifier:
+			return new IdentifierNode(child as ts.Identifier, parent);
+		case SK.VariableStatement:
+			return new VariableDeclarationNode(child as ts.VariableStatement, parent);
+		case SK.VariableDeclaration:
+			return new VariableDeclaratorNode(child as ts.VariableDeclaration, parent);
+		case SK.AsExpression:
+			return new TSAsExpressionNode(child, parent);
+		case SK.TypeReference:
+			return new TSTypeReferenceNode(child, parent);
+		case SK.NumericLiteral:
+			return new LiteralNode(child as ts.NumericLiteral, parent);
+		case SK.StringLiteral:
+			return new LiteralNode(child as ts.StringLiteral, parent);
+		case SK.ExpressionStatement:
+			return new ExpressionStatementNode(child, parent);
+		case SK.ReturnStatement:
+			return new ReturnStatementNode(child, parent);
+		case SK.Block:
+			return new BlockStatementNode(child, parent);
+		case SK.IfStatement:
+			return new IfStatementNode(child, parent);
 		case SK.BinaryExpression: {
 			// Comma operator becomes ESTree SequenceExpression (matches
 			// typescript-estree's `convertBinaryExpression`). All other
@@ -909,16 +1012,18 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return new BinaryLikeExpressionNode(be, parent);
 		}
-		case SK.PropertyAccessExpression: return wrapChainIfNeeded(
-			new MemberExpressionNode(child as ts.PropertyAccessExpression, parent),
-			child as ts.PropertyAccessExpression,
-			parent,
-		);
-		case SK.ElementAccessExpression: return wrapChainIfNeeded(
-			new MemberExpressionNode(child as ts.ElementAccessExpression, parent),
-			child as ts.ElementAccessExpression,
-			parent,
-		);
+		case SK.PropertyAccessExpression:
+			return wrapChainIfNeeded(
+				new MemberExpressionNode(child as ts.PropertyAccessExpression, parent),
+				child as ts.PropertyAccessExpression,
+				parent,
+			);
+		case SK.ElementAccessExpression:
+			return wrapChainIfNeeded(
+				new MemberExpressionNode(child as ts.ElementAccessExpression, parent),
+				child as ts.ElementAccessExpression,
+				parent,
+			);
 		case SK.CallExpression: {
 			const ce = child as ts.CallExpression;
 			if (ce.expression.kind === SK.ImportKeyword) {
@@ -926,32 +1031,58 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return wrapChainIfNeeded(new CallExpressionNode(ce, parent), ce, parent);
 		}
-		case SK.ClassStaticBlockDeclaration: return new StaticBlockNode(child as ts.ClassStaticBlockDeclaration, parent);
-		case SK.MetaProperty: return new MetaPropertyNode(child as ts.MetaProperty, parent);
-		case SK.TrueKeyword: return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
-		case SK.FalseKeyword: return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
-		case SK.FunctionDeclaration: return new FunctionDeclarationNode(child as ts.FunctionDeclaration, parent);
-		case SK.FunctionExpression: return new FunctionExpressionNode(child as ts.FunctionExpression, parent);
-		case SK.ArrowFunction: return new ArrowFunctionExpressionNode(child as ts.ArrowFunction, parent);
-		case SK.Parameter: return convertParameter(child as ts.ParameterDeclaration, parent);
-		case SK.ImportDeclaration: return new ImportDeclarationNode(child as ts.ImportDeclaration, parent);
-		case SK.ImportSpecifier: return new ImportSpecifierNode(child as ts.ImportSpecifier, parent);
-		case SK.NamespaceImport: return new ImportNamespaceSpecifierNode(child as ts.NamespaceImport, parent);
-		case SK.ImportClause: return new ImportDefaultSpecifierNode(child as ts.ImportClause, parent);
-		case SK.ImportAttribute: return new ImportAttributeNode(child as ts.ImportAttribute, parent);
-		case SK.InterfaceDeclaration: return new TSInterfaceDeclarationNode(child as ts.InterfaceDeclaration, parent);
-		case SK.PropertySignature: return new TSPropertySignatureNode(child as ts.PropertySignature, parent);
-		case SK.MethodSignature: return new TSMethodSignatureNode(child as ts.MethodSignature, parent);
-		case SK.FunctionType: return new TSFunctionTypeNode(child as ts.FunctionTypeNode, parent);
-		case SK.UnionType: return new TSUnionTypeNode(child as ts.UnionTypeNode, parent);
-		case SK.IntersectionType: return new TSIntersectionTypeNode(child as ts.IntersectionTypeNode, parent);
-		case SK.ArrayType: return new TSArrayTypeNode(child as ts.ArrayTypeNode, parent);
-		case SK.TypeLiteral: return new TSTypeLiteralNode(child as ts.TypeLiteralNode, parent);
-		case SK.TypeQuery: return new TSTypeQueryNode(child as ts.TypeQueryNode, parent);
-		case SK.TypeOperator: return new TSTypeOperatorNode(child as ts.TypeOperatorNode, parent);
-		case SK.IndexedAccessType: return new TSIndexedAccessTypeNode(child as ts.IndexedAccessTypeNode, parent);
-		case SK.LiteralType: return convertLiteralType(child as ts.LiteralTypeNode, parent);
-		case SK.ParenthesizedType: return convertChild((child as ts.ParenthesizedTypeNode).type, parent);
+		case SK.ClassStaticBlockDeclaration:
+			return new StaticBlockNode(child, parent);
+		case SK.MetaProperty:
+			return new MetaPropertyNode(child as ts.MetaProperty, parent);
+		case SK.TrueKeyword:
+			return new BoolLiteralNode(child as ts.TrueLiteral, parent, true);
+		case SK.FalseKeyword:
+			return new BoolLiteralNode(child as ts.FalseLiteral, parent, false);
+		case SK.FunctionDeclaration:
+			return new FunctionDeclarationNode(child as ts.FunctionDeclaration, parent);
+		case SK.FunctionExpression:
+			return new FunctionExpressionNode(child as ts.FunctionExpression, parent);
+		case SK.ArrowFunction:
+			return new ArrowFunctionExpressionNode(child as ts.ArrowFunction, parent);
+		case SK.Parameter:
+			return convertParameter(child as ts.ParameterDeclaration, parent);
+		case SK.ImportDeclaration:
+			return new ImportDeclarationNode(child as ts.ImportDeclaration, parent);
+		case SK.ImportSpecifier:
+			return new ImportSpecifierNode(child as ts.ImportSpecifier, parent);
+		case SK.NamespaceImport:
+			return new ImportNamespaceSpecifierNode(child, parent);
+		case SK.ImportClause:
+			return new ImportDefaultSpecifierNode(child as ts.ImportClause, parent);
+		case SK.ImportAttribute:
+			return new ImportAttributeNode(child, parent);
+		case SK.InterfaceDeclaration:
+			return new TSInterfaceDeclarationNode(child as ts.InterfaceDeclaration, parent);
+		case SK.PropertySignature:
+			return new TSPropertySignatureNode(child as ts.PropertySignature, parent);
+		case SK.MethodSignature:
+			return new TSMethodSignatureNode(child as ts.MethodSignature, parent);
+		case SK.FunctionType:
+			return new TSFunctionTypeNode(child, parent);
+		case SK.UnionType:
+			return new TSUnionTypeNode(child, parent);
+		case SK.IntersectionType:
+			return new TSIntersectionTypeNode(child, parent);
+		case SK.ArrayType:
+			return new TSArrayTypeNode(child, parent);
+		case SK.TypeLiteral:
+			return new TSTypeLiteralNode(child, parent);
+		case SK.TypeQuery:
+			return new TSTypeQueryNode(child, parent);
+		case SK.TypeOperator:
+			return new TSTypeOperatorNode(child as ts.TypeOperatorNode, parent);
+		case SK.IndexedAccessType:
+			return new TSIndexedAccessTypeNode(child, parent);
+		case SK.LiteralType:
+			return convertLiteralType(child as ts.LiteralTypeNode, parent);
+		case SK.ParenthesizedType:
+			return convertChild((child as ts.ParenthesizedTypeNode).type, parent);
 		case SK.ImportType: {
 			// `typeof import('x')` — when isTypeOf, wrap in TSTypeQuery.
 			const it = child as ts.ImportTypeNode;
@@ -961,66 +1092,122 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return inner;
 		}
-		case SK.QualifiedName: return new TSQualifiedNameNode(child as ts.QualifiedName, parent);
-		case SK.CallSignature: return new TSCallishSignatureNode('TSCallSignatureDeclaration', child as ts.CallSignatureDeclaration, parent);
-		case SK.ConstructSignature: return new TSCallishSignatureNode('TSConstructSignatureDeclaration', child as ts.ConstructSignatureDeclaration, parent);
-		case SK.IndexSignature: return new TSIndexSignatureNode(child as ts.IndexSignatureDeclaration, parent);
-		case SK.ExportDeclaration: return convertExportDeclaration(child as ts.ExportDeclaration, parent);
-		case SK.ExportSpecifier: return new ExportSpecifierNode(child as ts.ExportSpecifier, parent);
-		case SK.ExportAssignment: return convertExportAssignment(child as ts.ExportAssignment, parent);
-		case SK.ImportEqualsDeclaration: return new TSImportEqualsDeclarationNode(child as ts.ImportEqualsDeclaration, parent);
-		case SK.ExternalModuleReference: return new TSExternalModuleReferenceNode(child as ts.ExternalModuleReference, parent);
-		case SK.TypeAliasDeclaration: return new TSTypeAliasDeclarationNode(child as ts.TypeAliasDeclaration, parent);
-		case SK.PrefixUnaryExpression: return new UnaryLikeExpressionNode(child as ts.PrefixUnaryExpression, parent, true);
-		case SK.PostfixUnaryExpression: return new UnaryLikeExpressionNode(child as ts.PostfixUnaryExpression, parent, false);
-		case SK.TypeOfExpression: return new TypeofExpressionNode(child as ts.TypeOfExpression, parent);
-		case SK.NonNullExpression: return new TSNonNullExpressionNode(child as ts.NonNullExpression, parent);
-		case SK.TupleType: return new TSTupleTypeNode(child as ts.TupleTypeNode, parent);
-		case SK.NamedTupleMember: return convertNamedTupleMember(child as ts.NamedTupleMember, parent);
-		case SK.OptionalType: return new TSOptionalTypeNode(child as ts.OptionalTypeNode, parent);
-		case SK.RestType: return new TSRestTypeNode(child as ts.RestTypeNode, parent);
-		case SK.ConditionalExpression: return new ConditionalExpressionNode(child as ts.ConditionalExpression, parent);
-		case SK.NewExpression: return new NewExpressionNode(child as ts.NewExpression, parent);
-		case SK.NoSubstitutionTemplateLiteral: return new NoSubstitutionTemplateNode(child as ts.NoSubstitutionTemplateLiteral, parent);
-		case SK.TaggedTemplateExpression: return new TaggedTemplateExpressionNode(child as ts.TaggedTemplateExpression, parent);
-		case SK.SpreadElement: return allowPattern
-			? new RestElementFromSpreadNode(child as ts.SpreadElement, parent)
-			: new SpreadElementNode(child as ts.SpreadElement, parent);
-		case SK.SpreadAssignment: return allowPattern
-			? new RestElementFromSpreadNode(child as ts.SpreadAssignment, parent)
-			: new SpreadElementNode(child as ts.SpreadAssignment, parent);
-		case SK.ParenthesizedExpression: return convertChild((child as ts.ParenthesizedExpression).expression, parent);
-		case SK.ArrayLiteralExpression: return allowPattern
-			? new ArrayPatternFromLiteralNode(child as ts.ArrayLiteralExpression, parent)
-			: new ArrayExpressionNode(child as ts.ArrayLiteralExpression, parent);
-		case SK.ObjectLiteralExpression: return allowPattern
-			? new ObjectPatternFromLiteralNode(child as ts.ObjectLiteralExpression, parent)
-			: new ObjectExpressionNode(child as ts.ObjectLiteralExpression, parent);
-		case SK.PropertyAssignment: return new PropertyAssignmentNode(child as ts.PropertyAssignment, parent);
-		case SK.ShorthandPropertyAssignment: return new ShorthandPropertyNode(child as ts.ShorthandPropertyAssignment, parent);
-		case SK.ComputedPropertyName: return convertChild((child as ts.ComputedPropertyName).expression, parent);
-		case SK.TemplateExpression: return new TemplateLiteralNode(child as ts.TemplateExpression, parent);
-		case SK.TemplateLiteralType: return new TSTemplateLiteralTypeNode(child as ts.TemplateLiteralTypeNode, parent);
-		case SK.RegularExpressionLiteral: return new RegExpLiteralNode(child as ts.RegularExpressionLiteral, parent);
-		case SK.ThrowStatement: return new ThrowStatementNode(child as ts.ThrowStatement, parent);
-		case SK.TryStatement: return new TryStatementNode(child as ts.TryStatement, parent);
-		case SK.CatchClause: return new CatchClauseNode(child as ts.CatchClause, parent);
-		case SK.WhileStatement: return new WhileStatementNode(child as ts.WhileStatement, parent);
-		case SK.DoStatement: return new DoWhileStatementNode(child as ts.DoStatement, parent);
-		case SK.ForStatement: return new ForStatementNode(child as ts.ForStatement, parent);
-		case SK.ForInStatement: return new ForInStatementNode(child as ts.ForInStatement, parent);
-		case SK.ForOfStatement: return new ForOfStatementNode(child as ts.ForOfStatement, parent);
-		case SK.SwitchStatement: return new SwitchStatementNode(child as ts.SwitchStatement, parent);
-		case SK.CaseClause: return new SwitchCaseNode(child as ts.CaseClause, parent);
-		case SK.DefaultClause: return new SwitchCaseNode(child as ts.DefaultClause, parent);
-		case SK.BreakStatement: return new BreakOrContinueNode('BreakStatement', child as ts.BreakStatement, parent);
-		case SK.ContinueStatement: return new BreakOrContinueNode('ContinueStatement', child as ts.ContinueStatement, parent);
-		case SK.LabeledStatement: return new LabeledStatementNode(child as ts.LabeledStatement, parent);
-		case SK.EmptyStatement: return new EmptyStatementNode(child as ts.EmptyStatement, parent);
-		case SK.AwaitExpression: return new AwaitExpressionNode(child as ts.AwaitExpression, parent);
-		case SK.YieldExpression: return new YieldExpressionNode(child as ts.YieldExpression, parent);
-		case SK.ClassDeclaration: return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
-		case SK.ClassExpression: return new ClassNode('ClassExpression', child as ts.ClassExpression, parent);
+		case SK.QualifiedName:
+			return new TSQualifiedNameNode(child, parent);
+		case SK.CallSignature:
+			return new TSCallishSignatureNode('TSCallSignatureDeclaration', child as ts.CallSignatureDeclaration, parent);
+		case SK.ConstructSignature:
+			return new TSCallishSignatureNode(
+				'TSConstructSignatureDeclaration',
+				child as ts.ConstructSignatureDeclaration,
+				parent,
+			);
+		case SK.IndexSignature:
+			return new TSIndexSignatureNode(child as ts.IndexSignatureDeclaration, parent);
+		case SK.ExportDeclaration:
+			return convertExportDeclaration(child as ts.ExportDeclaration, parent);
+		case SK.ExportSpecifier:
+			return new ExportSpecifierNode(child as ts.ExportSpecifier, parent);
+		case SK.ExportAssignment:
+			return convertExportAssignment(child as ts.ExportAssignment, parent);
+		case SK.ImportEqualsDeclaration:
+			return new TSImportEqualsDeclarationNode(child as ts.ImportEqualsDeclaration, parent);
+		case SK.ExternalModuleReference:
+			return new TSExternalModuleReferenceNode(child, parent);
+		case SK.TypeAliasDeclaration:
+			return new TSTypeAliasDeclarationNode(child as ts.TypeAliasDeclaration, parent);
+		case SK.PrefixUnaryExpression:
+			return new UnaryLikeExpressionNode(child as ts.PrefixUnaryExpression, parent, true);
+		case SK.PostfixUnaryExpression:
+			return new UnaryLikeExpressionNode(child as ts.PostfixUnaryExpression, parent, false);
+		case SK.TypeOfExpression:
+			return new TypeofExpressionNode(child, parent);
+		case SK.NonNullExpression:
+			return new TSNonNullExpressionNode(child, parent);
+		case SK.TupleType:
+			return new TSTupleTypeNode(child, parent);
+		case SK.NamedTupleMember:
+			return convertNamedTupleMember(child as ts.NamedTupleMember, parent);
+		case SK.OptionalType:
+			return new TSOptionalTypeNode(child, parent);
+		case SK.RestType:
+			return new TSRestTypeNode(child, parent);
+		case SK.ConditionalExpression:
+			return new ConditionalExpressionNode(child, parent);
+		case SK.NewExpression:
+			return new NewExpressionNode(child, parent);
+		case SK.NoSubstitutionTemplateLiteral:
+			return new NoSubstitutionTemplateNode(child, parent);
+		case SK.TaggedTemplateExpression:
+			return new TaggedTemplateExpressionNode(child, parent);
+		case SK.SpreadElement:
+			return allowPattern
+				? new RestElementFromSpreadNode(child, parent)
+				: new SpreadElementNode(child, parent);
+		case SK.SpreadAssignment:
+			return allowPattern
+				? new RestElementFromSpreadNode(child, parent)
+				: new SpreadElementNode(child, parent);
+		case SK.ParenthesizedExpression:
+			return convertChild((child as ts.ParenthesizedExpression).expression, parent);
+		case SK.ArrayLiteralExpression:
+			return allowPattern
+				? new ArrayPatternFromLiteralNode(child, parent)
+				: new ArrayExpressionNode(child, parent);
+		case SK.ObjectLiteralExpression:
+			return allowPattern
+				? new ObjectPatternFromLiteralNode(child, parent)
+				: new ObjectExpressionNode(child, parent);
+		case SK.PropertyAssignment:
+			return new PropertyAssignmentNode(child as ts.PropertyAssignment, parent);
+		case SK.ShorthandPropertyAssignment:
+			return new ShorthandPropertyNode(child, parent);
+		case SK.ComputedPropertyName:
+			return convertChild((child as ts.ComputedPropertyName).expression, parent);
+		case SK.TemplateExpression:
+			return new TemplateLiteralNode(child, parent);
+		case SK.TemplateLiteralType:
+			return new TSTemplateLiteralTypeNode(child, parent);
+		case SK.RegularExpressionLiteral:
+			return new RegExpLiteralNode(child as ts.RegularExpressionLiteral, parent);
+		case SK.ThrowStatement:
+			return new ThrowStatementNode(child, parent);
+		case SK.TryStatement:
+			return new TryStatementNode(child, parent);
+		case SK.CatchClause:
+			return new CatchClauseNode(child, parent);
+		case SK.WhileStatement:
+			return new WhileStatementNode(child, parent);
+		case SK.DoStatement:
+			return new DoWhileStatementNode(child, parent);
+		case SK.ForStatement:
+			return new ForStatementNode(child, parent);
+		case SK.ForInStatement:
+			return new ForInStatementNode(child, parent);
+		case SK.ForOfStatement:
+			return new ForOfStatementNode(child as ts.ForOfStatement, parent);
+		case SK.SwitchStatement:
+			return new SwitchStatementNode(child, parent);
+		case SK.CaseClause:
+			return new SwitchCaseNode(child, parent);
+		case SK.DefaultClause:
+			return new SwitchCaseNode(child, parent);
+		case SK.BreakStatement:
+			return new BreakOrContinueNode('BreakStatement', child as ts.BreakStatement, parent);
+		case SK.ContinueStatement:
+			return new BreakOrContinueNode('ContinueStatement', child as ts.ContinueStatement, parent);
+		case SK.LabeledStatement:
+			return new LabeledStatementNode(child, parent);
+		case SK.EmptyStatement:
+			return new EmptyStatementNode(child, parent);
+		case SK.AwaitExpression:
+			return new AwaitExpressionNode(child, parent);
+		case SK.YieldExpression:
+			return new YieldExpressionNode(child as ts.YieldExpression, parent);
+		case SK.ClassDeclaration:
+			return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
+		case SK.ClassExpression:
+			return new ClassNode('ClassExpression', child as ts.ClassExpression, parent);
 		case SK.MethodDeclaration: {
 			// In an ObjectLiteralExpression, a MethodDeclaration becomes a
 			// Property with `method: true` and a FunctionExpression value
@@ -1039,7 +1226,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			if (isAccessor) return new PropertyDefinitionNode(pd, parent, 'AccessorProperty');
 			return new PropertyDefinitionNode(pd, parent, 'PropertyDefinition');
 		}
-		case SK.Constructor: return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
+		case SK.Constructor:
+			return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
 		case SK.GetAccessor:
 		case SK.SetAccessor: {
 			// In an ObjectLiteralExpression, accessors become Property{kind:'get'/'set'}.
@@ -1048,8 +1236,10 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return new MethodDefinitionNode(child as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent);
 		}
-		case SK.ArrayBindingPattern: return new ArrayPatternNode(child as ts.ArrayBindingPattern, parent);
-		case SK.ObjectBindingPattern: return new ObjectPatternNode(child as ts.ObjectBindingPattern, parent);
+		case SK.ArrayBindingPattern:
+			return new ArrayPatternNode(child, parent);
+		case SK.ObjectBindingPattern:
+			return new ObjectPatternNode(child, parent);
 		case SK.BindingElement: {
 			// In ArrayBindingPattern, BindingElement resolves to the inner
 			// name directly (or wrapped in RestElement if `...`). Only
@@ -1058,7 +1248,7 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			const be = child as ts.BindingElement;
 			if (parent._ts.kind === SK.ArrayBindingPattern) {
 				if (be.dotDotDotToken) {
-					return new RestElementNode(be as unknown as ts.ParameterDeclaration, parent);
+					return new RestElementNode(be, parent);
 				}
 				if (be.initializer) {
 					// `[a = 1] = ...` — AssignmentPattern wrapping the name.
@@ -1070,11 +1260,16 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return new BindingElementNode(be, parent);
 		}
-		case SK.OmittedExpression: return null;
-		case SK.NullKeyword: return new NullLiteralNode(child as ts.NullLiteral, parent);
-		case SK.SuperKeyword: return new SuperNode(child, parent);
-		case SK.ThisKeyword: return new ThisExpressionNode(child, parent);
-		case SK.TypeParameter: return new TSTypeParameterNode(child as ts.TypeParameterDeclaration, parent);
+		case SK.OmittedExpression:
+			return null;
+		case SK.NullKeyword:
+			return new NullLiteralNode(child, parent);
+		case SK.SuperKeyword:
+			return new SuperNode(child, parent);
+		case SK.ThisKeyword:
+			return new ThisExpressionNode(child, parent);
+		case SK.TypeParameter:
+			return new TSTypeParameterNode(child as ts.TypeParameterDeclaration, parent);
 		case SK.ExpressionWithTypeArguments: {
 			// Parent-aware shape (mirrors eager line 1858). The TS parent
 			// chain — not our lazy parent — is what carries this signal:
@@ -1088,43 +1283,76 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 				tag = (tsParent as ts.HeritageClause).parent?.kind === SK.InterfaceDeclaration
 					? 'TSInterfaceHeritage'
 					: 'TSClassImplements';
-			} else {
+			}
+			else {
 				tag = 'TSInstantiationExpression';
 			}
 			return new ExpressionWithTypeArgumentsNode(ewta, parent, tag);
 		}
-		case SK.PrivateIdentifier: return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
-		case SK.TypeAssertionExpression: return new TSTypeAssertionNode(child as ts.TypeAssertion, parent);
-		case SK.SatisfiesExpression: return new TSSatisfiesExpressionNode(child as ts.SatisfiesExpression, parent);
-		case SK.ConstructorType: return new TSConstructorTypeNode(child as ts.ConstructorTypeNode, parent);
-		case SK.MappedType: return new TSMappedTypeNode(child as ts.MappedTypeNode, parent);
-		case SK.ConditionalType: return new TSConditionalTypeNode(child as ts.ConditionalTypeNode, parent);
-		case SK.InferType: return new TSInferTypeNode(child as ts.InferTypeNode, parent);
-		case SK.ThisType: return new TSThisTypeNode(child, parent);
-		case SK.TypePredicate: return new TSTypePredicateNode(child as ts.TypePredicateNode, parent);
-		case SK.ModuleDeclaration: return new TSModuleDeclarationNode(child as ts.ModuleDeclaration, parent);
-		case SK.ModuleBlock: return new TSModuleBlockNode(child as ts.ModuleBlock, parent);
-		case SK.EnumDeclaration: return new TSEnumDeclarationNode(child as ts.EnumDeclaration, parent);
-		case SK.EnumMember: return new TSEnumMemberNode(child as ts.EnumMember, parent);
-		case SK.Decorator: return new DecoratorNode(child as ts.Decorator, parent);
-		case SK.HeritageClause: return null; // handled inline by ClassNode
-		case SK.VariableDeclarationList: return new VariableDeclarationListAsNode(child as ts.VariableDeclarationList, parent);
-		case SK.VoidExpression: return new VoidExpressionNode(child as ts.VoidExpression, parent);
-		case SK.DeleteExpression: return new DeleteExpressionNode(child as ts.DeleteExpression, parent);
-		case SK.JsxText: return null; // JSX not supported in MVP
-		case SK.AnyKeyword: return new TypeKeywordNode('TSAnyKeyword', child, parent);
-		case SK.UnknownKeyword: return new TypeKeywordNode('TSUnknownKeyword', child, parent);
-		case SK.NumberKeyword: return new TypeKeywordNode('TSNumberKeyword', child, parent);
-		case SK.StringKeyword: return new TypeKeywordNode('TSStringKeyword', child, parent);
-		case SK.BooleanKeyword: return new TypeKeywordNode('TSBooleanKeyword', child, parent);
-		case SK.SymbolKeyword: return new TypeKeywordNode('TSSymbolKeyword', child, parent);
-		case SK.NeverKeyword: return new TypeKeywordNode('TSNeverKeyword', child, parent);
-		case SK.VoidKeyword: return new TypeKeywordNode('TSVoidKeyword', child, parent);
-		case SK.UndefinedKeyword: return new TypeKeywordNode('TSUndefinedKeyword', child, parent);
-		case SK.NullKeyword: return new TypeKeywordNode('TSNullKeyword', child, parent);
-		case SK.BigIntKeyword: return new TypeKeywordNode('TSBigIntKeyword', child, parent);
-		case SK.ObjectKeyword: return new TypeKeywordNode('TSObjectKeyword', child, parent);
-		case SK.IntrinsicKeyword: return new TypeKeywordNode('TSIntrinsicKeyword', child, parent);
+		case SK.PrivateIdentifier:
+			return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
+		case SK.TypeAssertionExpression:
+			return new TSTypeAssertionNode(child, parent);
+		case SK.SatisfiesExpression:
+			return new TSSatisfiesExpressionNode(child, parent);
+		case SK.ConstructorType:
+			return new TSConstructorTypeNode(child as ts.ConstructorTypeNode, parent);
+		case SK.MappedType:
+			return new TSMappedTypeNode(child as ts.MappedTypeNode, parent);
+		case SK.ConditionalType:
+			return new TSConditionalTypeNode(child, parent);
+		case SK.InferType:
+			return new TSInferTypeNode(child, parent);
+		case SK.ThisType:
+			return new TSThisTypeNode(child, parent);
+		case SK.TypePredicate:
+			return new TSTypePredicateNode(child as ts.TypePredicateNode, parent);
+		case SK.ModuleDeclaration:
+			return new TSModuleDeclarationNode(child as ts.ModuleDeclaration, parent);
+		case SK.ModuleBlock:
+			return new TSModuleBlockNode(child, parent);
+		case SK.EnumDeclaration:
+			return new TSEnumDeclarationNode(child as ts.EnumDeclaration, parent);
+		case SK.EnumMember:
+			return new TSEnumMemberNode(child as ts.EnumMember, parent);
+		case SK.Decorator:
+			return new DecoratorNode(child, parent);
+		case SK.HeritageClause:
+			return null; // handled inline by ClassNode
+		case SK.VariableDeclarationList:
+			return new VariableDeclarationListAsNode(child as ts.VariableDeclarationList, parent);
+		case SK.VoidExpression:
+			return new VoidExpressionNode(child, parent);
+		case SK.DeleteExpression:
+			return new DeleteExpressionNode(child, parent);
+		case SK.JsxText:
+			return null; // JSX not supported in MVP
+		case SK.AnyKeyword:
+			return new TypeKeywordNode('TSAnyKeyword', child, parent);
+		case SK.UnknownKeyword:
+			return new TypeKeywordNode('TSUnknownKeyword', child, parent);
+		case SK.NumberKeyword:
+			return new TypeKeywordNode('TSNumberKeyword', child, parent);
+		case SK.StringKeyword:
+			return new TypeKeywordNode('TSStringKeyword', child, parent);
+		case SK.BooleanKeyword:
+			return new TypeKeywordNode('TSBooleanKeyword', child, parent);
+		case SK.SymbolKeyword:
+			return new TypeKeywordNode('TSSymbolKeyword', child, parent);
+		case SK.NeverKeyword:
+			return new TypeKeywordNode('TSNeverKeyword', child, parent);
+		case SK.VoidKeyword:
+			return new TypeKeywordNode('TSVoidKeyword', child, parent);
+		case SK.UndefinedKeyword:
+			return new TypeKeywordNode('TSUndefinedKeyword', child, parent);
+		case SK.NullKeyword:
+			return new TypeKeywordNode('TSNullKeyword', child, parent);
+		case SK.BigIntKeyword:
+			return new TypeKeywordNode('TSBigIntKeyword', child, parent);
+		case SK.ObjectKeyword:
+			return new TypeKeywordNode('TSObjectKeyword', child, parent);
+		case SK.IntrinsicKeyword:
+			return new TypeKeywordNode('TSIntrinsicKeyword', child, parent);
 		default:
 			// Unsupported SyntaxKind — fall back to a generic node mirroring
 			// typescript-estree's `deeplyCopy`: type='TS<KindName>', range +
@@ -1206,8 +1434,8 @@ function wrapChainIfNeeded(
 ): LazyNode {
 	const isMember = result.type === 'MemberExpression';
 	const child = isMember
-		? (result as MemberExpressionNode).object
-		: (result as CallExpressionNode).callee;
+		? result.object
+		: result.callee;
 	const isOptional = result.optional;
 	const isChildChain = (child as { type?: string } | null)?.type === 'ChainExpression'
 		&& (tsNode as ts.PropertyAccessExpression).expression?.kind !== SK.ParenthesizedExpression;
@@ -1255,7 +1483,10 @@ class ChainExpressionWrappingNode extends LazyNode {
 // Wrap typeParameters declaration (`<T extends X>`) in
 // TSTypeParameterDeclaration matching eager. Used by classes,
 // interfaces, type aliases, and any function-like with `<T>` generics.
-function convertTypeParameters(typeParams: ts.NodeArray<ts.TypeParameterDeclaration> | undefined, parent: LazyNode): TSTypeParameterDeclarationNode | undefined {
+function convertTypeParameters(
+	typeParams: ts.NodeArray<ts.TypeParameterDeclaration> | undefined,
+	parent: LazyNode,
+): TSTypeParameterDeclarationNode | undefined {
 	if (!typeParams || typeParams.length === 0) return undefined;
 	return new TSTypeParameterDeclarationNode(typeParams, parent);
 }
@@ -1280,7 +1511,10 @@ class TSTypeParameterDeclarationNode extends LazyNode {
 // Wrap typeArguments (e.g. `<number, string>`) in TSTypeParameterInstantiation
 // matching typescript-estree's `convertTypeArguments` (line 264). Range
 // extends one char before the first type to cover the `<`.
-function convertTypeArguments(typeArgs: ts.NodeArray<ts.TypeNode> | undefined, parent: LazyNode): TSTypeParameterInstantiationNode | undefined {
+function convertTypeArguments(
+	typeArgs: ts.NodeArray<ts.TypeNode> | undefined,
+	parent: LazyNode,
+): TSTypeParameterInstantiationNode | undefined {
 	if (!typeArgs || typeArgs.length === 0) return undefined;
 	return new TSTypeParameterInstantiationNode(typeArgs, parent);
 }
@@ -1405,17 +1639,20 @@ class VariableDeclarationNode extends LazyNode {
 		this.kind = (flags & ts.NodeFlags.AwaitUsing) === ts.NodeFlags.AwaitUsing
 			? 'await using'
 			: (flags & ts.NodeFlags.Using) === ts.NodeFlags.Using
-				? 'using'
-				: flags & ts.NodeFlags.Const
-					? 'const'
-					: flags & ts.NodeFlags.Let
-						? 'let'
-						: 'var';
+			? 'using'
+			: flags & ts.NodeFlags.Const
+			? 'const'
+			: flags & ts.NodeFlags.Let
+			? 'let'
+			: 'var';
 		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
 	}
 
 	get declarations() {
-		return this._declarations ??= convertChildren((this._ts as ts.VariableStatement).declarationList.declarations, this);
+		return this._declarations ??= convertChildren(
+			(this._ts as ts.VariableStatement).declarationList.declarations,
+			this,
+		);
 	}
 }
 
@@ -1614,8 +1851,8 @@ class TSTypeOperatorNode extends LazyNode {
 		this.operator = tsNode.operator === SK.KeyOfKeyword
 			? 'keyof'
 			: tsNode.operator === SK.UniqueKeyword
-				? 'unique'
-				: 'readonly';
+			? 'unique'
+			: 'readonly';
 	}
 	get typeAnnotation() {
 		return this._typeAnnotation ??= convertChild((this._ts as ts.TypeOperatorNode).type, this);
@@ -1772,12 +2009,12 @@ class VariableDeclarationListAsNode extends LazyNode {
 		this.kind = (flags & ts.NodeFlags.AwaitUsing) === ts.NodeFlags.AwaitUsing
 			? 'await using'
 			: (flags & ts.NodeFlags.Using) === ts.NodeFlags.Using
-				? 'using'
-				: flags & ts.NodeFlags.Const
-					? 'const'
-					: flags & ts.NodeFlags.Let
-						? 'let'
-						: 'var';
+			? 'using'
+			: flags & ts.NodeFlags.Const
+			? 'const'
+			: flags & ts.NodeFlags.Let
+			? 'let'
+			: 'var';
 	}
 	get declarations() {
 		return this._declarations ??= convertChildren((this._ts as ts.VariableDeclarationList).declarations, this);
@@ -1800,7 +2037,9 @@ class ClassNode extends LazyNode {
 	private _superClass?: LazyNode | null;
 	private _implements?: (LazyNode | null)[];
 	private _decorators?: (LazyNode | null)[];
-	get decorators() { return this._decorators ??= convertDecorators(this._ts, this); }
+	get decorators() {
+		return this._decorators ??= convertDecorators(this._ts, this);
+	}
 
 	constructor(
 		type: 'ClassDeclaration' | 'ClassExpression',
@@ -1871,7 +2110,10 @@ class MethodFunctionExpressionNode extends LazyNode {
 	private _body?: LazyNode | null;
 	private _returnType?: LazyNode | null | undefined;
 
-	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
+	constructor(
+		tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
+		parent: LazyNode,
+	) {
 		super(tsNode, parent, undefined, false);
 		// Eager method range starts one before parameters' first paren.
 		let start = tsNode.parameters.pos - 1;
@@ -1930,7 +2172,10 @@ class ObjectAccessorPropertyNode extends LazyNode {
 		);
 	}
 	get value() {
-		return this._value ??= new MethodFunctionExpressionNode(this._ts as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, this);
+		return this._value ??= new MethodFunctionExpressionNode(
+			this._ts as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
+			this,
+		);
 	}
 }
 
@@ -1969,17 +2214,22 @@ class MethodDefinitionNode extends LazyNode {
 	private _key?: LazyNode | null;
 	private _value?: MethodFunctionExpressionNode;
 	private _decorators?: (LazyNode | null)[];
-	get decorators() { return this._decorators ??= convertDecorators(this._ts, this); }
+	get decorators() {
+		return this._decorators ??= convertDecorators(this._ts, this);
+	}
 
-	constructor(tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
+	constructor(
+		tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
+		parent: LazyNode,
+	) {
 		super(tsNode, parent);
 		this.kind = tsNode.kind === SK.Constructor
 			? 'constructor'
 			: tsNode.kind === SK.GetAccessor
-				? 'get'
-				: tsNode.kind === SK.SetAccessor
-					? 'set'
-					: 'method';
+			? 'get'
+			: tsNode.kind === SK.SetAccessor
+			? 'set'
+			: 'method';
 		// `abstract foo();` (body-less method in an abstract class) becomes
 		// TSAbstractMethodDefinition; everything else stays MethodDefinition.
 		this.type = tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword)
@@ -1993,7 +2243,8 @@ class MethodDefinitionNode extends LazyNode {
 		this.accessibility = accMod
 			? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
 			: undefined;
-		this.computed = !!(tsNode as ts.MethodDeclaration).name && (tsNode as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName;
+		this.computed = !!(tsNode as ts.MethodDeclaration).name
+			&& (tsNode as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName;
 		this.optional = !!(tsNode as ts.MethodDeclaration).questionToken;
 	}
 	get key() {
@@ -2003,7 +2254,7 @@ class MethodDefinitionNode extends LazyNode {
 		if (t.kind === SK.Constructor) {
 			return this._key = new ConstructorKeyIdentifierNode(t, this);
 		}
-		return this._key = convertChild((t as ts.MethodDeclaration).name, this);
+		return this._key = convertChild(t.name, this);
 	}
 	get value() {
 		return this._value ??= new MethodFunctionExpressionNode(
@@ -2034,7 +2285,11 @@ class ConstructorKeyIdentifierNode extends LazyNode {
 }
 
 class PropertyDefinitionNode extends LazyNode {
-	readonly type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty';
+	readonly type:
+		| 'PropertyDefinition'
+		| 'TSAbstractPropertyDefinition'
+		| 'AccessorProperty'
+		| 'TSAbstractAccessorProperty';
 	readonly static: boolean;
 	readonly override: boolean;
 	readonly readonly: boolean;
@@ -2047,9 +2302,16 @@ class PropertyDefinitionNode extends LazyNode {
 	private _value?: LazyNode | null;
 	private _typeAnnotation?: LazyNode | null | undefined;
 	private _decorators?: (LazyNode | null)[];
-	get decorators() { return this._decorators ??= convertDecorators(this._ts, this); }
+	get decorators() {
+		return this._decorators ??= convertDecorators(this._ts, this);
+	}
 
-	constructor(tsNode: ts.PropertyDeclaration, parent: LazyNode, type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty' = 'PropertyDefinition') {
+	constructor(
+		tsNode: ts.PropertyDeclaration,
+		parent: LazyNode,
+		type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty' =
+			'PropertyDefinition',
+	) {
 		super(tsNode, parent);
 		this.type = type;
 		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
@@ -2577,7 +2839,9 @@ class ShorthandPropertyNode extends LazyNode {
 	get key() {
 		return this._key ??= convertChild((this._ts as ts.ShorthandPropertyAssignment).name, this);
 	}
-	get value() { return this.key; }
+	get value() {
+		return this.key;
+	}
 }
 
 class TemplateLiteralNode extends LazyNode {
@@ -3104,16 +3368,16 @@ class UnaryLikeExpressionNode extends LazyNode {
 		const op = tokenKind === SK.PlusPlusToken
 			? '++'
 			: tokenKind === SK.MinusMinusToken
-				? '--'
-				: tokenKind === SK.PlusToken
-					? '+'
-					: tokenKind === SK.MinusToken
-						? '-'
-						: tokenKind === SK.ExclamationToken
-							? '!'
-							: tokenKind === SK.TildeToken
-								? '~'
-								: '?';
+			? '--'
+			: tokenKind === SK.PlusToken
+			? '+'
+			: tokenKind === SK.MinusToken
+			? '-'
+			: tokenKind === SK.ExclamationToken
+			? '!'
+			: tokenKind === SK.TildeToken
+			? '~'
+			: '?';
 		this.operator = op;
 		this.type = (op === '++' || op === '--') ? 'UpdateExpression' : 'UnaryExpression';
 	}
@@ -3166,7 +3430,11 @@ class ExpressionWithTypeArgumentsNode extends LazyNode {
 	private _expression?: LazyNode | null;
 	private _typeArguments?: LazyNode | undefined;
 
-	constructor(tsNode: ts.ExpressionWithTypeArguments, parent: LazyNode, type: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression') {
+	constructor(
+		tsNode: ts.ExpressionWithTypeArguments,
+		parent: LazyNode,
+		type: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression',
+	) {
 		super(tsNode, parent);
 		this.type = type;
 	}
@@ -3367,7 +3635,7 @@ class TSCallishSignatureNode extends LazyNode {
 		return this._typeParameters = convertTypeParameters((this._ts as ts.SignatureDeclarationBase).typeParameters, this);
 	}
 	get params() {
-		return this._params ??= convertChildren((this._ts as ts.SignatureDeclarationBase).parameters!, this);
+		return this._params ??= convertChildren((this._ts as ts.SignatureDeclarationBase).parameters, this);
 	}
 	get returnType() {
 		if (this._returnType !== undefined) return this._returnType;
@@ -3551,7 +3819,10 @@ class ImportDeclarationNode extends LazyNode {
 
 	get attributes() {
 		if (this._attributes) return this._attributes;
-		const ts_ = this._ts as ts.ImportDeclaration & { attributes?: { elements?: ReadonlyArray<ts.Node> }; assertClause?: { elements?: ReadonlyArray<ts.Node> } };
+		const ts_ = this._ts as ts.ImportDeclaration & {
+			attributes?: { elements?: ReadonlyArray<ts.Node> };
+			assertClause?: { elements?: ReadonlyArray<ts.Node> };
+		};
 		const attrs = ts_.attributes ?? ts_.assertClause;
 		return this._attributes = attrs?.elements ? convertChildren(attrs.elements, this) : [];
 	}
@@ -3823,7 +4094,7 @@ function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): La
 	}
 
 	if (hasPropertyModifiers && result) {
-		const wrapper = new TSParameterPropertyNode(tsNode, parent, result, propertyModifiers!);
+		const wrapper = new TSParameterPropertyNode(tsNode, parent, result, propertyModifiers);
 		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, wrapper);
 		return wrapper;
 	}
@@ -3880,7 +4151,12 @@ class TSParameterPropertyNode extends LazyNode {
 	readonly static = false;
 	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly parameter: LazyNode;
-	constructor(tsNode: ts.ParameterDeclaration, parent: LazyNode, parameter: LazyNode, mods: ReadonlyArray<ts.ModifierLike>) {
+	constructor(
+		tsNode: ts.ParameterDeclaration,
+		parent: LazyNode,
+		parameter: LazyNode,
+		mods: ReadonlyArray<ts.ModifierLike>,
+	) {
 		super(tsNode, parent);
 		const accMod = mods.find(m =>
 			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
@@ -3907,10 +4183,16 @@ const LOGICAL_OP_KINDS = new Set<ts.SyntaxKind>([
 	SK.QuestionQuestionToken,
 ]);
 const ASSIGN_OP_KINDS = new Set<ts.SyntaxKind>([
-	SK.EqualsToken, SK.PlusEqualsToken, SK.MinusEqualsToken,
-	SK.AsteriskAsteriskEqualsToken, SK.AsteriskEqualsToken,
-	SK.SlashEqualsToken, SK.PercentEqualsToken,
-	SK.AmpersandEqualsToken, SK.BarEqualsToken, SK.CaretEqualsToken,
+	SK.EqualsToken,
+	SK.PlusEqualsToken,
+	SK.MinusEqualsToken,
+	SK.AsteriskAsteriskEqualsToken,
+	SK.AsteriskEqualsToken,
+	SK.SlashEqualsToken,
+	SK.PercentEqualsToken,
+	SK.AmpersandEqualsToken,
+	SK.BarEqualsToken,
+	SK.CaretEqualsToken,
 	SK.LessThanLessThanEqualsToken,
 	SK.GreaterThanGreaterThanEqualsToken,
 	SK.GreaterThanGreaterThanGreaterThanEqualsToken,
@@ -4167,7 +4449,9 @@ class LiteralNode extends LazyNode {
 
 // --- Entry point --------------------------------------------------------
 
-export function convertLazy(file: ts.SourceFile): { estree: ProgramNode; astMaps: LazyAstMaps; context: ConvertContext; } {
+export function convertLazy(
+	file: ts.SourceFile,
+): { estree: ProgramNode; astMaps: LazyAstMaps; context: ConvertContext } {
 	const maps: LazyAstMaps = {
 		esTreeNodeToTSNodeMap: ESTREE_TO_TS_FACADE,
 		tsNodeToESTreeNodeMap: new WeakMap(),

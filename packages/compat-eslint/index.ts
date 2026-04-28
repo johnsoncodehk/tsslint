@@ -2,19 +2,19 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
-
-// ESLint internals — these reach into lib/ paths and may break on major
-// ESLint upgrades. Resolved on first use so warm runs that hit TSSLint's
-// per-rule cache for every file never have to load them. We only keep
-// `CodePathAnalyzer` is vendored from ESLint's `lib/linter/code-path-analysis/`
-// (see `lib/code-path-analysis/`). ESLint doesn't expose CPA on any
-// public surface (`use-at-your-own-risk` only re-exports lint engines /
-// `builtinRules`), so we ship the source ourselves — that drops the
-// last runtime `eslint` package dependency. The vendored copy has its
-// `eslint/lib/shared/assert` reference replaced with a tiny inline ok()
-// and the `debug` package replaced with a no-op stub.
+// `CodePathAnalyzer` is vendored from ESLint's
+// `lib/linter/code-path-analysis/` (see `lib/code-path-analysis/`).
+// ESLint doesn't expose CPA on any public surface
+// (`use-at-your-own-risk` only re-exports lint engines / `builtinRules`),
+// so we ship the source ourselves — that drops the last runtime
+// `eslint` package dependency. The vendored copy has its
+// `eslint/lib/shared/assert` reference replaced with a tiny inline
+// `ok()` and the `debug` package replaced with a no-op stub.
+// Lazy-loaded so cold lint runs that don't hit a CPA-using rule
+// (no-fallthrough / no-unreachable / getter-return / etc.) never
+// pay for parsing the ~4500 lines of analyzer source.
 let eslintInternals: {
-	CodePathAnalyzer: new (eventGenerator: {
+	CodePathAnalyzer: new(eventGenerator: {
 		// ESLint 9.39+ uses `eventGenerator.emit` (function) directly;
 		// ESLint 9.0-9.38 called `eventGenerator.emitter.emit`. Provide
 		// both shapes so we work across the supported range.
@@ -379,7 +379,7 @@ function runSharedTraversal(
 			const wrapped = isCodePathListener(selector)
 				? wrapVariadicListener(entry.id, listener as (...args: unknown[]) => unknown)
 				: wrapSelectorListener(entry.id, listener as (n: unknown) => unknown);
-			allListeners.push([eslintRule, selector, wrapped as (n: unknown) => void]);
+			allListeners.push([eslintRule, selector, wrapped]);
 		}
 	}
 
@@ -388,7 +388,9 @@ function runSharedTraversal(
 	// `decomposeSimple`; if it can't, an UnsupportedSelectorError fires
 	// — never silent NodeEventGenerator fallback. See `buildFastDispatch`.
 	const fast = buildFastDispatch(allListeners);
-	const onTarget = (t: unknown) => { currentNode = t; };
+	const onTarget = (t: unknown) => {
+		currentNode = t;
+	};
 
 	// Two-mode dispatch path:
 	//
@@ -407,11 +409,11 @@ function runSharedTraversal(
 	if (fast.codePath.size > 0) {
 		const eventQueue = buildCpaEventQueue(file, fast);
 		dispatchFast(eventQueue, fast, errors, onTarget);
-	} else {
+	}
+	else {
 		runTsScanInline(file, fast, errors, onTarget);
 	}
 }
-
 
 interface DispatchEntry {
 	rule: ESLint.Rule.RuleModule;
@@ -447,7 +449,9 @@ interface FastDispatch {
 function buildFastDispatch(
 	allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]>,
 ): FastDispatch {
-	const { decomposeSimple, isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
+	const { decomposeSimple, isCodePathListener } = require(
+		'./lib/selector-analysis',
+	) as typeof import('./lib/selector-analysis');
 	const enter = new Map<string, DispatchEntry[]>();
 	const exit = new Map<string, DispatchEntry[]>();
 	const enterAll: DispatchEntry[] = [];
@@ -457,7 +461,7 @@ function buildFastDispatch(
 		if (isCodePathListener(selector)) {
 			let arr = codePath.get(selector);
 			if (!arr) codePath.set(selector, arr = []);
-			arr.push([rule, listener as (...args: unknown[]) => void]);
+			arr.push([rule, listener]);
 			continue;
 		}
 		const infos = decomposeSimple(selector);
@@ -465,14 +469,16 @@ function buildFastDispatch(
 			const map = info.isExit ? exit : enter;
 			const allList = info.isExit ? exitAll : enterAll;
 			const entry: DispatchEntry = {
-				rule, listener,
+				rule,
+				listener,
 				fieldFire: info.fieldFire,
 				typeFilter: info.typeFilter,
 				filter: info.filter,
 			};
 			if (info.types === 'all') {
 				allList.push(entry);
-			} else {
+			}
+			else {
 				for (const type of info.types) {
 					let arr = map.get(type);
 					if (!arr) map.set(type, arr = []);
@@ -501,7 +507,9 @@ function buildFastDispatch(
 //     if any type lacks a registered predicate (same philosophy as
 //     decomposeSimple — surface coverage gaps as hard errors).
 function buildScanPredicate(fast: FastDispatch) {
-	const { predicateForTriggerSet, predicateAllKinds } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	const { predicateForTriggerSet, predicateAllKinds } = require(
+		'./lib/ts-ast-scan',
+	) as typeof import('./lib/ts-ast-scan');
 	const usesCodePath = fast.codePath.size > 0;
 	const usesWildcard = fast.enterAll.length > 0 || fast.exitAll.length > 0;
 	if (usesCodePath || usesWildcard) {
@@ -578,8 +586,12 @@ function buildCpaEventQueue(file: ts.SourceFile, fast: FastDispatch): any[] {
 	const { CodePathAnalyzer } = loadEslintInternals();
 	const cpa = new CodePathAnalyzer(wrapped);
 	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
-		enterNode(target) { cpa.enterNode(target); },
-		leaveNode(target) { cpa.leaveNode(target); },
+		enterNode(target) {
+			cpa.enterNode(target);
+		},
+		leaveNode(target) {
+			cpa.leaveNode(target);
+		},
 	});
 	return queue;
 }
@@ -612,7 +624,8 @@ function dispatchFast(
 		const step = eventQueue[i];
 		if (step.kind === 1) {
 			dispatchTarget(step.target, step.phase === 1, fast, errors, onTarget);
-		} else if (step.kind === 2) {
+		}
+		else if (step.kind === 2) {
 			// CodePathAnalyzer emit step: target is the event name
 			// (`onCodePathStart`, `onCodePathSegmentEnd`, …) and args is
 			// the payload. Dispatch directly to the per-event listener
@@ -624,7 +637,8 @@ function dispatchFast(
 					if (errors.has(rule)) continue;
 					try {
 						fn(...step.args);
-					} catch (err) {
+					}
+					catch (err) {
 						errors.set(rule, err);
 					}
 				}
@@ -651,7 +665,8 @@ function runEntries(
 		if (e.filter !== undefined && !e.filter(actual)) continue;
 		try {
 			e.listener(actual);
-		} catch (err) {
+		}
+		catch (err) {
 			errors.set(e.rule, err);
 		}
 	}
@@ -786,7 +801,9 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// dispatches to typescript-estree's astConverter, which we already have
 		// a ts.SourceFile for. Calling it directly avoids the parser require.
 		const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
-		const { TsScopeManager, applyEslintGlobals } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
+		const { TsScopeManager, applyEslintGlobals } = require(
+			'./lib/ts-scope-manager',
+		) as typeof import('./lib/ts-scope-manager');
 		const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
 		const { LazySourceCode } = require('./lib/lazy-source-code') as typeof import('./lib/lazy-source-code');
 
@@ -794,7 +811,11 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// typescript-estree's eager Converter on every TS file under
 		// packages/, but materialises children on first read. Rules see
 		// real subtrees and can't null-deref into them.
-		const { astMaps, estree, context: convertContext } = convertLazy(file) as { astMaps: any; estree: any; context: unknown };
+		const { astMaps, estree, context: convertContext } = convertLazy(file) as {
+			astMaps: any;
+			estree: any;
+			context: unknown;
+		};
 
 		// tokens / comments come from our own scanner-based converters
 		// (lib/tokens.ts) — byte-identical to typescript-estree's
@@ -810,19 +831,23 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 			configurable: true,
 			enumerable: true,
 			get: () => _tokens ??= convertTokens(file),
-			set: (v: unknown[]) => { _tokens = v; },
+			set: (v: unknown[]) => {
+				_tokens = v;
+			},
 		});
 		Object.defineProperty(estree, 'comments', {
 			configurable: true,
 			enumerable: true,
 			get: () => _comments ??= convertComments(file),
-			set: (v: unknown[]) => { _comments = v; },
+			set: (v: unknown[]) => {
+				_comments = v;
+			},
 		});
 
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';
-		const scopeManager = new TsScopeManager(file, program, estree as any, astMaps as any, estree.sourceType);
+		const scopeManager = new TsScopeManager(file, program, estree, astMaps, estree.sourceType);
 		// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
 		// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
 		// `TsScopeManager` itself stays free of this lint-pipeline policy
@@ -844,9 +869,9 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 				experimentalDecorators: undefined,
 				isolatedDeclarations: undefined,
 				getSymbolAtLocation: (node: any) =>
-					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
+					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
 				getTypeAtLocation: (node: any) =>
-					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
+					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
 			},
 		}) as unknown as ESLint.SourceCode;
 		cachedEstree = { file, sourceCode, convertContext };
@@ -855,4 +880,3 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		sourceCode: cachedEstree.sourceCode,
 	};
 }
-

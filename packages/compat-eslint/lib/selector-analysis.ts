@@ -57,7 +57,8 @@ function* iterChildNodes(node: any): IterableIterator<any> {
 					yield c;
 				}
 			}
-		} else if (child && typeof child === 'object' && typeof (child as { type?: unknown }).type === 'string') {
+		}
+		else if (child && typeof child === 'object' && typeof (child as { type?: unknown }).type === 'string') {
 			yield child;
 		}
 	}
@@ -144,7 +145,11 @@ export interface FastDispatchInfo {
 // typos and our coverage gaps.
 export class UnsupportedSelectorError extends Error {
 	constructor(public readonly selector: string, reason?: string) {
-		super(`compat-eslint fast dispatch can't decompose selector \`${selector}\`${reason ? `: ${reason}` : ''}. This is a coverage gap in selector-analysis.ts; please open an issue with the selector + the rule that registered it.`);
+		super(
+			`compat-eslint fast dispatch can't decompose selector \`${selector}\`${
+				reason ? `: ${reason}` : ''
+			}. This is a coverage gap in selector-analysis.ts; please open an issue with the selector + the rule that registered it.`,
+		);
 		this.name = 'UnsupportedSelectorError';
 	}
 }
@@ -178,7 +183,8 @@ export function decomposeSimple(selector: string): FastDispatchInfo[] {
 	let ast: unknown;
 	try {
 		ast = esquery.parse(cleanSource);
-	} catch (e) {
+	}
+	catch (e) {
 		throw new Error(`Invalid esquery selector \`${selector}\`: ${(e as Error).message}`);
 	}
 	const infos = walkSelector(ast as any, isExit);
@@ -278,45 +284,56 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 		for (const sub of right.selectors) {
 			if (sub.type === 'wildcard') {
 				wildcard = true;
-			} else if (sub.type === 'identifier') {
+			}
+			else if (sub.type === 'identifier') {
 				typeFilter = sub.value;
-			} else if (sub.type === 'field') {
+			}
+			else if (sub.type === 'field') {
 				fieldName = sub.name;
-			} else if (sub.type === 'attribute') {
+			}
+			else if (sub.type === 'attribute') {
 				const attrFilter = makeAttributeFilter(sub);
 				if (!attrFilter) return null;
 				addFilter(attrFilter);
-			} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
+			}
+			else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 				isExit = true;
-			} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'scope') {
+			}
+			else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'scope') {
 				// no-op
-			} else if (sub.type === 'class') {
+			}
+			else if (sub.type === 'class') {
 				const m = classMacroMatcher(String(sub.name).toLowerCase());
 				if (!m) return null;
 				wildcard = wildcard || typeFilter === undefined;
 				addFilter(m);
-			} else if (sub.type === 'not') {
+			}
+			else if (sub.type === 'not') {
 				const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
 				if (!inner) return null;
 				addFilter(n => !inner(n));
 				wildcard = wildcard || typeFilter === undefined;
-			} else if (sub.type === 'has') {
+			}
+			else if (sub.type === 'has') {
 				const m = collectMatcher(sub);
 				if (!m) return null;
 				addFilter(m);
-			} else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
+			}
+			else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
 				const idx = sub.index?.value;
 				if (typeof idx !== 'number') return null;
 				const fromEnd = sub.type === 'nth-last-child';
 				addFilter(n => isNthChild(n, idx, fromEnd));
-			} else if (sub.type === 'matches') {
+			}
+			else if (sub.type === 'matches') {
 				// Inside `Parent > :matches(...)`, branches contribute either
 				// types (collapse into typeFilter — first one wins, others
 				// added as filter) or attribute-style filters.
 				const m = collectMatcher(sub);
 				if (!m) return null;
 				addFilter(m);
-			} else {
+			}
+			else {
 				return null;
 			}
 		}
@@ -331,8 +348,8 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			const composed = parentSideFilter && extraFilter
 				? (actual: any) => parentSideFilter(actual.parent) && extraFilter!(actual)
 				: parentSideFilter
-					? (actual: any) => parentSideFilter(actual.parent)
-					: extraFilter;
+				? (actual: any) => parentSideFilter(actual.parent)
+				: extraFilter;
 			return {
 				types: parentInfo.types,
 				isExit,
@@ -487,10 +504,12 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 				if (sub.type === 'identifier') {
 					collected.add(sub.value);
 					sawType = true;
-				} else if (sub.type === 'wildcard') {
+				}
+				else if (sub.type === 'wildcard') {
 					isAll = true;
 					sawType = true;
-				} else if (sub.type === 'matches') {
+				}
+				else if (sub.type === 'matches') {
 					const inner = walkTypeMatcher(sub, isExit);
 					if (!inner) return null;
 					if (inner.types === 'all') {
@@ -503,7 +522,8 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 							const innerFilter = inner.filter;
 							extraFilter = prev ? n => prev(n) && innerFilter(n) : innerFilter;
 						}
-					} else {
+					}
+					else {
 						for (const t of inner.types) collected.add(t);
 						if (inner.filter) {
 							const prev = extraFilter;
@@ -512,12 +532,15 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 						}
 						sawType = true;
 					}
-				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
+				}
+				else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'exit') {
 					isExit = true;
-				} else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'scope') {
+				}
+				else if (sub.type === 'class' && String(sub.name).toLowerCase() === 'scope') {
 					// `:scope` is a no-op identity marker outside `:has(...)`.
 					// Carry on without contributing types or filters.
-				} else if (sub.type === 'class') {
+				}
+				else if (sub.type === 'class') {
 					// `:function` etc. inside compound. Same as standalone,
 					// but composes with other constraints.
 					const name = String(sub.name).toLowerCase();
@@ -525,7 +548,8 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 						const fnTypes = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'];
 						for (const t of fnTypes) collected.add(t);
 						sawType = true;
-					} else {
+					}
+					else {
 						const m = classMacroMatcher(name);
 						if (!m) return null;
 						isAll = true;
@@ -533,14 +557,16 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 						const prev = extraFilter;
 						extraFilter = prev ? n => prev(n) && m(n) : m;
 					}
-				} else if (sub.type === 'not') {
+				}
+				else if (sub.type === 'not') {
 					// `Foo:not(Bar)` — types stay {Foo}, add filter inverting inner.
 					const inner = collectMatcher({ type: 'matches', selectors: sub.selectors });
 					if (!inner) return null;
 					const negFilter = (n: any) => !inner(n);
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && negFilter(n) : negFilter;
-				} else if (sub.type === 'has') {
+				}
+				else if (sub.type === 'has') {
 					// `Foo:has(Bar)` — types stay {Foo}, add :has filter
 					// (delegates to collectMatcher so `:scope` binds
 					// correctly to the dispatched node).
@@ -548,33 +574,40 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 					if (!m) return null;
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && m(n) : m;
-				} else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
+				}
+				else if (sub.type === 'nth-child' || sub.type === 'nth-last-child') {
 					const idx = sub.index?.value;
 					if (typeof idx !== 'number') return null;
 					const fromEnd = sub.type === 'nth-last-child';
 					const f = (n: any) => isNthChild(n, idx, fromEnd);
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && f(n) : f;
-				} else if (sub.type === 'attribute') {
+				}
+				else if (sub.type === 'attribute') {
 					const attrFilter = makeAttributeFilter(sub);
 					if (!attrFilter) return null;
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && attrFilter(n) : attrFilter;
-				} else if (sub.type === 'field') {
+				}
+				else if (sub.type === 'field') {
 					// `Foo.field` — node is at parent[field]. Reference equality.
 					const fieldName = sub.name as string;
 					const f = (n: any) => !!n.parent && n.parent[fieldName] === n;
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && f(n) : f;
-				} else if (sub.type === 'sibling' || sub.type === 'adjacent'
-					|| sub.type === 'child' || sub.type === 'descendant') {
+				}
+				else if (
+					sub.type === 'sibling' || sub.type === 'adjacent'
+					|| sub.type === 'child' || sub.type === 'descendant'
+				) {
 					// Nested combinator inside a compound — fall back to
 					// collectMatcher's full evaluation as a per-target filter.
 					const m = collectMatcher(sub);
 					if (!m) return null;
 					const prev = extraFilter;
 					extraFilter = prev ? n => prev(n) && m(n) : m;
-				} else {
+				}
+				else {
 					return null;
 				}
 			}
@@ -586,7 +619,10 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 			// At runtime, target matches if ANY branch's typeMatcher fires
 			// AND that branch's filter (if any) passes. The advertised
 			// `types` is the union (or 'all' if any branch is unbounded).
-			interface Branch { types: Set<string> | 'all'; filter?: NodePredicate; }
+			interface Branch {
+				types: Set<string> | 'all';
+				filter?: NodePredicate;
+			}
 			const branches: Branch[] = [];
 			let mergedExit: boolean | null = null;
 			let anyAll = false;
@@ -602,10 +638,11 @@ function walkTypeMatcher(ast: any, isExit: boolean): FastDispatchInfo | null {
 			let types: Set<string> | 'all';
 			if (anyAll) {
 				types = 'all';
-			} else {
+			}
+			else {
 				const merged = new Set<string>();
 				for (const b of branches) {
-					if (b.types !== 'all') for (const t of b.types) merged.add(t);
+					if (b.types !== 'all') { for (const t of b.types) merged.add(t); }
 				}
 				types = merged;
 			}
@@ -799,7 +836,8 @@ function collectMatcher(ast: any, scope?: ScopeRef): NodePredicate | null {
 function classMacroMatcher(name: string): NodePredicate | null {
 	switch (name) {
 		case 'function':
-			return n => n != null
+			return n =>
+				n != null
 				&& (n.type === 'FunctionDeclaration'
 					|| n.type === 'FunctionExpression'
 					|| n.type === 'ArrowFunctionExpression');
@@ -929,4 +967,3 @@ function makeAttributeFilter(attr: any): ((target: any) => boolean) | null {
 export function isCodePathListener(key: string): boolean {
 	return key.startsWith('onCodePath') || key.startsWith('onUnreachableCodePath');
 }
-

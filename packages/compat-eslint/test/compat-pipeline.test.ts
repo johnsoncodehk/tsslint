@@ -11,8 +11,8 @@
 // Run via:
 //   node --experimental-strip-types --no-warnings packages/compat-eslint/test/compat-pipeline.test.ts
 
-import * as ts from 'typescript';
 import type * as ESLint from 'eslint';
+import * as ts from 'typescript';
 
 const compat = require('../index.js') as typeof import('../index.js');
 
@@ -20,7 +20,8 @@ const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: string) {
 	if (cond) {
 		process.stdout.write('.');
-	} else {
+	}
+	else {
 		failures.push(name + (detail ? ' — ' + detail : ''));
 		process.stdout.write('F');
 	}
@@ -47,7 +48,7 @@ function makeRule(listeners: Record<string, true>): MockRule {
 		create(_ctx) {
 			const out: Record<string, (n: any) => void> = {};
 			for (const sel of Object.keys(listeners)) {
-				out[sel] = (n) => {
+				out[sel] = n => {
 					const parents: string[] = [];
 					let p = (n as { parent?: { type?: string } }).parent;
 					while (p && parents.length < 20) {
@@ -104,10 +105,14 @@ function buildProgram(code: string): { program: ts.Program; file: ts.SourceFile 
 // Drive the rule through the TSSLint pipeline. Returns the reports the
 // rule produced (mock rules don't report; we capture listener calls
 // instead, which exercises the same path before the report-replay step).
-function runRule(rule: ESLint.Rule.RuleModule, program: ts.Program, file: ts.SourceFile): { reports: any[]; threw?: unknown } {
+function runRule(
+	rule: ESLint.Rule.RuleModule,
+	program: ts.Program,
+	file: ts.SourceFile,
+): { reports: any[]; threw?: unknown } {
 	const reports: any[] = [];
 	let threw: unknown;
-	const tsslintRule = compat.convertRule(rule, [], { id: 'mock' } as any);
+	const tsslintRule = compat.convertRule(rule, [], { id: 'mock' });
 	const reportFn: any = (msg: string, start: number, end: number) => {
 		const r: any = { msg, start, end };
 		reports.push(r);
@@ -115,18 +120,31 @@ function runRule(rule: ESLint.Rule.RuleModule, program: ts.Program, file: ts.Sou
 		// reporter exposes — tests don't exercise these but the pipeline
 		// calls them.
 		const chain = {
-			at() { return chain; },
-			asWarning() { return chain; },
-			asError() { return chain; },
-			asSuggestion() { return chain; },
-			withFix() { return chain; },
-			withRefactor() { return chain; },
+			at() {
+				return chain;
+			},
+			asWarning() {
+				return chain;
+			},
+			asError() {
+				return chain;
+			},
+			asSuggestion() {
+				return chain;
+			},
+			withFix() {
+				return chain;
+			},
+			withRefactor() {
+				return chain;
+			},
 		};
 		return chain;
 	};
 	try {
 		tsslintRule({ file, report: reportFn, program } as any);
-	} catch (e) {
+	}
+	catch (e) {
 		threw = e;
 	}
 	return { reports, threw };
@@ -166,9 +184,11 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 	check('integration: TSNumberKeyword fires inside type annotation', nums.length === 1);
 	// Walk up via .parent — verify materialise builds the chain bottom-up.
 	const parents = nums[0]?.parents ?? [];
-	check('integration: TSNumberKeyword.parent.parent reaches FunctionDeclaration via .parent walk',
+	check(
+		'integration: TSNumberKeyword.parent.parent reaches FunctionDeclaration via .parent walk',
 		parents.includes('FunctionDeclaration'),
-		`parent chain: [${parents.join(' → ')}]`);
+		`parent chain: [${parents.join(' → ')}]`,
+	);
 }
 
 // 2. Compound :exit selector — fast dispatch handles `Type:exit` as the
@@ -186,14 +206,13 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 	// Both program:exit and import enters fire. Listener firings are in
 	// pre-order, but :exit fires AFTER its enter+children. So the order
 	// should be: ImportDeclaration enter × 2, then Program:exit.
-	check('integration: 2 ImportDeclaration enter events',
-		calls.filter(c => c.selector === 'ImportDeclaration').length === 2);
-	check('integration: 1 Program:exit event',
-		calls.filter(c => c.selector === 'Program:exit').length === 1);
+	check(
+		'integration: 2 ImportDeclaration enter events',
+		calls.filter(c => c.selector === 'ImportDeclaration').length === 2,
+	);
+	check('integration: 1 Program:exit event', calls.filter(c => c.selector === 'Program:exit').length === 1);
 	const lastSel = calls[calls.length - 1]?.selector;
-	check('integration: Program:exit fires LAST',
-		lastSel === 'Program:exit',
-		`last call: ${lastSel}`);
+	check('integration: Program:exit fires LAST', lastSel === 'Program:exit', `last call: ${lastSel}`);
 }
 
 // 3. CPA fallback — registering an `onCodePathStart` listener forces
@@ -216,17 +235,17 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 				FunctionDeclaration(n: any) {
 					cpaCalls.push({ event: 'FunctionDeclaration', node: n.type });
 				},
-			} as any;
+			};
 		},
 	};
 	runRule(rule, program, file);
 
-	check('CPA fallback: onCodePathStart fires (slow path)',
-		cpaCalls.some(c => c.event === 'onCodePathStart'));
-	check('CPA fallback: onCodePathEnd fires',
-		cpaCalls.some(c => c.event === 'onCodePathEnd'));
-	check('CPA fallback: FunctionDeclaration also fires alongside CPA events',
-		cpaCalls.some(c => c.event === 'FunctionDeclaration'));
+	check('CPA fallback: onCodePathStart fires (slow path)', cpaCalls.some(c => c.event === 'onCodePathStart'));
+	check('CPA fallback: onCodePathEnd fires', cpaCalls.some(c => c.event === 'onCodePathEnd'));
+	check(
+		'CPA fallback: FunctionDeclaration also fires alongside CPA events',
+		cpaCalls.some(c => c.event === 'FunctionDeclaration'),
+	);
 }
 
 // 3b. CPA correctness — method shorthand inside object literal must open
@@ -244,16 +263,46 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUnreachable = require(eslintRoot + '/lib/rules/no-unreachable.js');
 	const reports: { start: number; end: number }[] = [];
-	const tsslintRule = compat.convertRule(noUnreachable, [], { id: 'no-unreachable' } as any);
+	const tsslintRule = compat.convertRule(noUnreachable, [], { id: 'no-unreachable' });
 	const reportFn: any = (_msg: string, start: number, end: number) => {
 		reports.push({ start, end });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('no-unreachable: method shorthand return does not poison outer scope reachability',
+	check(
+		'no-unreachable: method shorthand return does not poison outer scope reachability',
 		reports.length === 0,
-		`got ${reports.length} reports, first at [${reports[0]?.start}, ${reports[0]?.end}]`);
+		`got ${reports.length} reports, first at [${reports[0]?.start}, ${reports[0]?.end}]`,
+	);
 }
 
 // 3c. Wrapping nodes (ExportNamed / ExportDefault / TSParameterProperty) must
@@ -278,17 +327,47 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 	const tsslintRule = compat.convertRule(
 		paddingRule,
 		[{ blankLine: 'always', prev: '*', next: 'function' }],
-		{ id: 'padding-line-between-statements' } as any,
+		{ id: 'padding-line-between-statements' },
 	);
 	const reportFn: any = (_msg: string, start: number, end: number) => {
 		reports.push({ start, end });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('padding-line: export-wrapped function inherits proper parent (no false positive on JSDoc-then-export)',
+	check(
+		'padding-line: export-wrapped function inherits proper parent (no false positive on JSDoc-then-export)',
 		reports.length === 0,
-		`got ${reports.length} reports`);
+		`got ${reports.length} reports`,
+	);
 }
 
 // 3d. Scope-manager Definition.parent for for-of / for-in / for-init bindings
@@ -304,16 +383,46 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noLoopFunc = require(eslintRoot + '/lib/rules/no-loop-func.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noLoopFunc, [], { id: 'no-loop-func' } as any);
+	const tsslintRule = compat.convertRule(noLoopFunc, [], { id: 'no-loop-func' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('no-loop-func: const for-of binding is block-scoped (safe), no false positive',
+	check(
+		'no-loop-func: const for-of binding is block-scoped (safe), no false positive',
 		reports.length === 0,
-		`got ${reports.length} reports`);
+		`got ${reports.length} reports`,
+	);
 }
 
 // 3e. `materialize()` fallback to GenericTSNode(parent=null) must pass
@@ -348,12 +457,16 @@ function runMock(code: string, listeners: Record<string, true>): { calls: Record
 	catch (e) {
 		threw = e;
 	}
-	check('materialize: GenericTSNode fallback receives ctx (no parent!._ctx throw)',
+	check(
+		'materialize: GenericTSNode fallback receives ctx (no parent!._ctx throw)',
 		threw === undefined,
-		threw ? `threw: ${(threw as Error).message}` : 'unexpected');
-	check('materialize: GenericTSNode fallback returns a usable node',
+		threw ? `threw: ${(threw as Error).message}` : 'unexpected',
+	);
+	check(
+		'materialize: GenericTSNode fallback returns a usable node',
 		!!result && typeof (result as { type?: unknown }).type === 'string',
-		`got: ${result === undefined ? 'undefined' : typeof result}`);
+		`got: ${result === undefined ? 'undefined' : typeof result}`,
+	);
 }
 
 // 3f. `prefer-const` with array destructuring + mixed reassign — under
@@ -382,16 +495,46 @@ function g() {
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const preferConst = require(eslintRoot + '/lib/rules/prefer-const.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(preferConst, [], { id: 'prefer-const' } as any);
+	const tsslintRule = compat.convertRule(preferConst, [], { id: 'prefer-const' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('prefer-const: array destructuring with mixed reassign reports each non-reassigned binding (destructuring: any default)',
+	check(
+		'prefer-const: array destructuring with mixed reassign reports each non-reassigned binding (destructuring: any default)',
 		reports.length === 4,
-		`got ${reports.length} reports: ${reports.map(r => r.msg).join(' | ')}`);
+		`got ${reports.length} reports: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3g. ECMAScript built-in globals (`undefined`, `Math`, `String`, etc.)
@@ -422,19 +565,51 @@ const g = NOT_A_REAL_GLOBAL;
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('no-undef: built-in ECMAScript globals (undefined/Math/String/Array/JSON/parseInt) are recognised',
+	check(
+		'no-undef: built-in ECMAScript globals (undefined/Math/String/Array/JSON/parseInt) are recognised',
 		reports.length === 1,
-		`expected 1 report (NOT_A_REAL_GLOBAL); got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
-	check('no-undef: the one report is for the truly undefined name',
+		`expected 1 report (NOT_A_REAL_GLOBAL); got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
+	check(
+		'no-undef: the one report is for the truly undefined name',
 		reports.length === 1 && reports[0].msg.includes('NOT_A_REAL_GLOBAL'),
-		`got: ${reports[0]?.msg}`);
+		`got: ${reports[0]?.msg}`,
+	);
 }
 
 // 3h. `TsVariable.defs` must filter out declarations that aren't in the
@@ -468,11 +643,39 @@ const x = m.size;
 	const tsslintRule = compat.convertRule(
 		namingConvention,
 		[{ selector: 'typeLike', format: ['PascalCase'] }],
-		{ id: 'naming-convention' } as any,
+		{ id: 'naming-convention' },
 	);
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	let threw: unknown;
@@ -482,9 +685,11 @@ const x = m.size;
 	catch (e) {
 		threw = e;
 	}
-	check('TsVariable.defs: lib-source declarations are filtered (no naming-convention crash on def.node.parent.type)',
+	check(
+		'TsVariable.defs: lib-source declarations are filtered (no naming-convention crash on def.node.parent.type)',
 		threw === undefined,
-		threw ? `threw: ${(threw as Error).message}` : 'unexpected');
+		threw ? `threw: ${(threw as Error).message}` : 'unexpected',
+	);
 }
 
 // 3i. `addGlobals` must NOT trigger eager `materialize()` on through
@@ -523,10 +728,38 @@ function f(obj?: { x: { y: string } | undefined }) {
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const consistentReturn = require(eslintRoot + '/lib/rules/consistent-return.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(consistentReturn, [], { id: 'consistent-return' } as any);
+	const tsslintRule = compat.convertRule(consistentReturn, [], { id: 'consistent-return' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	let threw: unknown;
@@ -536,9 +769,11 @@ function f(obj?: { x: { y: string } | undefined }) {
 	catch (e) {
 		threw = e;
 	}
-	check('addGlobals: no eager materialize, CPA stack stays balanced (no popChoiceContext null crash)',
+	check(
+		'addGlobals: no eager materialize, CPA stack stays balanced (no popChoiceContext null crash)',
 		threw === undefined,
-		threw ? `threw: ${(threw as Error).message}` : 'unexpected');
+		threw ? `threw: ${(threw as Error).message}` : 'unexpected',
+	);
 }
 
 // 3j. `BinaryExpression(operator=',')` must convert to ESTree
@@ -565,18 +800,48 @@ function f() {
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noSequences = require(eslintRoot + '/lib/rules/no-sequences.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noSequences, [], { id: 'no-sequences' } as any);
+	const tsslintRule = compat.convertRule(noSequences, [], { id: 'no-sequences' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
 	// `x = i, j` — bare comma in expression statement. Not in
 	// allowed-parens skip list, not for-update, no parens → reports.
-	check('SequenceExpression: BinaryExpression(",") converts to SequenceExpression so no-sequences fires',
+	check(
+		'SequenceExpression: BinaryExpression(",") converts to SequenceExpression so no-sequences fires',
 		reports.length === 1,
-		`expected 1 report; got ${reports.length}`);
+		`expected 1 report; got ${reports.length}`,
+	);
 }
 
 // 3k. `convertRule` must DEEP-merge `meta.defaultOptions` with the
@@ -607,17 +872,47 @@ namespace M {
 		// Partial user options — the merge must fill in `enums: true`
 		// from defaultOptions for the rule to fire on the const enum.
 		[{ functions: false, classes: false }],
-		{ id: 'no-use-before-define' } as any,
+		{ id: 'no-use-before-define' },
 	);
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('convertRule: deep-merges meta.defaultOptions with user options (no-use-before-define enums fires on const enum)',
+	check(
+		'convertRule: deep-merges meta.defaultOptions with user options (no-use-before-define enums fires on const enum)',
 		reports.length === 1 && reports[0].msg.includes("'Bar'"),
-		`expected 1 report for Bar; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 1 report for Bar; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3l. `TsVariable.isValueVariable` / `isTypeVariable` must mirror
@@ -641,16 +936,46 @@ function f(sys: string) { return sys; }
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' } as any);
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('TsVariable.isValueVariable: ImportBinding counts as value (no-shadow fires on import-vs-param value/value shadow)',
+	check(
+		'TsVariable.isValueVariable: ImportBinding counts as value (no-shadow fires on import-vs-param value/value shadow)',
 		reports.length === 1 && reports[0].msg.includes("'sys'"),
-		`expected 1 sys shadow; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 1 sys shadow; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3m. `TsScope.block` and `TsDefinition.node` must unwrap
@@ -678,16 +1003,46 @@ export function outer() {
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noRedecl = require(eslintRoot + '/lib/rules/no-redeclare.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noRedecl, [], { id: 'no-redeclare' } as any);
+	const tsslintRule = compat.convertRule(noRedecl, [], { id: 'no-redeclare' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('scope.block / def.node: unwrap export wrappers (no-redeclare fires on overloads inside exported function)',
+	check(
+		'scope.block / def.node: unwrap export wrappers (no-redeclare fires on overloads inside exported function)',
 		reports.length === 2,
-		`expected 2 inner overload redeclares; got ${reports.length}`);
+		`expected 2 inner overload redeclares; got ${reports.length}`,
+	);
 }
 
 // 3n. `scope.through` must use `_variableBySymbol` (alias-aware) instead
@@ -713,16 +1068,46 @@ function f() {
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('scope.through: alias-aware lookup resolves synthetic `arguments` and lib `Map` (no-undef false positives)',
+	check(
+		'scope.through: alias-aware lookup resolves synthetic `arguments` and lib `Map` (no-undef false positives)',
 		reports.length === 0,
-		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3o. `export { foo }` (no `from`) must resolve `foo` to the LOCAL
@@ -741,16 +1126,46 @@ export { foo };
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('export specifier: re-export resolves to local target via getExportSpecifierLocalTargetSymbol',
+	check(
+		'export specifier: re-export resolves to local target via getExportSpecifierLocalTargetSymbol',
 		reports.length === 0,
-		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3p. `TsDefinition.parent` for `ImportSpecifier` / `NamespaceImport` /
@@ -776,16 +1191,46 @@ function f(start: number, length: number) { return start + length; }
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' } as any);
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('TsDefinition.parent: ImportSpecifier walks to ImportDeclaration so no-shadow filter sees specifiers',
+	check(
+		'TsDefinition.parent: ImportSpecifier walks to ImportDeclaration so no-shadow filter sees specifiers',
 		reports.length === 0,
-		`expected 0 (any-type-specifier widens skip); got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 0 (any-type-specifier widens skip); got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3q. `TSImportType` qualifier (`import("mod").Foo`,
@@ -803,16 +1248,46 @@ function g(): import("inspector").Session { return null as any; }
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('TSImportType qualifier: not classified as a free reference (single + nested QualifiedName)',
+	check(
+		'TSImportType qualifier: not classified as a free reference (single + nested QualifiedName)',
 		reports.length === 0,
-		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3r. Conditional type's `infer X` must define `X` in the conditional's
@@ -829,16 +1304,46 @@ type ExtractName<T> = T extends { name: infer TName } ? TName extends string ? T
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' } as any);
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('infer type parameter: defined on the enclosing conditional-type scope',
+	check(
+		'infer type parameter: defined on the enclosing conditional-type scope',
 		reports.length === 0,
-		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`);
+		`expected 0; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
 }
 
 // 3s. `BindingElement` with a `ComputedPropertyName` propertyName must
@@ -857,16 +1362,46 @@ console.log(x);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUselessComputedKey = require(eslintRoot + '/lib/rules/no-useless-computed-key.js');
 	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(noUselessComputedKey, [], { id: 'no-useless-computed-key' } as any);
+	const tsslintRule = compat.convertRule(noUselessComputedKey, [], { id: 'no-useless-computed-key' });
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file, report: reportFn, program } as any);
-	check('BindingElement.computed: ComputedPropertyName propertyName produces Property with computed=true',
+	check(
+		'BindingElement.computed: ComputedPropertyName propertyName produces Property with computed=true',
 		reports.length === 1,
-		`expected 1 useless-computed-key on the destructure key; got ${reports.length}`);
+		`expected 1 useless-computed-key on the destructure key; got ${reports.length}`,
+	);
 }
 
 // 4. Mixed simple + complex selectors — descendant combinator selectors
@@ -887,10 +1422,14 @@ console.log(x);
 	});
 
 	// Both listeners must fire even though one is complex (descendant).
-	check('mixed: simple FunctionDeclaration listener fires',
-		calls.filter(c => c.selector === 'FunctionDeclaration').length === 2);
-	check('mixed: complex `FunctionDeclaration > BlockStatement > VariableDeclaration` fires',
-		calls.filter(c => c.selector.includes('VariableDeclaration')).length === 1);
+	check(
+		'mixed: simple FunctionDeclaration listener fires',
+		calls.filter(c => c.selector === 'FunctionDeclaration').length === 2,
+	);
+	check(
+		'mixed: complex `FunctionDeclaration > BlockStatement > VariableDeclaration` fires',
+		calls.filter(c => c.selector.includes('VariableDeclaration')).length === 1,
+	);
 }
 
 // 5. Rule-level error isolation — when one rule's listener throws, the
@@ -909,37 +1448,53 @@ console.log(x);
 		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
 		create() {
 			return {
-				VariableDeclaration() { throw new Error('intentional'); },
-			} as any;
+				VariableDeclaration() {
+					throw new Error('intentional');
+				},
+			};
 		},
 	};
 	const goodRule: ESLint.Rule.RuleModule = {
 		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
 		create() {
 			return {
-				VariableDeclaration(n: any) { goodCalls.push(n.type); },
-			} as any;
+				VariableDeclaration(n: any) {
+					goodCalls.push(n.type);
+				},
+			};
 		},
 	};
 
-	const badTsslintRule = compat.convertRule(badRule, [], { id: 'bad' } as any);
-	const goodTsslintRule = compat.convertRule(goodRule, [], { id: 'good' } as any);
+	const badTsslintRule = compat.convertRule(badRule, [], { id: 'bad' });
+	const goodTsslintRule = compat.convertRule(goodRule, [], { id: 'good' });
 
 	const reportFn: any = () => ({
 		at: () => ({ asWarning() {}, asError() {}, asSuggestion() {}, withFix() {}, withRefactor() {} }),
 	});
 	let badThrew: unknown;
-	try { badTsslintRule({ file, report: reportFn, program } as any); }
-	catch (e) { badThrew = e; }
+	try {
+		badTsslintRule({ file, report: reportFn, program } as any);
+	}
+	catch (e) {
+		badThrew = e;
+	}
 	let goodThrew: unknown;
-	try { goodTsslintRule({ file, report: reportFn, program } as any); }
-	catch (e) { goodThrew = e; }
+	try {
+		goodTsslintRule({ file, report: reportFn, program } as any);
+	}
+	catch (e) {
+		goodThrew = e;
+	}
 
-	check('error isolation: bad rule re-throws on its own dispatch',
-		badThrew instanceof Error && (badThrew as Error).message === 'intentional');
-	check('error isolation: good rule still fires both VariableDeclarations',
+	check(
+		'error isolation: bad rule re-throws on its own dispatch',
+		badThrew instanceof Error && badThrew.message === 'intentional',
+	);
+	check(
+		'error isolation: good rule still fires both VariableDeclarations',
 		goodCalls.length === 2 && goodThrew === undefined,
-		`goodCalls=${goodCalls.length}, threw=${String(goodThrew)}`);
+		`goodCalls=${goodCalls.length}, threw=${String(goodThrew)}`,
+	);
 }
 
 // 6. Bottom-up materialise after TS-scan dispatch — listener for an
@@ -962,18 +1517,18 @@ console.log(x);
 						specifierParentType: spec?.parent?.type,
 					});
 				},
-			} as any;
+			};
 		},
 	};
 	runRule(rule, program, file);
 
-	check('post-dispatch: ImportDeclaration target shape correct',
-		captured[0]?.type === 'ImportDeclaration');
-	check('post-dispatch: .specifiers[0] resolves to ImportSpecifier',
-		captured[0]?.specifierType === 'ImportSpecifier');
-	check('post-dispatch: specifier.parent points back to ImportDeclaration',
+	check('post-dispatch: ImportDeclaration target shape correct', captured[0]?.type === 'ImportDeclaration');
+	check('post-dispatch: .specifiers[0] resolves to ImportSpecifier', captured[0]?.specifierType === 'ImportSpecifier');
+	check(
+		'post-dispatch: specifier.parent points back to ImportDeclaration',
 		captured[0]?.specifierParentType === 'ImportDeclaration',
-		`got: ${captured[0]?.specifierParentType}`);
+		`got: ${captured[0]?.specifierParentType}`,
+	);
 }
 
 // 7. TS-scan covers type-only triggers — for a rule with ONLY TS-typed
@@ -993,14 +1548,20 @@ console.log(x);
 		'TSNumberKeyword': true,
 	});
 
-	check('TS-scan narrow trigger: TSAsExpression fires once',
-		calls.filter(c => c.selector === 'TSAsExpression').length === 1);
-	check('TS-scan narrow trigger: TSNumberKeyword fires twice (annotation + as)',
+	check(
+		'TS-scan narrow trigger: TSAsExpression fires once',
+		calls.filter(c => c.selector === 'TSAsExpression').length === 1,
+	);
+	check(
+		'TS-scan narrow trigger: TSNumberKeyword fires twice (annotation + as)',
 		calls.filter(c => c.selector === 'TSNumberKeyword').length === 2,
-		`got count: ${calls.filter(c => c.selector === 'TSNumberKeyword').length}`);
+		`got count: ${calls.filter(c => c.selector === 'TSNumberKeyword').length}`,
+	);
 	// JS-side things are NOT in trigger set. They must NOT fire.
-	check('TS-scan narrow trigger: no FunctionDeclaration/CallExpression noise',
-		!calls.some(c => c.selector === 'FunctionDeclaration' || c.selector === 'CallExpression'));
+	check(
+		'TS-scan narrow trigger: no FunctionDeclaration/CallExpression noise',
+		!calls.some(c => c.selector === 'FunctionDeclaration' || c.selector === 'CallExpression'),
+	);
 }
 
 console.log();

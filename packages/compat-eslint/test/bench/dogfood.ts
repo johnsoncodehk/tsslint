@@ -14,8 +14,8 @@
 // - Output is grouped: each unique (rule, divergence-pattern) is
 //   collapsed to one entry plus a single example location.
 
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as ts from 'typescript';
 
 const compat = require('../../index.js') as typeof import('../../index.js');
@@ -61,12 +61,23 @@ const DOGFOOD_FILES = [
 	'tsslint.config.ts',
 ];
 
-interface DiagLoc { file: string; line: number; column: number; ruleId: string }
+interface DiagLoc {
+	file: string;
+	line: number;
+	column: number;
+	ruleId: string;
+}
 
 function buildProgram(files: string[]) {
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.ES2020 });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const realLib = ts.createSourceFile(realLibPath, ts.sys.readFile(realLibPath) ?? '', ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS);
+	const realLib = ts.createSourceFile(
+		realLibPath,
+		ts.sys.readFile(realLibPath) ?? '',
+		ts.ScriptTarget.ES2020,
+		true,
+		ts.ScriptKind.TS,
+	);
 	const sources = new Map<string, ts.SourceFile>();
 	for (const f of files) {
 		const abs = path.join(REPO_ROOT, f);
@@ -127,18 +138,53 @@ function loadRule(ruleName: string): unknown {
 function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
 	const rule = loadRule(ruleName);
 	const out: DiagLoc[] = [];
-	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName } as any);
+	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName });
 	const reportFn: any = (_msg: string, start: number, _end: number) => {
 		const lc = sf.getLineAndCharacterOfPosition(start);
 		out.push({ file: sf.fileName, line: lc.line + 1, column: lc.character + 1, ruleId: ruleName });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	tsslintRule({ file: sf, report: reportFn, program } as any);
 	return out;
 }
 
-function runEslint(linter: import('eslint').Linter, code: string, fileName: string, ruleName: string, options: unknown[], program: ts.Program): DiagLoc[] {
+function runEslint(
+	linter: import('eslint').Linter,
+	code: string,
+	fileName: string,
+	ruleName: string,
+	options: unknown[],
+	program: ts.Program,
+): DiagLoc[] {
 	const isPluginRule = ruleName.startsWith('@typescript-eslint/');
 	const config: any = {
 		files: ['**/*.ts'],
@@ -160,9 +206,16 @@ function runEslint(linter: import('eslint').Linter, code: string, fileName: stri
 		.map(m => ({ file: fileName, line: m.line ?? 0, column: m.column ?? 0, ruleId: ruleName }));
 }
 
-function key(d: DiagLoc): string { return `${d.line}:${d.column}`; }
+function key(d: DiagLoc): string {
+	return `${d.line}:${d.column}`;
+}
 
-interface CrashRecord { rule: string; file: string; runner: 'tsslint' | 'eslint'; message: string }
+interface CrashRecord {
+	rule: string;
+	file: string;
+	runner: 'tsslint' | 'eslint';
+	message: string;
+}
 interface DivergenceRecord {
 	rule: string;
 	file: string;
@@ -196,7 +249,8 @@ async function main() {
 			let e: DiagLoc[] | null = null;
 			try {
 				t = runTsslint(program, sf, ruleName, options);
-			} catch (err: any) {
+			}
+			catch (err: any) {
 				crashes.push({ rule: ruleName, file, runner: 'tsslint', message: err?.message ?? String(err) });
 			}
 			try {
@@ -205,7 +259,8 @@ async function main() {
 				// type-aware plugin rules silently re-parse without type
 				// info and emit nothing).
 				e = runEslint(linter, code, abs, ruleName, options, program);
-			} catch (err: any) {
+			}
+			catch (err: any) {
 				crashes.push({ rule: ruleName, file, runner: 'eslint', message: err?.message ?? String(err) });
 			}
 
@@ -255,7 +310,8 @@ async function main() {
 				missed += r.eslintOnly.length;
 				if (!example && r.tsslintOnly.length) {
 					example = { file: r.file, loc: r.tsslintOnly[0], kind: 'over' };
-				} else if (!example && r.eslintOnly.length) {
+				}
+				else if (!example && r.eslintOnly.length) {
 					example = { file: r.file, loc: r.eslintOnly[0], kind: 'missed' };
 				}
 			}
@@ -267,8 +323,12 @@ async function main() {
 				const overTail = r.tsslintOnly.slice(0, 3).join(', ');
 				const missTail = r.eslintOnly.slice(0, 3).join(', ');
 				const parts: string[] = [];
-				if (r.tsslintOnly.length) parts.push(`over[${r.tsslintOnly.length}]: ${overTail}${r.tsslintOnly.length > 3 ? ', ...' : ''}`);
-				if (r.eslintOnly.length) parts.push(`missed[${r.eslintOnly.length}]: ${missTail}${r.eslintOnly.length > 3 ? ', ...' : ''}`);
+				if (r.tsslintOnly.length) {
+					parts.push(`over[${r.tsslintOnly.length}]: ${overTail}${r.tsslintOnly.length > 3 ? ', ...' : ''}`);
+				}
+				if (r.eslintOnly.length) {
+					parts.push(`missed[${r.eslintOnly.length}]: ${missTail}${r.eslintOnly.length > 3 ? ', ...' : ''}`);
+				}
 				console.log(`      ${r.file} — ${parts.join(' | ')}`);
 			}
 		}
@@ -278,7 +338,10 @@ async function main() {
 		console.log(`\nclean across ${corpus.length} files × ${RULES.length} rules`);
 		return 0;
 	}
-	return 0;  // Don't fail CI — this is exploratory.
+	return 0; // Don't fail CI — this is exploratory.
 }
 
-main().then(code => process.exit(code)).catch(e => { console.error(e); process.exit(2); });
+main().then(code => process.exit(code)).catch(e => {
+	console.error(e);
+	process.exit(2);
+});

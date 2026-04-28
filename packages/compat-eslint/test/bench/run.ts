@@ -18,8 +18,8 @@
 //   diffs (ideally empty). New unexpected diffs fail; absent
 //   expected diffs also fail (the bug got fixed, baseline is stale).
 
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as ts from 'typescript';
 
 const compat = require('../../index.js') as typeof import('../../index.js');
@@ -31,7 +31,12 @@ const { RULES } = require('./rules.config.js') as { RULES: Array<[string, unknow
 const CORPUS_DIR = path.join(__dirname, 'corpus');
 const BASELINE_PATH = path.join(__dirname, 'baseline.json');
 
-interface DiagLoc { file: string; line: number; column: number; ruleId: string }
+interface DiagLoc {
+	file: string;
+	line: number;
+	column: number;
+	ruleId: string;
+}
 
 function listCorpus(): string[] {
 	return fs.readdirSync(CORPUS_DIR)
@@ -45,7 +50,13 @@ function listCorpus(): string[] {
 function buildProgram(files: string[]) {
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.ES2020 });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const realLib = ts.createSourceFile(realLibPath, ts.sys.readFile(realLibPath) ?? '', ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS);
+	const realLib = ts.createSourceFile(
+		realLibPath,
+		ts.sys.readFile(realLibPath) ?? '',
+		ts.ScriptTarget.ES2020,
+		true,
+		ts.ScriptKind.TS,
+	);
 	// Root program files under `process.cwd()` so the path matches what
 	// `Linter.verify(code, configs, fullPath)` produces — without this,
 	// `@typescript-eslint/parser` (with `parserOptions.programs: [program]`)
@@ -128,19 +139,48 @@ function loadRule(ruleName: string): unknown {
 function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
 	const rule = loadRule(ruleName);
 	const out: DiagLoc[] = [];
-	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName } as any);
+	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName });
 	const reportFn: any = (msg: string, start: number, _end: number) => {
 		const lc = sf.getLineAndCharacterOfPosition(start);
 		if (process.env.BENCH_DEBUG && ruleName === process.env.BENCH_DEBUG) {
 			console.log(`[${ruleName}] ${sf.fileName}:${lc.line + 1}:${lc.character + 1} — ${msg}`);
 		}
 		out.push({ file: '/' + path.basename(sf.fileName), line: lc.line + 1, column: lc.character + 1, ruleId: ruleName });
-		const r: any = { at() { return r; }, asWarning() { return r; }, asError() { return r; }, asSuggestion() { return r; }, withFix() { return r; }, withRefactor() { return r; }, withDeprecated() { return r; }, withUnnecessary() { return r; }, withoutCache() { return r; } };
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
 		return r;
 	};
 	try {
 		tsslintRule({ file: sf, report: reportFn, program } as any);
-	} catch (e) {
+	}
+	catch (e) {
 		if (process.env.BENCH_DEBUG && ruleName === process.env.BENCH_DEBUG) {
 			console.log(`[${ruleName}] ${sf.fileName} CRASH: ${(e as Error).message}`);
 		}
@@ -148,7 +188,14 @@ function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, op
 	return out;
 }
 
-function runEslint(linter: import('eslint').Linter, code: string, fileName: string, ruleName: string, options: unknown[], program: ts.Program): DiagLoc[] {
+function runEslint(
+	linter: import('eslint').Linter,
+	code: string,
+	fileName: string,
+	ruleName: string,
+	options: unknown[],
+	program: ts.Program,
+): DiagLoc[] {
 	// For `@typescript-eslint/...` rules: register the plugin, pass our
 	// existing ts.Program via `parserOptions.programs` so the parser
 	// reuses it instead of building a duplicate (mirrors how TSSLint
@@ -177,7 +224,9 @@ function runEslint(linter: import('eslint').Linter, code: string, fileName: stri
 		.map(m => ({ file: '/' + path.basename(fileName), line: m.line ?? 0, column: m.column ?? 0, ruleId: ruleName }));
 }
 
-function key(d: DiagLoc): string { return `${d.file}:${d.line}:${d.column}`; }
+function key(d: DiagLoc): string {
+	return `${d.file}:${d.line}:${d.column}`;
+}
 
 interface Diff {
 	tsslintOnly: string[];
@@ -193,7 +242,11 @@ function diff(t: DiagLoc[], e: DiagLoc[]): Diff {
 	};
 }
 
-interface BaselineEntry { tsslintOnly?: string[]; eslintOnly?: string[]; reason?: string }
+interface BaselineEntry {
+	tsslintOnly?: string[];
+	eslintOnly?: string[];
+	reason?: string;
+}
 
 function loadBaseline(): Record<string, Record<string, BaselineEntry>> {
 	if (!fs.existsSync(BASELINE_PATH)) return {};
@@ -211,7 +264,8 @@ function saveBaseline(b: Record<string, Record<string, BaselineEntry>>) {
 
 function diffsEqual(actual: Diff, expected: BaselineEntry): boolean {
 	const ae = (a: string[] | undefined, b: string[] | undefined) => {
-		const aa = a ?? []; const bb = b ?? [];
+		const aa = a ?? [];
+		const bb = b ?? [];
 		if (aa.length !== bb.length) return false;
 		for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false;
 		return true;
@@ -251,9 +305,9 @@ async function main() {
 
 			const expected = baseline[ruleName]?.[file];
 			const expectedHas = expected !== undefined;
-			if (!hasDiff && !expectedHas) continue;  // clean
+			if (!hasDiff && !expectedHas) continue; // clean
 
-			if (updateBaseline) continue;  // recording, no compare
+			if (updateBaseline) continue; // recording, no compare
 
 			if (!hasDiff && expectedHas) {
 				console.log(`✓ FIXED ${ruleName} ${file} — baseline expected diff is now clean`);
@@ -267,7 +321,7 @@ async function main() {
 				totalRegressions++;
 				continue;
 			}
-			if (hasDiff && expectedHas && !diffsEqual(d, expected!)) {
+			if (hasDiff && expectedHas && !diffsEqual(d, expected)) {
 				console.log(`✗ DRIFTED ${ruleName} ${file}`);
 				console.log(`    expected: ${JSON.stringify(expected)}`);
 				console.log(`    actual:   ${JSON.stringify(newBaseline[ruleName][file])}`);
@@ -298,4 +352,7 @@ async function main() {
 	return 0;
 }
 
-main().then(code => process.exit(code)).catch(e => { console.error(e); process.exit(2); });
+main().then(code => process.exit(code)).catch(e => {
+	console.error(e);
+	process.exit(2);
+});

@@ -13,8 +13,17 @@ import * as ts from 'typescript';
 const SK = ts.SyntaxKind;
 
 export type TokenType =
-	| 'Boolean' | 'Null' | 'Identifier' | 'Keyword' | 'Numeric' | 'Punctuator'
-	| 'String' | 'RegularExpression' | 'Template' | 'JSXText' | 'JSXIdentifier'
+	| 'Boolean'
+	| 'Null'
+	| 'Identifier'
+	| 'Keyword'
+	| 'Numeric'
+	| 'Punctuator'
+	| 'String'
+	| 'RegularExpression'
+	| 'Template'
+	| 'JSXText'
+	| 'JSXIdentifier'
 	| 'PrivateIdentifier';
 
 export interface Token {
@@ -48,7 +57,8 @@ function isComment(node: ts.Node): boolean {
 }
 function isJSDocComment(node: ts.Node): boolean {
 	// JSDocComment was added in TS 4.7; alias as JSDoc for older versions.
-	return node.kind === SK.JSDocComment || (node as { kind: number }).kind === (SK as unknown as { JSDoc?: number }).JSDoc;
+	return node.kind === SK.JSDocComment
+		|| (node as { kind: number }).kind === (SK as unknown as { JSDoc?: number }).JSDoc;
 }
 function isJSXToken(node: ts.Node): boolean {
 	return node.kind >= SK.JsxElement && node.kind <= SK.JsxAttribute;
@@ -113,7 +123,8 @@ function buildToken(token: ts.Node, start: number, end: number, ast: ts.SourceFi
 		const lastSlash = value.lastIndexOf('/');
 		return {
 			type: tokenType,
-			loc, range,
+			loc,
+			range,
 			regex: { flags: value.slice(lastSlash + 1), pattern: value.slice(1, lastSlash) },
 			value,
 		};
@@ -293,7 +304,13 @@ export function walkInnerCommentsOf(
 	}
 }
 
-export function buildCommentObject(text: string, pos: number, end: number, kind: ts.CommentKind, ast: ts.SourceFile): Comment {
+export function buildCommentObject(
+	text: string,
+	pos: number,
+	end: number,
+	kind: ts.CommentKind,
+	ast: ts.SourceFile,
+): Comment {
 	const isLine = kind === SK.SingleLineCommentTrivia;
 	const raw = text.slice(pos, end);
 	const value = isLine ? raw.slice(2) : raw.slice(2, -2);

@@ -2,13 +2,16 @@
 // fast-dispatch decomposer) and the `isCodePathListener` predicate.
 // Run via: node --experimental-strip-types --no-warnings packages/compat-eslint/test/selector-analysis.test.ts
 
-const { isCodePathListener, decomposeSimple, UnsupportedSelectorError } = require('../lib/selector-analysis.js') as typeof import('../lib/selector-analysis.js');
+const { isCodePathListener, decomposeSimple, UnsupportedSelectorError } = require(
+	'../lib/selector-analysis.js',
+) as typeof import('../lib/selector-analysis.js');
 
 const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: string) {
 	if (cond) {
 		process.stdout.write('.');
-	} else {
+	}
+	else {
 		failures.push(name + (detail ? ' — ' + detail : ''));
 		process.stdout.write('F');
 	}
@@ -20,7 +23,10 @@ function check(name: string, cond: boolean, detail?: string) {
 	check('isCodePathListener: onCodePathStart', isCodePathListener('onCodePathStart'));
 	check('isCodePathListener: onCodePathEnd', isCodePathListener('onCodePathEnd'));
 	check('isCodePathListener: onCodePathSegmentStart', isCodePathListener('onCodePathSegmentStart'));
-	check('isCodePathListener: onUnreachableCodePathSegmentStart', isCodePathListener('onUnreachableCodePathSegmentStart'));
+	check(
+		'isCodePathListener: onUnreachableCodePathSegmentStart',
+		isCodePathListener('onUnreachableCodePathSegmentStart'),
+	);
 	check('isCodePathListener: rejects normal selector', !isCodePathListener('Identifier'));
 	check('isCodePathListener: rejects FunctionDeclaration', !isCodePathListener('FunctionDeclaration'));
 }
@@ -78,7 +84,8 @@ function wire(node: any): any {
 						stack.push(c);
 					}
 				}
-			} else if (v && typeof v === 'object' && typeof v.type === 'string') {
+			}
+			else if (v && typeof v === 'object' && typeof v.type === 'string') {
 				v.parent = cur;
 				stack.push(v);
 			}
@@ -91,7 +98,10 @@ function wire(node: any): any {
 
 {
 	const info = take(decomposeSimple('Identifier'));
-	check('decomp: Identifier types {Identifier}', info.types !== 'all' && info.types.has('Identifier') && info.types.size === 1);
+	check(
+		'decomp: Identifier types {Identifier}',
+		info.types !== 'all' && info.types.has('Identifier') && info.types.size === 1,
+	);
 	check('decomp: Identifier not isExit', !info.isExit);
 }
 
@@ -103,10 +113,13 @@ function wire(node: any): any {
 {
 	const infos = decomposeSimple('A, B, C');
 	check('decomp: matches list yields 3 entries', infos !== null && infos.length === 3);
-	check('decomp: matches list types', infos !== null
-		&& infos[0].types !== 'all' && infos[0].types.has('A')
-		&& infos[1].types !== 'all' && infos[1].types.has('B')
-		&& infos[2].types !== 'all' && infos[2].types.has('C'));
+	check(
+		'decomp: matches list types',
+		infos !== null
+			&& infos[0].types !== 'all' && infos[0].types.has('A')
+			&& infos[1].types !== 'all' && infos[1].types.has('B')
+			&& infos[2].types !== 'all' && infos[2].types.has('C'),
+	);
 }
 
 {
@@ -119,14 +132,13 @@ function wire(node: any): any {
 {
 	// Nested inside compound, `:matches(...)` collapses into the type set.
 	const info = take(decomposeSimple('Identifier:matches([name="x"], [name="y"])'));
-	check('decomp: compound + matches(attr-only) yields {Identifier}',
-		info.types !== 'all' && info.types.has('Identifier') && info.types.size === 1);
-	check('compound + matches filter accepts name=x',
-		info.filter!({ type: 'Identifier', name: 'x' }));
-	check('compound + matches filter accepts name=y',
-		info.filter!({ type: 'Identifier', name: 'y' }));
-	check('compound + matches filter rejects name=z',
-		!info.filter!({ type: 'Identifier', name: 'z' }));
+	check(
+		'decomp: compound + matches(attr-only) yields {Identifier}',
+		info.types !== 'all' && info.types.has('Identifier') && info.types.size === 1,
+	);
+	check('compound + matches filter accepts name=x', info.filter!({ type: 'Identifier', name: 'x' }));
+	check('compound + matches filter accepts name=y', info.filter!({ type: 'Identifier', name: 'y' }));
+	check('compound + matches filter rejects name=z', !info.filter!({ type: 'Identifier', name: 'z' }));
 }
 
 // --- Wildcard / class macros ------------------------------------------
@@ -138,12 +150,14 @@ function wire(node: any): any {
 
 {
 	const info = take(decomposeSimple(':function'));
-	check('decomp: :function expands to 3 fn types',
+	check(
+		'decomp: :function expands to 3 fn types',
 		info.types !== 'all'
-		&& info.types.has('FunctionDeclaration')
-		&& info.types.has('FunctionExpression')
-		&& info.types.has('ArrowFunctionExpression')
-		&& info.types.size === 3);
+			&& info.types.has('FunctionDeclaration')
+			&& info.types.has('FunctionExpression')
+			&& info.types.has('ArrowFunctionExpression')
+			&& info.types.size === 3,
+	);
 }
 
 {
@@ -188,8 +202,7 @@ function wire(node: any): any {
 	const info = take(decomposeSimple('Foo[bar.baz="x"]'));
 	check('attr dotted-path matches', info.filter!({ type: 'Foo', bar: { baz: 'x' } }));
 	check('attr dotted-path rejects', !info.filter!({ type: 'Foo', bar: { baz: 'y' } }));
-	check('attr dotted-path tolerates missing intermediate',
-		!info.filter!({ type: 'Foo' }));
+	check('attr dotted-path tolerates missing intermediate', !info.filter!({ type: 'Foo' }));
 }
 
 {
@@ -198,10 +211,8 @@ function wire(node: any): any {
 	// `Literal[raw=null]` selector used by `no-restricted-syntax` rules
 	// works because `Literal.raw === "null"` for the JS null literal.
 	const info = take(decomposeSimple('Literal[raw=null]'));
-	check('attr eq raw="null" matches the JS null literal',
-		info.filter!({ type: 'Literal', raw: 'null' }));
-	check('attr eq raw="null" rejects other literals',
-		!info.filter!({ type: 'Literal', raw: '42' }));
+	check('attr eq raw="null" matches the JS null literal', info.filter!({ type: 'Literal', raw: 'null' }));
+	check('attr eq raw="null" rejects other literals', !info.filter!({ type: 'Literal', raw: '42' }));
 }
 
 // --- :not -------------------------------------------------------------
@@ -215,12 +226,9 @@ function wire(node: any): any {
 
 {
 	const info = take(decomposeSimple('Foo:not(Bar)'));
-	check('Foo:not(Bar) types {Foo}',
-		info.types !== 'all' && info.types.has('Foo') && info.types.size === 1);
-	check('Foo:not(Bar) filter rejects parent.type Bar redundantly',
-		!info.filter!({ type: 'Bar' }));
-	check('Foo:not(Bar) filter accepts type Foo',
-		info.filter!({ type: 'Foo' }));
+	check('Foo:not(Bar) types {Foo}', info.types !== 'all' && info.types.has('Foo') && info.types.size === 1);
+	check('Foo:not(Bar) filter rejects parent.type Bar redundantly', !info.filter!({ type: 'Bar' }));
+	check('Foo:not(Bar) filter accepts type Foo', info.filter!({ type: 'Foo' }));
 }
 
 {
@@ -239,8 +247,7 @@ function wire(node: any): any {
 	const tree = wire({ type: 'Foo', body: { type: 'Bar' } });
 	const bar = tree.body;
 	check('Foo > Bar fires when parent is Foo', info.filter!(bar));
-	check('Foo > Bar rejects when parent is Other',
-		!info.filter!(wire({ type: 'Other', body: { type: 'Bar' } }).body));
+	check('Foo > Bar rejects when parent is Other', !info.filter!(wire({ type: 'Other', body: { type: 'Bar' } }).body));
 }
 
 {
@@ -422,8 +429,7 @@ function wire(node: any): any {
 
 {
 	const info = take(decomposeSimple('Foo > :not(Bar)'));
-	check('Foo > :not(Bar) types include {Foo}-anchored wildcard',
-		info.types === 'all');
+	check('Foo > :not(Bar) types include {Foo}-anchored wildcard', info.types === 'all');
 	const okTree = wire({ type: 'Foo', body: { type: 'Other' } });
 	const badTree = wire({ type: 'Foo', body: { type: 'Bar' } });
 	check('Foo > :not(Bar) accepts non-Bar child', info.filter!(okTree.body));
@@ -440,11 +446,13 @@ function wire(node: any): any {
 
 {
 	const info = take(decomposeSimple('Foo > :function'));
-	check('Foo > :function types is the 3-fn set',
+	check(
+		'Foo > :function types is the 3-fn set',
 		info.types !== 'all'
-		&& info.types.has('FunctionDeclaration')
-		&& info.types.has('FunctionExpression')
-		&& info.types.has('ArrowFunctionExpression'));
+			&& info.types.has('FunctionDeclaration')
+			&& info.types.has('FunctionExpression')
+			&& info.types.has('ArrowFunctionExpression'),
+	);
 }
 
 {
@@ -599,8 +607,7 @@ function wire(node: any): any {
 	const infos = decomposeSimple(':matches(A:not(B), C)');
 	check(':matches A:not(B), C expands per-branch', infos.length === 2);
 	const aInfo = infos.find(i => i.types !== 'all' && i.types.has('A'))!;
-	check('A:not(B) filter rejects when type is B (impossible) — accepts type A',
-		aInfo.filter!({ type: 'A' }));
+	check('A:not(B) filter rejects when type is B (impossible) — accepts type A', aInfo.filter!({ type: 'A' }));
 }
 
 // --- UnsupportedSelectorError + parse error throws -------------------
@@ -608,7 +615,10 @@ function wire(node: any): any {
 {
 	let threw = false;
 	let isUnsupported = false;
-	try { decomposeSimple('('); } catch (e: any) {
+	try {
+		decomposeSimple('(');
+	}
+	catch (e: any) {
 		threw = true;
 		isUnsupported = e instanceof UnsupportedSelectorError;
 	}
@@ -622,7 +632,10 @@ function wire(node: any): any {
 	// AST by feeding a class macro we don't recognise.
 	let threw = false;
 	let isUnsupported = false;
-	try { decomposeSimple(':bogus-class-macro'); } catch (e: any) {
+	try {
+		decomposeSimple(':bogus-class-macro');
+	}
+	catch (e: any) {
 		threw = true;
 		isUnsupported = e instanceof UnsupportedSelectorError;
 	}

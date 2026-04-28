@@ -5,13 +5,16 @@
 import * as ts from 'typescript';
 
 const lazy = require('../lib/lazy-estree.js') as typeof import('../lib/lazy-estree.js');
-const { predicateForTriggerSet, hasPredicate, tsScanTraverse } = require('../lib/ts-ast-scan.js') as typeof import('../lib/ts-ast-scan.js');
+const { predicateForTriggerSet, hasPredicate, tsScanTraverse } = require(
+	'../lib/ts-ast-scan.js',
+) as typeof import('../lib/ts-ast-scan.js');
 
 const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: string) {
 	if (cond) {
 		process.stdout.write('.');
-	} else {
+	}
+	else {
 		failures.push(name + (detail ? ' — ' + detail : ''));
 		process.stdout.write('F');
 	}
@@ -54,14 +57,16 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	try {
 		predicateForTriggerSet(['TSAsExpression']);
 		returned = true;
-	} catch {}
+	}
+	catch {}
 	check('predicateForTriggerSet: returns predicate for known types', returned);
 }
 {
 	let threw = false;
 	try {
 		predicateForTriggerSet(['TSAsExpression', 'NotARealType']);
-	} catch (e) {
+	}
+	catch (e) {
 		threw = (e as Error).name === 'UnsupportedSelectorError';
 	}
 	check('predicateForTriggerSet: throws UnsupportedSelectorError when missing', threw);
@@ -99,8 +104,10 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		['ImportDeclaration'],
 	);
 	check('order: 3 imports captured', entered.filter(t => t === 'ImportDeclaration').length === 3);
-	check('order: only ImportDeclarations entered (no Program in trigger set)',
-		entered.every(t => t === 'ImportDeclaration'));
+	check(
+		'order: only ImportDeclarations entered (no Program in trigger set)',
+		entered.every(t => t === 'ImportDeclaration'),
+	);
 }
 
 {
@@ -142,8 +149,10 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `declare function foo(): void; function bar() {}`;
 	const { entered } = scan(code, ['FunctionDeclaration']);
 	check('FunctionDeclaration: visits bar (has body)', entered.includes('FunctionDeclaration'));
-	check('FunctionDeclaration: visits exactly 1 (skips declare)',
-		entered.filter(t => t === 'FunctionDeclaration').length === 1);
+	check(
+		'FunctionDeclaration: visits exactly 1 (skips declare)',
+		entered.filter(t => t === 'FunctionDeclaration').length === 1,
+	);
 }
 
 // --- Materialised ESTree nodes have correct .type ------------------
@@ -152,7 +161,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `let v = (x as Foo);`;
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
-	const pred = predicateForTriggerSet(['TSAsExpression'])!;
+	const pred = predicateForTriggerSet(['TSAsExpression']);
 	const steps = tsScanTraverse(sf, pred, context);
 	check('materialised: 1 enter step', (steps as any[]).filter(s => s.phase === 1).length === 1);
 	const target = (steps as any[])[0].target;
@@ -169,33 +178,43 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 
 {
 	const types = scan(`export function foo() {}`, ['FunctionDeclaration']).entered;
-	check('export wrapper: FunctionDeclaration listener fires for `export function`',
+	check(
+		'export wrapper: FunctionDeclaration listener fires for `export function`',
 		types.includes('FunctionDeclaration'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	const types = scan(`export const x = 1;`, ['VariableDeclaration']).entered;
-	check('export wrapper: VariableDeclaration listener fires for `export const`',
+	check(
+		'export wrapper: VariableDeclaration listener fires for `export const`',
 		types.includes('VariableDeclaration'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	const types = scan(`export class C {}`, ['ClassDeclaration']).entered;
-	check('export wrapper: ClassDeclaration listener fires for `export class`',
+	check(
+		'export wrapper: ClassDeclaration listener fires for `export class`',
 		types.includes('ClassDeclaration'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	const types = scan(`export interface I {}`, ['TSInterfaceDeclaration']).entered;
-	check('export wrapper: TSInterfaceDeclaration listener fires for `export interface`',
+	check(
+		'export wrapper: TSInterfaceDeclaration listener fires for `export interface`',
 		types.includes('TSInterfaceDeclaration'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	const types = scan(`export type T = number;`, ['TSTypeAliasDeclaration']).entered;
-	check('export wrapper: TSTypeAliasDeclaration listener fires for `export type`',
+	check(
+		'export wrapper: TSTypeAliasDeclaration listener fires for `export type`',
 		types.includes('TSTypeAliasDeclaration'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 
 // --- Soundness: ChainExpression must dispatch inner MemberExpression / CallExpression --
@@ -204,23 +223,29 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 
 {
 	const types = scan(`let x = a?.b;`, ['MemberExpression']).entered;
-	check('chain: MemberExpression listener fires inside `a?.b`',
+	check(
+		'chain: MemberExpression listener fires inside `a?.b`',
 		types.includes('MemberExpression'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	const types = scan(`let x = a?.b();`, ['CallExpression']).entered;
-	check('chain: CallExpression listener fires inside `a?.b()`',
+	check(
+		'chain: CallExpression listener fires inside `a?.b()`',
 		types.includes('CallExpression'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	// Nested chain: outer ChainExpression wraps a CallExpression whose
 	// callee is a MemberExpression. Both inner nodes need to dispatch.
 	const types = scan(`let x = a?.b();`, ['MemberExpression', 'CallExpression']).entered;
-	check('chain: nested — both MemberExpression and CallExpression fire',
+	check(
+		'chain: nested — both MemberExpression and CallExpression fire',
 		types.includes('MemberExpression') && types.includes('CallExpression'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 
 // --- Soundness: UnaryExpression covers typeof / delete / void --------
@@ -230,21 +255,15 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 
 {
 	const types = scan(`let r = typeof x;`, ['UnaryExpression']).entered;
-	check('unary: typeof fires UnaryExpression',
-		types.includes('UnaryExpression'),
-		`got: [${types.join(', ')}]`);
+	check('unary: typeof fires UnaryExpression', types.includes('UnaryExpression'), `got: [${types.join(', ')}]`);
 }
 {
 	const types = scan(`delete x.y;`, ['UnaryExpression']).entered;
-	check('unary: delete fires UnaryExpression',
-		types.includes('UnaryExpression'),
-		`got: [${types.join(', ')}]`);
+	check('unary: delete fires UnaryExpression', types.includes('UnaryExpression'), `got: [${types.join(', ')}]`);
 }
 {
 	const types = scan(`void x;`, ['UnaryExpression']).entered;
-	check('unary: void fires UnaryExpression',
-		types.includes('UnaryExpression'),
-		`got: [${types.join(', ')}]`);
+	check('unary: void fires UnaryExpression', types.includes('UnaryExpression'), `got: [${types.join(', ')}]`);
 }
 
 // --- Soundness: ImportDefaultSpecifier only for default-style imports -
@@ -252,24 +271,30 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 {
 	// Default + named: should fire ImportDefaultSpecifier
 	const types = scan(`import a from 'x';`, ['ImportDefaultSpecifier']).entered;
-	check('import-default: `import a from "x"` fires ImportDefaultSpecifier',
+	check(
+		'import-default: `import a from "x"` fires ImportDefaultSpecifier',
 		types.includes('ImportDefaultSpecifier'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	// Named-only: ImportClause exists but has no `name` — must NOT fire
 	// ImportDefaultSpecifier (typescript-estree wouldn't emit one).
 	const types = scan(`import { a } from 'x';`, ['ImportDefaultSpecifier']).entered;
-	check('import-default: `import { a } from "x"` does NOT fire ImportDefaultSpecifier',
+	check(
+		'import-default: `import { a } from "x"` does NOT fire ImportDefaultSpecifier',
 		!types.includes('ImportDefaultSpecifier'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 {
 	// Bare side-effect: same — no default specifier
 	const types = scan(`import 'x';`, ['ImportDefaultSpecifier']).entered;
-	check('import-default: `import "x"` does NOT fire ImportDefaultSpecifier',
+	check(
+		'import-default: `import "x"` does NOT fire ImportDefaultSpecifier',
 		!types.includes('ImportDefaultSpecifier'),
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 
 // --- Predicate context filters (must mirror lazy-estree dispatch) ----
@@ -282,9 +307,11 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		['MethodDefinition'],
 	).entered;
 	const count = types.filter(t => t === 'MethodDefinition').length;
-	check('MethodDefinition: fires for class methods only (not object literal methods)',
+	check(
+		'MethodDefinition: fires for class methods only (not object literal methods)',
 		count === 1,
-		`got count=${count}, types=[${types.join(', ')}]`);
+		`got count=${count}, types=[${types.join(', ')}]`,
+	);
 }
 
 {
@@ -293,9 +320,11 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// listener on PropertyDefinition only fires on plain class fields.
 	const code = `class C { accessor a = 1; abstract b: number; foo = 2; }`;
 	const types = scan(code, ['PropertyDefinition']).entered;
-	check('PropertyDefinition: only fires on plain class fields',
+	check(
+		'PropertyDefinition: only fires on plain class fields',
 		types.length === 1 && types[0] === 'PropertyDefinition',
-		`got: [${types.join(', ')}]`);
+		`got: [${types.join(', ')}]`,
+	);
 }
 
 {
@@ -307,8 +336,10 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const pred = predicateForTriggerSet(['FunctionDeclaration']);
 	if (pred) {
 		const steps = tsScanTraverse(sf, pred, context);
-		check('TSDeclareFunction: predicate skips body-less function declarations',
-			(steps as any[]).filter(s => s.phase === 1).length === 0);
+		check(
+			'TSDeclareFunction: predicate skips body-less function declarations',
+			(steps as any[]).filter(s => s.phase === 1).length === 0,
+		);
 	}
 }
 
@@ -318,7 +349,8 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	let threw = false;
 	try {
 		predicateForTriggerSet(['NotARealType']);
-	} catch (e) {
+	}
+	catch (e) {
 		threw = (e as Error).name === 'UnsupportedSelectorError';
 	}
 	check('predicateForTriggerSet: unknown type throws', threw);
@@ -338,30 +370,24 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// Array/object NOT in pattern position must NOT trip pattern listeners.
 	const code = `let a = [1, 2]; let b = { x: 1 };`;
 	const types = scan(code, ['ArrayPattern', 'ObjectPattern']).entered;
-	check('ArrayPattern: NOT fired for literal in expression position',
-		!types.includes('ArrayPattern'));
-	check('ObjectPattern: NOT fired for literal in expression position',
-		!types.includes('ObjectPattern'));
+	check('ArrayPattern: NOT fired for literal in expression position', !types.includes('ArrayPattern'));
+	check('ObjectPattern: NOT fired for literal in expression position', !types.includes('ObjectPattern'));
 }
 
 {
 	// BindingPattern always fires pattern listener.
 	const code = `function f([a, b]: number[], { x }: { x: number }) {}`;
 	const types = scan(code, ['ArrayPattern', 'ObjectPattern']).entered;
-	check('ArrayPattern: fires for ArrayBindingPattern in param',
-		types.includes('ArrayPattern'));
-	check('ObjectPattern: fires for ObjectBindingPattern in param',
-		types.includes('ObjectPattern'));
+	check('ArrayPattern: fires for ArrayBindingPattern in param', types.includes('ArrayPattern'));
+	check('ObjectPattern: fires for ObjectBindingPattern in param', types.includes('ObjectPattern'));
 }
 
 {
 	// Array/object literal in destructuring assignment LHS → pattern.
 	const code = `let r; [r] = [1]; ({ r } = { r: 1 });`;
 	const types = scan(code, ['ArrayPattern', 'ObjectPattern']).entered;
-	check('ArrayPattern: fires for ArrayLiteral on assignment LHS',
-		types.includes('ArrayPattern'));
-	check('ObjectPattern: fires for ObjectLiteral on assignment LHS',
-		types.includes('ObjectPattern'));
+	check('ArrayPattern: fires for ArrayLiteral on assignment LHS', types.includes('ArrayPattern'));
+	check('ObjectPattern: fires for ObjectLiteral on assignment LHS', types.includes('ObjectPattern'));
 }
 
 {
@@ -379,9 +405,11 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const patterns = types.filter(t => t === 'ArrayPattern').length;
 	const exprs = types.filter(t => t === 'ArrayExpression').length;
 	// LHS: 1 outer + 2 inner ArrayPattern. RHS: 1 outer + 2 inner ArrayExpression.
-	check('Nested: 3 ArrayPattern (LHS) + 3 ArrayExpression (RHS)',
+	check(
+		'Nested: 3 ArrayPattern (LHS) + 3 ArrayExpression (RHS)',
 		patterns === 3 && exprs === 3,
-		`got patterns=${patterns}, exprs=${exprs}`);
+		`got patterns=${patterns}, exprs=${exprs}`,
+	);
 }
 
 // --- Property predicate (5 sources) ----------------------------------
@@ -392,8 +420,11 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const types = scan(code, ['Property']).entered;
 	const count = types.filter(t => t === 'Property').length;
 	// 4 properties: a:1 (PropertyAssignment), r (Shorthand), foo() (method), g (getter).
-	check('Property: fires for all 4 object-literal property forms',
-		count === 4, `got count=${count}, types=[${types.join(', ')}]`);
+	check(
+		'Property: fires for all 4 object-literal property forms',
+		count === 4,
+		`got count=${count}, types=[${types.join(', ')}]`,
+	);
 }
 
 {
@@ -401,8 +432,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `function f({ a, b }) {}`;
 	const types = scan(code, ['Property']).entered;
 	const count = types.filter(t => t === 'Property').length;
-	check('Property: fires for object-binding-pattern elements',
-		count === 2, `got count=${count}`);
+	check('Property: fires for object-binding-pattern elements', count === 2, `got count=${count}`);
 }
 
 {
@@ -411,8 +441,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const types = scan(code, ['MethodDefinition', 'Property']).entered;
 	const m = types.filter(t => t === 'MethodDefinition').length;
 	const p = types.filter(t => t === 'Property').length;
-	check('MethodDefinition vs Property: split correctly',
-		m === 1 && p === 1, `got M=${m}, P=${p}`);
+	check('MethodDefinition vs Property: split correctly', m === 1 && p === 1, `got M=${m}, P=${p}`);
 }
 
 // --- AssignmentPattern (parameter default + array binding default) ---
@@ -422,8 +451,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `function f(x = 1, y: string = 'a') {}`;
 	const types = scan(code, ['AssignmentPattern']).entered;
 	const count = types.filter(t => t === 'AssignmentPattern').length;
-	check('AssignmentPattern: fires for parameter defaults',
-		count === 2, `got count=${count}`);
+	check('AssignmentPattern: fires for parameter defaults', count === 2, `got count=${count}`);
 }
 
 {
@@ -433,8 +461,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `function f([a = 1, b = 2]) {}`;
 	const types = scan(code, ['AssignmentPattern']).entered;
 	const count = types.filter(t => t === 'AssignmentPattern').length;
-	check('AssignmentPattern: fires for array-binding defaults',
-		count === 2, `got count=${count}`);
+	check('AssignmentPattern: fires for array-binding defaults', count === 2, `got count=${count}`);
 }
 
 // --- RestElement (4 sources) -----------------------------------------
@@ -464,8 +491,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// Spread in pattern position (destructuring assignment with rest).
 	const code = `let r; [r, ...rest] = [1, 2, 3];`;
 	const types = scan(code, ['RestElement']).entered;
-	check('RestElement: fires for ...rest in array destructure',
-		types.includes('RestElement'));
+	check('RestElement: fires for ...rest in array destructure', types.includes('RestElement'));
 }
 
 {
@@ -474,8 +500,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const types = scan(code, ['SpreadElement', 'RestElement']).entered;
 	const s = types.filter(t => t === 'SpreadElement').length;
 	const r = types.filter(t => t === 'RestElement').length;
-	check('SpreadElement vs RestElement: split correctly',
-		s === 2 && r === 0, `got S=${s}, R=${r}`);
+	check('SpreadElement vs RestElement: split correctly', s === 2 && r === 0, `got S=${s}, R=${r}`);
 }
 
 // --- AssignmentExpression — `=` outside pattern position only -------
@@ -484,8 +509,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `let r; r = 1; r += 2;`;
 	const types = scan(code, ['AssignmentExpression']).entered;
 	const count = types.filter(t => t === 'AssignmentExpression').length;
-	check('AssignmentExpression: fires for plain `=` and `+=`',
-		count === 2, `got count=${count}`);
+	check('AssignmentExpression: fires for plain `=` and `+=`', count === 2, `got count=${count}`);
 }
 
 {
@@ -493,8 +517,10 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// The outer `=` is still AssignmentExpression (not AssignmentPattern).
 	const code = `let a; [a] = [1];`;
 	const types = scan(code, ['AssignmentExpression', 'AssignmentPattern']).entered;
-	check('AssignmentExpression: outer destructure `=` is still AssignmentExpression',
-		types.includes('AssignmentExpression'));
+	check(
+		'AssignmentExpression: outer destructure `=` is still AssignmentExpression',
+		types.includes('AssignmentExpression'),
+	);
 }
 
 // --- AccessorProperty / TSAbstractPropertyDefinition / TSAbstractAccessorProperty -
@@ -512,15 +538,14 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		'TSAbstractPropertyDefinition',
 		'TSAbstractAccessorProperty',
 	]).entered;
-	check('PropertyDefinition: fires for plain field only',
+	check(
+		'PropertyDefinition: fires for plain field only',
 		types.filter(t => t === 'PropertyDefinition').length === 1,
-		`PropertyDefinition count: ${types.filter(t => t === 'PropertyDefinition').length}`);
-	check('AccessorProperty: fires for accessor field',
-		types.includes('AccessorProperty'));
-	check('TSAbstractPropertyDefinition: fires for abstract field',
-		types.includes('TSAbstractPropertyDefinition'));
-	check('TSAbstractAccessorProperty: fires for abstract accessor',
-		types.includes('TSAbstractAccessorProperty'));
+		`PropertyDefinition count: ${types.filter(t => t === 'PropertyDefinition').length}`,
+	);
+	check('AccessorProperty: fires for accessor field', types.includes('AccessorProperty'));
+	check('TSAbstractPropertyDefinition: fires for abstract field', types.includes('TSAbstractPropertyDefinition'));
+	check('TSAbstractAccessorProperty: fires for abstract accessor', types.includes('TSAbstractAccessorProperty'));
 }
 
 // --- Decorator -------------------------------------------------------
@@ -536,8 +561,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	`;
 	const types = scan(code, ['Decorator']).entered;
 	const count = types.filter(t => t === 'Decorator').length;
-	check('Decorator: fires for class / property / method / parameter decorators',
-		count === 4, `got count=${count}`);
+	check('Decorator: fires for class / property / method / parameter decorators', count === 4, `got count=${count}`);
 }
 
 // --- TSParameterProperty + wrapper unwrap ----------------------------
@@ -549,12 +573,10 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// must both fire (covered by unwrapChain).
 	const code = `class C { constructor(public x: number, private y = 1) {} }`;
 	const types = scan(code, ['TSParameterProperty', 'AssignmentPattern']).entered;
-	check('TSParameterProperty: fires for `public x`',
-		types.includes('TSParameterProperty'));
+	check('TSParameterProperty: fires for `public x`', types.includes('TSParameterProperty'));
 	// `private y = 1` materialises as TSParameterProperty wrapping
 	// AssignmentPattern. unwrapChain dispatches both.
-	check('TSParameterProperty wrapper: inner AssignmentPattern fires too',
-		types.includes('AssignmentPattern'));
+	check('TSParameterProperty wrapper: inner AssignmentPattern fires too', types.includes('AssignmentPattern'));
 }
 
 // --- ExportNamedDeclaration / ExportDefaultDeclaration / ExportAllDeclaration -
@@ -563,62 +585,52 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// `export { a }` — SK.ExportDeclaration with NamedExports clause.
 	const code = `const a = 1; export { a };`;
 	const types = scan(code, ['ExportNamedDeclaration']).entered;
-	check('ExportNamedDeclaration: fires for `export { a }`',
-		types.includes('ExportNamedDeclaration'));
+	check('ExportNamedDeclaration: fires for `export { a }`', types.includes('ExportNamedDeclaration'));
 }
 
 {
 	// `export function foo() {}` — fixExports wrapper.
 	const code = `export function foo() {}`;
 	const types = scan(code, ['ExportNamedDeclaration']).entered;
-	check('ExportNamedDeclaration: fires for `export function`',
-		types.includes('ExportNamedDeclaration'));
+	check('ExportNamedDeclaration: fires for `export function`', types.includes('ExportNamedDeclaration'));
 }
 
 {
 	// `export * from 'x'` — ExportAllDeclaration.
 	const code = `export * from 'x';`;
 	const types = scan(code, ['ExportAllDeclaration', 'ExportNamedDeclaration']).entered;
-	check('ExportAllDeclaration: fires for `export * from`',
-		types.includes('ExportAllDeclaration'));
-	check('ExportNamedDeclaration: does NOT fire for `export *`',
-		!types.includes('ExportNamedDeclaration'));
+	check('ExportAllDeclaration: fires for `export * from`', types.includes('ExportAllDeclaration'));
+	check('ExportNamedDeclaration: does NOT fire for `export *`', !types.includes('ExportNamedDeclaration'));
 }
 
 {
 	// `export * as ns from 'x'` — also ExportAllDeclaration.
 	const code = `export * as ns from 'x';`;
 	const types = scan(code, ['ExportAllDeclaration']).entered;
-	check('ExportAllDeclaration: fires for `export * as ns`',
-		types.includes('ExportAllDeclaration'));
+	check('ExportAllDeclaration: fires for `export * as ns`', types.includes('ExportAllDeclaration'));
 }
 
 {
 	// `export default <expr>` — ExportDefaultDeclaration.
 	const code = `export default 42;`;
 	const types = scan(code, ['ExportDefaultDeclaration']).entered;
-	check('ExportDefaultDeclaration: fires for `export default <expr>`',
-		types.includes('ExportDefaultDeclaration'));
+	check('ExportDefaultDeclaration: fires for `export default <expr>`', types.includes('ExportDefaultDeclaration'));
 }
 
 {
 	// `export default function foo() {}` — fixExports wrapper as default.
 	const code = `export default function foo() {}`;
 	const types = scan(code, ['ExportDefaultDeclaration', 'FunctionDeclaration']).entered;
-	check('ExportDefaultDeclaration: fires for `export default function`',
-		types.includes('ExportDefaultDeclaration'));
-	check('FunctionDeclaration: inner still fires under unwrapChain',
-		types.includes('FunctionDeclaration'));
+	check('ExportDefaultDeclaration: fires for `export default function`', types.includes('ExportDefaultDeclaration'));
+	check('FunctionDeclaration: inner still fires under unwrapChain', types.includes('FunctionDeclaration'));
 }
 
 {
 	// `export = expr` — TSExportAssignment, NOT ExportDefaultDeclaration.
 	const code = `export = { a: 1 };`;
 	const types = scan(code, ['ExportDefaultDeclaration', 'TSExportAssignment']).entered;
-	check('ExportDefaultDeclaration: does NOT fire for `export =`',
-		!types.includes('ExportDefaultDeclaration'));
-	check('TSExportAssignment: fires for `export =`',
-		types.includes('TSExportAssignment'));
+	check('ExportDefaultDeclaration: does NOT fire for `export =`', !types.includes('ExportDefaultDeclaration'));
+	check('TSExportAssignment: fires for `export =`', types.includes('TSExportAssignment'));
 }
 
 // --- TSTypeQuery / TSImportType — `typeof import('x')` wrapper ------
@@ -636,28 +648,23 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// listeners must fire (unwrapChain handles the wrap).
 	const code = `let x: typeof import('x');`;
 	const types = scan(code, ['TSTypeQuery', 'TSImportType']).entered;
-	check('TSTypeQuery: fires for `typeof import(...)` (wrapper)',
-		types.includes('TSTypeQuery'));
-	check('TSImportType: inner fires too via unwrapChain',
-		types.includes('TSImportType'));
+	check('TSTypeQuery: fires for `typeof import(...)` (wrapper)', types.includes('TSTypeQuery'));
+	check('TSImportType: inner fires too via unwrapChain', types.includes('TSImportType'));
 }
 
 {
 	// `import('x')` (in type position, no typeof) — just TSImportType.
 	const code = `let x: import('x');`;
 	const types = scan(code, ['TSTypeQuery', 'TSImportType']).entered;
-	check('TSImportType: fires for `import(...)` without typeof',
-		types.includes('TSImportType'));
-	check('TSTypeQuery: does NOT fire for plain `import(...)`',
-		!types.includes('TSTypeQuery'));
+	check('TSImportType: fires for `import(...)` without typeof', types.includes('TSImportType'));
+	check('TSTypeQuery: does NOT fire for plain `import(...)`', !types.includes('TSTypeQuery'));
 }
 
 // --- ImportExpression (dynamic `import()` as expression) -------------
 
 {
 	const types = scan(`async function f() { return await import('x'); }`, ['ImportExpression']).entered;
-	check('ImportExpression: fires for dynamic import() as expression',
-		types.includes('ImportExpression'));
+	check('ImportExpression: fires for dynamic import() as expression', types.includes('ImportExpression'));
 }
 
 {
@@ -665,8 +672,11 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const types = scan(`f(); import('x');`, ['CallExpression', 'ImportExpression']).entered;
 	const calls = types.filter(t => t === 'CallExpression').length;
 	const imports = types.filter(t => t === 'ImportExpression').length;
-	check('CallExpression vs ImportExpression: split correctly',
-		calls === 1 && imports === 1, `got CE=${calls}, IE=${imports}`);
+	check(
+		'CallExpression vs ImportExpression: split correctly',
+		calls === 1 && imports === 1,
+		`got CE=${calls}, IE=${imports}`,
+	);
 }
 
 // --- TSDeclareFunction (body-less function declaration) -------------
@@ -674,10 +684,8 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 {
 	const code = `declare function foo(): void; function bar() {}`;
 	const types = scan(code, ['TSDeclareFunction', 'FunctionDeclaration']).entered;
-	check('TSDeclareFunction: fires for `declare function`',
-		types.includes('TSDeclareFunction'));
-	check('FunctionDeclaration: fires for body-having declaration',
-		types.includes('FunctionDeclaration'));
+	check('TSDeclareFunction: fires for `declare function`', types.includes('TSDeclareFunction'));
+	check('FunctionDeclaration: fires for body-having declaration', types.includes('FunctionDeclaration'));
 }
 
 // --- ChainExpression — outermost only --------------------------------
@@ -687,16 +695,14 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// access.
 	const types = scan(`let r = a?.b;`, ['ChainExpression']).entered;
 	const count = types.filter(t => t === 'ChainExpression').length;
-	check('ChainExpression: fires once for `a?.b`',
-		count === 1, `got count=${count}`);
+	check('ChainExpression: fires once for `a?.b`', count === 1, `got count=${count}`);
 }
 
 {
 	// Multi-level chain: `a?.b.c` — ChainExpression fires ONLY on outermost.
 	const types = scan(`let r = a?.b.c;`, ['ChainExpression']).entered;
 	const count = types.filter(t => t === 'ChainExpression').length;
-	check('ChainExpression: fires exactly once for `a?.b.c` (outermost only)',
-		count === 1, `got count=${count}`);
+	check('ChainExpression: fires exactly once for `a?.b.c` (outermost only)', count === 1, `got count=${count}`);
 }
 
 {
@@ -704,16 +710,14 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// (CallExpression).
 	const types = scan(`let r = a?.b();`, ['ChainExpression']).entered;
 	const count = types.filter(t => t === 'ChainExpression').length;
-	check('ChainExpression: fires once for `a?.b()` (outermost call)',
-		count === 1, `got count=${count}`);
+	check('ChainExpression: fires once for `a?.b()` (outermost call)', count === 1, `got count=${count}`);
 }
 
 {
 	// Two SEPARATE chains in one expression — each fires its own ChainExpression.
 	const types = scan(`let r = a?.b + c?.d;`, ['ChainExpression']).entered;
 	const count = types.filter(t => t === 'ChainExpression').length;
-	check('ChainExpression: fires twice for two separate chains',
-		count === 2, `got count=${count}`);
+	check('ChainExpression: fires twice for two separate chains', count === 2, `got count=${count}`);
 }
 
 {
@@ -721,15 +725,13 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// extends the chain.
 	const types = scan(`let r = a!.b?.c;`, ['ChainExpression']).entered;
 	const count = types.filter(t => t === 'ChainExpression').length;
-	check('ChainExpression: fires once for `a!.b?.c`',
-		count === 1, `got count=${count}`);
+	check('ChainExpression: fires once for `a!.b?.c`', count === 1, `got count=${count}`);
 }
 
 {
 	// No chain — non-optional access shouldn't fire ChainExpression.
 	const types = scan(`let r = a.b.c;`, ['ChainExpression']).entered;
-	check('ChainExpression: does NOT fire for non-optional access',
-		!types.includes('ChainExpression'));
+	check('ChainExpression: does NOT fire for non-optional access', !types.includes('ChainExpression'));
 }
 
 {
@@ -740,8 +742,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	// ChainExpression wrapping outer MemberExpression; unwrapChain emits
 	// MemberExpression for it. Then inner ?.b is also visited as plain
 	// MemberExpression after outer's processing rewrote its cache.)
-	check('MemberExpression: fires for both .b and .c in `a?.b.c`',
-		count === 2, `got count=${count}`);
+	check('MemberExpression: fires for both .b and .c in `a?.b.c`', count === 2, `got count=${count}`);
 }
 
 // --- TSAbstractMethodDefinition --------------------------------------
@@ -752,12 +753,12 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		abstract bar(): void;
 	}`;
 	const types = scan(code, ['MethodDefinition', 'TSAbstractMethodDefinition']).entered;
-	check('MethodDefinition: fires for non-abstract method',
-		types.includes('MethodDefinition'));
-	check('TSAbstractMethodDefinition: fires for abstract method',
-		types.includes('TSAbstractMethodDefinition'));
-	check('MethodDefinition: does NOT also fire on abstract method',
-		types.filter(t => t === 'MethodDefinition').length === 1);
+	check('MethodDefinition: fires for non-abstract method', types.includes('MethodDefinition'));
+	check('TSAbstractMethodDefinition: fires for abstract method', types.includes('TSAbstractMethodDefinition'));
+	check(
+		'MethodDefinition: does NOT also fire on abstract method',
+		types.filter(t => t === 'MethodDefinition').length === 1,
+	);
 }
 
 // --- ClassBody (drilled in via unwrapChain) -------------------------
@@ -767,8 +768,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `class A {} const B = class {};`;
 	const types = scan(code, ['ClassBody']).entered;
 	const count = types.filter(t => t === 'ClassBody').length;
-	check('ClassBody: fires for ClassDeclaration AND ClassExpression',
-		count === 2, `got count=${count}`);
+	check('ClassBody: fires for ClassDeclaration AND ClassExpression', count === 2, `got count=${count}`);
 }
 
 {
@@ -777,9 +777,11 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const { entered } = scan(`class C { foo() {} }`, ['ClassDeclaration', 'ClassBody']);
 	const cdIdx = entered.indexOf('ClassDeclaration');
 	const cbIdx = entered.indexOf('ClassBody');
-	check('ClassDeclaration enters before ClassBody (parent → child)',
+	check(
+		'ClassDeclaration enters before ClassBody (parent → child)',
 		cdIdx >= 0 && cbIdx >= 0 && cdIdx < cbIdx,
-		`order: [${entered.join(', ')}]`);
+		`order: [${entered.join(', ')}]`,
+	);
 }
 
 // --- StaticBlock -----------------------------------------------------
@@ -787,16 +789,14 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 {
 	const code = `class C { static { console.log('init'); } }`;
 	const types = scan(code, ['StaticBlock']).entered;
-	check('StaticBlock: fires for `class C { static {} }`',
-		types.includes('StaticBlock'));
+	check('StaticBlock: fires for `class C { static {} }`', types.includes('StaticBlock'));
 }
 
 {
 	// StaticBlock should NOT fire for non-static class methods or fields.
 	const code = `class C { static foo = 1; static bar() {} }`;
 	const types = scan(code, ['StaticBlock']).entered;
-	check('StaticBlock: does NOT fire for `static` field/method',
-		!types.includes('StaticBlock'));
+	check('StaticBlock: does NOT fire for `static` field/method', !types.includes('StaticBlock'));
 }
 
 // --- MetaProperty ----------------------------------------------------
@@ -804,15 +804,13 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 {
 	const code = `function f() { return new.target; }`;
 	const types = scan(code, ['MetaProperty']).entered;
-	check('MetaProperty: fires for `new.target`',
-		types.includes('MetaProperty'));
+	check('MetaProperty: fires for `new.target`', types.includes('MetaProperty'));
 }
 
 {
 	const code = `let x = import.meta.url;`;
 	const types = scan(code, ['MetaProperty']).entered;
-	check('MetaProperty: fires for `import.meta`',
-		types.includes('MetaProperty'));
+	check('MetaProperty: fires for `import.meta`', types.includes('MetaProperty'));
 }
 
 {
@@ -820,14 +818,15 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const code = `let x = import.meta;`;
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
-	const pred = predicateForTriggerSet(['MetaProperty'])!;
+	const pred = predicateForTriggerSet(['MetaProperty']);
 	const steps = tsScanTraverse(sf, pred, context);
 	const target = (steps as any[])[0]?.target;
 	check('MetaProperty: target.type === MetaProperty', target?.type === 'MetaProperty');
-	check('MetaProperty: target.meta is Identifier "import"',
-		target?.meta?.type === 'Identifier' && target.meta.name === 'import');
-	check('MetaProperty: target.property is Identifier "meta"',
-		target?.property?.type === 'Identifier');
+	check(
+		'MetaProperty: target.meta is Identifier "import"',
+		target?.meta?.type === 'Identifier' && target.meta.name === 'import',
+	);
+	check('MetaProperty: target.property is Identifier "meta"', target?.property?.type === 'Identifier');
 }
 
 console.log();

@@ -54,7 +54,10 @@ const pluginRuleLoaders = new Map<string, ((ruleName: string) => ESLint.Rule.Rul
 const RULE_DIR_CANDIDATES = ['dist/rules', 'lib/rules', 'rules', 'build/rules', 'src/rules'];
 const RULE_FILE_EXTS = ['.js', '.cjs'];
 
-function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName: string) => ESLint.Rule.RuleModule | undefined) | null {
+function detectRuleLoader(
+	pluginName: string,
+	probeRuleName: string,
+): ((ruleName: string) => ESLint.Rule.RuleModule | undefined) | null {
 	let pkgRoot: string;
 	try {
 		pkgRoot = path.dirname(require.resolve(`${pluginName}/package.json`));
@@ -89,12 +92,17 @@ function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName
 			// has an empty url and DevTools hides the frame as native.
 			const initKey = JSON.stringify(pluginName + ':init');
 			const probeAbs = path.join(pkgRoot, dir, probeRuleName + ext);
-			(new Function(
+			new Function(
 				'warm',
 				`({ ${initKey}: () => warm() })[${initKey}]();\n//# sourceURL=tsslint-rule-loader/${pluginName}/init.js`,
 			)(
-				() => { try { require(probeAbs); } catch {} },
-			));
+				() => {
+					try {
+						require(probeAbs);
+					}
+					catch {}
+				},
+			);
 			// Per-rule named thunk. NamedEvaluation on a computed
 			// property key (`{ [name]: () => ... }`) sets
 			// `Function.prototype.name` at runtime — visible to stack
@@ -104,7 +112,7 @@ function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName
 			// with `new Function`, baking the rule name in as a string
 			// literal. Same trick ESLint core's `LazyLoadingRuleMap`
 			// achieves with static-keyed object literals.
-			return (ruleName) => {
+			return ruleName => {
 				const filePath = path.join(pkgRoot, dir, ruleName + ext);
 				const key = JSON.stringify(ruleName);
 				const thunk = new Function(

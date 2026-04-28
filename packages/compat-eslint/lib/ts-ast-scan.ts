@@ -18,7 +18,7 @@
 // don't pre-build ancestors either.
 
 import * as ts from 'typescript';
-import { GENERIC_TS_NODE_MARKER, materialize, type ConvertContext } from './lazy-estree';
+import { type ConvertContext, GENERIC_TS_NODE_MARKER, materialize } from './lazy-estree';
 import { UnsupportedSelectorError } from './selector-analysis';
 
 const SK = ts.SyntaxKind;
@@ -43,16 +43,22 @@ function makeStep(target: unknown, phase: 1 | 2): VisitStep {
 // hits the head is none of these and the chain is just [target] — visit's
 // hot loop short-circuits that case to skip the array allocation.
 const WRAPPER_HEAD_TYPES = new Set<string>([
-	'ExportNamedDeclaration', 'ExportDefaultDeclaration',
-	'ChainExpression', 'TSParameterProperty',
-	'TSTypeQuery', 'ClassDeclaration', 'ClassExpression',
-	'TSInterfaceDeclaration', 'TSEnumDeclaration',
+	'ExportNamedDeclaration',
+	'ExportDefaultDeclaration',
+	'ChainExpression',
+	'TSParameterProperty',
+	'TSTypeQuery',
+	'ClassDeclaration',
+	'ClassExpression',
+	'TSInterfaceDeclaration',
+	'TSEnumDeclaration',
 	// Method-shaped wrappers whose `.value` is a FunctionExpression /
 	// MethodFunctionExpressionNode that CodePathAnalyzer must enter to
 	// open a new code path. Without this, the inner method's `return`
 	// poisons reachability of the surrounding scope.
 	'Property',
-	'MethodDefinition', 'TSAbstractMethodDefinition',
+	'MethodDefinition',
+	'TSAbstractMethodDefinition',
 ]);
 
 type Predicate = (n: ts.Node) => boolean;
@@ -123,8 +129,10 @@ function chainHasQuestionDot(n: ts.Node): boolean {
 	return false;
 }
 function parentExtendsChainOf(parent: ts.Node, child: ts.Node): boolean {
-	if (parent.kind === SK.PropertyAccessExpression
-		|| parent.kind === SK.ElementAccessExpression) {
+	if (
+		parent.kind === SK.PropertyAccessExpression
+		|| parent.kind === SK.ElementAccessExpression
+	) {
 		return (parent as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression === child;
 	}
 	if (parent.kind === SK.CallExpression) {
@@ -136,9 +144,11 @@ function parentExtendsChainOf(parent: ts.Node, child: ts.Node): boolean {
 	return false;
 }
 function isOutermostOptionalChain(n: ts.Node): boolean {
-	if (n.kind !== SK.PropertyAccessExpression
+	if (
+		n.kind !== SK.PropertyAccessExpression
 		&& n.kind !== SK.ElementAccessExpression
-		&& n.kind !== SK.CallExpression) {
+		&& n.kind !== SK.CallExpression
+	) {
 		return false;
 	}
 	if (!chainHasQuestionDot(n)) return false;
@@ -169,9 +179,11 @@ function hasParameterPropertyModifier(n: ts.Node): boolean {
 	const ms = (n as { modifiers?: ReadonlyArray<ts.ModifierLike> }).modifiers;
 	if (!ms) return false;
 	for (const m of ms) {
-		if (m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword
+		if (
+			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword
 			|| m.kind === SK.ProtectedKeyword || m.kind === SK.ReadonlyKeyword
-			|| m.kind === SK.OverrideKeyword) {
+			|| m.kind === SK.OverrideKeyword
+		) {
 			return true;
 		}
 	}
@@ -204,13 +216,15 @@ function isInPatternPosition(tsNode: ts.Node): boolean {
 		// Pattern-transparent: keep walking up. The shape of `cur` may
 		// itself be a literal/spread that hasn't yet decided whether it's
 		// expression or pattern — its ancestors decide.
-		if (p.kind === SK.ArrayLiteralExpression
+		if (
+			p.kind === SK.ArrayLiteralExpression
 			|| p.kind === SK.ObjectLiteralExpression
 			|| p.kind === SK.SpreadElement
 			|| p.kind === SK.SpreadAssignment
 			|| p.kind === SK.PropertyAssignment
 			|| p.kind === SK.ShorthandPropertyAssignment
-			|| p.kind === SK.ParenthesizedExpression) {
+			|| p.kind === SK.ParenthesizedExpression
+		) {
 			cur = p;
 			continue;
 		}
@@ -267,7 +281,8 @@ const PREDICATES: Record<string, Predicate> = {
 	// fire here. Without this, `for (let key in obj)` doesn't dispatch a
 	// VariableDeclaration enter event, and prefer-const's
 	// `VariableDeclaration` listener never sees the for-in let binding.
-	'VariableDeclaration': n => n.kind === SK.VariableStatement
+	'VariableDeclaration': n =>
+		n.kind === SK.VariableStatement
 		|| (n.kind === SK.VariableDeclarationList && n.parent?.kind !== SK.VariableStatement),
 	'VariableDeclarator': n => n.kind === SK.VariableDeclaration,
 
@@ -287,7 +302,8 @@ const PREDICATES: Record<string, Predicate> = {
 	// no-loop-func, prefer-arrow-callback) gates visit() out and never
 	// fires on object/class method bodies — even though the chain expansion
 	// would emit the FunctionExpression enter event.
-	'FunctionExpression': n => n.kind === SK.FunctionExpression
+	'FunctionExpression': n =>
+		n.kind === SK.FunctionExpression
 		|| n.kind === SK.MethodDeclaration
 		|| n.kind === SK.Constructor
 		|| n.kind === SK.GetAccessor
@@ -308,44 +324,53 @@ const PREDICATES: Record<string, Predicate> = {
 	// MethodDeclaration / Constructor / GetAccessor / SetAccessor outside
 	// an object literal materialise as MethodDefinition; inside an object
 	// literal they become Property{method:true} or Property{kind:'get'/'set'}.
-	'MethodDefinition': n => (
-		n.kind === SK.MethodDeclaration || n.kind === SK.Constructor
-		|| n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
-	) && n.parent?.kind !== SK.ObjectLiteralExpression
+	'MethodDefinition': n =>
+		(
+			n.kind === SK.MethodDeclaration || n.kind === SK.Constructor
+			|| n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
+		) && n.parent?.kind !== SK.ObjectLiteralExpression
 		&& !hasModifier(n, SK.AbstractKeyword),
 	// `abstract foo();` (body-less abstract method) materialises as
 	// TSAbstractMethodDefinition.
-	'TSAbstractMethodDefinition': n => (
-		n.kind === SK.MethodDeclaration || n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
-	) && n.parent?.kind !== SK.ObjectLiteralExpression
+	'TSAbstractMethodDefinition': n =>
+		(
+			n.kind === SK.MethodDeclaration || n.kind === SK.GetAccessor || n.kind === SK.SetAccessor
+		) && n.parent?.kind !== SK.ObjectLiteralExpression
 		&& hasModifier(n, SK.AbstractKeyword),
 
 	// PropertyDeclaration without abstract/accessor modifiers materialises
 	// as PropertyDefinition. With modifiers it splits into AccessorProperty,
 	// TSAbstractPropertyDefinition, TSAbstractAccessorProperty.
-	'PropertyDefinition': n => n.kind === SK.PropertyDeclaration
+	'PropertyDefinition': n =>
+		n.kind === SK.PropertyDeclaration
 		&& !hasAbstractModifier(n) && !hasAccessorModifier(n),
-	'AccessorProperty': n => n.kind === SK.PropertyDeclaration
+	'AccessorProperty': n =>
+		n.kind === SK.PropertyDeclaration
 		&& hasAccessorModifier(n) && !hasAbstractModifier(n),
-	'TSAbstractPropertyDefinition': n => n.kind === SK.PropertyDeclaration
+	'TSAbstractPropertyDefinition': n =>
+		n.kind === SK.PropertyDeclaration
 		&& hasAbstractModifier(n) && !hasAccessorModifier(n),
-	'TSAbstractAccessorProperty': n => n.kind === SK.PropertyDeclaration
+	'TSAbstractAccessorProperty': n =>
+		n.kind === SK.PropertyDeclaration
 		&& hasAbstractModifier(n) && hasAccessorModifier(n),
 
 	// Class-constructor parameter properties (`constructor(public x: number)`)
 	// wrap the parameter into TSParameterProperty.
-	'TSParameterProperty': n => n.kind === SK.Parameter
+	'TSParameterProperty': n =>
+		n.kind === SK.Parameter
 		&& hasParameterPropertyModifier(n),
 
 	// --- Decorators ---------------------------------------------------
 	'Decorator': n => n.kind === SK.Decorator,
 
 	// --- Expressions --------------------------------------------------
-	'BinaryExpression': n => n.kind === SK.BinaryExpression
+	'BinaryExpression': n =>
+		n.kind === SK.BinaryExpression
 		&& (n as ts.BinaryExpression).operatorToken.kind !== SK.CommaToken
 		&& !LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind)
 		&& !ASSIGN_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
-	'LogicalExpression': n => n.kind === SK.BinaryExpression
+	'LogicalExpression': n =>
+		n.kind === SK.BinaryExpression
 		&& LOGICAL_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
 	// SequenceExpression matches `BinaryExpression(',')` BUT only the
 	// outermost: nested `1,2,3` parses as `BE(BE(1,2,','),3,',')` and
@@ -375,28 +400,33 @@ const PREDICATES: Record<string, Predicate> = {
 	// destructure is AssignmentPattern, not AssignmentExpression. Compound
 	// assignments (`+=`, `||=`, …) are always AssignmentExpression — they
 	// don't appear in pattern position.
-	'AssignmentExpression': n => n.kind === SK.BinaryExpression
+	'AssignmentExpression': n =>
+		n.kind === SK.BinaryExpression
 		&& ASSIGN_OPS.has((n as ts.BinaryExpression).operatorToken.kind),
 	// PrefixUnaryExpression with !/+/-/~  AND  TypeOfExpression /
 	// DeleteExpression / VoidExpression all collapse to UnaryExpression in
 	// ESTree. The latter three are their own SyntaxKinds in TS AST.
-	'UnaryExpression': n => (n.kind === SK.PrefixUnaryExpression
+	'UnaryExpression': n =>
+		(n.kind === SK.PrefixUnaryExpression
 			&& isUnaryOp((n as ts.PrefixUnaryExpression).operator))
 		|| n.kind === SK.TypeOfExpression
 		|| n.kind === SK.DeleteExpression
 		|| n.kind === SK.VoidExpression,
-	'UpdateExpression': n => (n.kind === SK.PrefixUnaryExpression
-		&& isUpdateOp((n as ts.PrefixUnaryExpression).operator))
+	'UpdateExpression': n =>
+		(n.kind === SK.PrefixUnaryExpression
+			&& isUpdateOp((n as ts.PrefixUnaryExpression).operator))
 		|| n.kind === SK.PostfixUnaryExpression,
 	// Plain function call. Dynamic `import('x')` is also SK.CallExpression
 	// but lazy-estree converts it to ImportExpression — predicate matches
 	// either way; dispatchFast filters by `target.type` so a CallExpression
 	// listener won't fire on an ImportExpression node.
-	'CallExpression': n => n.kind === SK.CallExpression
+	'CallExpression': n =>
+		n.kind === SK.CallExpression
 		&& (n as ts.CallExpression).expression.kind !== SK.ImportKeyword,
 	// Dynamic `import('x')` as expression — SK.CallExpression with
 	// ImportKeyword as expression.
-	'ImportExpression': n => n.kind === SK.CallExpression
+	'ImportExpression': n =>
+		n.kind === SK.CallExpression
 		&& (n as ts.CallExpression).expression.kind === SK.ImportKeyword,
 	// Outermost optional-chain root (lazy-estree wraps only the outermost).
 	'ChainExpression': isOutermostOptionalChain,
@@ -413,7 +443,8 @@ const PREDICATES: Record<string, Predicate> = {
 	// SpreadElement vs RestElement: same TS kinds (SK.SpreadElement /
 	// SpreadAssignment), split by pattern context. SpreadElement only in
 	// expression position; RestElement only in pattern position.
-	'SpreadElement': n => (n.kind === SK.SpreadElement || n.kind === SK.SpreadAssignment)
+	'SpreadElement': n =>
+		(n.kind === SK.SpreadElement || n.kind === SK.SpreadAssignment)
 		&& !isInPatternPosition(n),
 
 	// --- Array / Object — context-sensitive ---------------------------
@@ -422,15 +453,18 @@ const PREDICATES: Record<string, Predicate> = {
 	// literal in pattern position.
 	'ArrayExpression': n => n.kind === SK.ArrayLiteralExpression && !isInPatternPosition(n),
 	'ObjectExpression': n => n.kind === SK.ObjectLiteralExpression && !isInPatternPosition(n),
-	'ArrayPattern': n => n.kind === SK.ArrayBindingPattern
+	'ArrayPattern': n =>
+		n.kind === SK.ArrayBindingPattern
 		|| (n.kind === SK.ArrayLiteralExpression && isInPatternPosition(n)),
-	'ObjectPattern': n => n.kind === SK.ObjectBindingPattern
+	'ObjectPattern': n =>
+		n.kind === SK.ObjectBindingPattern
 		|| (n.kind === SK.ObjectLiteralExpression && isInPatternPosition(n)),
 
 	// Property: PropertyAssignment / ShorthandPropertyAssignment / methods
 	// inside object literal / BindingElement inside ObjectBindingPattern
 	// (for `{a, b}` destructuring patterns).
-	'Property': n => n.kind === SK.PropertyAssignment
+	'Property': n =>
+		n.kind === SK.PropertyAssignment
 		|| n.kind === SK.ShorthandPropertyAssignment
 		|| ((n.kind === SK.MethodDeclaration || n.kind === SK.GetAccessor || n.kind === SK.SetAccessor)
 			&& n.parent?.kind === SK.ObjectLiteralExpression)
@@ -546,7 +580,8 @@ const PREDICATES: Record<string, Predicate> = {
 	// `typeof import('x')` in TSTypeQuery as well (TSImportType inner).
 	// Match both ts.SyntaxKinds; unwrapChain expands the wrapping case so
 	// listeners on the inner TSImportType still fire.
-	'TSTypeQuery': n => n.kind === SK.TypeQuery
+	'TSTypeQuery': n =>
+		n.kind === SK.TypeQuery
 		|| (n.kind === SK.ImportType && (n as ts.ImportTypeNode).isTypeOf),
 	'TSImportType': n => n.kind === SK.ImportType,
 	'TSLiteralType': n => n.kind === SK.LiteralType,
@@ -569,7 +604,8 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSModuleBlock': n => n.kind === SK.ModuleBlock,
 	'TSImportEqualsDeclaration': n => n.kind === SK.ImportEqualsDeclaration,
 	// TSExportAssignment: only `export = <expr>` (NOT `export default`).
-	'TSExportAssignment': n => n.kind === SK.ExportAssignment
+	'TSExportAssignment': n =>
+		n.kind === SK.ExportAssignment
 		&& !!(n as ts.ExportAssignment).isExportEquals,
 	'TSExternalModuleReference': n => n.kind === SK.ExternalModuleReference,
 	'TSNamespaceExportDeclaration': n => n.kind === SK.NamespaceExportDeclaration,
@@ -586,13 +622,16 @@ const PREDICATES: Record<string, Predicate> = {
 	// TSClassImplements (`class C implements X`) or TSInterfaceHeritage
 	// (`interface I extends X`) depending on the grandparent. Outside a
 	// HeritageClause it's TSInstantiationExpression (`Foo<T>` as a value).
-	'TSInstantiationExpression': n => n.kind === SK.ExpressionWithTypeArguments
+	'TSInstantiationExpression': n =>
+		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind !== SK.HeritageClause,
-	'TSClassImplements': n => n.kind === SK.ExpressionWithTypeArguments
+	'TSClassImplements': n =>
+		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind === SK.HeritageClause
 		&& (n.parent.parent?.kind === SK.ClassDeclaration
 			|| n.parent.parent?.kind === SK.ClassExpression),
-	'TSInterfaceHeritage': n => n.kind === SK.ExpressionWithTypeArguments
+	'TSInterfaceHeritage': n =>
+		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind === SK.HeritageClause
 		&& n.parent.parent?.kind === SK.InterfaceDeclaration,
 
@@ -651,8 +690,13 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TemplateLiteral': [SK.TemplateExpression, SK.NoSubstitutionTemplateLiteral],
 	'TaggedTemplateExpression': [SK.TaggedTemplateExpression],
 	'Literal': [
-		SK.NumericLiteral, SK.StringLiteral, SK.RegularExpressionLiteral,
-		SK.BigIntLiteral, SK.NullKeyword, SK.TrueKeyword, SK.FalseKeyword,
+		SK.NumericLiteral,
+		SK.StringLiteral,
+		SK.RegularExpressionLiteral,
+		SK.BigIntLiteral,
+		SK.NullKeyword,
+		SK.TrueKeyword,
+		SK.FalseKeyword,
 	],
 	'Identifier': [SK.Identifier],
 	'PrivateIdentifier': [SK.PrivateIdentifier],
@@ -748,9 +792,13 @@ export function predicateForTriggerSet(estreeTypes: Iterable<string>): Predicate
 		const kinds = SIMPLE_KINDS[t];
 		if (kinds) {
 			for (const k of kinds) {
-				if (!simpleBitmap[k]) { simpleBitmap[k] = 1; simpleCount++; }
+				if (!simpleBitmap[k]) {
+					simpleBitmap[k] = 1;
+					simpleCount++;
+				}
 			}
-		} else {
+		}
+		else {
 			conditional.push(PREDICATES[t]);
 		}
 	}
@@ -861,7 +909,8 @@ export function tsScanTraverse(
 		// of ImportDeclaration in ESTree). Recurse into children with the
 		// parent's target unchanged.
 		const k = node.kind;
-		if (k === SK.SyntaxList
+		if (
+			k === SK.SyntaxList
 			|| k === SK.CaseBlock
 			|| k === SK.NamedImports
 			|| (k === SK.VariableDeclarationList && node.parent?.kind === SK.VariableStatement)
@@ -874,7 +923,8 @@ export function tsScanTraverse(
 			// reports as a redundant nested block. Recurse into the Block's
 			// children with the StaticBlock as the parent target so each
 			// statement appears as a direct child of StaticBlock.
-			|| (k === SK.Block && node.parent?.kind === SK.ClassStaticBlockDeclaration)) {
+			|| (k === SK.Block && node.parent?.kind === SK.ClassStaticBlockDeclaration)
+		) {
 			tsForEachChild(node, child => visit(child, parentTarget));
 			return;
 		}
@@ -960,7 +1010,9 @@ export function tsScanTraverse(
 			if (param.questionToken) visit(param.questionToken, nextParent);
 			if (param.initializer) visit(param.initializer, nextParent);
 		}
-		else if (k === SK.VariableDeclaration && (node as ts.VariableDeclaration).type && (node as ts.VariableDeclaration).name) {
+		else if (
+			k === SK.VariableDeclaration && (node as ts.VariableDeclaration).type && (node as ts.VariableDeclaration).name
+		) {
 			const vd = node as ts.VariableDeclaration;
 			visit(vd.name, nextParent, vd.type);
 			if (vd.exclamationToken) visit(vd.exclamationToken, nextParent);
@@ -1010,38 +1062,46 @@ function unwrapChain(node: unknown): unknown[] {
 		const t = (cur as { type?: string }).type;
 		if (t === 'ExportNamedDeclaration' || t === 'ExportDefaultDeclaration') {
 			cur = (cur as { declaration?: unknown }).declaration;
-		} else if (t === 'ChainExpression') {
+		}
+		else if (t === 'ChainExpression') {
 			cur = (cur as { expression?: unknown }).expression;
-		} else if (t === 'TSParameterProperty') {
+		}
+		else if (t === 'TSParameterProperty') {
 			cur = (cur as { parameter?: unknown }).parameter;
-		} else if (t === 'TSTypeQuery') {
+		}
+		else if (t === 'TSTypeQuery') {
 			const inner = (cur as { exprName?: { type?: string } }).exprName;
 			// Only the typeof-import wrapper case has TSImportType inside.
 			if (inner && inner.type === 'TSImportType') {
 				cur = inner;
-			} else {
+			}
+			else {
 				break;
 			}
-		} else if (t === 'ClassDeclaration' || t === 'ClassExpression') {
+		}
+		else if (t === 'ClassDeclaration' || t === 'ClassExpression') {
 			// Drill into the synthetic ClassBody child slot. ClassBody has
 			// no own TS kind — it only exists as a wrapper around the
 			// class's members. Adding it to the chain lets a ClassBody
 			// listener fire between class enter and member visits.
 			cur = (cur as { body?: unknown }).body;
-		} else if (t === 'TSInterfaceDeclaration' || t === 'TSEnumDeclaration') {
+		}
+		else if (t === 'TSInterfaceDeclaration' || t === 'TSEnumDeclaration') {
 			// Same pattern as ClassBody: TSInterfaceBody / TSEnumBody have
 			// no own ts.SyntaxKind — synthetic ESTree wrappers around the
 			// declaration's members. Drill into `body` so listeners on
 			// those wrappers fire between the declaration enter and the
 			// member visits.
 			cur = (cur as { body?: unknown }).body;
-		} else if (t === 'MethodDefinition' || t === 'TSAbstractMethodDefinition') {
+		}
+		else if (t === 'MethodDefinition' || t === 'TSAbstractMethodDefinition') {
 			// MethodDefinition's `.value` is a FunctionExpression /
 			// TSEmptyBodyFunctionExpression. CPA hooks `FunctionExpression`
 			// enter to push a new code path — without this, the method's
 			// return statement poisons the surrounding scope's reachability.
 			cur = (cur as { value?: unknown }).value;
-		} else if (t === 'Property') {
+		}
+		else if (t === 'Property') {
 			// Object-literal method shorthand (`{ m() {} }`) and accessors
 			// (`{ get foo() {} }` / `{ set foo(v) {} }`) materialise as
 			// Property{value: FunctionExpression}. Plain `key: value`
@@ -1050,10 +1110,12 @@ function unwrapChain(node: unknown): unknown[] {
 			const p = cur as { method?: boolean; kind?: string; value?: unknown };
 			if (p.method || p.kind === 'get' || p.kind === 'set') {
 				cur = p.value;
-			} else {
+			}
+			else {
 				break;
 			}
-		} else {
+		}
+		else {
 			break;
 		}
 	}

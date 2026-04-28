@@ -16,16 +16,18 @@
 // substitute an adapter that returns a TsScopeManager-backed result instead
 // of upstream's analyze().
 
-import * as ts from 'typescript';
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as ts from 'typescript';
 const Module = require('module') as typeof import('module');
 
 // Use the same lazy converter as production (`compat-eslint/index.ts`).
 // TsScopeManager's tsToEstreeOrStub uses `materialize` (lazy) as fallback,
 // so identity comparisons work as long as both sides go through the same
 // WeakMap cache.
-const { convertLazy } = require('../lib/lazy-estree.js') as { convertLazy: (file: ts.SourceFile) => { astMaps: any; estree: any; context: any } };
+const { convertLazy } = require('../lib/lazy-estree.js') as {
+	convertLazy: (file: ts.SourceFile) => { astMaps: any; estree: any; context: any };
+};
 const { TsScopeManager } = require('../lib/ts-scope-manager.js') as typeof import('../lib/ts-scope-manager.js');
 
 function buildHost(fileName: string, content: string): ts.CompilerHost {
@@ -35,15 +37,15 @@ function buildHost(fileName: string, content: string): ts.CompilerHost {
 	const realLib = ts.createSourceFile(realLibPath, realLibContent, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 	const sf = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 	return {
-		getSourceFile: (n) => n === fileName ? sf : (n === realLibPath ? realLib : undefined),
+		getSourceFile: n => n === fileName ? sf : (n === realLibPath ? realLib : undefined),
 		getDefaultLibFileName: () => realLibName,
 		getDefaultLibLocation: () => realLibPath.replace('/' + realLibName, ''),
 		writeFile: () => {},
 		getCurrentDirectory: () => '/',
 		getDirectories: () => [],
-		fileExists: (n) => n === fileName || n === realLibPath,
-		readFile: (n) => n === fileName ? content : (n === realLibPath ? realLibContent : undefined),
-		getCanonicalFileName: (n) => n,
+		fileExists: n => n === fileName || n === realLibPath,
+		readFile: n => n === fileName ? content : (n === realLibPath ? realLibContent : undefined),
+		getCanonicalFileName: n => n,
 		useCaseSensitiveFileNames: () => true,
 		getNewLine: () => '\n',
 	};
@@ -63,7 +65,7 @@ function parseAndAnalyze(code: string, options?: any) {
 	if (typeof options === 'string') sourceType = options as 'module' | 'script';
 	else if (options && typeof options === 'object' && options.sourceType) sourceType = options.sourceType;
 	(estree as { sourceType: 'module' | 'script' }).sourceType = sourceType;
-	const scopeManager = new TsScopeManager(sf, program, estree as any, astMaps as any, sourceType);
+	const scopeManager = new TsScopeManager(sf, program, estree, astMaps, sourceType);
 	return { ast: estree, scopeManager };
 }
 
@@ -80,8 +82,12 @@ let currentSuite: string[] = [];
 
 (globalThis as any).describe = (name: string, fn: () => void) => {
 	currentSuite.push(name);
-	try { fn(); }
-	finally { currentSuite.pop(); }
+	try {
+		fn();
+	}
+	finally {
+		currentSuite.pop();
+	}
 };
 
 (globalThis as any).it = (name: string, fn: () => void | Promise<void>) => {
@@ -110,7 +116,9 @@ let currentSuite: string[] = [];
 
 class Expect {
 	constructor(public actual: any, public negated = false) {}
-	get not() { return new Expect(this.actual, !this.negated); }
+	get not() {
+		return new Expect(this.actual, !this.negated);
+	}
 	private check(cond: boolean, msg: string) {
 		const ok = this.negated ? !cond : cond;
 		if (!ok) throw new Error(msg + (this.negated ? ' (negated)' : ''));
@@ -124,12 +132,24 @@ class Expect {
 	toHaveLength(n: number) {
 		this.check(this.actual?.length === n, `Expected length ${this.actual?.length} === ${n}`);
 	}
-	toBeNull() { this.check(this.actual === null, `Expected null, got ${ser(this.actual)}`); }
-	toBeUndefined() { this.check(this.actual === undefined, `Expected undefined, got ${ser(this.actual)}`); }
-	toBeTruthy() { this.check(!!this.actual, `Expected truthy, got ${ser(this.actual)}`); }
-	toBeFalsy() { this.check(!this.actual, `Expected falsy, got ${ser(this.actual)}`); }
-	toBeGreaterThanOrEqual(n: number) { this.check(this.actual >= n, `Expected ${this.actual} >= ${n}`); }
-	toContain(item: any) { this.check(this.actual?.includes?.(item), `Expected ${ser(this.actual)} to contain ${ser(item)}`); }
+	toBeNull() {
+		this.check(this.actual === null, `Expected null, got ${ser(this.actual)}`);
+	}
+	toBeUndefined() {
+		this.check(this.actual === undefined, `Expected undefined, got ${ser(this.actual)}`);
+	}
+	toBeTruthy() {
+		this.check(!!this.actual, `Expected truthy, got ${ser(this.actual)}`);
+	}
+	toBeFalsy() {
+		this.check(!this.actual, `Expected falsy, got ${ser(this.actual)}`);
+	}
+	toBeGreaterThanOrEqual(n: number) {
+		this.check(this.actual >= n, `Expected ${this.actual} >= ${n}`);
+	}
+	toContain(item: any) {
+		this.check(this.actual?.includes?.(item), `Expected ${ser(this.actual)} to contain ${ser(item)}`);
+	}
 	toHaveDeclaredVariables(_names: string[]) {
 		// Custom matcher used in get-declared-variables tests; defer / soft-pass for now.
 		this.check(true, 'toHaveDeclaredVariables stub');
@@ -215,7 +235,10 @@ function deepEqual(a: any, b: any): boolean {
 // for a tiny shim exporting matching constants/types and our parseAndAnalyze.
 const REAL_RESOLVE = (Module as any)._resolveFilename;
 (Module as any)._resolveFilename = function(req: string, parent: any, ...rest: any[]) {
-	if (req === '../../src/index.js' || req === '../../../src/index.js' || req === '../test-utils/index.js' || req === '../../test-utils/index.js') {
+	if (
+		req === '../../src/index.js' || req === '../../../src/index.js' || req === '../test-utils/index.js'
+		|| req === '../../test-utils/index.js'
+	) {
 		return path.resolve(__dirname, 'upstream-shim.js');
 	}
 	return REAL_RESOLVE.call(this, req, parent, ...rest);
@@ -356,27 +379,38 @@ const KNOWN_DIVERGENCES: Record<string, string> = {
 	// per binding identifier (one read for `c`, one write for the
 	// binding); TS's checker exposes one identifier→symbol mapping per
 	// occurrence. Off by 1–3 in count. No real rule we tested cared.
-	'ES6 destructuring assignments > Pattern with default values in var in ForInStatement': 'destructure double-ref divergence',
-	'ES6 destructuring assignments > Pattern with default values in let in ForInStatement': 'destructure double-ref divergence',
-	'ES6 destructuring assignments > Pattern with nested default values in var in ForInStatement': 'destructure double-ref divergence',
-	'ES6 destructuring assignments > Pattern with nested default values in let in ForInStatement': 'destructure double-ref divergence',
-	'ES6 destructuring assignments > Pattern with default values in var in ForInStatement (separate declarations)': 'destructure double-ref divergence',
+	'ES6 destructuring assignments > Pattern with default values in var in ForInStatement':
+		'destructure double-ref divergence',
+	'ES6 destructuring assignments > Pattern with default values in let in ForInStatement':
+		'destructure double-ref divergence',
+	'ES6 destructuring assignments > Pattern with nested default values in var in ForInStatement':
+		'destructure double-ref divergence',
+	'ES6 destructuring assignments > Pattern with nested default values in let in ForInStatement':
+		'destructure double-ref divergence',
+	'ES6 destructuring assignments > Pattern with default values in var in ForInStatement (separate declarations)':
+		'destructure double-ref divergence',
 	'ES6 destructuring assignments > default values and patterns in var': 'destructure double-ref divergence',
-	'ES6 destructuring assignments > default values containing references and patterns in var': 'destructure double-ref divergence',
-	'ES6 destructuring assignments > nested default values containing references and patterns in var': 'destructure double-ref divergence',
+	'ES6 destructuring assignments > default values containing references and patterns in var':
+		'destructure double-ref divergence',
+	'ES6 destructuring assignments > nested default values containing references and patterns in var':
+		'destructure double-ref divergence',
 
 	// ESLint's `globalReturn` option synthesizes a function scope
 	// around the program (CommonJS-wrapper convention). Not a TS
 	// concept; TSSLint doesn't support the option and never will.
-	'globalReturn option > creates a function scope following the global scope immediately': 'ESLint-only globalReturn option, out of TS scope',
-	'globalReturn option > creates a function scope following the global scope immediately and creates module scope': 'ESLint-only globalReturn option, out of TS scope',
+	'globalReturn option > creates a function scope following the global scope immediately':
+		'ESLint-only globalReturn option, out of TS scope',
+	'globalReturn option > creates a function scope following the global scope immediately and creates module scope':
+		'ESLint-only globalReturn option, out of TS scope',
 
 	// ESLint's `impliedStrict` option forces strict mode everywhere.
 	// TS handles strict mode via its own compiler options; we don't
 	// re-implement the ESLint flag.
 	'impliedStrict option > ensures all user scopes are strict': 'ESLint-only impliedStrict option, out of TS scope',
-	'impliedStrict option > omits a nodejs global scope when ensuring all user scopes are strict': 'ESLint-only impliedStrict option, out of TS scope',
-	'impliedStrict option > omits a module global scope when ensuring all user scopes are strict': 'ESLint-only impliedStrict option, out of TS scope',
+	'impliedStrict option > omits a nodejs global scope when ensuring all user scopes are strict':
+		'ESLint-only impliedStrict option, out of TS scope',
+	'impliedStrict option > omits a module global scope when ensuring all user scopes are strict':
+		'ESLint-only impliedStrict option, out of TS scope',
 };
 
 const passed = allResults.filter(r => r.pass).length;
@@ -384,7 +418,9 @@ const realFailures = allResults.filter(r => !r.pass && !KNOWN_DIVERGENCES[r.name
 const knownFailures = allResults.filter(r => !r.pass && KNOWN_DIVERGENCES[r.name]);
 const unexpectedPasses = allResults.filter(r => r.pass && KNOWN_DIVERGENCES[r.name]);
 
-console.log(`\n=== ${passed}/${allResults.length} passed (${knownFailures.length} known divergences, ${realFailures.length} regressions) ===`);
+console.log(
+	`\n=== ${passed}/${allResults.length} passed (${knownFailures.length} known divergences, ${realFailures.length} regressions) ===`,
+);
 
 if (process.argv.includes('-v') && (realFailures.length || unexpectedPasses.length)) {
 	if (realFailures.length) {

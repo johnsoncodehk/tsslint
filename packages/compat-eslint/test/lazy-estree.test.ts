@@ -75,8 +75,10 @@ function compare(lazyNode: any, eagerNode: any, path: string): void {
 		failures.push(`${path}: type ${lazyNode.type} vs ${eagerNode.type}`);
 		return;
 	}
-	if (lazyNode.range && eagerNode.range
-		&& (lazyNode.range[0] !== eagerNode.range[0] || lazyNode.range[1] !== eagerNode.range[1])) {
+	if (
+		lazyNode.range && eagerNode.range
+		&& (lazyNode.range[0] !== eagerNode.range[0] || lazyNode.range[1] !== eagerNode.range[1])
+	) {
 		failures.push(`${path}.range: [${lazyNode.range}] vs [${eagerNode.range}]`);
 	}
 	// Iterate eager's keys — they're the canonical shape.
@@ -220,7 +222,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	// Sibling reuse: now access program.body and confirm body[1] is the SAME
 	// VariableDeclaration instance the bottom-up walk built (not a fresh
 	// recreate). This is the cache-on-TS-node-identity invariant.
-	const body = (estree.body as any);
+	const body = estree.body as any;
 	check('bottom-up: body[1] is the bottom-up-materialised statement', body[1] === decl);
 
 	// And: body[0]/body[2] are independently materialised when accessed.
@@ -270,7 +272,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const { estree, context } = lazy.convertLazy(sf);
 	const tsId = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].name as ts.Identifier;
 	// Force top-down build:
-	const topDownId = ((estree.body as any)[0]).declarations[0].id;
+	const topDownId = (estree.body as any)[0].declarations[0].id;
 	// Now bottom-up:
 	const bottomUpId = lazy.materialize(tsId, context);
 	check('top-down then bottom-up: same instance', topDownId === bottomUpId);
@@ -331,7 +333,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs('let x: number = 1;');
 	const { estree } = lazy.convertLazy(sf);
 	// Top-down path goes through the synthetic wrapper:
-	const idTopDown = ((estree.body as any)[0]).declarations[0].id;
+	const idTopDown = (estree.body as any)[0].declarations[0].id;
 	const wrapperTopDown = idTopDown.typeAnnotation;
 	const innerTopDown = wrapperTopDown.typeAnnotation;
 	check(
@@ -366,7 +368,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs('let x = 1;');
 	const { estree, context } = lazy.convertLazy(sf);
 	const tsId = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].name as ts.Identifier;
-	const topDown = ((estree.body as any)[0]).declarations[0].id;
+	const topDown = (estree.body as any)[0].declarations[0].id;
 	const seen = new Set<object>([topDown]);
 	const bottomUp = lazy.materialize(tsId, context);
 	check('comparison: Set membership across top-down/bottom-up', seen.has(bottomUp));
@@ -379,7 +381,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('let x;');
 	const { estree } = lazy.convertLazy(sf);
-	const declarator = ((estree.body as any)[0]).declarations[0];
+	const declarator = (estree.body as any)[0].declarations[0];
 	const eager = eagerConvert(parseTs('let x;'));
 	const eagerDeclarator = eager.body[0].declarations[0];
 	check('null/undefined: lazy missing init === null', declarator.init === null);
@@ -391,7 +393,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('let x = 1;');
 	const { estree } = lazy.convertLazy(sf);
-	const id = ((estree.body as any)[0]).declarations[0].id;
+	const id = (estree.body as any)[0].declarations[0].id;
 	check('null/undefined: untyped identifier.typeAnnotation === undefined', id.typeAnnotation === undefined);
 }
 
@@ -409,12 +411,14 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sfB = parseTs(code);
 	const a = lazy.convertLazy(sfA);
 	const b = lazy.convertLazy(sfB);
-	const idA = ((a.estree.body as any)[0]).declarations[0].id;
-	const idB = ((b.estree.body as any)[0]).declarations[0].id;
+	const idA = (a.estree.body as any)[0].declarations[0].id;
+	const idB = (b.estree.body as any)[0].declarations[0].id;
 	check('concurrent: roots are distinct instances', a.estree !== b.estree);
 	check('concurrent: descendants are distinct instances', idA !== idB);
-	check('concurrent: tsNodeToESTreeNodeMap is per-call (real WeakMap)',
-		a.astMaps.tsNodeToESTreeNodeMap !== b.astMaps.tsNodeToESTreeNodeMap);
+	check(
+		'concurrent: tsNodeToESTreeNodeMap is per-call (real WeakMap)',
+		a.astMaps.tsNodeToESTreeNodeMap !== b.astMaps.tsNodeToESTreeNodeMap,
+	);
 }
 
 // Re-converting the SAME ts.SourceFile yields a fresh Program (matches the
@@ -434,7 +438,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('let a = 1; let b = 2; let c = 3;');
 	const { estree } = lazy.convertLazy(sf);
-	const body = (estree.body as any);
+	const body = estree.body as any;
 	check('iteration: Array.isArray(body)', Array.isArray(body));
 	check('iteration: body.length === 3', body.length === 3);
 	check('iteration: indexed access', body[0] != null && body[1] != null && body[2] != null);
@@ -473,10 +477,15 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('let x = 1;');
 	const { estree } = lazy.convertLazy(sf);
-	const id = ((estree.body as any)[0]).declarations[0].id;
+	const id = (estree.body as any)[0].declarations[0].id;
 	let mutationOK = true;
-	try { (id as any).extraProp = 'hello'; } catch { mutationOK = false; }
-	check('mutation: ad-hoc property write succeeds', mutationOK && (id as any).extraProp === 'hello');
+	try {
+		id.extraProp = 'hello';
+	}
+	catch {
+		mutationOK = false;
+	}
+	check('mutation: ad-hoc property write succeeds', mutationOK && id.extraProp === 'hello');
 }
 
 // --- Object.keys / for-in -----------------------------------------------
@@ -510,28 +519,32 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('let x: number = 1;');
 	const { estree, astMaps } = lazy.convertLazy(sf);
-	const id = ((estree.body as any)[0]).declarations[0].id;
+	const id = (estree.body as any)[0].declarations[0].id;
 	const wrapper = id.typeAnnotation;
 	const inner = wrapper.typeAnnotation;
 	const tsType = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].type!;
-	check('wrapper: tsNodeToESTreeNodeMap[tsType] points at inner (not wrapper)',
-		astMaps.tsNodeToESTreeNodeMap.get(tsType) === inner);
+	check(
+		'wrapper: tsNodeToESTreeNodeMap[tsType] points at inner (not wrapper)',
+		astMaps.tsNodeToESTreeNodeMap.get(tsType) === inner,
+	);
 	// esTreeNodeToTSNodeMap is a facade over `_ts`. Both the wrapper and
 	// the inner have `_ts` set to tsType, so the facade returns tsType for
 	// both. The OLD (separate-WeakMap) impl distinguished them; the new
 	// (faster) impl gives the same TS node for either ESTree side. This
 	// matches eager's intent — both wrapper and inner came from the same
 	// TS source position.
-	check('wrapper: esTreeNodeToTSNodeMap[wrapper] points at the type TS node',
-		astMaps.esTreeNodeToTSNodeMap.get(wrapper) === tsType);
-	check('wrapper: esTreeNodeToTSNodeMap[inner] is the TS type node',
-		astMaps.esTreeNodeToTSNodeMap.get(inner) === tsType);
+	check(
+		'wrapper: esTreeNodeToTSNodeMap[wrapper] points at the type TS node',
+		astMaps.esTreeNodeToTSNodeMap.get(wrapper) === tsType,
+	);
+	check(
+		'wrapper: esTreeNodeToTSNodeMap[inner] is the TS type node',
+		astMaps.esTreeNodeToTSNodeMap.get(inner) === tsType,
+	);
 	// Range: wrapper covers the leading colon (one char before tsType.start),
 	// so wrapper.range[0] < inner.range[0].
-	check('wrapper: range starts before inner range (covers leading colon)',
-		wrapper.range[0] < inner.range[0]);
-	check('wrapper: range ends at inner range end',
-		wrapper.range[1] === inner.range[1]);
+	check('wrapper: range starts before inner range (covers leading colon)', wrapper.range[0] < inner.range[0]);
+	check('wrapper: range ends at inner range end', wrapper.range[1] === inner.range[1]);
 }
 
 // --- Range correctness for AsExpression ------------------------------
@@ -546,7 +559,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
 	const eager = eagerConvert(parseTs(code));
-	const lazyAs = ((estree.body as any)[0]).declarations[0].init;
+	const lazyAs = (estree.body as any)[0].declarations[0].init;
 	const eagerAs = eager.body[0].declarations[0].init;
 	check('AsExpression range: lazy [0]', lazyAs.range[0] === eagerAs.range[0]);
 	check('AsExpression range: lazy [1]', lazyAs.range[1] === eagerAs.range[1]);
@@ -561,7 +574,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs('let x = 1;');
 	const { estree, context } = lazy.convertLazy(sf);
 	const tsId = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].name as ts.Identifier;
-	const topDownId = ((estree.body as any)[0]).declarations[0].id;
+	const topDownId = (estree.body as any)[0].declarations[0].id;
 	const originalParent = topDownId.parent;
 	// Materialise again via bottom-up — should be a cache hit.
 	const bottomUpId = lazy.materialize(tsId, context);
@@ -576,7 +589,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('let abc = 1;');
 	const { estree } = lazy.convertLazy(sf);
-	const id = ((estree.body as any)[0]).declarations[0].id;
+	const id = (estree.body as any)[0].declarations[0].id;
 	check('loc: line is 1-indexed', id.loc.start.line === 1);
 	check('loc: column is 0-indexed', id.loc.start.column === 4);
 	check('loc: end column matches identifier length', id.loc.end.column === 7);
@@ -588,7 +601,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
 	const eager = eagerConvert(parseTs(code));
-	const lazyB = ((estree.body as any)[1]).declarations[0].id;
+	const lazyB = (estree.body as any)[1].declarations[0].id;
 	const eagerB = eager.body[1].declarations[0].id;
 	check('CRLF: line numbers match eager', lazyB.loc.start.line === eagerB.loc.start.line);
 	check('CRLF: ranges match eager', lazyB.range[0] === eagerB.range[0] && lazyB.range[1] === eagerB.range[1]);
@@ -601,12 +614,13 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
 	const eager = eagerConvert(parseTs(code));
-	const lazyId = ((estree.body as any)[0]).declarations[0].id;
+	const lazyId = (estree.body as any)[0].declarations[0].id;
 	const eagerId = eager.body[0].declarations[0].id;
-	check('no-trailing-nl: id range matches eager',
-		lazyId.range[0] === eagerId.range[0] && lazyId.range[1] === eagerId.range[1]);
-	check('no-trailing-nl: Program end matches eager',
-		estree.range[1] === eager.range[1]);
+	check(
+		'no-trailing-nl: id range matches eager',
+		lazyId.range[0] === eagerId.range[0] && lazyId.range[1] === eagerId.range[1],
+	);
+	check('no-trailing-nl: Program end matches eager', estree.range[1] === eager.range[1]);
 }
 
 // Empty source: Program with empty body, range [0, 0].
@@ -615,11 +629,12 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const { estree } = lazy.convertLazy(sf);
 	const eager = eagerConvert(parseTs(''));
 	check('empty source: lazy body length 0', (estree.body as any).length === 0);
-	check('empty source: range [0,0]',
-		estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1]);
-	check('empty source: loc shape matches',
+	check('empty source: range [0,0]', estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1]);
+	check(
+		'empty source: loc shape matches',
 		estree.loc.start.line === eager.loc.start.line
-		&& estree.loc.end.line === eager.loc.end.line);
+			&& estree.loc.end.line === eager.loc.end.line,
+	);
 }
 
 // Whitespace-only source: Program range starts at the END of leading ws
@@ -630,8 +645,10 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
 	const eager = eagerConvert(parseTs(code));
-	check('whitespace-only: range matches eager',
-		estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1]);
+	check(
+		'whitespace-only: range matches eager',
+		estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1],
+	);
 }
 
 // --- Bottom-up through TSTypeAnnotation wrapper -----------------------
@@ -686,7 +703,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs('let x: number = 1;');
 	const { estree, context } = lazy.convertLazy(sf);
 	const tsType = (sf.statements[0] as ts.VariableStatement).declarationList.declarations[0].type!;
-	const topDown = ((estree.body as any)[0]).declarations[0].id.typeAnnotation.typeAnnotation;
+	const topDown = (estree.body as any)[0].declarations[0].id.typeAnnotation.typeAnnotation;
 	const bottomUp = lazy.materialize(tsType, context);
 	check('wrapper bottom-up: converges with top-down (same instance)', topDown === bottomUp);
 }
@@ -859,7 +876,10 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		{ name: 'for-of-destructure', code: `for (const [k, v] of Object.entries({})) {}` },
 		// Decorators
 		{ name: 'decorator-class', code: `function dec(t: any) {} @dec class C {}` },
-		{ name: 'decorator-method-property', code: `function dec(t: any) {} class C { @dec foo: number = 1; @dec bar() {} }` },
+		{
+			name: 'decorator-method-property',
+			code: `function dec(t: any) {} class C { @dec foo: number = 1; @dec bar() {} }`,
+		},
 		{ name: 'decorator-parameter', code: `function dec(t: any) {} class C { method(@dec p: number) {} }` },
 		// Enums (TSEnumBody wrapper)
 		{ name: 'enum-numeric', code: `enum E { A, B = 1, C }` },
@@ -887,7 +907,10 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		{ name: 'class-static-block', code: `class C { static y = 1; static { console.log('init'); } }` },
 		{ name: 'class-abstract', code: `abstract class C { abstract foo(): void; abstract bar: number; }` },
 		{ name: 'class-accessor', code: `class C { accessor x = 1; }` },
-		{ name: 'class-parameter-property', code: `class C { constructor(public a: number, private b = 1, readonly c: string) {} }` },
+		{
+			name: 'class-parameter-property',
+			code: `class C { constructor(public a: number, private b = 1, readonly c: string) {} }`,
+		},
 		{ name: 'class-private-field', code: `class C { #priv = 1; #method() { return this.#priv; } }` },
 		// Optional chaining + non-null + assertions
 		{ name: 'optional-chain-deep', code: `let r = a?.b.c?.d();` },
@@ -930,7 +953,9 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		if (!r.matched) supportedDiverged.push({ name: fx.name, first: r.first ?? '' });
 	}
 	check(
-		`focused parity: ${supportedFixtures.length - supportedDiverged.length}/${supportedFixtures.length} fixtures match eager`,
+		`focused parity: ${
+			supportedFixtures.length - supportedDiverged.length
+		}/${supportedFixtures.length} fixtures match eager`,
 		supportedDiverged.length === 0,
 		supportedDiverged.length ? supportedDiverged.map(d => `${d.name}: ${d.first}`).join('; ') : '',
 	);

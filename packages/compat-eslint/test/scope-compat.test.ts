@@ -188,7 +188,7 @@ const fixtures: Fixture[] = [
 	},
 ];
 
-function makeProgram(code: string): { program: ts.Program; sourceFile: ts.SourceFile; } {
+function makeProgram(code: string): { program: ts.Program; sourceFile: ts.SourceFile } {
 	const fileName = '/test.ts';
 	const sourceFile = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
@@ -206,9 +206,9 @@ function makeProgram(code: string): { program: ts.Program; sourceFile: ts.Source
 		writeFile: () => {},
 		getCurrentDirectory: () => '/',
 		getDirectories: () => [],
-		fileExists: (n) => n === fileName || n === realLibPath,
-		readFile: (n) => n === fileName ? code : (n === realLibPath ? realLibContent : undefined),
-		getCanonicalFileName: (n) => n,
+		fileExists: n => n === fileName || n === realLibPath,
+		readFile: n => n === fileName ? code : (n === realLibPath ? realLibContent : undefined),
+		getCanonicalFileName: n => n,
 		useCaseSensitiveFileNames: () => true,
 		getNewLine: () => '\n',
 	};
@@ -220,7 +220,7 @@ function makeProgram(code: string): { program: ts.Program; sourceFile: ts.Source
 	return { program, sourceFile: program.getSourceFile(fileName)! };
 }
 
-function names(arr: { name: string; }[]): string {
+function names(arr: { name: string }[]): string {
 	return arr.map(v => v.name).sort().join(',');
 }
 
@@ -242,7 +242,9 @@ function runFixture(fx: Fixture): string[] {
 	let idx = 0;
 	const visit = (uScope: any, oScope: TsScope | null) => {
 		const i = idx++;
-		const blockTag = uScope.block ? `${uScope.block.type}:${uScope.block.range[0]}-${uScope.block.range[1]}` : 'no-block';
+		const blockTag = uScope.block
+			? `${uScope.block.type}:${uScope.block.range[0]}-${uScope.block.range[1]}`
+			: 'no-block';
 		const tag = `[scope#${i} ${uScope.type} @${blockTag}]`;
 		if (!oScope) {
 			diffs.push(`${tag} ours has no matching scope (tree out of sync)`);
