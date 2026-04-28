@@ -390,7 +390,21 @@ export class LazySourceCode {
 		return map?.get(nodeOrToken as unknown as object);
 	}
 
+	// Per-node WeakMap caches for idempotent queries. Multiple rules often
+	// hit the same node with the same query (e.g. consistent-return,
+	// no-fallthrough, naming-convention all read `getCommentsBefore` on
+	// statement headers). Cache by node identity so the second-and-onward
+	// reads short-circuit. Result arrays are read-only by ESLint
+	// convention so sharing the same instance is safe.
+	private _commentsBeforeCache?: WeakMap<NodeOrTokenLike, Comment[]>;
+	private _commentsAfterCache?: WeakMap<NodeOrTokenLike, Comment[]>;
+	private _commentsInsideCache?: WeakMap<NodeOrTokenLike, Comment[]>;
+	private _declaredVariablesCache?: WeakMap<object, any[]>;
+
 	getCommentsBefore(nodeOrToken: NodeOrTokenLike): Comment[] {
+		const cache = this._commentsBeforeCache ??= new WeakMap();
+		const cached = cache.get(nodeOrToken);
+		if (cached) return cached;
 		const out: Comment[] = [];
 		// Scan trivia from the position right after the previous token
 		// up to the start of this node/token. For ESTree nodes built by
@@ -415,10 +429,14 @@ export class LazySourceCode {
 			if (pos >= nodeOrToken.range[0]) return;
 			out.push(buildCommentObject(this.text, pos, end, kind, this._tsFile));
 		});
+		cache.set(nodeOrToken, out);
 		return out;
 	}
 
 	getCommentsAfter(nodeOrToken: NodeOrTokenLike): Comment[] {
+		const cache = this._commentsAfterCache ??= new WeakMap();
+		const cached = cache.get(nodeOrToken);
+		if (cached) return cached;
 		const out: Comment[] = [];
 		const tsNode = this.tsNodeOf(nodeOrToken);
 		const endPos = tsNode ? tsNode.end : nodeOrToken.range[1];
@@ -429,11 +447,15 @@ export class LazySourceCode {
 		ts.forEachLeadingCommentRange(this.text, endPos, (pos, end, kind) => {
 			out.push(buildCommentObject(this.text, pos, end, kind, this._tsFile));
 		});
+		cache.set(nodeOrToken, out);
 		return out;
 	}
 
 	private _innerScanner?: ts.Scanner;
 	getCommentsInside(node: NodeOrTokenLike): Comment[] {
+		const cache = this._commentsInsideCache ??= new WeakMap();
+		const cached = cache.get(node);
+		if (cached) return cached;
 		// AST-driven gap scan: walk the underlying ts.Node, emit each
 		// trivia gap's comments via the same `walkInnerCommentsOf`
 		// helper `convertComments` uses. No dependency on `this.comments`
@@ -445,7 +467,9 @@ export class LazySourceCode {
 			// the comments array — Tokens are leaves anyway, so they
 			// can't contain inner comments worth scanning, but ESLint
 			// API has it pass through.
-			return this.commentsInRange(node.range[0], node.range[1]);
+			const fallback = this.commentsInRange(node.range[0], node.range[1]);
+			cache.set(node, fallback);
+			return fallback;
 		}
 		const out: Comment[] = [];
 		const text = this.text;
@@ -474,13 +498,17 @@ export class LazySourceCode {
 		}
 		else {
 			const start = tsNode.getStart(ast);
-			if (start >= tsNode.end) return out;
+			if (start >= tsNode.end) {
+				cache.set(node, out);
+				return out;
+			}
 			scanner.setTextPos(start);
 			scanner.scan();
 			innerStart = scanner.getTokenEnd();
 		}
 		if (innerStart < tsNode.end) emitFrom(innerStart);
 		walkInnerCommentsOf(tsNode, ast, scanner, emitFrom);
+		cache.set(node, out);
 		return out;
 	}
 
@@ -642,9 +670,14 @@ export class LazySourceCode {
 	}
 
 	getDeclaredVariables(node: any): any[] {
+		const cache = this._declaredVariablesCache ??= new WeakMap();
+		const cached = cache.get(node);
+		if (cached) return cached;
 		const sm = this.scopeManager;
 		if (!sm || !sm.getDeclaredVariables) return [];
-		return sm.getDeclaredVariables(node);
+		const result = sm.getDeclaredVariables(node);
+		cache.set(node, result);
+		return result;
 	}
 
 	isGlobalReference(node: any): boolean {
