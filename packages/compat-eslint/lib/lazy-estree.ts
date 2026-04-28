@@ -4929,22 +4929,29 @@ function convertJSXNamespaceOrIdentifier(node: ts.Node, parent: LazyNode): LazyN
 	return new JSXIdentifierNode(id, parent, id.text, true);
 }
 
-// JsxText/string-literal entity decoding. typescript-estree calls into
-// `unescapeStringLiteralText` (lib/node-utils.ts) for both StringLiteral
-// inside JsxAttribute and JsxText. Rules read `.value` for the decoded
-// text and `.raw` for the verbatim source. Cover the common entities so
-// parity holds on text like `&amp;` / `&lt;` / `&#65;`.
+// JsxText / JsxAttribute-string entity decoding. typescript-estree's
+// `unescapeStringLiteralText` (lib/node-utils.ts) decodes the full XHTML
+// named-entity set + numeric refs. We vendor its `xhtmlEntities` table
+// so `&copy;` → `©`, `&nbsp;` → U+00A0 (no-break space, NOT 0x20), etc.
+// resolve to the exact code points eager produces. Rules that compare
+// `.value` (react/no-unescaped-entities, jsx-a11y accessibility checks,
+// whitespace detectors) need this parity — partial decoding silently
+// hides real entities behind their `&name;` source form.
+const { xhtmlEntities } = require('./xhtml-entities.js') as { xhtmlEntities: Record<string, string> };
 function unescapeJsxText(text: string): string {
 	if (!text.includes('&')) return text;
-	return text
-		.replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-		.replace(/&#x([0-9a-fA-F]+);/g, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&apos;/g, '\'')
-		.replace(/&nbsp;/g, ' ');
+	return text.replace(/&(?:#\d+|#x[\da-fA-F]+|[0-9a-zA-Z]+);/g, entity => {
+		const item = entity.slice(1, -1);
+		if (item[0] === '#') {
+			const codePoint = item[1] === 'x'
+				? parseInt(item.slice(2), 16)
+				: parseInt(item.slice(1), 10);
+			// String.fromCodePoint throws RangeError on out-of-range
+			// inputs; eager leaves the entity intact in that case.
+			return codePoint > 0x10ffff ? entity : String.fromCodePoint(codePoint);
+		}
+		return xhtmlEntities[item] ?? entity;
+	});
 }
 
 // --- Entry point --------------------------------------------------------

@@ -1010,6 +1010,21 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		{ name: 'jsx-attr-entity-lt-gt', code: `let _ = <div data="&lt;a&gt;" />;` },
 		{ name: 'jsx-attr-entity-numeric', code: `let _ = <div data="&#65;&#x42;" />;` },
 		{ name: 'jsx-text-entity', code: `let _ = <div>&amp;</div>;` },
+		// Named-entity decoding beyond the basic `&amp;`/`&lt;`/etc set —
+		// typescript-estree's xhtmlEntities table covers ~252 entities.
+		// Partial decoding silently leaves these as raw text and rules
+		// that compare `.value` against expected glyphs see the wrong
+		// string.
+		{ name: 'jsx-text-entity-copy', code: `let _ = <div>&copy;</div>;` },
+		{ name: 'jsx-text-entity-euro', code: `let _ = <div>&euro;</div>;` },
+		{ name: 'jsx-attr-entity-named', code: `let _ = <div title="&copy;&middot;&trade;" />;` },
+		// `&nbsp;` decodes to U+00A0 (no-break space), NOT the ASCII
+		// 0x20 it visually resembles. Whitespace-detection rules rely
+		// on this distinction.
+		{ name: 'jsx-text-entity-nbsp', code: `let _ = <div>x&nbsp;y</div>;` },
+		// Unknown entity stays as-is (eager preserves `&fakeentity;`
+		// verbatim when not in xhtmlEntities).
+		{ name: 'jsx-text-entity-unknown', code: `let _ = <div>&fakeentity;</div>;` },
 		// Edge cases: JSX-as-attribute-value (typescript-estree allows
 		// elements + fragments as attribute values, not just strings).
 		{ name: 'jsx-attr-element-value', code: `let _ = <Foo prop=<Bar /> />;` },
