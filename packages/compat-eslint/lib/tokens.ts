@@ -190,12 +190,16 @@ export function convertTokens(ast: ts.SourceFile): Token[] {
 // Comments: walk each token once (same recursion as `convertTokens`, but
 // without skipping JSDoc subtrees so trivia inside them is reachable) and
 // collect both leading and trailing comment ranges via TS's helpers.
-// Tried two scanner-only rewrites (`createScanner(skipTrivia=false)` whole-
-// file sweep, and per-AST-leaf gap scanning). The whole-file sweep drifted
-// — scanner mode transitions (JSX, regex/division, template) made it return
-// ~68/hundreds of comments on `binder.ts`. The gap-scan approach was correct
-// but slower than the AST walk because of per-gap `setText` overhead. Until
-// we find a faster + correct path, leave this as-is.
+// Tried three scanner-based rewrites:
+//  1. Whole-file `skipTrivia:false` sweep — drifted (binder.ts 68/hundreds).
+//  2. Per-gap `setText(text, start, length)` sweep — correct, but bounds
+//     setting per leaf dominated → slower.
+//  3. Shared scanner + `setTextPos` between AST leaves — correct, but
+//     full-file lex (every keyword/punctuator/identifier in addition to
+//     comments) costs more than `forEachLeadingCommentRange`'s short-jump
+//     scans of each leaf's leading trivia → slower.
+// The current approach (`getChildren` + `forEachLeading/TrailingCommentRange`)
+// stays the winner.
 export function convertComments(ast: ts.SourceFile): Comment[] {
 	const out: Comment[] = [];
 	const text = ast.text;
