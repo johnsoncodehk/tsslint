@@ -18,6 +18,102 @@ type AstMaps = {
 	tsNodeToESTreeNodeMap: WeakMap<ts.Node, TSESTree.Node>;
 };
 
+// ECMAScript built-in globals, vendored from `eslint/conf/globals.js`'s
+// `es2026` (the latest superset). ESLint core registers these via
+// `addDeclaredGlobals` before rules run; the constructor below mirrors
+// that step so `no-undef` doesn't fire on `undefined`, `Math`, `String`,
+// `Array`, etc. — names that `@typescript-eslint/scope-manager`'s lib
+// data marks TYPE-only after merging (`es2015.core` re-declares es5's
+// `TYPE_VALUE Math` as `TYPE`, etc.). Update if ESLint adds a new ES
+// year.
+const ESLINT_BUILTIN_GLOBALS: readonly string[] = [
+	'AggregateError', 'Array', 'ArrayBuffer', 'AsyncDisposableStack',
+	'Atomics', 'BigInt', 'BigInt64Array', 'BigUint64Array', 'Boolean',
+	'DataView', 'Date', 'DisposableStack', 'Error', 'EvalError',
+	'FinalizationRegistry', 'Float16Array', 'Float32Array', 'Float64Array',
+	'Function', 'Infinity', 'Int16Array', 'Int32Array', 'Int8Array',
+	'Intl', 'Iterator', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object',
+	'Promise', 'Proxy', 'RangeError', 'ReferenceError', 'Reflect',
+	'RegExp', 'Set', 'SharedArrayBuffer', 'String', 'SuppressedError',
+	'Symbol', 'SyntaxError', 'Temporal', 'TypeError', 'URIError',
+	'Uint16Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray',
+	'WeakMap', 'WeakRef', 'WeakSet', 'constructor', 'decodeURI',
+	'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape',
+	'eval', 'globalThis', 'hasOwnProperty', 'isFinite', 'isNaN',
+	'isPrototypeOf', 'parseFloat', 'parseInt', 'propertyIsEnumerable',
+	'toLocaleString', 'toString', 'undefined', 'unescape', 'valueOf',
+];
+
+// TypeScript built-in lib type globals. Vendored union of every TYPE-tagged
+// name across `@typescript-eslint/scope-manager`'s `dist/lib/es*.js`
+// (es5 / es2015–es2025 / esnext, including sub-libs like
+// `es2015.collection`, `es2024.regexp`, etc.). Excludes DOM / decorators /
+// scripthost (environment-specific — opting in would silence undef on
+// browser-only names in pure-Node code, which over-silences). Registering
+// these via `addGlobals` makes type-position references to lib utility
+// types (`Record<K, V>`, `Promise<T>`, `Awaited<T>`, …) resolve cleanly
+// even when only a partial lib is loaded — without this, our type-position
+// guard had to silence ALL type-position freeRefs, hiding ESLint's
+// no-undef on real undeclared type names (`NodeJS.ErrnoException`,
+// `Visitor`).
+const TS_LIB_TYPE_GLOBALS: readonly string[] = [
+	'AggregateError', 'AggregateErrorConstructor', 'Array', 'ArrayBuffer',
+	'ArrayBufferConstructor', 'ArrayBufferLike', 'ArrayBufferTypes',
+	'ArrayBufferView', 'ArrayConstructor', 'ArrayIterator', 'ArrayLike',
+	'AsyncDisposable', 'AsyncDisposableStack', 'AsyncDisposableStackConstructor',
+	'AsyncGenerator', 'AsyncGeneratorFunction', 'AsyncGeneratorFunctionConstructor',
+	'AsyncIterable', 'AsyncIterableIterator', 'AsyncIterator', 'AsyncIteratorObject',
+	'Atomics', 'Awaited', 'BigInt', 'BigInt64Array', 'BigInt64ArrayConstructor',
+	'BigIntConstructor', 'BigIntToLocaleStringOptions', 'BigUint64Array',
+	'BigUint64ArrayConstructor', 'Boolean', 'BooleanConstructor',
+	'BuiltinIteratorReturn', 'CallableFunction', 'Capitalize', 'ConcatArray',
+	'ConstructorParameters', 'DataView', 'DataViewConstructor', 'Date',
+	'DateConstructor', 'Disposable', 'DisposableStack', 'DisposableStackConstructor',
+	'Error', 'ErrorConstructor', 'ErrorOptions', 'EvalError', 'EvalErrorConstructor',
+	'Exclude', 'Extract', 'FinalizationRegistry', 'FinalizationRegistryConstructor',
+	'FlatArray', 'Float16Array', 'Float16ArrayConstructor', 'Float32Array',
+	'Float32ArrayConstructor', 'Float64Array', 'Float64ArrayConstructor', 'Function',
+	'FunctionConstructor', 'Generator', 'GeneratorFunction',
+	'GeneratorFunctionConstructor', 'IArguments', 'ImportAssertions',
+	'ImportAttributes', 'ImportCallOptions', 'ImportMeta', 'InstanceType',
+	'Int16Array', 'Int16ArrayConstructor', 'Int32Array', 'Int32ArrayConstructor',
+	'Int8Array', 'Int8ArrayConstructor', 'Intl', 'Iterable', 'IterableIterator',
+	'Iterator', 'IteratorObject', 'IteratorObjectConstructor', 'IteratorResult',
+	'IteratorReturnResult', 'IteratorYieldResult', 'JSON', 'Lowercase', 'Map',
+	'MapConstructor', 'MapIterator', 'Math', 'NewableFunction', 'NoInfer',
+	'NonNullable', 'Number', 'NumberConstructor', 'Object', 'ObjectConstructor',
+	'Omit', 'OmitThisParameter', 'Parameters', 'Partial', 'Pick', 'Promise',
+	'PromiseConstructor', 'PromiseConstructorLike', 'PromiseFulfilledResult',
+	'PromiseLike', 'PromiseRejectedResult', 'PromiseSettledResult',
+	'PromiseWithResolvers', 'PropertyDescriptor', 'PropertyDescriptorMap',
+	'PropertyKey', 'ProxyConstructor', 'ProxyHandler', 'RangeError',
+	'RangeErrorConstructor', 'Readonly', 'ReadonlyArray', 'ReadonlyMap',
+	'ReadonlySet', 'ReadonlySetLike', 'Record', 'ReferenceError',
+	'ReferenceErrorConstructor', 'Reflect', 'RegExp', 'RegExpConstructor',
+	'RegExpExecArray', 'RegExpIndicesArray', 'RegExpMatchArray',
+	'RegExpStringIterator', 'Required', 'ReturnType', 'Set', 'SetConstructor',
+	'SetIterator', 'SharedArrayBuffer', 'SharedArrayBufferConstructor', 'String',
+	'StringConstructor', 'StringIterator', 'SuppressedError',
+	'SuppressedErrorConstructor', 'Symbol', 'SymbolConstructor', 'SyntaxError',
+	'SyntaxErrorConstructor', 'TemplateStringsArray', 'Temporal',
+	'ThisParameterType', 'ThisType', 'TypeError', 'TypeErrorConstructor',
+	'TypedPropertyDescriptor', 'URIError', 'URIErrorConstructor', 'Uint16Array',
+	'Uint16ArrayConstructor', 'Uint32Array', 'Uint32ArrayConstructor', 'Uint8Array',
+	'Uint8ArrayConstructor', 'Uint8ClampedArray', 'Uint8ClampedArrayConstructor',
+	'Uncapitalize', 'Uppercase', 'WeakKey', 'WeakKeyTypes', 'WeakMap',
+	'WeakMapConstructor', 'WeakRef', 'WeakRefConstructor', 'WeakSet',
+	'WeakSetConstructor',
+	// Decorator types (from `lib.decorators*.d.ts`). Includes both stage-3
+	// (ClassMethodDecoratorContext etc.) and legacy (ClassDecorator,
+	// MethodDecorator, PropertyDecorator, ParameterDecorator).
+	'ClassMemberDecoratorContext', 'DecoratorContext', 'DecoratorMetadataObject',
+	'DecoratorMetadata', 'ClassDecoratorContext', 'ClassMethodDecoratorContext',
+	'ClassGetterDecoratorContext', 'ClassSetterDecoratorContext',
+	'ClassAccessorDecoratorContext', 'ClassAccessorDecoratorTarget',
+	'ClassAccessorDecoratorResult', 'ClassFieldDecoratorContext',
+	'ClassDecorator', 'PropertyDecorator', 'MethodDecorator', 'ParameterDecorator',
+];
+
 // Lib globals that upstream's `analyze({ lib: ['esnext'] })` exposes as values
 // (i.e. `isValueVariable === true`) after resolving the lib chain. Most lib
 // names are type-only because later libs (e.g. `esnext.collection`) override
@@ -177,7 +273,10 @@ export class TsScopeManager {
 		// project). Per-file managers all hit the same Map / WeakMap.
 		this._libDecisionBySymbol = _getLibDecisionMap(program);
 		this._libSourceFileCache = _getLibSourceFileMap(program);
-		// Build scope tree by walking the TS AST.
+		// Build scope tree by walking the TS AST. ESLint built-in globals
+		// are NOT injected here — that's a lint-pipeline policy, not a
+		// scope-analysis fact. `applyEslintGlobals(manager)` is the
+		// pipeline-side hook (see compat-eslint/index.ts).
 		this._buildScopeTree();
 	}
 
@@ -501,6 +600,13 @@ export class TsScopeManager {
 	isModule() { return this.sourceType === 'module'; }
 	isStrictModeSupported() { return true; }
 
+	// Fake globals registered by `addGlobals` whose through-ref reconciliation
+	// is still pending. Drained when `_ensureRefIndex` actually runs (i.e.
+	// when a rule first reads references). Reading `globalScope.variables`
+	// directly already sees these — only the `through` -> `references`
+	// re-resolve is deferred.
+	_pendingFakeGlobals?: Map<string, TsVariable>;
+
 	// upstream: `eslint-scope/lib/scope-manager.js` `ScopeManager.addGlobals`,
 	// invoked by `eslint/lib/languages/js/source-code/source-code.js`
 	// `addDeclaredGlobals` for every name in `conf/globals.js`'s
@@ -510,6 +616,14 @@ export class TsScopeManager {
 	// (`getEstree` in index.ts) calls this with the vendored
 	// `ESLINT_BUILTIN_GLOBALS` (es2026) so `no-undef` doesn't fire on
 	// `undefined` / `Math` / `Array` / etc.
+	//
+	// Splits the work: declaring the fake variable on `globalScope` happens
+	// eagerly (cheap — populates only that one scope), but the through-ref
+	// reconciliation is parked until `_ensureRefIndex` is forced. The
+	// reconciliation requires `_through` to exist, and building it walks
+	// every scope's `variables` getter — which is the dominant cost. Rule
+	// sets that don't query references (most lint configs without
+	// `no-undef` / `no-unused-vars`) skip it entirely now.
 	addGlobals(names: string[]) {
 		// Skip names that already exist as declared globals — upstream's
 		// addGlobals is a no-op for already-known names (test name:
@@ -518,26 +632,36 @@ export class TsScopeManager {
 		for (const v of this.globalScope.variables) {
 			existingNames.add(v.name);
 		}
+		const pending = this._pendingFakeGlobals ??= new Map<string, TsVariable>();
 		for (const name of names) {
 			if (existingNames.has(name)) continue;
 			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
 			const v = new TsVariable(this, fakeSym);
 			this._variableBySymbol.set(fakeSym, v);
 			this.globalScope._addLibVariable(v);
+			pending.set(name, v);
 		}
-		// Re-resolve through references whose identifier name matches an added
-		// global. Move them from `through` into the per-symbol refs map (and
-		// per-scope bucket).
-		this._ensureRefIndex();
+		// If the ref index is already built (rare — only when a rule queried
+		// references before all `addGlobals` calls finished), reconcile now
+		// since the deferred path won't fire again.
+		if (this._refIndex) {
+			this._reconcileFakeGlobals();
+		}
+		// Clear implicit-globals cache — added globals supersede the
+		// auto-synthesized ones for any matching names.
+		this._implicitGlobals = undefined;
+	}
+
+	// Drain `_pendingFakeGlobals` against the currently-built `_through`,
+	// moving every ref whose identifier text matches a registered fake into
+	// the per-symbol `_refIndex`. Called either from `addGlobals` (when the
+	// ref index is already built) or at the tail of `_ensureRefIndex` (the
+	// common path for the lint pipeline).
+	_reconcileFakeGlobals() {
+		const pending = this._pendingFakeGlobals;
+		if (!pending || pending.size === 0) return;
 		const through = this._through!;
 		const refs = this._refIndex!;
-		// Build a name→fakeVar lookup once (was an O(N×M) scan inside the
-		// per-ref loop). Only the fake vars we just added qualify
-		// (declarations.length === 0); real lib vars stay as-is.
-		const fakeByName = new Map<string, TsVariable>();
-		for (const v of this.globalScope.variables) {
-			if (v.symbol.declarations?.length === 0) fakeByName.set(v.name, v);
-		}
 		const remaining: TsReference[] = [];
 		for (const ref of through) {
 			// Read name from the ts.Identifier directly — `ref.identifier.name`
@@ -550,7 +674,7 @@ export class TsScopeManager {
 			// `popChoiceContext` on null. Reading `tsIdentifier.text` is
 			// pure and avoids the eager materialize.
 			const name = ref.tsIdentifier.text;
-			const added = fakeByName.get(name);
+			const added = pending.get(name);
 			if (!added) {
 				remaining.push(ref);
 				continue;
@@ -562,9 +686,7 @@ export class TsScopeManager {
 			arr.push(ref);
 		}
 		this._through = remaining;
-		// Clear implicit-globals cache — added globals supersede the
-		// auto-synthesized ones for any matching names.
-		this._implicitGlobals = undefined;
+		this._pendingFakeGlobals = undefined;
 	}
 
 	// upstream equivalent: `@typescript-eslint/scope-manager/dist/referencer/Referencer.js`
@@ -787,7 +909,12 @@ export class TsScopeManager {
 		this._pendingIdentifiers = [];
 		this._through = through;
 		this._referencesByScope = byScope;
-		return this._refIndex = refs;
+		this._refIndex = refs;
+		// Drain any `addGlobals` calls that landed before the index was
+		// built — `_through` now exists, so we can move matching refs
+		// across in one pass instead of forcing the index per `addGlobals`.
+		this._reconcileFakeGlobals();
+		return this._refIndex;
 	}
 
 	getReferencesFor(symbol: ts.Symbol): TsReference[] {
@@ -2253,4 +2380,20 @@ export class TsImplicitGlobalDefinition extends TsDefinition {
 	get parent(): TSESTree.Node | undefined { return undefined; }
 	get isVariableDefinition(): boolean { return true; }
 	get isTypeDefinition(): boolean { return false; }
+}
+
+// Declares ECMAScript built-ins (es2026 from ESLint's `conf/globals.js`)
+// plus TS `lib.*.d.ts` type globals on the manager's `globalScope`.
+// Called by the compat-eslint lint pipeline so `no-undef` doesn't fire on
+// `undefined` / `Math` / `Promise` / `Record<K, V>` / etc. — names that
+// `@typescript-eslint/scope-manager`'s lib data marks TYPE-only after
+// merging.
+//
+// Kept as a free function (not a `TsScopeManager` method) because this is
+// a lint-pipeline policy, not a scope-analysis fact: upstream
+// `eslint-scope` parity tests construct managers without it and would
+// fail if it ran inside the constructor.
+export function applyEslintGlobals(manager: TsScopeManager): void {
+	manager.addGlobals(ESLINT_BUILTIN_GLOBALS as string[]);
+	manager.addGlobals(TS_LIB_TYPE_GLOBALS as string[]);
 }

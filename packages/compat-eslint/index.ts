@@ -60,102 +60,6 @@ function deepMergeArrays(first: unknown[] | undefined, second: unknown[] | undef
 	];
 }
 
-// ECMAScript built-in globals, vendored from
-// `eslint/conf/globals.js`'s `es2026` (the latest superset). ESLint
-// core registers these via `addDeclaredGlobals` before rules run; we
-// match that step in `getEstree` so `no-undef` doesn't fire on
-// `undefined`, `Math`, `String`, `Array`, etc. — names that
-// `@typescript-eslint/scope-manager`'s lib data marks TYPE-only after
-// merging (`es2015.core` re-declares es5's `TYPE_VALUE Math` as `TYPE`,
-// etc.). Update if ESLint adds a new ES year.
-const ESLINT_BUILTIN_GLOBALS: readonly string[] = [
-	'AggregateError', 'Array', 'ArrayBuffer', 'AsyncDisposableStack',
-	'Atomics', 'BigInt', 'BigInt64Array', 'BigUint64Array', 'Boolean',
-	'DataView', 'Date', 'DisposableStack', 'Error', 'EvalError',
-	'FinalizationRegistry', 'Float16Array', 'Float32Array', 'Float64Array',
-	'Function', 'Infinity', 'Int16Array', 'Int32Array', 'Int8Array',
-	'Intl', 'Iterator', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object',
-	'Promise', 'Proxy', 'RangeError', 'ReferenceError', 'Reflect',
-	'RegExp', 'Set', 'SharedArrayBuffer', 'String', 'SuppressedError',
-	'Symbol', 'SyntaxError', 'Temporal', 'TypeError', 'URIError',
-	'Uint16Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray',
-	'WeakMap', 'WeakRef', 'WeakSet', 'constructor', 'decodeURI',
-	'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape',
-	'eval', 'globalThis', 'hasOwnProperty', 'isFinite', 'isNaN',
-	'isPrototypeOf', 'parseFloat', 'parseInt', 'propertyIsEnumerable',
-	'toLocaleString', 'toString', 'undefined', 'unescape', 'valueOf',
-];
-
-// TypeScript built-in lib type globals. Vendored union of every TYPE-tagged
-// name across `@typescript-eslint/scope-manager`'s `dist/lib/es*.js`
-// (es5 / es2015–es2025 / esnext, including sub-libs like
-// `es2015.collection`, `es2024.regexp`, etc.). Excludes DOM /
-// decorators / scripthost (environment-specific — opting in would
-// silence undef on browser-only names in pure-Node code, which over-
-// silences). Registering these via `addGlobals` makes type-position
-// references to lib utility types (`Record<K, V>`, `Promise<T>`,
-// `Awaited<T>`, …) resolve cleanly even when only a partial lib is
-// loaded — without this, our type-position guard had to silence ALL
-// type-position freeRefs, hiding ESLint's no-undef on real undeclared
-// type names (`NodeJS.ErrnoException`, `Visitor`).
-const TS_LIB_TYPE_GLOBALS: readonly string[] = [
-	'AggregateError', 'AggregateErrorConstructor', 'Array', 'ArrayBuffer',
-	'ArrayBufferConstructor', 'ArrayBufferLike', 'ArrayBufferTypes',
-	'ArrayBufferView', 'ArrayConstructor', 'ArrayIterator', 'ArrayLike',
-	'AsyncDisposable', 'AsyncDisposableStack', 'AsyncDisposableStackConstructor',
-	'AsyncGenerator', 'AsyncGeneratorFunction', 'AsyncGeneratorFunctionConstructor',
-	'AsyncIterable', 'AsyncIterableIterator', 'AsyncIterator', 'AsyncIteratorObject',
-	'Atomics', 'Awaited', 'BigInt', 'BigInt64Array', 'BigInt64ArrayConstructor',
-	'BigIntConstructor', 'BigIntToLocaleStringOptions', 'BigUint64Array',
-	'BigUint64ArrayConstructor', 'Boolean', 'BooleanConstructor',
-	'BuiltinIteratorReturn', 'CallableFunction', 'Capitalize', 'ConcatArray',
-	'ConstructorParameters', 'DataView', 'DataViewConstructor', 'Date',
-	'DateConstructor', 'Disposable', 'DisposableStack', 'DisposableStackConstructor',
-	'Error', 'ErrorConstructor', 'ErrorOptions', 'EvalError', 'EvalErrorConstructor',
-	'Exclude', 'Extract', 'FinalizationRegistry', 'FinalizationRegistryConstructor',
-	'FlatArray', 'Float16Array', 'Float16ArrayConstructor', 'Float32Array',
-	'Float32ArrayConstructor', 'Float64Array', 'Float64ArrayConstructor', 'Function',
-	'FunctionConstructor', 'Generator', 'GeneratorFunction',
-	'GeneratorFunctionConstructor', 'IArguments', 'ImportAssertions',
-	'ImportAttributes', 'ImportCallOptions', 'ImportMeta', 'InstanceType',
-	'Int16Array', 'Int16ArrayConstructor', 'Int32Array', 'Int32ArrayConstructor',
-	'Int8Array', 'Int8ArrayConstructor', 'Intl', 'Iterable', 'IterableIterator',
-	'Iterator', 'IteratorObject', 'IteratorObjectConstructor', 'IteratorResult',
-	'IteratorReturnResult', 'IteratorYieldResult', 'JSON', 'Lowercase', 'Map',
-	'MapConstructor', 'MapIterator', 'Math', 'NewableFunction', 'NoInfer',
-	'NonNullable', 'Number', 'NumberConstructor', 'Object', 'ObjectConstructor',
-	'Omit', 'OmitThisParameter', 'Parameters', 'Partial', 'Pick', 'Promise',
-	'PromiseConstructor', 'PromiseConstructorLike', 'PromiseFulfilledResult',
-	'PromiseLike', 'PromiseRejectedResult', 'PromiseSettledResult',
-	'PromiseWithResolvers', 'PropertyDescriptor', 'PropertyDescriptorMap',
-	'PropertyKey', 'ProxyConstructor', 'ProxyHandler', 'RangeError',
-	'RangeErrorConstructor', 'Readonly', 'ReadonlyArray', 'ReadonlyMap',
-	'ReadonlySet', 'ReadonlySetLike', 'Record', 'ReferenceError',
-	'ReferenceErrorConstructor', 'Reflect', 'RegExp', 'RegExpConstructor',
-	'RegExpExecArray', 'RegExpIndicesArray', 'RegExpMatchArray',
-	'RegExpStringIterator', 'Required', 'ReturnType', 'Set', 'SetConstructor',
-	'SetIterator', 'SharedArrayBuffer', 'SharedArrayBufferConstructor', 'String',
-	'StringConstructor', 'StringIterator', 'SuppressedError',
-	'SuppressedErrorConstructor', 'Symbol', 'SymbolConstructor', 'SyntaxError',
-	'SyntaxErrorConstructor', 'TemplateStringsArray', 'Temporal',
-	'ThisParameterType', 'ThisType', 'TypeError', 'TypeErrorConstructor',
-	'TypedPropertyDescriptor', 'URIError', 'URIErrorConstructor', 'Uint16Array',
-	'Uint16ArrayConstructor', 'Uint32Array', 'Uint32ArrayConstructor', 'Uint8Array',
-	'Uint8ArrayConstructor', 'Uint8ClampedArray', 'Uint8ClampedArrayConstructor',
-	'Uncapitalize', 'Uppercase', 'WeakKey', 'WeakKeyTypes', 'WeakMap',
-	'WeakMapConstructor', 'WeakRef', 'WeakRefConstructor', 'WeakSet',
-	'WeakSetConstructor',
-	// Decorator types (from `lib.decorators*.d.ts`). Includes both stage-3
-	// (ClassMethodDecoratorContext etc.) and legacy (ClassDecorator,
-	// MethodDecorator, PropertyDecorator, ParameterDecorator).
-	'ClassMemberDecoratorContext', 'DecoratorContext', 'DecoratorMetadataObject',
-	'DecoratorMetadata', 'ClassDecoratorContext', 'ClassMethodDecoratorContext',
-	'ClassGetterDecoratorContext', 'ClassSetterDecoratorContext',
-	'ClassAccessorDecoratorContext', 'ClassAccessorDecoratorTarget',
-	'ClassAccessorDecoratorResult', 'ClassFieldDecoratorContext',
-	'ClassDecorator', 'PropertyDecorator', 'MethodDecorator', 'ParameterDecorator',
-];
-
 interface RuleEntry {
 	id: string;
 	eslintRule: ESLint.Rule.RuleModule;
@@ -828,9 +732,9 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 		// dispatches to typescript-estree's astConverter, which we already have
 		// a ts.SourceFile for. Calling it directly avoids the parser require.
 		const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
-		const { SourceCode } = loadEslintInternals();
-		const { TsScopeManager } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
+		const { TsScopeManager, applyEslintGlobals } = require('./lib/ts-scope-manager') as typeof import('./lib/ts-scope-manager');
 		const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
+		const { LazySourceCode } = require('./lib/lazy-source-code') as typeof import('./lib/lazy-source-code');
 
 		// Lazy ESTree shim (lib/lazy-estree.ts). Byte-identical to
 		// typescript-estree's eager Converter on every TS file under
@@ -865,21 +769,18 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 			? 'module'
 			: 'script';
 		const scopeManager = new TsScopeManager(file, program, estree as any, astMaps as any, estree.sourceType);
-		// ECMAScript built-in globals (es2026 set from ESLint's
-		// `conf/globals.js`). ESLint core injects these via
-		// `addDeclaredGlobals` in `SourceCode#getGlobalsForEcmaVersion`
-		// before any rule runs; without it, `no-undef` reports `undefined`,
-		// `Math`, `String`, etc. as undefined because `@typescript-eslint/
-		// scope-manager`'s lib data marks them TYPE-only after merging
-		// (es2015.core re-declares es5's `TYPE_VALUE Math` as `TYPE`).
-		// `TsScopeManager.addGlobals` no-ops names already declared, so
-		// this is safe to always call.
-		scopeManager.addGlobals(ESLINT_BUILTIN_GLOBALS as string[]);
-		scopeManager.addGlobals(TS_LIB_TYPE_GLOBALS as string[]);
-		const sourceCode = new SourceCode({
+		// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
+		// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
+		// `TsScopeManager` itself stays free of this lint-pipeline policy
+		// (upstream eslint-scope parity tests rely on the un-injected
+		// shape); the names + de-dupe logic live next to `addGlobals` in
+		// `ts-scope-manager.ts`.
+		applyEslintGlobals(scopeManager);
+		const sourceCode = new LazySourceCode({
 			text: file.text,
-			ast: estree as unknown as ESLint.AST.Program,
-			scopeManager: scopeManager as unknown as ESLint.Scope.ScopeManager,
+			ast: estree,
+			tsFile: file,
+			scopeManager,
 			visitorKeys: visitorKeys as Record<string, string[]>,
 			parserServices: {
 				...astMaps,
@@ -893,7 +794,7 @@ function getEstree(file: ts.SourceFile, program: ts.Program) {
 				getTypeAtLocation: (node: any) =>
 					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)!),
 			},
-		});
+		}) as unknown as ESLint.SourceCode;
 		cachedEstree = { file, sourceCode, convertContext };
 	}
 	return {
