@@ -71,14 +71,31 @@ function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName
 			// (which in @typescript-eslint blocks `dist/rules/<name>` access),
 			// so this works even when the plugin doesn't expose individual
 			// rules as a public subpath.
+			//
+			// Wrap the require in a per-rule named thunk so the rule name
+			// shows up directly as a frame in CPU profiles (ESLint core
+			// does the same via `LazyLoadingRuleMap`). NamedEvaluation on
+			// a computed property key (`{ [name]: () => ... }`) sets
+			// `Function.prototype.name` at runtime — that's enough for
+			// stack traces, but V8's CPU profile uses the SharedFunctionInfo's
+			// parse-time-inferred name and ignores runtime renames. To get
+			// a parse-time literal name we compile per-thunk source with
+			// `new Function`, baking the rule name in as a string literal.
 			return (ruleName) => {
-				try {
-					const m = require(path.join(pkgRoot, dir, ruleName + ext));
-					return (m && 'default' in m ? m.default : m) as ESLint.Rule.RuleModule;
-				}
-				catch {
-					return undefined;
-				}
+				const filePath = path.join(pkgRoot, dir, ruleName + ext);
+				const key = JSON.stringify(ruleName);
+				const thunk = new Function('requireFn', `return ({ ${key}: () => requireFn() })[${key}];`)(
+					() => {
+						try {
+							const m = require(filePath);
+							return (m && 'default' in m ? m.default : m);
+						}
+						catch {
+							return undefined;
+						}
+					},
+				) as () => ESLint.Rule.RuleModule | undefined;
+				return thunk();
 			};
 		}
 	}
