@@ -31,6 +31,60 @@ const loader = async (moduleName: string) => {
 	return mod as any;
 };
 
+// Per-plugin "where do individual rule files live" cache. Filled the first
+// time we successfully load a rule from that plugin, then reused for every
+// subsequent rule from the same plugin so we never have to require the
+// whole plugin (which on `@typescript-eslint/eslint-plugin` is ~400 ms
+// cold start to load all ~150 rules eagerly).
+//
+// `null` means "we tried to detect a per-rule layout and couldn't — fall
+// back to whole-plugin require for any rule from this plugin".
+const pluginRuleLoaders = new Map<string, ((ruleName: string) => ESLint.Rule.RuleModule | undefined) | null>();
+
+// Common per-rule directory layouts in published ESLint plugins.
+//   `dist/rules/<name>.js`      — @typescript-eslint, eslint-plugin-jsdoc (newer)
+//   `lib/rules/<name>.js`       — eslint-plugin-react / import / vue / n / jsx-a11y
+//   `rules/<name>.js`           — eslint-plugin-unicorn / promise
+//   `build/rules/<name>.js`     — some Babel-built plugins
+//   `src/rules/<name>.js`       — published-from-source plugins (rare)
+//
+// Each candidate is probed with the FIRST rule we're asked to load. The
+// directory that has that rule's file wins; remember the layout so later
+// rules go straight to disk by absolute path.
+const RULE_DIR_CANDIDATES = ['dist/rules', 'lib/rules', 'rules', 'build/rules', 'src/rules'];
+const RULE_FILE_EXTS = ['.js', '.cjs'];
+
+function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName: string) => ESLint.Rule.RuleModule | undefined) | null {
+	let pkgRoot: string;
+	try {
+		pkgRoot = path.dirname(require.resolve(`${pluginName}/package.json`));
+	}
+	catch {
+		return null;
+	}
+	for (const dir of RULE_DIR_CANDIDATES) {
+		for (const ext of RULE_FILE_EXTS) {
+			const probePath = path.join(pkgRoot, dir, probeRuleName + ext);
+			if (!fs.existsSync(probePath)) continue;
+			// Lock in this dir + ext for every subsequent rule from this plugin.
+			// Absolute-path `require()` bypasses the package's `exports` field
+			// (which in @typescript-eslint blocks `dist/rules/<name>` access),
+			// so this works even when the plugin doesn't expose individual
+			// rules as a public subpath.
+			return (ruleName) => {
+				try {
+					const m = require(path.join(pkgRoot, dir, ruleName + ext));
+					return (m && 'default' in m ? m.default : m) as ESLint.Rule.RuleModule;
+				}
+				catch {
+					return undefined;
+				}
+			};
+		}
+	}
+	return null;
+}
+
 /**
  * Converts an ESLint rules configuration to TSSLint rules.
  *
@@ -120,6 +174,24 @@ async function loadRuleByKey(rule: string): Promise<ESLint.Rule.RuleModule | und
 
 async function loadRule(pluginName: string | undefined, ruleName: string): Promise<ESLint.Rule.RuleModule | undefined> {
 	if (pluginName) {
+		// Try per-rule lazy load first — saves loading the whole plugin's
+		// ~all-rules-eager bundle. On a 30-rule typescript-eslint config
+		// this saves ~150 ms cold start vs requiring the whole plugin.
+		let lazy = pluginRuleLoaders.get(pluginName);
+		if (lazy === undefined) {
+			lazy = detectRuleLoader(pluginName, ruleName);
+			pluginRuleLoaders.set(pluginName, lazy);
+		}
+		if (lazy) {
+			const r = lazy(ruleName);
+			if (r) return r;
+			// Layout was detected but this specific rule's file doesn't
+			// exist there (rule renamed / moved / lives under a sub-path).
+			// Fall through to whole-plugin load below.
+		}
+		// Fallback: ESM-only plugins, plugins with no recognisable layout,
+		// or rules whose file doesn't sit at `<dir>/<name>.js`. Pay the
+		// eager cost once per plugin.
 		plugins[pluginName] ??= loader(pluginName);
 		const plugin = await plugins[pluginName];
 		return plugin?.rules[ruleName];
