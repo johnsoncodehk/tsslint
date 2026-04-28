@@ -232,6 +232,24 @@ function _getLibSourceFileMap(program: ts.Program): WeakMap<ts.SourceFile, boole
 	return m;
 }
 
+// Module-level cache of fake `ts.Symbol` placeholders for ESLint declared
+// globals. The shape `{ name, declarations: [], flags: 0 }` is completely
+// stateless — same fake works for every file's `TsScopeManager`. Without
+// this, every `getEstree` would alloc 250+ throwaway plain objects.
+//
+// `_variableBySymbol` is still per-manager, so the wrapper `TsVariable`
+// is per-file (it carries `manager`, `references` are file-local). But
+// the symbol that keys it can — and should — be shared.
+const _SHARED_FAKE_GLOBAL_SYMBOLS = new Map<string, ts.Symbol>();
+function _sharedFakeGlobalSymbol(name: string): ts.Symbol {
+	let s = _SHARED_FAKE_GLOBAL_SYMBOLS.get(name);
+	if (!s) {
+		s = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
+		_SHARED_FAKE_GLOBAL_SYMBOLS.set(name, s);
+	}
+	return s;
+}
+
 // Public surface mirrors `@typescript-eslint/scope-manager`'s
 // `ScopeManager` class (`scope-manager/dist/ScopeManager.js`):
 // `scopes`, `globalScope`, `getDeclaredVariables`, `acquire`,
@@ -610,20 +628,27 @@ export class TsScopeManager {
 	// upstream: `eslint-scope/lib/scope-manager.js` `ScopeManager.addGlobals`,
 	// invoked by `eslint/lib/languages/js/source-code/source-code.js`
 	// `addDeclaredGlobals` for every name in `conf/globals.js`'s
-	// `es${ecmaVersion}` set + user `globals` config. Synthesizes a
-	// Variable in globalScope per name and re-resolves any matching
-	// through-refs against it. Compat-eslint's entry point
-	// (`getEstree` in index.ts) calls this with the vendored
-	// `ESLINT_BUILTIN_GLOBALS` (es2026) so `no-undef` doesn't fire on
-	// `undefined` / `Math` / `Array` / etc.
+	// `es${ecmaVersion}` set + user `globals` config. Synthesises a
+	// Variable in `globalScope` per name and re-resolves matching
+	// through-refs against it. Compat-eslint's entry point calls this
+	// with the vendored `ESLINT_BUILTIN_GLOBALS` (es2026) so `no-undef`
+	// doesn't fire on `undefined` / `Math` / `Array` / etc.
 	//
-	// Splits the work: declaring the fake variable on `globalScope` happens
-	// eagerly (cheap — populates only that one scope), but the through-ref
-	// reconciliation is parked until `_ensureRefIndex` is forced. The
-	// reconciliation requires `_through` to exist, and building it walks
-	// every scope's `variables` getter — which is the dominant cost. Rule
-	// sets that don't query references (most lint configs without
-	// `no-undef` / `no-unused-vars`) skip it entirely now.
+	// ESLint's contract requires `scopeManager.variables` /
+	// `globalScope.set` to immediately reflect an `addGlobals` call (see
+	// `eslint-scope/test/add-globals.test.ts`'s "doesn't affect unrelated
+	// references" case), so the per-file `TsVariable` is built eagerly.
+	// What we DO save:
+	//   1. Fake `ts.Symbol` placeholders are module-shared via
+	//      `_sharedFakeGlobalSymbol(name)` — every file's manager reuses
+	//      the same plain-object symbol per name. Across the TypeScript
+	//      repo's 710 files × ~250 declared names, that's ~177k throwaway
+	//      allocs avoided.
+	//   2. The through-ref reconciliation is parked in
+	//      `_pendingFakeGlobals` and drained at the tail of
+	//      `_ensureRefIndex`. Rule sets that don't query references
+	//      (most lint configs without `no-undef` / `no-unused-vars`)
+	//      skip it entirely.
 	addGlobals(names: string[]) {
 		// Skip names that already exist as declared globals — upstream's
 		// addGlobals is a no-op for already-known names (test name:
@@ -635,7 +660,7 @@ export class TsScopeManager {
 		const pending = this._pendingFakeGlobals ??= new Map<string, TsVariable>();
 		for (const name of names) {
 			if (existingNames.has(name)) continue;
-			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
+			const fakeSym = _sharedFakeGlobalSymbol(name);
 			const v = new TsVariable(this, fakeSym);
 			this._variableBySymbol.set(fakeSym, v);
 			this.globalScope._addLibVariable(v);
