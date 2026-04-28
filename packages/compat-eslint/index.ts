@@ -607,8 +607,13 @@ function buildCpaEventQueue(file: ts.SourceFile, fast: FastDispatch): any[] {
 
 // Per-target dispatcher: type-keyed enter/exit list + wildcard list. Used
 // by both the inline non-CPA path and dispatchFast's kind=1 branch.
-// Updates `currentNode` (via `onTarget`) on enter so getScope/getAncestors
-// see the right node when rules call them from inside a listener.
+// Updates `currentNode` (via `onTarget`) on BOTH enter and exit so that
+// `getScope` / `getAncestors` / `markVariableAsUsed` from inside an exit
+// listener see the node being exited — not the last-entered descendant.
+// ESLint's Linter sets the same `currentNode` before invoking either
+// phase's listener; matching that contract is what rules like `no-shadow`
+// / `no-redeclare` (which read scope from `:exit` listeners on inner
+// nodes) depend on.
 function dispatchTarget(
 	target: unknown,
 	isEnter: boolean,
@@ -616,7 +621,7 @@ function dispatchTarget(
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 	onTarget: (target: unknown) => void,
 ): void {
-	if (isEnter) onTarget(target);
+	onTarget(target);
 	const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
 	if (arr) runEntries(arr, target, errors);
 	const allArr = isEnter ? fast.enterAll : fast.exitAll;
