@@ -233,14 +233,6 @@ export class TsScopeManager {
 			currentParent = prevParent;
 		};
 		ts.forEachChild(this.tsFile, walk);
-
-		// Eagerly populate every scope's variables — this fills
-		// `_variableBySymbol` so reference resolution can distinguish symbols
-		// declared in this file (resolved) from cross-file globals (unresolved
-		// → no-undef material in `globalScope.through`).
-		for (const s of this.scopes) {
-			void s.variables;
-		}
 	}
 
 	_registerScope(tsNode: ts.Node, scope: TsScope) {
@@ -591,6 +583,18 @@ export class TsScopeManager {
 	_referencesByScope?: Map<TsScope, TsReference[]>;
 	_ensureRefIndex(): Map<ts.Symbol, TsReference[]> {
 		if (this._refIndex) return this._refIndex;
+		// Reference classification needs `_variableBySymbol` populated for
+		// every scope so it can distinguish file-local symbols (resolved)
+		// from cross-file globals (unresolved → goes to `through`). Walking
+		// `s.variables` for each scope is what fills the map. Used to be
+		// done eagerly in `_buildScopeTree`, but rule sets that never query
+		// references (e.g. eqeqeq + no-var + no-bitwise) don't need this —
+		// defer until the first ref query forces it. addGlobals reads
+		// `globalScope.variables` explicitly, so the global scope still
+		// gets populated at the right time.
+		for (const s of this.scopes) {
+			void s.variables;
+		}
 		const refs = new Map<ts.Symbol, TsReference[]>();
 		const through: TsReference[] = [];
 		const byScope = new Map<TsScope, TsReference[]>();

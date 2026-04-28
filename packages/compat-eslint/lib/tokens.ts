@@ -101,6 +101,10 @@ function getTokenType(token: ts.Node): TokenType {
 function convertToken(token: ts.Node, ast: ts.SourceFile): Token {
 	const start = token.kind === SK.JsxText ? token.getFullStart() : token.getStart(ast);
 	const end = token.getEnd();
+	return buildToken(token, start, end, ast);
+}
+
+function buildToken(token: ts.Node, start: number, end: number, ast: ts.SourceFile): Token {
 	const value = ast.text.slice(start, end);
 	const tokenType = getTokenType(token);
 	const range: [number, number] = [start, end];
@@ -121,32 +125,77 @@ function convertToken(token: ts.Node, ast: ts.SourceFile): Token {
 	return { type: tokenType, loc, range, value };
 }
 
-// Walk the AST, picking up every leaf token. ts.Node has no built-in iterator
-// over child tokens — `getChildren(ast)` returns both ts.Node children AND
-// the boundary tokens (`;`, `=`, …) that don't appear in `forEachChild`. We
-// recurse manually, skipping the EOF sentinel and any comment-trivia subtrees
-// (the latter only show up under JSDoc-bearing nodes).
+// Walk the AST emitting every leaf token + the punctuator trivia tokens
+// (`;` / `,` / `=` / `(` / `)` / `{` / `}` / etc.) that sit between AST
+// siblings. `forEachChild` visits AST children but skips these inter-child
+// punctuators (they're not standalone AST nodes). The earlier impl used
+// `node.getChildren(ast)` to surface them, but `getChildren` lazily runs
+// `ts.Scanner` over each non-leaf node's full range — overlapping ranges
+// at every nesting level had `convertTokens` dominated by repeated scanner
+// work (~75% of `computeLineAndCharacterOfPosition` ticks per the CPU
+// profile, gap-filled by `ts.Scanner.scan` frames in the timeline).
+//
+// Replace with one linear scanner sweep keyed by `forEachChild` walk
+// position. Scanner advances monotonically through the file, emitting
+// tokens between AST leaves; total scanner work = O(file_size), not
+// O(file_size × tree_depth).
 export function convertTokens(ast: ts.SourceFile): Token[] {
 	const result: Token[] = [];
+	const text = ast.text;
+	const scanner = ts.createScanner(
+		ast.languageVersion,
+		/*skipTrivia*/ true,
+		ast.languageVariant,
+	);
+	scanner.setText(text);
+	let pos = 0;
+
+	function emitScanned(targetEnd: number): void {
+		while (pos < targetEnd) {
+			scanner.setTextPos(pos);
+			const k = scanner.scan();
+			if (k === SK.EndOfFileToken) break;
+			const start = scanner.getTokenStart();
+			if (start >= targetEnd) break;
+			pos = scanner.getTokenEnd();
+			// Build via buildToken with explicit start/end (synthetic
+			// POJO has no ts.Node methods like getStart/getEnd). Parent
+			// context isn't available for trivia tokens, but the only
+			// classifications that depend on parent (JSX*) don't apply
+			// to punctuators / keywords sitting between AST nodes.
+			const synthetic: ts.Node = { kind: k, pos: start, end: pos } as ts.Node;
+			result.push(buildToken(synthetic, start, pos, ast));
+		}
+		if (pos < targetEnd) pos = targetEnd;
+	}
+
 	const walk = (node: ts.Node): void => {
 		if (isComment(node) || isJSDocComment(node)) return;
+		const nodeStart = node.kind === SK.JsxText ? node.getFullStart() : node.getStart(ast);
+		// Scanner sweeps through trivia / punctuators preceding this node.
+		emitScanned(nodeStart);
 		if (isToken(node) && node.kind !== SK.EndOfFileToken) {
 			result.push(convertToken(node, ast));
+			pos = node.getEnd();
 			return;
 		}
-		const children = node.getChildren(ast);
-		for (let i = 0; i < children.length; i++) walk(children[i]);
+		ts.forEachChild(node, walk);
 	};
 	walk(ast);
+	// Trailing punctuators (e.g. final `;` after the last statement).
+	emitScanned(ast.end);
 	return result;
 }
 
 // Comments: walk each token once (same recursion as `convertTokens`, but
 // without skipping JSDoc subtrees so trivia inside them is reachable) and
-// collect both leading and trailing comment ranges via TS's helpers. A naive
-// `createScanner(skipTrivia=false)` walk misses comments hidden inside
-// JSDoc / template / type-annotation spans — `forEachLeading/TrailingCommentRange`
-// is what typescript-estree uses (via ts-api-utils.iterateComments).
+// collect both leading and trailing comment ranges via TS's helpers.
+// Tried two scanner-only rewrites (`createScanner(skipTrivia=false)` whole-
+// file sweep, and per-AST-leaf gap scanning). The whole-file sweep drifted
+// — scanner mode transitions (JSX, regex/division, template) made it return
+// ~68/hundreds of comments on `binder.ts`. The gap-scan approach was correct
+// but slower than the AST walk because of per-gap `setText` overhead. Until
+// we find a faster + correct path, leave this as-is.
 export function convertComments(ast: ts.SourceFile): Comment[] {
 	const out: Comment[] = [];
 	const text = ast.text;
