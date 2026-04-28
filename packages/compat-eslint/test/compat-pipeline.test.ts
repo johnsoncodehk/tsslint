@@ -1692,6 +1692,51 @@ type D = Awaited<Promise<number>>;
 	);
 }
 
+// 3y. Catch clause's parameter must NOT dispatch as `VariableDeclarator`.
+//     TS models `catch (e) { … }` as `CatchClause.variableDeclaration`
+//     (a `ts.VariableDeclaration`), but ESTree exposes the param
+//     directly as `CatchClause.param` (an Identifier). Without
+//     excluding catch's variableDeclaration from the
+//     `VariableDeclarator` predicate (and from the walker's structural-
+//     skip list in CPA-allKinds mode), every `catch (e)` triggered a
+//     phantom VariableDeclarator enter. Rules listening on it (e.g.
+//     `no-unassigned-vars`, which checks for `let`/`var` declared
+//     without assignment) fired false-positives on every catch param.
+{
+	const code = `
+		try { throw new Error('x'); }
+		catch (e) {
+			console.log(e);
+		}
+		try { throw new Error('y'); }
+		catch (err) {
+			console.log(err);
+		}
+	`;
+	const fired: { type: string; name?: string }[] = [];
+	const rule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
+		create() {
+			return {
+				VariableDeclarator(n: any) {
+					fired.push({ type: n.type, name: n.id?.name });
+				},
+				// Force CPA mode (predicateAllKinds) so the walker visits
+				// every TS node, exercising the structural-skip list path.
+				onCodePathStart() {},
+			};
+		},
+	};
+	const { program, file } = buildProgram(code);
+	const tsslintRule = compat.convertRule(rule, [], { id: 'no-phantom-decl' });
+	tsslintRule({ file, program, report: () => ({} as any) } as any);
+	check(
+		'catch param: no phantom VariableDeclarator dispatch in CPA mode',
+		fired.length === 0,
+		`fired: ${JSON.stringify(fired)}`,
+	);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the

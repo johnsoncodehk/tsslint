@@ -360,7 +360,15 @@ const PREDICATES: Record<string, Predicate> = {
 	'VariableDeclaration': n =>
 		n.kind === SK.VariableStatement
 		|| (n.kind === SK.VariableDeclarationList && n.parent?.kind !== SK.VariableStatement),
-	'VariableDeclarator': n => n.kind === SK.VariableDeclaration,
+	// `try { } catch (e) {}` — TS models the catch parameter as a
+	// `ts.VariableDeclaration` under `CatchClause.variableDeclaration`,
+	// but ESTree exposes it as `CatchClause.param` (a plain Identifier).
+	// Without this exclusion the walker dispatches a phantom
+	// `VariableDeclarator` enter on the catch param, triggering rules
+	// like `no-unassigned-vars` that listen on VariableDeclarator —
+	// fires false-positive on every `catch (e)`.
+	'VariableDeclarator': n =>
+		n.kind === SK.VariableDeclaration && n.parent?.kind !== SK.CatchClause,
 
 	// --- Functions / Classes ------------------------------------------
 	'FunctionDeclaration': n => n.kind === SK.FunctionDeclaration && (n as ts.FunctionDeclaration).body !== undefined,
@@ -789,7 +797,11 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'DebuggerStatement': [SK.DebuggerStatement],
 	// VariableDeclaration is no longer simple (parent check on
 	// VariableDeclarationList). The function predicate above handles it.
-	'VariableDeclarator': [SK.VariableDeclaration],
+	// VariableDeclarator is also conditional now — must exclude
+	// `CatchClause.variableDeclaration` (the catch param), which TS
+	// models as a ts.VariableDeclaration but ESTree exposes as
+	// `CatchClause.param`. Drop from SIMPLE_KINDS so the conditional
+	// predicate runs.
 	'FunctionExpression': [SK.FunctionExpression, SK.MethodDeclaration, SK.Constructor, SK.GetAccessor, SK.SetAccessor],
 	'ArrowFunctionExpression': [SK.ArrowFunction],
 	'ClassDeclaration': [SK.ClassDeclaration],
@@ -1054,6 +1066,16 @@ export function tsScanTraverse(
 			// children with the StaticBlock as the parent target so each
 			// statement appears as a direct child of StaticBlock.
 			|| (k === SK.Block && node.parent?.kind === SK.ClassStaticBlockDeclaration)
+			// `try { } catch (e) {}` — TS wraps the catch parameter in
+			// `CatchClause.variableDeclaration` (a ts.VariableDeclaration),
+			// but ESTree exposes the param directly as `CatchClause.param`
+			// (an Identifier). Without skipping, the wrapper materialises
+			// as a phantom `VariableDeclarator` and CPA-mode dispatch
+			// fires `VariableDeclarator` listeners on it (e.g.
+			// no-unassigned-vars false-positives on every `catch (e)`).
+			// Recurse through with the CatchClause as parentTarget so the
+			// inner Identifier visit lands with the right ESTree parent.
+			|| (k === SK.VariableDeclaration && node.parent?.kind === SK.CatchClause)
 		) {
 			tsForEachChild(node, child => visit(child, parentTarget));
 			return;
