@@ -34,6 +34,49 @@ function loadEslintInternals() {
 	return eslintInternals;
 }
 
+// Build a parse-time-named wrapper around a rule listener. V8's CPU
+// profile reads the SharedFunctionInfo's parse-time-inferred name, so we
+// have to compile fresh source per rule with the rule id baked in as a
+// string literal; runtime renames (`Function.prototype.name = ...` or a
+// computed-property-key object literal) only show up in
+// `Function.prototype.name` and stack traces, not in profile frames.
+//
+// Two specialised wrappers, both per-rule cached and compiled fresh
+// via `new Function` so the rule id is parse-time literal:
+//   - selector listener: `function (node) { return fn(node); }` —
+//     covers the AST-visit hot path (~99% of listener calls). V8
+//     decides per-rule whether to inline; rules whose listener body
+//     does enough work to register on the profiler keep their frame.
+//   - code-path listener: `function () { return fn.apply(this, arguments); }`
+//     — preserves variadic dispatch for `onCodePath*` listeners that
+//     take multiple args.
+const _wrapCache = new Map<string, [
+	selectorWrap: (fn: (n: unknown) => unknown) => (n: unknown) => unknown,
+	variadicWrap: (fn: (...args: unknown[]) => unknown) => (...args: unknown[]) => unknown,
+]>();
+function _getWrappers(ruleId: string) {
+	let pair = _wrapCache.get(ruleId);
+	if (pair) return pair;
+	const key = JSON.stringify(ruleId);
+	const selectorWrap = new Function(
+		'fn',
+		`return ({ ${key}: function (node) { return fn(node); } })[${key}];`,
+	) as any;
+	const variadicWrap = new Function(
+		'fn',
+		`return ({ ${key}: function () { return fn.apply(this, arguments); } })[${key}];`,
+	) as any;
+	pair = [selectorWrap, variadicWrap];
+	_wrapCache.set(ruleId, pair);
+	return pair;
+}
+function wrapSelectorListener(ruleId: string, fn: (n: unknown) => unknown) {
+	return _getWrappers(ruleId)[0](fn);
+}
+function wrapVariadicListener(ruleId: string, fn: (...args: unknown[]) => unknown) {
+	return _getWrappers(ruleId)[1](fn);
+}
+
 // Vendored from `eslint/lib/shared/deep-merge-arrays.js`. Public API
 // is `deepMergeArrays(defaults, userOptions)`. Array elements at the
 // same index are merged via `deepMergeObjects` (object spread + recurse
@@ -321,11 +364,19 @@ function runSharedTraversal(
 		}) as unknown as ESLint.Rule.RuleContext;
 		const ruleListeners = eslintRule.create(ruleContext);
 
+		const { isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
-			if (listener) {
-				allListeners.push([eslintRule, selector, listener as (n: unknown) => void]);
-			}
+			if (!listener) continue;
+			// Wrap the listener in a parse-time-named thunk so V8's CPU
+			// profile attributes the listener's run time to the rule id.
+			// Single-arg fast wrap for AST visit listeners (the ~99 % hot
+			// path), variadic wrap for code-path listeners that take
+			// multiple args.
+			const wrapped = isCodePathListener(selector)
+				? wrapVariadicListener(entry.id, listener as (...args: unknown[]) => unknown)
+				: wrapSelectorListener(entry.id, listener as (n: unknown) => unknown);
+			allListeners.push([eslintRule, selector, wrapped as (n: unknown) => void]);
 		}
 	}
 
