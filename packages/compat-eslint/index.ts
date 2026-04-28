@@ -7,12 +7,13 @@ import path = require('path');
 // ESLint internals — these reach into lib/ paths and may break on major
 // ESLint upgrades. Resolved on first use so warm runs that hit TSSLint's
 // per-rule cache for every file never have to load them. We only keep
-// what fast-dispatch + CPA-aware TS-scan actually need: `SourceCode` to
-// build the rule's `sourceCode` view of the lazy ESTree, and
-// `CodePathAnalyzer` to drive `onCodePath*` events from the inline
-// visitor. NodeEventGenerator and Traverser are no longer used anywhere.
+// We need exactly one ESLint internal: `CodePathAnalyzer` to drive
+// `onCodePath*` events from the inline visitor. `SourceCode` is replaced
+// by our own `LazySourceCode` (lib/lazy-source-code.ts) — we don't
+// instantiate ESLint's any more, so we don't import the file (saving the
+// transitive `TokenStore` / cursor / linebreak-regex chain). NodeEventGenerator
+// and Traverser are no longer used anywhere.
 let eslintInternals: {
-	SourceCode: typeof ESLint.SourceCode;
 	CodePathAnalyzer: new (eventGenerator: {
 		// ESLint 9.39+ uses `eventGenerator.emit` (function) directly;
 		// ESLint 9.0-9.38 called `eventGenerator.emitter.emit`. Provide
@@ -27,7 +28,6 @@ function loadEslintInternals() {
 	if (!eslintInternals) {
 		const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
 		eslintInternals = {
-			SourceCode: require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js')),
 			CodePathAnalyzer: require(path.join(eslintRoot, 'lib/linter/code-path-analysis/code-path-analyzer.js')),
 		};
 	}
