@@ -1416,6 +1416,126 @@ console.log(x);
 	);
 }
 
+// 3t. TS lib utility types (`Pick`, `Record`, `Extract`, `Partial`, …)
+//     used in type-arg positions must NOT be reported by `no-undef`.
+//     Sanity check: `applyEslintGlobals` registers them via
+//     `addGlobals(TS_LIB_TYPE_GLOBALS)` and the through-ref reconciliation
+//     drains those names from `_through`. Companion lib-detection
+//     reuse-fake fix is exercised by the TS-repo benchmark (712 → 56
+//     no-undef over-fire reduction); single-file fixtures don't
+//     trigger the lib-detection path because `getSymbolAtLocation` on a
+//     TypeReference's typeName returns undefined unless the program
+//     has more cross-file context (so reconciliation alone covers
+//     the leak in this simple form).
+{
+	const code = `
+type A = Pick<{ a: 1; b: 2 }, 'a'>;
+type B = Record<string, number>;
+type C = Extract<'a' | 'b' | 'c', 'a' | 'b'>;
+type D = Partial<{ a: 1 }>;
+type E = NonNullable<string | null>;
+type F = Exclude<'a' | 'b', 'a'>;
+function f(x: A, y: B, z: C): D | E | F { return null!; }
+f({ a: 1 } as A, {} as B, 'a' as C);
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = {
+			at() { return r; },
+			asWarning() { return r; },
+			asError() { return r; },
+			asSuggestion() { return r; },
+			withFix() { return r; },
+			withRefactor() { return r; },
+			withDeprecated() { return r; },
+			withUnnecessary() { return r; },
+			withoutCache() { return r; },
+		};
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check(
+		'no-undef: TS lib utility types in type-arg positions are recognised globals',
+		reports.length === 0,
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
+}
+
+// 3u. Type parameters in `.d.ts` files where the host declaration merges
+//     across files (cross-file declaration merging — TS lib types
+//     declared in both bundled `lib.*.d.ts` and user-loaded
+//     `src/lib/*.d.ts`, ambient interface redeclarations, etc.) must
+//     still resolve at usage sites. `_collectVariables` binds the type
+//     param via `getSymbolAtLocation(tp.name)` so registration uses the
+//     SAME symbol identity that reference resolution returns. Pre-fix
+//     it used `tp.symbol` (the local declaration symbol) which differs
+//     from the merged symbol the resolver returns; without the fix
+//     `variableBySymbol.get(refSym)` misses and the type param leaks to
+//     `through`. Repro requires a multi-file program — single-file
+//     interfaces don't trigger merging.
+{
+	const fA = '/a.d.ts';
+	const fB = '/b.d.ts';
+	const codeA = `interface Container<T> { value: T; }\n`;
+	const codeB = `interface Container<T> { extra: T; map(fn: (v: T) => T): T; }\n`;
+	const sfA = ts.createSourceFile(fA, codeA, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const sfB = ts.createSourceFile(fB, codeB, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
+	const realLibName = realLibPath.split(/[\\/]/).pop()!;
+	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
+	const realLib = ts.createSourceFile(realLibPath, realLibContent, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const host: ts.CompilerHost = {
+		getSourceFile: n => n === fA ? sfA : (n === fB ? sfB : (n === realLibPath ? realLib : undefined)),
+		getDefaultLibFileName: () => realLibName,
+		getDefaultLibLocation: () => realLibPath.replace('/' + realLibName, ''),
+		writeFile: () => {},
+		getCurrentDirectory: () => '/',
+		getDirectories: () => [],
+		fileExists: n => n === fA || n === fB || n === realLibPath,
+		readFile: n => n === fA ? codeA : (n === fB ? codeB : (n === realLibPath ? realLibContent : undefined)),
+		getCanonicalFileName: n => n,
+		useCaseSensitiveFileNames: () => true,
+		getNewLine: () => '\n',
+	};
+	const program = ts.createProgram({
+		rootNames: [fA, fB],
+		options: { target: ts.ScriptTarget.Latest, lib: [realLibName], strict: true, noEmit: true },
+		host,
+	});
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noUndef, [], { id: 'no-undef' });
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = {
+			at() { return r; },
+			asWarning() { return r; },
+			asError() { return r; },
+			asSuggestion() { return r; },
+			withFix() { return r; },
+			withRefactor() { return r; },
+			withDeprecated() { return r; },
+			withUnnecessary() { return r; },
+			withoutCache() { return r; },
+		};
+		return r;
+	};
+	// Lint /b.d.ts — the references to T inside Container<T> should
+	// resolve to the merged Container symbol's type parameter, not leak.
+	tsslintRule({ file: program.getSourceFile(fB), report: reportFn, program } as any);
+	check(
+		'no-undef: type parameters in cross-file-merged ambient interfaces resolve',
+		reports.length === 0,
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
+}
+
 // 4. Mixed simple + complex selectors — descendant combinator selectors
 //    decompose into a (Right type, ancestor-walk filter) tuple via
 //    `decomposeSimple`, so fast dispatch handles them alongside the
