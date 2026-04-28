@@ -568,6 +568,59 @@ function wire(node: any): any {
 	check('descendant + Identifier.label rejects value slot', !info.filter!(valueId));
 }
 
+// --- Multi-level child chain with compound + field on the right ------
+//
+// `A > B.f1 > C[attr].f2` — left side is itself a `child` selector, not
+// a leaf type matcher. The fast fieldFire path requires a finite parent
+// type set (so it can trigger on Parent and extract `parent[field]`),
+// which a chain doesn't give. Slow path: trigger on Right's compound
+// type and add the field constraint + parent-chain match as filters.
+//
+// Real-world repro: rules registering selectors like
+// `CallExpression > MemberExpression.callee > Identifier[name="join"].property`
+// (e.g. prefer-string-replace-all-style guidance).
+{
+	const info = take(decomposeSimple(
+		'CallExpression > MemberExpression.callee > Identifier[name="join"].property',
+	));
+	check('chain+field: trigger types {Identifier}', info.types !== 'all' && info.types.has('Identifier'));
+	const tree = wire({
+		type: 'CallExpression',
+		callee: {
+			type: 'MemberExpression',
+			object: { type: 'Identifier', name: 'arr' },
+			property: { type: 'Identifier', name: 'join' },
+		},
+		arguments: [],
+	});
+	const joinId = tree.callee.property;
+	const objectId = tree.callee.object;
+	check('chain+field: fires on the property Identifier(name=join)', info.filter!(joinId));
+	check('chain+field: rejects the object Identifier(name=arr)', !info.filter!(objectId));
+	// Wrong attribute value — same shape, different name.
+	const tree2 = wire({
+		type: 'CallExpression',
+		callee: {
+			type: 'MemberExpression',
+			object: { type: 'Identifier', name: 'arr' },
+			property: { type: 'Identifier', name: 'concat' },
+		},
+		arguments: [],
+	});
+	check('chain+field: rejects property name=concat', !info.filter!(tree2.callee.property));
+	// Right-shaped Identifier(name=join) but parent isn't a CallExpression's MemberExpression.callee.
+	const tree3 = wire({
+		type: 'BinaryExpression',
+		left: {
+			type: 'MemberExpression',
+			object: { type: 'Identifier', name: 'arr' },
+			property: { type: 'Identifier', name: 'join' },
+		},
+		right: { type: 'Literal', value: 1 },
+	});
+	check('chain+field: rejects Identifier(name=join) in non-CallExpression chain', !info.filter!(tree3.left.property));
+}
+
 // --- Standalone .field / standalone [attr] ---------------------------
 
 {

@@ -338,25 +338,50 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			}
 		}
 		if (fieldName) {
-			// fieldFire path — trigger on Parent (left).
+			// Try the fast fieldFire path first — trigger on Parent (left).
+			// Only works when the left side is a leaf type matcher (we need
+			// a finite trigger type set, not a chain).
 			const parentInfo = walkTypeMatcher(left, isExit);
-			if (!parentInfo || parentInfo.types === 'all') return null;
-			// Parent-side filters (e.g. `[optional=true]`) check the
-			// triggering node, but `filter` runs on the post-fieldFire
-			// `actual` — wrap them as `actual.parent` checks.
-			const parentSideFilter = parentInfo.filter;
-			const composed = parentSideFilter && extraFilter
-				? (actual: any) => parentSideFilter(actual.parent) && extraFilter!(actual)
-				: parentSideFilter
-				? (actual: any) => parentSideFilter(actual.parent)
-				: extraFilter;
-			return {
-				types: parentInfo.types,
-				isExit,
-				fieldFire: fieldName,
-				typeFilter,
-				filter: composed,
-			};
+			if (parentInfo && parentInfo.types !== 'all') {
+				// Parent-side filters (e.g. `[optional=true]`) check the
+				// triggering node, but `filter` runs on the post-fieldFire
+				// `actual` — wrap them as `actual.parent` checks.
+				const parentSideFilter = parentInfo.filter;
+				const composed = parentSideFilter && extraFilter
+					? (actual: any) => parentSideFilter(actual.parent) && extraFilter!(actual)
+					: parentSideFilter
+					? (actual: any) => parentSideFilter(actual.parent)
+					: extraFilter;
+				return {
+					types: parentInfo.types,
+					isExit,
+					fieldFire: fieldName,
+					typeFilter,
+					filter: composed,
+				};
+			}
+			// Slow path: left is itself a chain (`A > B.f1 > C.f2`) or a
+			// shape walkTypeMatcher couldn't decompose. Trigger on the
+			// compound's type (or wildcard) and add the field constraint
+			// + parent-chain match as filters. Used by selectors like
+			// `CallExpression > MemberExpression.callee > Identifier[name="join"].property`
+			// (eslint-plugin-prefer-string-starts-ends-with-style rules).
+			if (typeFilter || wildcard) {
+				const types: Set<string> | 'all' = wildcard
+					? 'all'
+					: new Set([typeFilter!]);
+				const parentMatch = collectMatcher(left);
+				if (!parentMatch) return null;
+				const fieldCheck = (n: any) => !!n.parent && n.parent[fieldName] === n;
+				const parentFilter = (n: any) => parentMatch(n.parent);
+				const composed = (n: any) => {
+					if (!fieldCheck(n)) return false;
+					if (!parentFilter(n)) return false;
+					return extraFilter ? extraFilter(n) : true;
+				};
+				return { types, isExit, filter: composed };
+			}
+			return null;
 		}
 		// No field: `Parent > Type[attr]` / `Parent > Type:exit`. Trigger
 		// on Right type, filter parent.type === Parent.
