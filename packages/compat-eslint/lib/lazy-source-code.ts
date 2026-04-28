@@ -366,31 +366,90 @@ export class LazySourceCode {
 		return this.comments;
 	}
 
+	// Per-position comment queries — going through TS's
+	// `forEachLeadingCommentRange` directly skips the whole-file
+	// `convertComments` walk that `this.comments` would otherwise force.
+	// Most rules read comments by position (`getCommentsBefore` etc.,
+	// ~78 / 95 grep'd call sites in eslint core + ts-eslint plugin) and
+	// don't need the full array. As long as the lint pass has at least
+	// one rule that reads `sourceCode.comments` / `getAllComments` (e.g.
+	// `ban-tslint-comment`), the array still gets built; otherwise we
+	// skip `convertComments` entirely.
+	//
+	// `tsNodeOf` returns the underlying ts.Node for an ESTree node we
+	// generated via the lazy converter (esTreeNodeToTSNodeMap is a
+	// WeakMap). Plain ESLint `Token` objects (output of `convertTokens`)
+	// don't have one — they fall back to a tokens-array binary search,
+	// which only forces `convertTokens` (~50 ms cold) instead of
+	// `convertComments` (~115 ms cold).
+	private tsNodeOf(nodeOrToken: NodeOrTokenLike): ts.Node | undefined {
+		const map = this.parserServices?.esTreeNodeToTSNodeMap as WeakMap<object, ts.Node> | undefined;
+		return map?.get(nodeOrToken as unknown as object);
+	}
+
 	getCommentsBefore(nodeOrToken: NodeOrTokenLike): Comment[] {
-		// Comments that sit between the previous token and this one.
-		const tokens = this.tokens;
-		const startLoc = nodeOrToken.range[0];
-		const tIdx = searchLastEndingAtOrBefore(tokens, startLoc);
-		const prevTokenEnd = tIdx >= 0 ? tokens[tIdx].range[1] : 0;
-		return this.commentsInRange(prevTokenEnd, startLoc);
+		const out: Comment[] = [];
+		// Scan trivia from the position right after the previous token
+		// up to the start of this node/token. For ESTree nodes built by
+		// the lazy converter, `tsNode.pos` = fullStart (the boundary just
+		// after the previous non-trivia token, including leading trivia).
+		// For raw tokens we pay one cheap binary search over `tokens`.
+		const tsNode = this.tsNodeOf(nodeOrToken);
+		let scanStart: number;
+		if (tsNode) {
+			scanStart = tsNode.pos;
+		} else {
+			const tIdx = searchLastEndingAtOrBefore(this.tokens, nodeOrToken.range[0]);
+			scanStart = tIdx >= 0 ? this.tokens[tIdx].range[1] : 0;
+		}
+		// `convertComments` skips position 0 if a shebang sits there
+		// (the scanner reports the shebang as a `SingleLineCommentTrivia`
+		// at offset 0); match that for parity.
+		if (scanStart === 0) {
+			scanStart = (ts.getShebang(this.text) ?? '').length;
+		}
+		ts.forEachLeadingCommentRange(this.text, scanStart, (pos, end, kind) => {
+			if (pos >= nodeOrToken.range[0]) return;
+			out.push(buildComment(this.text, pos, end, kind, this._tsFile));
+		});
+		return out;
 	}
 
 	getCommentsAfter(nodeOrToken: NodeOrTokenLike): Comment[] {
-		const tokens = this.tokens;
-		const endLoc = nodeOrToken.range[1];
-		const tIdx = searchFirstAtOrAfter(tokens, endLoc);
-		const nextTokenStart = tIdx < tokens.length ? tokens[tIdx].range[0] : this.text.length;
-		return this.commentsInRange(endLoc, nextTokenStart);
+		const out: Comment[] = [];
+		const tsNode = this.tsNodeOf(nodeOrToken);
+		const endPos = tsNode ? tsNode.end : nodeOrToken.range[1];
+		// `forEachLeadingCommentRange(text, endPos)` scans forward from
+		// `endPos` through trivia until the next non-trivia token,
+		// emitting every comment in between — matches ESLint's
+		// "comments after node up to next token" semantics.
+		ts.forEachLeadingCommentRange(this.text, endPos, (pos, end, kind) => {
+			out.push(buildComment(this.text, pos, end, kind, this._tsFile));
+		});
+		return out;
 	}
 
 	getCommentsInside(node: NodeOrTokenLike): Comment[] {
+		// No matching TS API — need every comment strictly inside the
+		// node's range, and TS only exposes leading/trailing iteration
+		// off a single position. Walk children + collect leading of
+		// each + the parent's tail. Falls back to the full-comments
+		// array for now since this method has the lowest call count
+		// (24/107, mostly ts-plugin rules not in our config).
 		return this.commentsInRange(node.range[0], node.range[1]);
 	}
 
 	commentsExistBetween(left: NodeOrTokenLike, right: NodeOrTokenLike): boolean {
-		const comments = this.comments;
-		const i = searchFirstAtOrAfter(comments, left.range[1]);
-		return i < comments.length && comments[i].range[1] <= right.range[0];
+		// Early-return version of `getCommentsAfter(left)` filtered to
+		// the `right` boundary. `forEachLeadingCommentRange`'s callback
+		// can return a truthy value to terminate the iteration.
+		const tsLeft = this.tsNodeOf(left);
+		const startPos = tsLeft ? tsLeft.end : left.range[1];
+		const rightStart = right.range[0];
+		const found = ts.forEachLeadingCommentRange(this.text, startPos, (_pos, end) => {
+			return end <= rightStart ? true : undefined;
+		});
+		return !!found;
 	}
 
 	private commentsInRange(start: number, end: number): Comment[] {
@@ -594,6 +653,28 @@ function advanceBackward(
 		if (remaining > 0 && --remaining === 0) break;
 	}
 	return matchOne ? null : out;
+}
+
+// ─── Comment construction helper ────────────────────────────────────────────
+
+// Builds an ESLint-shaped Comment object from a TS comment range. Mirrors
+// `convertComments`'s collect step (lib/tokens.ts) but used standalone in
+// the per-position query path so we don't need the whole comments array.
+function buildComment(text: string, pos: number, end: number, kind: ts.CommentKind, ast: ts.SourceFile): Comment {
+	const isLine = kind === ts.SyntaxKind.SingleLineCommentTrivia;
+	const raw = text.slice(pos, end);
+	const value = isLine ? raw.slice(2) : raw.slice(2, -2);
+	const startLC = ast.getLineAndCharacterOfPosition(pos);
+	const endLC = ast.getLineAndCharacterOfPosition(end);
+	return {
+		type: isLine ? 'Line' : 'Block',
+		value,
+		range: [pos, end],
+		loc: {
+			start: { line: startLC.line + 1, column: startLC.character },
+			end: { line: endLC.line + 1, column: endLC.character },
+		},
+	};
 }
 
 // ─── Sorted merge of tokens + comments ──────────────────────────────────────
