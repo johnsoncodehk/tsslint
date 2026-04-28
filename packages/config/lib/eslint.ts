@@ -72,15 +72,30 @@ function detectRuleLoader(pluginName: string, probeRuleName: string): ((ruleName
 			// so this works even when the plugin doesn't expose individual
 			// rules as a public subpath.
 			//
-			// Wrap the require in a per-rule named thunk so the rule name
-			// shows up directly as a frame in CPU profiles (ESLint core
-			// does the same via `LazyLoadingRuleMap`). NamedEvaluation on
-			// a computed property key (`{ [name]: () => ... }`) sets
-			// `Function.prototype.name` at runtime — that's enough for
-			// stack traces, but V8's CPU profile uses the SharedFunctionInfo's
-			// parse-time-inferred name and ignores runtime renames. To get
-			// a parse-time literal name we compile per-thunk source with
-			// `new Function`, baking the rule name in as a string literal.
+			// Pre-warm the plugin's shared dependency tree behind a
+			// stable, plugin-named profile frame. Without this, the
+			// first rule we happen to load gets blamed for ~150–250 ms
+			// of `@typescript-eslint/utils` + `scope-manager` +
+			// `typescript-estree` etc. transitive load — and which rule
+			// that is depends on the user's config-object key order.
+			// The pre-warm gives that cost a deterministic attribution
+			// (`<pluginName>:init` shows up in the flame graph) and
+			// leaves every subsequent rule frame as pure rule-body
+			// load time.
+			const initKey = JSON.stringify(pluginName + ':init');
+			const probeAbs = path.join(pkgRoot, dir, probeRuleName + ext);
+			(new Function('warm', `({ ${initKey}: () => warm() })[${initKey}]();`)(
+				() => { try { require(probeAbs); } catch {} },
+			));
+			// Per-rule named thunk. NamedEvaluation on a computed
+			// property key (`{ [name]: () => ... }`) sets
+			// `Function.prototype.name` at runtime — visible to stack
+			// traces, but V8's CPU profile uses the parse-time-inferred
+			// SharedFunctionInfo name and ignores runtime renames. To
+			// get a parse-time literal name we compile per-thunk source
+			// with `new Function`, baking the rule name in as a string
+			// literal. Same trick ESLint core's `LazyLoadingRuleMap`
+			// achieves with static-keyed object literals.
 			return (ruleName) => {
 				const filePath = path.join(pkgRoot, dir, ruleName + ext);
 				const key = JSON.stringify(ruleName);
