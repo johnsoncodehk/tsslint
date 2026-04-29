@@ -163,9 +163,9 @@ defineConfig({
 
 ### Caching
 
-By default, rules run in a syntax-only mode and their diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/`. Cache is keyed by file mtime.
+Diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/`, keyed by file mtime. The cache is shared across rules and survives between editor sessions.
 
-The moment a rule reads `ctx.program`, it switches to type-aware mode for that file and skips the cache (type information depends on more than one file's mtime). To opt a single diagnostic out of caching without going type-aware, call `.withoutCache()` on the reporter.
+A diagnostic whose correctness depends on more than one file's mtime (e.g. anything that reads `ctx.program` for cross-file resolution and reports on the cached side) should opt out per-diagnostic via `.withoutCache()` on the reporter — the cached entry would otherwise go stale when an unrelated dependency file changes without invalidating its consumers' mtime.
 
 Pass `--force` to the CLI to ignore the cache.
 
