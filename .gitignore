@@ -6,6 +6,7 @@ node_modules
 packages/*/index.js
 packages/*/lib/**/*.js
 !packages/compat-eslint/lib/code-path-analysis/*.js
+!packages/compat-eslint/lib/code-path-analysis/*.d.ts
 packages/*/test/**/*.js
 .tsslint/
 packages/compat-eslint/test/upstream-shim.js
