@@ -610,9 +610,10 @@ export class LazySourceCode {
 		const out: any[] = [];
 		let p = node?.parent;
 		while (p) {
-			out.unshift(p);
+			out.push(p);
 			p = p.parent;
 		}
+		out.reverse();
 		return out;
 	}
 

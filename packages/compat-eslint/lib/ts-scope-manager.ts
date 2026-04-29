@@ -1230,11 +1230,13 @@ export class TsScopeManager {
 	getImplicitGlobals(): TsVariable[] {
 		if (this._implicitGlobals) return this._implicitGlobals;
 		const through = this.globalScope.through;
-		const byName = new Map<string, { v: TsVariable; firstWrite: TsReference }>();
+		const out: TsVariable[] = [];
+		const seen = new Set<string>();
 		for (const ref of through) {
 			if (!ref.isWrite()) continue;
 			const name = ref.identifier.name;
-			if (byName.has(name)) continue;
+			if (seen.has(name)) continue;
+			seen.add(name);
 			const fakeSym = { name, declarations: [], flags: 0 } as unknown as ts.Symbol;
 			const v = new TsVariable(this, fakeSym);
 			// Override defs / identifiers via instance-level override so the
@@ -1244,9 +1246,9 @@ export class TsScopeManager {
 				new TsImplicitGlobalDefinition(this, v, ref.tsIdentifier),
 			];
 			(v as TsVariable & { _identifiersOverride?: TSESTree.Identifier[] })._identifiersOverride = [ref.identifier];
-			byName.set(name, { v, firstWrite: ref });
+			out.push(v);
 		}
-		return this._implicitGlobals = Array.from(byName.values()).map(x => x.v);
+		return this._implicitGlobals = out;
 	}
 
 	// upstream equivalent: spread across `@typescript-eslint/scope-manager/dist/
