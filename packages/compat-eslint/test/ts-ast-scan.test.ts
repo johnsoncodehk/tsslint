@@ -24,11 +24,23 @@ function parseTs(code: string): ts.SourceFile {
 	return ts.createSourceFile('/test.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
+// Collect the same `{phase, target}` shape tests previously got back from
+// `tsScanTraverse`. The function now requires a visitor and returns void;
+// tests reuse this helper to preserve their assertion patterns.
+function collectSteps(sf: ts.SourceFile, pred: any, context: any): any[] {
+	const steps: any[] = [];
+	tsScanTraverse(sf, pred, context, {
+		enterNode(target) { steps.push({ phase: 1, target }); },
+		leaveNode(target) { steps.push({ phase: 2, target }); },
+	});
+	return steps;
+}
+
 function scan(code: string, types: string[]): { entered: string[]; left: string[] } {
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(types);
-	const steps = tsScanTraverse(sf, pred, context);
+	const steps = collectSteps(sf, pred, context);
 	const entered: string[] = [];
 	const left: string[] = [];
 	for (const step of steps as any[]) {
@@ -162,7 +174,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['TSAsExpression']);
-	const steps = tsScanTraverse(sf, pred, context);
+	const steps = collectSteps(sf, pred, context);
 	check('materialised: 1 enter step', (steps as any[]).filter(s => s.phase === 1).length === 1);
 	const target = (steps as any[])[0].target;
 	check('materialised: target.type === TSAsExpression', target.type === 'TSAsExpression');
@@ -335,7 +347,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['FunctionDeclaration']);
 	if (pred) {
-		const steps = tsScanTraverse(sf, pred, context);
+		const steps = collectSteps(sf, pred, context);
 		check(
 			'TSDeclareFunction: predicate skips body-less function declarations',
 			(steps as any[]).filter(s => s.phase === 1).length === 0,
@@ -819,7 +831,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const sf = parseTs(code);
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['MetaProperty']);
-	const steps = tsScanTraverse(sf, pred, context);
+	const steps = collectSteps(sf, pred, context);
 	const target = (steps as any[])[0]?.target;
 	check('MetaProperty: target.type === MetaProperty', target?.type === 'MetaProperty');
 	check(

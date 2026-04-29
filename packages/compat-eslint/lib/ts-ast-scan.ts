@@ -26,18 +26,6 @@ const SK = ts.SyntaxKind;
 // each access. Caching this once avoids the getter per visit (~2% hot path).
 const tsForEachChild = ts.forEachChild;
 
-// Step shape compatible with @eslint/plugin-kit's VisitNodeStep. Both
-// dispatchFast (index.ts) and NodeEventGenerator's switch on `step.kind`
-// only read kind/target/phase, so we omit the `type` / `args` fields
-// upstream's VisitNodeStep carries. The narrow type is dispatcher-contract
-// shape, not a perf win — V8 hidden-class size hasn't shown up in
-// pair-test bench at this slot count. Don't reintroduce the absent fields
-// unless a downstream consumer actually needs them.
-type VisitStep = { kind: 1; target: unknown; phase: 1 | 2 };
-function makeStep(target: unknown, phase: 1 | 2): VisitStep {
-	return { kind: 1, target, phase };
-}
-
 // Wrapper kinds whose `materialize()` result expands into multi-layer
 // chain (see unwrapChain comment at the bottom of the file). For >95% of
 // hits the head is none of these and the chain is just [target] — visit's
@@ -986,17 +974,8 @@ export function predicateAllKinds(): Predicate {
 }
 
 // Walks the TS AST in source order. For each ts.Node where `match`
-// returns true, materialise its ESTree counterpart and emit
-// VisitNodeStep enter/leave events around the recursive descent.
-//
-// This is a drop-in eventQueue producer for the existing dispatchFast
-// loop in index.ts.
-//
-// `inlineVisitor`: when provided, enter/leave fire as inline callbacks
-// during the walk instead of being collected into a steps array. This
-// is the path used when CodePathAnalyzer wraps the dispatcher — CPA
-// must observe enter/leave in real-time order to update its state and
-// emit code-path events. Returns an empty array in that mode.
+// returns true, materialise its ESTree counterpart and dispatch
+// enter/leave through `visitor` in real source order.
 export interface InlineVisitor {
 	enterNode(target: unknown): void;
 	leaveNode(target: unknown): void;
@@ -1005,19 +984,14 @@ export function tsScanTraverse(
 	source: ts.SourceFile,
 	match: Predicate,
 	ctx: ConvertContext,
-	inlineVisitor?: InlineVisitor,
-): unknown[] {
-	const steps: unknown[] = [];
+	visitor: InlineVisitor,
+): void {
 	// Pure-bitmap predicates expose their Uint8Array; reading bitmap[kind]
 	// inline saves a closure call per visit (≈300k visits on checker.ts).
 	// Mixed/conditional predicates fall through to calling match() as before.
 	const bitmap = (match as PredicateWithBitmap).__bitmap;
-	const enterCb = inlineVisitor
-		? (target: unknown) => inlineVisitor.enterNode(target)
-		: (target: unknown) => steps.push(makeStep(target, 1));
-	const leaveCb = inlineVisitor
-		? (target: unknown) => inlineVisitor.leaveNode(target)
-		: (target: unknown) => steps.push(makeStep(target, 2));
+	const enterCb = (target: unknown) => visitor.enterNode(target);
+	const leaveCb = (target: unknown) => visitor.leaveNode(target);
 	// `parentTarget` is the most recent ESTree target we entered on the
 	// way down. ParenthesizedExpression / ComputedPropertyName / ParenthesizedType
 	// are pass-through in convertChildInner — materialise on those returns
@@ -1177,7 +1151,6 @@ export function tsScanTraverse(
 		}
 	};
 	visit(source, null);
-	return steps;
 }
 
 // Lazy-estree wraps certain materialised nodes:
