@@ -2,7 +2,6 @@ import ts = require('typescript');
 import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import url = require('url');
-import fs = require('fs');
 import path = require('path');
 import languagePlugins = require('./languagePlugins.js');
 
@@ -83,13 +82,13 @@ export function create() {
 			return setup(...args);
 		},
 		lint(...args: Parameters<typeof lint>) {
-			return lint(...args)[0];
+			return lint(...args);
 		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return hasCodeFixes(...args);
 		},
 		hasRules(...args: Parameters<typeof hasRules>) {
-			return hasRules(...args)[0];
+			return hasRules(...args);
 		},
 	};
 }
@@ -171,22 +170,17 @@ async function setup(
 	return true;
 }
 
-function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
+function lint(fileName: string, fix: boolean) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
 
 	if (fix) {
-		if (Object.values(fileCache[1]).some(([hasFix]) => hasFix)) {
-			// Reset the cache if there are any fixes applied.
-			fileCache[1] = {};
-			fileCache[2] = {};
-		}
-		diagnostics = linter.lint(fileName, fileCache);
+		diagnostics = linter.lint(fileName);
 		shouldCheck = false;
 
 		let fixes = linter
-			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[2])
+			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
 			.filter(fix => fix.fixId === 'tsslint');
 
 		if (language) {
@@ -211,15 +205,12 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 		const oldText = ts.sys.readFile(fileName);
 		if (newText !== oldText) {
 			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
-			fileCache[0] = fs.statSync(fileName).mtimeMs;
-			fileCache[1] = {};
-			fileCache[2] = {};
 			shouldCheck = true;
 		}
 	}
 
 	if (shouldCheck) {
-		diagnostics = linter.lint(fileName, fileCache);
+		diagnostics = linter.lint(fileName);
 	}
 
 	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
@@ -254,7 +245,7 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
 	// only computes line starts once per file).
 
-	return [diagnostics, fileCache] as const;
+	return diagnostics;
 }
 
 function getFileText(fileName: string) {
@@ -265,6 +256,6 @@ function hasCodeFixes(fileName: string) {
 	return linter.hasCodeFixes(fileName);
 }
 
-function hasRules(fileName: string, minimatchCache: core.FileLintCache[2]) {
-	return [Object.keys(linter.getRules(fileName, minimatchCache)).length > 0, minimatchCache] as const;
+function hasRules(fileName: string) {
+	return Object.keys(linter.getRules(fileName)).length > 0;
 }

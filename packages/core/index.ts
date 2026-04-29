@@ -4,15 +4,6 @@ import type * as ts from 'typescript';
 import path = require('path');
 import minimatch = require('minimatch');
 
-export type FileLintCache = [
-	mtime: number,
-	lintResult: Record<
-		/* ruleId */ string,
-		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
-	>,
-	minimatchResult: Record<string, boolean>,
-];
-
 export type Linter = ReturnType<typeof createLinter>;
 
 export function createLinter(
@@ -47,32 +38,21 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
-	// Rules that touched `rulesContext.program` are type-aware: their
-	// diagnostics depend on cross-file type information that the per-file
-	// mtime cache can't track. We never write their results to cache, and
-	// we ignore any pre-existing cached entry for them so a session that
-	// classifies a rule as type-aware doesn't keep serving stale data
-	// from a previous session that didn't.
-	const typeAwareRules = new Set</* ruleId */ string>();
 
 	return {
-		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
+		lint(fileName: string): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
 
-			const rules = getRulesForFile(fileName, cache?.[2]);
+			const rules = getRulesForFile(fileName);
 			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const configs = getConfigsForFile(fileName, cache?.[2]);
+			const configs = getConfigsForFile(fileName);
 
 			const program = ctx.languageService.getProgram()!;
 			const file = program.getSourceFile(fileName)!;
-			let touchedProgram = false;
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
 				file,
-				get program() {
-					touchedProgram = true;
-					return program;
-				},
+				program,
 				report,
 			};
 
@@ -87,26 +67,6 @@ export function createLinter(
 
 				currentRuleId = ruleId;
 
-				const ruleCache = cache?.[1][currentRuleId];
-				if (ruleCache && !typeAwareRules.has(currentRuleId)) {
-					let lintResult = lintResults.get(fileName);
-					if (!lintResult) {
-						lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
-					}
-					for (const cacheDiagnostic of ruleCache[1]) {
-						lintResult[1].set({
-							...cacheDiagnostic,
-							file: rulesContext.file,
-							relatedInformation: cacheDiagnostic.relatedInformation?.map(info => ({
-								...info,
-								file: info.file ? program.getSourceFile(info.file.fileName) : undefined,
-							})),
-						}, []);
-					}
-					continue;
-				}
-
-				touchedProgram = false;
 				try {
 					rule(rulesContext);
 				}
@@ -116,29 +76,6 @@ export function createLinter(
 					}
 					else {
 						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
-					}
-				}
-				if (touchedProgram) {
-					typeAwareRules.add(currentRuleId);
-				}
-
-				if (cache) {
-					if (typeAwareRules.has(currentRuleId)) {
-						// Rule is type-aware: discard any cache entry (this
-						// session may have written one through `report()`
-						// before the program access; a previous session may
-						// have left a stale one too).
-						delete cache[1][currentRuleId];
-					}
-					else {
-						cache[1][currentRuleId] ??= [false, []];
-
-						for (const [_, fixes] of lintResult[1]) {
-							if (fixes.length) {
-								cache[1][currentRuleId][0] = true;
-								break;
-							}
-						}
 					}
 				}
 			}
@@ -182,20 +119,6 @@ export function createLinter(
 				};
 				let location: [Error, number] = [new Error(), 1];
 				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
-				let cachedObj: ts.DiagnosticWithLocation | undefined;
-
-				if (cache) {
-					cachedObj = {
-						...error,
-						file: undefined as any,
-						relatedInformation: error.relatedInformation?.map(info => ({
-							...info,
-							file: info.file ? { fileName: info.file.fileName } as any : undefined,
-						})),
-					};
-					cache[1][currentRuleId] ??= [false, []];
-					cache[1][currentRuleId][1].push(cachedObj);
-				}
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
@@ -243,18 +166,6 @@ export function createLinter(
 						});
 						return this;
 					},
-					withoutCache() {
-						if (cachedObj) {
-							const ruleCache = cache?.[1][currentRuleId];
-							if (ruleCache) {
-								const index = ruleCache[1].indexOf(cachedObj);
-								if (index >= 0) {
-									ruleCache[1].splice(index, 1);
-								}
-							}
-						}
-						return this;
-					},
 				};
 			}
 		},
@@ -275,7 +186,6 @@ export function createLinter(
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			minimatchCache?: FileLintCache[2],
 		) {
 			const lintResult = lintResults.get(fileName);
 			if (!lintResult) {
@@ -283,7 +193,7 @@ export function createLinter(
 			}
 
 			const file = lintResult[0];
-			const configs = getConfigsForFile(fileName, minimatchCache);
+			const configs = getConfigsForFile(fileName);
 			const result: ts.CodeFixAction[] = [];
 
 			for (const [diagnostic, actions] of lintResult[1]) {
@@ -366,11 +276,11 @@ export function createLinter(
 		getConfigs: getConfigsForFile,
 	};
 
-	function getRulesForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+	function getRulesForFile(fileName: string) {
 		let rules = fileRules.get(fileName);
 		if (!rules) {
 			rules = {};
-			const configs = getConfigsForFile(fileName, minimatchCache);
+			const configs = getConfigsForFile(fileName);
 			for (const config of configs) {
 				collectRules(rules, config.rules, []);
 			}
@@ -386,7 +296,7 @@ export function createLinter(
 		return rules;
 	}
 
-	function getConfigsForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+	function getConfigsForFile(fileName: string) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
@@ -403,21 +313,12 @@ export function createLinter(
 		return result;
 
 		function _minimatch(pattern: string) {
-			if (minimatchCache) {
-				if (pattern in minimatchCache) {
-					return minimatchCache[pattern];
-				}
-			}
 			let normalized = normalizedPath.get(pattern);
 			if (!normalized) {
 				normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
 				normalizedPath.set(pattern, normalized);
 			}
-			const res = minimatch.minimatch(fileName, normalized, { dot: true });
-			if (minimatchCache) {
-				minimatchCache[pattern] = res;
-			}
-			return res;
+			return minimatch.minimatch(fileName, normalized, { dot: true });
 		}
 	}
 

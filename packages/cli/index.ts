@@ -4,7 +4,6 @@ require('./lib/fs-cache.js');
 
 import ts = require('typescript');
 import path = require('path');
-import cache = require('./lib/cache.js');
 import worker = require('./lib/worker.js');
 import fs = require('fs');
 import minimatch = require('minimatch');
@@ -26,7 +25,6 @@ Options:
   --ts-macro-project <glob...>  Lint TS Macro projects
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
-  --force                       Ignore cache
   --failures-only               Only print errors and messages (skip warnings and suggestions)
   -h, --help                    Show this help message
 
@@ -82,7 +80,6 @@ class Project {
 	options: ts.CompilerOptions = {};
 	configFile: string | undefined;
 	currentFileIndex = 0;
-	cache: cache.CacheData = {};
 	pendingHeader: string | undefined;
 
 	constructor(
@@ -149,10 +146,6 @@ class Project {
 			colors.gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
 		}`;
 
-		if (!process.argv.includes('--force')) {
-			this.cache = cache.loadCache(this.tsconfig, this.configFile, this.languages, ts.sys.createHash);
-		}
-
 		return this;
 	}
 }
@@ -182,7 +175,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	let warnings = 0;
 	let messages = 0;
 	let suggestions = 0;
-	let cached = 0;
 	let configErrors = 0;
 	const failuresOnly = process.argv.includes('--failures-only');
 
@@ -289,9 +281,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	}
 
 	const hints: string[] = [];
-	if (cached) {
-		hints.push(colors.cyan('--force') + colors.gray(' to ignore cache'));
-	}
 	if (hasFix) {
 		hints.push(colors.cyan('--fix') + colors.gray(' to apply fixes'));
 	}
@@ -354,38 +343,19 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		while (project.currentFileIndex < project.fileNames.length) {
 			const fileName = project.fileNames[project.currentFileIndex++];
 
-			const fileStat = fs.statSync(fileName, { throwIfNoEntry: false });
-			if (!fileStat) {
+			if (!fs.statSync(fileName, { throwIfNoEntry: false })) {
 				continue;
-			}
-
-			let fileCache = project.cache[fileName];
-			if (fileCache) {
-				if (fileCache[0] !== fileStat.mtimeMs) {
-					fileCache[0] = fileStat.mtimeMs;
-					fileCache[1] = {};
-					fileCache[2] = {};
-				}
-				else {
-					cached++;
-				}
-			}
-			else {
-				project.cache[fileName] = fileCache = [fileStat.mtimeMs, {}, {}];
 			}
 
 			const diagnostics = await linterWorker.lint(
 				fileName,
 				process.argv.includes('--fix'),
-				fileCache,
 			);
 
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
-					hasFix ||= !!fileCache[1][diagnostic.code]?.[0];
-
 					let output: string;
 
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
@@ -428,13 +398,11 @@ const formatHost: ts.FormatDiagnosticsHost = {
 					}
 				}
 			}
-			else if (await linterWorker.hasRules(fileName, fileCache[2])) {
+			else if (await linterWorker.hasRules(fileName)) {
 				passed++;
 			}
 			processed++;
 		}
-
-		cache.saveCache(project.tsconfig, project.configFile!, project.languages, project.cache, ts.sys.createHash);
 
 		await startWorker(linterWorker);
 	}
