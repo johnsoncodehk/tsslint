@@ -47,6 +47,13 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
+	// Rules that touched `rulesContext.program` are type-aware: their
+	// diagnostics depend on cross-file type information that the per-file
+	// mtime cache can't track. We never write their results to cache, and
+	// we ignore any pre-existing cached entry for them so a session that
+	// classifies a rule as type-aware doesn't keep serving stale data
+	// from a previous session that didn't.
+	const typeAwareRules = new Set</* ruleId */ string>();
 
 	return {
 		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
@@ -58,10 +65,14 @@ export function createLinter(
 
 			const program = ctx.languageService.getProgram()!;
 			const file = program.getSourceFile(fileName)!;
+			let touchedProgram = false;
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
 				file,
-				program,
+				get program() {
+					touchedProgram = true;
+					return program;
+				},
 				report,
 			};
 
@@ -77,7 +88,7 @@ export function createLinter(
 				currentRuleId = ruleId;
 
 				const ruleCache = cache?.[1][currentRuleId];
-				if (ruleCache) {
+				if (ruleCache && !typeAwareRules.has(currentRuleId)) {
 					let lintResult = lintResults.get(fileName);
 					if (!lintResult) {
 						lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
@@ -95,6 +106,7 @@ export function createLinter(
 					continue;
 				}
 
+				touchedProgram = false;
 				try {
 					rule(rulesContext);
 				}
@@ -106,14 +118,26 @@ export function createLinter(
 						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
 					}
 				}
+				if (touchedProgram) {
+					typeAwareRules.add(currentRuleId);
+				}
 
 				if (cache) {
-					cache[1][currentRuleId] ??= [false, []];
+					if (typeAwareRules.has(currentRuleId)) {
+						// Rule is type-aware: discard any cache entry (this
+						// session may have written one through `report()`
+						// before the program access; a previous session may
+						// have left a stale one too).
+						delete cache[1][currentRuleId];
+					}
+					else {
+						cache[1][currentRuleId] ??= [false, []];
 
-					for (const [_, fixes] of lintResult[1]) {
-						if (fixes.length) {
-							cache[1][currentRuleId][0] = true;
-							break;
+						for (const [_, fixes] of lintResult[1]) {
+							if (fixes.length) {
+								cache[1][currentRuleId][0] = true;
+								break;
+							}
 						}
 					}
 				}

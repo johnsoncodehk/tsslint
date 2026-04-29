@@ -57,3 +57,7 @@ jobs:
       # TS-AST scan walker unit tests.
       - name: TS-AST scan
         run: node packages/compat-eslint/test/ts-ast-scan.test.js
+
+      # Core: type-aware rule cache classification (probe + sticky).
+      - name: Core cache type-aware classification
+        run: node packages/core/test/cache-typeaware.test.js
