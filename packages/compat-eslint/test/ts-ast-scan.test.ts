@@ -30,8 +30,12 @@ function parseTs(code: string): ts.SourceFile {
 function collectSteps(sf: ts.SourceFile, pred: any, context: any): any[] {
 	const steps: any[] = [];
 	tsScanTraverse(sf, pred, context, {
-		enterNode(target) { steps.push({ phase: 1, target }); },
-		leaveNode(target) { steps.push({ phase: 2, target }); },
+		enterNode(target) {
+			steps.push({ phase: 1, target });
+		},
+		leaveNode(target) {
+			steps.push({ phase: 2, target });
+		},
 	});
 	return steps;
 }
@@ -43,7 +47,7 @@ function scan(code: string, types: string[]): { entered: string[]; left: string[
 	const steps = collectSteps(sf, pred, context);
 	const entered: string[] = [];
 	const left: string[] = [];
-	for (const step of steps as any[]) {
+	for (const step of steps) {
 		if (step.phase === 1) entered.push(step.target.type);
 		else left.push(step.target.type);
 	}
@@ -175,8 +179,8 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['TSAsExpression']);
 	const steps = collectSteps(sf, pred, context);
-	check('materialised: 1 enter step', (steps as any[]).filter(s => s.phase === 1).length === 1);
-	const target = (steps as any[])[0].target;
+	check('materialised: 1 enter step', steps.filter(s => s.phase === 1).length === 1);
+	const target = steps[0].target;
 	check('materialised: target.type === TSAsExpression', target.type === 'TSAsExpression');
 	check('materialised: target.expression accessible', !!target.expression);
 	check('materialised: target.typeAnnotation accessible', !!target.typeAnnotation);
@@ -350,7 +354,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 		const steps = collectSteps(sf, pred, context);
 		check(
 			'TSDeclareFunction: predicate skips body-less function declarations',
-			(steps as any[]).filter(s => s.phase === 1).length === 0,
+			steps.filter(s => s.phase === 1).length === 0,
 		);
 	}
 }
@@ -832,7 +836,7 @@ check('hasPredicate: Decorator', hasPredicate('Decorator'));
 	const { context } = lazy.convertLazy(sf);
 	const pred = predicateForTriggerSet(['MetaProperty']);
 	const steps = collectSteps(sf, pred, context);
-	const target = (steps as any[])[0]?.target;
+	const target = steps[0]?.target;
 	check('MetaProperty: target.type === MetaProperty', target?.type === 'MetaProperty');
 	check(
 		'MetaProperty: target.meta is Identifier "import"',
