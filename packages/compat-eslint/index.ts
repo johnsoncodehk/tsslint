@@ -2,26 +2,108 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
-import path = require('path');
-
-// ESLint internals — these reach into lib/ paths and may break on major ESLint
-// upgrades. Resolved on first use so warm runs that hit TSSLint's per-rule
-// cache for every file never have to load them.
+// `CodePathAnalyzer` is vendored from ESLint's
+// `lib/linter/code-path-analysis/` (see `lib/code-path-analysis/`).
+// ESLint doesn't expose CPA on any public surface
+// (`use-at-your-own-risk` only re-exports lint engines / `builtinRules`),
+// so we ship the source ourselves — that drops the last runtime
+// `eslint` package dependency. The vendored copy has its
+// `eslint/lib/shared/assert` reference replaced with a tiny inline
+// `ok()` and the `debug` package replaced with a no-op stub.
+// Lazy-loaded so cold lint runs that don't hit a CPA-using rule
+// (no-fallthrough / no-unreachable / getter-return / etc.) never
+// pay for parsing the ~4500 lines of analyzer source.
 let eslintInternals: {
-	SourceCode: typeof ESLint.SourceCode;
-	NodeEventGenerator: any;
-	Traverser: { getKeys(node: object): string[] };
+	CodePathAnalyzer: new(eventGenerator: {
+		// ESLint 9.39+ uses `eventGenerator.emit` (function) directly;
+		// ESLint 9.0-9.38 called `eventGenerator.emitter.emit`. Provide
+		// both shapes so we work across the supported range.
+		emit?: (name: string, args: unknown[]) => void;
+		emitter?: { emit(name: string, ...args: unknown[]): void };
+		enterNode(node: unknown): void;
+		leaveNode(node: unknown): void;
+	}) => { enterNode(node: unknown): void; leaveNode(node: unknown): void };
 } | undefined;
 function loadEslintInternals() {
 	if (!eslintInternals) {
-		const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
 		eslintInternals = {
-			SourceCode: require(path.join(eslintRoot, 'lib/languages/js/source-code/source-code.js')),
-			NodeEventGenerator: require(path.join(eslintRoot, 'lib/linter/node-event-generator.js')),
-			Traverser: require(path.join(eslintRoot, 'lib/shared/traverser.js')),
+			CodePathAnalyzer: require('./lib/code-path-analysis/code-path-analyzer.js'),
 		};
 	}
 	return eslintInternals;
+}
+
+// Build a parse-time-named wrapper around a rule listener. V8's CPU
+// profile reads the SharedFunctionInfo's parse-time-inferred name, so we
+// have to compile fresh source per rule with the rule id baked in as a
+// string literal; runtime renames (`Function.prototype.name = ...` or a
+// computed-property-key object literal) only show up in
+// `Function.prototype.name` and stack traces, not in profile frames.
+//
+// Two specialised wrappers, both per-rule cached and compiled fresh
+// via `new Function` so the rule id is parse-time literal:
+//   - selector listener: `function (node) { return fn(node); }` —
+//     covers the AST-visit hot path (~99% of listener calls). V8
+//     decides per-rule whether to inline; rules whose listener body
+//     does enough work to register on the profiler keep their frame.
+//   - code-path listener: `function () { return fn.apply(this, arguments); }`
+//     — preserves variadic dispatch for `onCodePath*` listeners that
+//     take multiple args.
+const _wrapCache = new Map<string, [
+	selectorWrap: (fn: (n: unknown) => unknown) => (n: unknown) => unknown,
+	variadicWrap: (fn: (...args: unknown[]) => unknown) => (...args: unknown[]) => unknown,
+]>();
+function _getWrappers(ruleId: string) {
+	let pair = _wrapCache.get(ruleId);
+	if (pair) return pair;
+	const key = JSON.stringify(ruleId);
+	// `//# sourceURL=` directive gives the resulting SharedFunctionInfo a
+	// non-empty `url`, so Chrome DevTools surfaces these frames in
+	// flame graphs / Bottom-Up / search instead of hiding them as native.
+	// Different URL per rule so each frame is independently navigable.
+	const selectorWrap = new Function(
+		'fn',
+		`return ({ ${key}: function (node) { return fn(node); } })[${key}];\n//# sourceURL=tsslint-listener/${ruleId}.js`,
+	) as any;
+	const variadicWrap = new Function(
+		'fn',
+		`return ({ ${key}: function () { return fn.apply(this, arguments); } })[${key}];\n//# sourceURL=tsslint-listener/${ruleId}.js`,
+	) as any;
+	pair = [selectorWrap, variadicWrap];
+	_wrapCache.set(ruleId, pair);
+	return pair;
+}
+function wrapSelectorListener(ruleId: string, fn: (n: unknown) => unknown) {
+	return _getWrappers(ruleId)[0](fn);
+}
+function wrapVariadicListener(ruleId: string, fn: (...args: unknown[]) => unknown) {
+	return _getWrappers(ruleId)[1](fn);
+}
+
+// Vendored from `eslint/lib/shared/deep-merge-arrays.js`. Public API
+// is `deepMergeArrays(defaults, userOptions)`. Array elements at the
+// same index are merged via `deepMergeObjects` (object spread + recurse
+// into shared keys); user values win on leaves.
+function isObjectNotArray(v: unknown): v is Record<string, unknown> {
+	return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+function deepMergeObjects(first: unknown, second: unknown): unknown {
+	if (second === undefined) return first;
+	if (!isObjectNotArray(first) || !isObjectNotArray(second)) return second;
+	const result: Record<string, unknown> = { ...first, ...second };
+	for (const key of Object.keys(second)) {
+		if (Object.prototype.propertyIsEnumerable.call(first, key)) {
+			result[key] = deepMergeObjects(first[key], second[key]);
+		}
+	}
+	return result;
+}
+function deepMergeArrays(first: unknown[] | undefined, second: unknown[] | undefined): unknown[] {
+	if (!first || !second) return second || first || [];
+	return [
+		...first.map((v, i) => deepMergeObjects(v, i < second.length ? second[i] : undefined)),
+		...second.slice(first.length),
+	];
 }
 
 interface RuleEntry {
@@ -55,9 +137,18 @@ let sharedCache: {
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 } | undefined;
 
-let cachedEstree:
-	| [sourceFile: ts.SourceFile, sourceCode: ESLint.SourceCode, eventQueue: any[], program: ts.Program | undefined]
-	| undefined;
+// sourceCode cache is per-file. The eventQueue itself is no longer
+// cached — every call to `runSharedTraversal` rebuilds it from the TS
+// AST scan, since the path now serves both CPA and non-CPA modes
+// uniformly (CPA's per-walk state can't be replayed from a stale queue
+// anyway). `convertContext` is kept so the TS-scan path can call
+// `materialize(tsNode, context)` for each hit without rebuilding the
+// converter state.
+let cachedEstree: {
+	file: ts.SourceFile;
+	sourceCode: ESLint.SourceCode;
+	convertContext: unknown;
+} | undefined;
 
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
@@ -65,26 +156,28 @@ export function convertRule(
 	context: Partial<ESLint.Rule.RuleContext> = {},
 	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
 ): TSSLint.Rule {
+	// ESLint deep-merges `meta.defaultOptions` into user options so each
+	// rule sees the FULL options object (with all defaults filled in).
+	// Element-wise nullish-coalescing isn't enough — when a user passes
+	// `{ functions: false, classes: false }`, ESLint merges in the rule's
+	// other defaults (`variables: true`, `enums: true`,
+	// `ignoreTypeReferences: true`, …) so the rule's `!options.enums`
+	// guards see `false`, not `undefined`. Without this merge, e.g.
+	// `no-use-before-define` skips every const-enum/Type/Variable ref
+	// because `!undefined` is true. Mirrors
+	// `eslint/lib/shared/deep-merge-arrays.js`.
 	if (eslintRule.meta?.defaultOptions) {
-		for (let i = 0; i < eslintRule.meta.defaultOptions.length; i++) {
-			options[i] ??= eslintRule.meta.defaultOptions[i];
-		}
+		options = deepMergeArrays(eslintRule.meta.defaultOptions, options);
 	}
 
 	const id = (context as { id?: string }).id ?? 'unknown';
 	const entry: RuleEntry = { id, eslintRule, options, context, category };
 	ruleRegistry.set(eslintRule, entry);
 
-	const tsslintRule: TSSLint.Rule = rulesContext => {
-		// Don't destructure `program` out — TSSLint core's syntax-only context
-		// defines it as a throwing getter, and `{ ...ctx }` would trip it on
-		// every call before any rule code runs, marking every rule type-aware
-		// and forcing a Program build for the whole file.
-		const file = rulesContext.file;
-		const report = rulesContext.report;
+	const tsslintRule: TSSLint.Rule = ({ file, report, program }) => {
 		if (sharedCache?.file !== file) {
 			sharedCache = { file, reports: new Map(), errors: new Map() };
-			runSharedTraversal(file, () => rulesContext.program, sharedCache.reports, sharedCache.errors);
+			runSharedTraversal(file, program, sharedCache.reports, sharedCache.errors);
 		}
 
 		const ruleError = sharedCache.errors.get(eslintRule);
@@ -130,72 +223,25 @@ export function convertRule(
 	return tsslintRule;
 }
 
-// A stripped-down replacement for ESLint's safe-emitter that knows which rule
-// each listener belongs to. The per-listener try/catch + "skip if this rule
-// already errored" guard runs inline at emit time, so we don't have to wrap
-// every (rule × selector × file) listener in its own closure.
-function makeRuleEmitter(errors: Map<ESLint.Rule.RuleModule, unknown>) {
-	// Flat `[rule, fn, rule, fn, ...]` per event keeps the dispatch loop tight.
-	const listeners = new Map<string, unknown[]>();
-	let currentRule: ESLint.Rule.RuleModule | undefined;
-	return {
-		setCurrentRule(rule: ESLint.Rule.RuleModule | undefined) {
-			currentRule = rule;
-		},
-		on(eventName: string, listener: (...args: unknown[]) => void) {
-			let arr = listeners.get(eventName);
-			if (!arr) {
-				listeners.set(eventName, arr = []);
-			}
-			arr.push(currentRule, listener);
-		},
-		eventNames() {
-			return [...listeners.keys()];
-		},
-		emit(eventName: string, ...args: unknown[]) {
-			const arr = listeners.get(eventName);
-			if (!arr) {
-				return;
-			}
-			for (let i = 0; i < arr.length; i += 2) {
-				const rule = arr[i] as ESLint.Rule.RuleModule;
-				if (errors.has(rule)) {
-					continue;
-				}
-				try {
-					(arr[i + 1] as (...a: unknown[]) => void)(...args);
-				}
-				catch (err) {
-					errors.set(rule, err);
-				}
-			}
-		},
-	};
-}
-
 function runSharedTraversal(
 	file: ts.SourceFile,
-	getProgram: () => ts.Program,
+	program: ts.Program,
 	reports: Map<ESLint.Rule.RuleModule, DeferredReport[]>,
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 ) {
-	const { sourceCode, eventQueue, program } = getEstree(file, getProgram);
-	const emitter = makeRuleEmitter(errors);
-	// `cwd` mustn't depend on getProgram() — many rules (e.g.
-	// eslint-plugin-import-x's makeContextCacheKey) read it before any
-	// type-aware decision, so reaching for the program here would crash every
-	// rule in syntax-only mode. Reuse the program getEstree already probed for
-	// us; fall back to process.cwd() in syntax-only mode.
-	const cwd = program?.getCurrentDirectory() ?? process.cwd();
+	const { sourceCode } = getEstree(file, program);
+	const cwd = program.getCurrentDirectory();
 
 	let currentNode: any;
+	// (rule, selector, listener) triples — fed into buildFastDispatch
+	// which builds the per-type listener arrays dispatchFast walks.
+	const allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]> = [];
 
 	for (const entry of ruleRegistry.values()) {
 		const eslintRule = entry.eslintRule;
-		emitter.setCurrentRule(eslintRule);
 		// Lazy: rules that don't fire on this file pay no array allocation.
 		let myReports: DeferredReport[] | undefined;
-		const ruleListeners = eslintRule.create({
+		const ruleContext = ({
 			cwd,
 			getCwd() {
 				return cwd;
@@ -213,19 +259,30 @@ function runSharedTraversal(
 				return sourceCode;
 			},
 			settings: {},
-			parserOptions: {},
+			parserOptions: { ecmaVersion: 2026 as const, sourceType: 'module' as const },
 			// Provide nested parserOptions to avoid TypeError in rules that read
 			// `context.languageOptions.parserOptions.X` without a guard.
-			languageOptions: { parserOptions: {} },
+			// Set `ecmaVersion: 2026` (matches `ESLINT_BUILTIN_GLOBALS` set we
+			// register) and `sourceType: 'module'` — many rules gate listener
+			// registration on `ecmaVersion >= 2015` for ES6-only nodes
+			// (BlockStatement:exit + VariableDeclaration on no-lone-blocks,
+			// const/let detection, generator/async checks). Without this, those
+			// rules degrade to a pre-ES6 dispatch that misses block-scoped
+			// declarations and over-reports lone blocks.
+			languageOptions: {
+				parserOptions: {},
+				ecmaVersion: 2026 as const,
+				sourceType: 'module' as const,
+			},
 			parserPath: undefined,
 			id: entry.id,
 			options: entry.options,
-			report(descriptor) {
+			report(descriptor: ESLint.Rule.ReportDescriptor) {
 				let message = 'message' in descriptor
 					? descriptor.message
 					: eslintRule.meta?.messages?.[descriptor.messageId] ?? '';
-				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
-					return descriptor.data?.[key.slice(2, -2).trim()] ?? key;
+				message = message.replace(/\{\{\s*(\w+)\s*\}\}/gu, (key: string) => {
+					return String(descriptor.data?.[key.slice(2, -2).trim()] ?? key);
 				});
 				let start = 0;
 				let end = 0;
@@ -274,7 +331,7 @@ function runSharedTraversal(
 						if ('messageId' in suggest) {
 							suggestMsg = eslintRule.meta?.messages?.[suggest.messageId] ?? '';
 							suggestMsg = suggestMsg.replace(/\{\{\s*(\w+)\s*\}\}/gu, key => {
-								return suggest.data?.[key.slice(2, -2).trim()] ?? key;
+								return String(suggest.data?.[key.slice(2, -2).trim()] ?? key);
 							});
 						}
 						else {
@@ -297,51 +354,356 @@ function runSharedTraversal(
 			getAncestors() {
 				return sourceCode.getAncestors(currentNode);
 			},
-			getDeclaredVariables(node) {
-				return sourceCode.getDeclaredVariables(node);
+			getDeclaredVariables(node: unknown) {
+				return sourceCode.getDeclaredVariables(node as ESLint.Rule.Node);
 			},
 			getScope() {
 				return sourceCode.getScope(currentNode);
 			},
-			markVariableAsUsed(name) {
+			markVariableAsUsed(name: string) {
 				return sourceCode.markVariableAsUsed(name, currentNode);
 			},
 			...entry.context,
-		});
+		}) as unknown as ESLint.Rule.RuleContext;
+		const ruleListeners = eslintRule.create(ruleContext);
 
+		const { isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
-			if (listener) {
-				emitter.on(selector, listener as (...a: unknown[]) => void);
+			if (!listener) continue;
+			// Wrap the listener in a parse-time-named thunk so V8's CPU
+			// profile attributes the listener's run time to the rule id.
+			// Single-arg fast wrap for AST visit listeners (the ~99 % hot
+			// path), variadic wrap for code-path listeners that take
+			// multiple args.
+			const wrapped = isCodePathListener(selector)
+				? wrapVariadicListener(entry.id, listener as (...args: unknown[]) => unknown)
+				: wrapSelectorListener(entry.id, listener as (n: unknown) => unknown);
+			allListeners.push([eslintRule, selector, wrapped]);
+		}
+	}
+
+	// Fast dispatch is the only path. Every selector decomposes into a
+	// (typeSet, fieldFire?, typeFilter?, filter?) tuple via
+	// `decomposeSimple`; if it can't, an UnsupportedSelectorError fires
+	// — never silent NodeEventGenerator fallback. See `buildFastDispatch`.
+	const fast = buildFastDispatch(allListeners);
+	const onTarget = (t: unknown) => {
+		currentNode = t;
+	};
+
+	// Two-mode dispatch path:
+	//
+	//  - CPA mode (any onCodePath* listener present): the walker's inline
+	//    visitor is wrapped in a CodePathAnalyzer that needs its emit /
+	//    enter / leave calls interleaved in source order. CPA's emits and
+	//    node visits both land in one queue, then `dispatchFast` walks it.
+	//    The queue is structurally necessary here because CPA emits arrive
+	//    OUT-of-band relative to the enter/leave stream.
+	//
+	//  - Non-CPA mode (narrow + wildcard): no CPA wrapper, so there's no
+	//    out-of-band emit interleaving. Skip the queue entirely — the
+	//    walker's inline visitor calls `dispatchTarget` per hit. Saves the
+	//    per-step object allocation (~28k on checker.ts) plus the second
+	//    array walk in dispatchFast.
+	if (fast.codePath.size > 0) {
+		const eventQueue = buildCpaEventQueue(file, fast);
+		dispatchFast(eventQueue, fast, errors, onTarget);
+	}
+	else {
+		runTsScanInline(file, fast, errors, onTarget);
+	}
+}
+
+interface DispatchEntry {
+	rule: ESLint.Rule.RuleModule;
+	listener: (n: unknown) => void;
+	// When set, the listener receives `target[fieldFire]` instead of the
+	// triggering node (Parent > *.field selectors).
+	fieldFire?: string;
+	// Multi-level field walk for chains like `A > B.f1 > C.f2`. Each
+	// step extracts `actual[fieldChain[i]]` and (if `fieldChainTypes[i]`
+	// is set) checks the intermediate node's `.type`. Listener receives
+	// the final extracted node. Mutually exclusive with `fieldFire`.
+	fieldChain?: string[];
+	fieldChainTypes?: (string | undefined)[];
+	// Required type for the dispatched node (post fieldFire / fieldChain
+	// if any).
+	typeFilter?: string;
+	// Per-target predicate composing attribute / ancestry checks.
+	filter?: (target: any) => boolean;
+}
+interface FastDispatch {
+	enter: Map<string, DispatchEntry[]>;
+	exit: Map<string, DispatchEntry[]>;
+	// Listeners with wildcard-type triggers (`*` or `Parent > *`). Fire
+	// on every visited node, after the type-keyed lists.
+	enterAll: DispatchEntry[];
+	exitAll: DispatchEntry[];
+	// `onCodePathStart` / `onCodePathEnd` / `onCodePathSegment*` listeners
+	// gathered per event name. When non-empty, we have to drive every
+	// node through ESLint's CodePathAnalyzer so it can update internal
+	// state and emit these events.
+	codePath: Map<string, Array<[ESLint.Rule.RuleModule, (...args: unknown[]) => void]>>;
+}
+
+// Always returns a FastDispatch — never null. `decomposeSimple` throws
+// when it encounters a selector form it can't decompose, and we let
+// that throw propagate. The legacy NodeEventGenerator fallback was
+// retired once selector coverage hit 100% of the ESLint / typescript-
+// eslint rule catalogue; any new gap should surface immediately as
+// an UnsupportedSelectorError, not silently degrade performance.
+function buildFastDispatch(
+	allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]>,
+): FastDispatch {
+	const { decomposeSimple, isCodePathListener } = require(
+		'./lib/selector-analysis',
+	) as typeof import('./lib/selector-analysis');
+	const enter = new Map<string, DispatchEntry[]>();
+	const exit = new Map<string, DispatchEntry[]>();
+	const enterAll: DispatchEntry[] = [];
+	const exitAll: DispatchEntry[] = [];
+	const codePath = new Map<string, Array<[ESLint.Rule.RuleModule, (...args: unknown[]) => void]>>();
+	for (const [rule, selector, listener] of allListeners) {
+		if (isCodePathListener(selector)) {
+			let arr = codePath.get(selector);
+			if (!arr) codePath.set(selector, arr = []);
+			arr.push([rule, listener]);
+			continue;
+		}
+		const infos = decomposeSimple(selector);
+		for (const info of infos) {
+			const map = info.isExit ? exit : enter;
+			const allList = info.isExit ? exitAll : enterAll;
+			const entry: DispatchEntry = {
+				rule,
+				listener,
+				fieldFire: info.fieldFire,
+				fieldChain: info.fieldChain,
+				fieldChainTypes: info.fieldChainTypes,
+				typeFilter: info.typeFilter,
+				filter: info.filter,
+			};
+			if (info.types === 'all') {
+				allList.push(entry);
+			}
+			else {
+				for (const type of info.types) {
+					let arr = map.get(type);
+					if (!arr) map.set(type, arr = []);
+					arr.push(entry);
+				}
 			}
 		}
 	}
-	emitter.setCurrentRule(undefined);
+	return { enter, exit, enterAll, exitAll, codePath };
+}
 
-	const { NodeEventGenerator, Traverser } = loadEslintInternals();
-	const eventGenerator = new NodeEventGenerator(emitter, {
-		visitorKeys: sourceCode.visitorKeys,
-		fallback: Traverser.getKeys,
+// Build the predicate that decides which ts.Nodes get materialised.
+// Three shapes, picked by inspecting `fast`:
+//
+//  1. CPA mode (any onCodePath* listener present) — predicate fires on
+//     every ts.Node so the wrapped CodePathAnalyzer sees the full ESTree
+//     stream.
+//
+//  2. Wildcard mode (`*` / `Parent > *` listener) — predicate fires on
+//     every ts.Node, no CPA wrapper. Same materialisation cost as CPA
+//     mode but no per-step CPA bookkeeping.
+//
+//  3. Narrow mode (default) — predicate is a Uint8Array bitmap built from
+//     the trigger ESTree types. The vast majority of ts.Nodes never get
+//     materialised. predicateForTriggerSet throws UnsupportedSelectorError
+//     if any type lacks a registered predicate (same philosophy as
+//     decomposeSimple — surface coverage gaps as hard errors).
+function buildScanPredicate(fast: FastDispatch) {
+	const { predicateForTriggerSet, predicateAllKinds } = require(
+		'./lib/ts-ast-scan',
+	) as typeof import('./lib/ts-ast-scan');
+	const usesCodePath = fast.codePath.size > 0;
+	const usesWildcard = fast.enterAll.length > 0 || fast.exitAll.length > 0;
+	if (usesCodePath || usesWildcard) {
+		return predicateAllKinds();
+	}
+	const types = new Set<string>();
+	for (const t of fast.enter.keys()) types.add(t);
+	for (const t of fast.exit.keys()) types.add(t);
+	return predicateForTriggerSet(types);
+}
+
+// Non-CPA fast path. The walker's inline visitor calls `dispatchTarget`
+// directly per hit — no intermediate event-queue array allocation, no
+// per-step object alloc. This is the hot path for narrow + wildcard mode
+// (every rule set without onCodePath* listeners).
+function runTsScanInline(
+	file: ts.SourceFile,
+	fast: FastDispatch,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	onTarget: (target: unknown) => void,
+): void {
+	if (!cachedEstree) {
+		throw new Error('runTsScanInline called without an active sourceCode cache');
+	}
+	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	const match = buildScanPredicate(fast);
+	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
+		enterNode(target) {
+			dispatchTarget(target, true, fast, errors, onTarget);
+		},
+		leaveNode(target) {
+			dispatchTarget(target, false, fast, errors, onTarget);
+		},
 	});
+}
 
-	for (const step of eventQueue) {
-		switch (step.kind) {
-			case 1: {
-				if (step.phase === 1) {
-					currentNode = step.target;
-					eventGenerator.enterNode(step.target);
+// CPA-mode event-queue producer. The walker's inline visitor wraps a
+// CodePathAnalyzer; CPA's onCodePath* emits arrive out-of-band relative
+// to the enter/leave stream and have to be replayed in CPA's own ordering
+// — that's why we materialise a queue here. Steps are appended in the
+// order CPA produces them (state-update emits first, then the node
+// visit), exactly mirroring what ESLint's CodePathAnalyzer-wrapped
+// traverser would emit — but on the lazy ESTree built bottom-up from the
+// TS AST, no second walker.
+function buildCpaEventQueue(file: ts.SourceFile, fast: FastDispatch): any[] {
+	if (!cachedEstree) {
+		throw new Error('buildCpaEventQueue called without an active sourceCode cache');
+	}
+	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
+	const match = buildScanPredicate(fast);
+	const queue: any[] = [];
+	// CPA's emit API: ESLint 9.39 calls `analyzer.emit(name, args)` directly
+	// (the analyzer copies `eventGenerator.emit` onto itself); older ESLint
+	// 9.x called `analyzer.emitter.emit(name, ...args)`. Provide both to
+	// stay forward and backward compatible.
+	const emit = (name: string, args: unknown[]) => {
+		queue.push({ kind: 2, target: name, args });
+	};
+	const fakeEmitter = {
+		emit(name: string, ...args: unknown[]) {
+			queue.push({ kind: 2, target: name, args });
+		},
+	};
+	const wrapped = {
+		emit,
+		emitter: fakeEmitter,
+		enterNode(target: unknown) {
+			queue.push({ kind: 1, target, phase: 1 });
+		},
+		leaveNode(target: unknown) {
+			queue.push({ kind: 1, target, phase: 2 });
+		},
+	};
+	const { CodePathAnalyzer } = loadEslintInternals();
+	const cpa = new CodePathAnalyzer(wrapped);
+	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
+		enterNode(target) {
+			cpa.enterNode(target);
+		},
+		leaveNode(target) {
+			cpa.leaveNode(target);
+		},
+	});
+	return queue;
+}
+
+// Per-target dispatcher: type-keyed enter/exit list + wildcard list. Used
+// by both the inline non-CPA path and dispatchFast's kind=1 branch.
+// Updates `currentNode` (via `onTarget`) on BOTH enter and exit so that
+// `getScope` / `getAncestors` / `markVariableAsUsed` from inside an exit
+// listener see the node being exited — not the last-entered descendant.
+// ESLint's Linter sets the same `currentNode` before invoking either
+// phase's listener; matching that contract is what rules like `no-shadow`
+// / `no-redeclare` (which read scope from `:exit` listeners on inner
+// nodes) depend on.
+function dispatchTarget(
+	target: unknown,
+	isEnter: boolean,
+	fast: FastDispatch,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	onTarget: (target: unknown) => void,
+): void {
+	onTarget(target);
+	const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
+	if (arr) runEntries(arr, target, errors);
+	const allArr = isEnter ? fast.enterAll : fast.exitAll;
+	if (allArr.length) runEntries(allArr, target, errors);
+}
+
+function dispatchFast(
+	eventQueue: any[],
+	fast: FastDispatch,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	onTarget: (target: unknown) => void,
+): void {
+	for (let i = 0; i < eventQueue.length; i++) {
+		const step = eventQueue[i];
+		if (step.kind === 1) {
+			dispatchTarget(step.target, step.phase === 1, fast, errors, onTarget);
+		}
+		else if (step.kind === 2) {
+			// CodePathAnalyzer emit step: target is the event name
+			// (`onCodePathStart`, `onCodePathSegmentEnd`, …) and args is
+			// the payload. Dispatch directly to the per-event listener
+			// arrays we collected up front — no emitter, no NEG.
+			const listeners = fast.codePath.get(step.target);
+			if (listeners) {
+				for (let j = 0; j < listeners.length; j++) {
+					const [rule, fn] = listeners[j];
+					if (errors.has(rule)) continue;
+					try {
+						fn(...step.args);
+					}
+					catch (err) {
+						errors.set(rule, err);
+					}
 				}
-				else {
-					eventGenerator.leaveNode(step.target);
+			}
+		}
+	}
+}
+
+function runEntries(
+	arr: DispatchEntry[],
+	target: any,
+	errors: Map<ESLint.Rule.RuleModule, unknown>,
+): void {
+	for (let j = 0; j < arr.length; j++) {
+		const e = arr[j];
+		if (errors.has(e.rule)) continue;
+		let actual: any = target;
+		if (e.fieldFire !== undefined) {
+			actual = target[e.fieldFire];
+			if (actual == null) continue;
+			if (Array.isArray(actual)) continue; // arrays aren't single targets
+		}
+		else if (e.fieldChain !== undefined) {
+			// Multi-level field walk for `A > B.f1 > C.f2 [> …]` chains.
+			// Each step extracts and (when fieldChainTypes[k] is set)
+			// type-checks the intermediate node before walking further.
+			// Final extracted node is passed to the listener.
+			let bail = false;
+			const chain = e.fieldChain;
+			const types = e.fieldChainTypes;
+			for (let k = 0; k < chain.length; k++) {
+				actual = actual[chain[k]];
+				if (actual == null || Array.isArray(actual)) {
+					bail = true;
+					break;
 				}
-				break;
+				const t = types?.[k];
+				if (t !== undefined && actual.type !== t) {
+					bail = true;
+					break;
+				}
 			}
-			case 2: {
-				emitter.emit(step.target, ...step.args);
-				break;
-			}
-			default:
-				throw new Error(`Invalid traversal step found: "${step.type}".`);
+			if (bail) continue;
+		}
+		if (e.typeFilter !== undefined && actual.type !== e.typeFilter) continue;
+		if (e.filter !== undefined && !e.filter(actual)) continue;
+		try {
+			e.listener(actual);
+		}
+		catch (err) {
+			errors.set(e.rule, err);
 		}
 	}
 }
@@ -468,104 +830,89 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 	return obj != null && typeof (obj as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function';
 }
 
-// Subset of ParseSettings that astConverter actually reads.
-const PARSE_SETTINGS = {
-	allowInvalidAST: false,
-	comment: true,
-	errorOnUnknownASTType: false,
-	loc: true,
-	range: true,
-	suppressDeprecatedPropertyWarnings: true,
-	tokens: true,
-};
-
-function getEstree(
-	file: ts.SourceFile,
-	getProgram: () => ts.Program,
-) {
-	if (cachedEstree?.[0] !== file) {
+function getEstree(file: ts.SourceFile, program: ts.Program) {
+	if (cachedEstree?.file !== file) {
 		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
 		// whole parser package on first call (the heaviest single dep) and just
 		// dispatches to typescript-estree's astConverter, which we already have
 		// a ts.SourceFile for. Calling it directly avoids the parser require.
-		const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
-		const { analyze } = require('@typescript-eslint/scope-manager');
-		const { visitorKeys } = require('@typescript-eslint/visitor-keys');
-		const { SourceCode } = loadEslintInternals();
+		const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
+		const { TsScopeManager, applyEslintGlobals } = require(
+			'./lib/ts-scope-manager',
+		) as typeof import('./lib/ts-scope-manager');
+		const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
+		const { LazySourceCode } = require('./lib/lazy-source-code') as typeof import('./lib/lazy-source-code');
 
-		// Probe TSSLint core for an actual Program: in syntax-only mode the
-		// `program` getter throws "Not supported", in type-aware mode it returns
-		// the built Program. Hand rules whatever's available — undefined when
-		// types aren't, the real Program when they are. This matches what
-		// @typescript-eslint/parser exposes without `parserOptions.project`, so
-		// rules that probe `parserServices.program` truthiness (e.g.
-		// eslint-plugin-regexp's getTypeScriptTools) skip the type-aware path
-		// instead of tripping the throw and forcing a Program build.
-		let program: ts.Program | undefined;
-		try {
-			program = getProgram();
-		}
-		catch {
-			program = undefined;
-		}
+		// Lazy ESTree shim (lib/lazy-estree.ts). Byte-identical to
+		// typescript-estree's eager Converter on every TS file under
+		// packages/, but materialises children on first read. Rules see
+		// real subtrees and can't null-deref into them.
+		const { astMaps, estree, context: convertContext } = convertLazy(file) as {
+			astMaps: any;
+			estree: any;
+			context: unknown;
+		};
 
-		// astConverter walks via ts.Node#getText, which needs parent pointers.
-		// Type-checking sets these; the syntax-only path may not.
-		if (file.statements.length > 0 && file.statements[0].parent !== file) {
-			bindTsParents(file);
-		}
+		// tokens / comments come from our own scanner-based converters
+		// (lib/tokens.ts) — byte-identical to typescript-estree's
+		// `convertTokens` / `convertComments` on every checked fixture.
+		// Rules like no-unnecessary-type-assertion call
+		// `sourceCode.getTokenAfter()` and need the tokens array — but
+		// most rules never touch tokens/comments. Defer the scan via lazy
+		// getters: cheap when no rule reads, ~80ms saved on large files.
+		const { convertTokens, convertComments } = require('./lib/tokens') as typeof import('./lib/tokens');
+		let _tokens: unknown[] | undefined;
+		let _comments: unknown[] | undefined;
+		Object.defineProperty(estree, 'tokens', {
+			configurable: true,
+			enumerable: true,
+			get: () => _tokens ??= convertTokens(file),
+			set: (v: unknown[]) => {
+				_tokens = v;
+			},
+		});
+		Object.defineProperty(estree, 'comments', {
+			configurable: true,
+			enumerable: true,
+			get: () => _comments ??= convertComments(file),
+			set: (v: unknown[]) => {
+				_comments = v;
+			},
+		});
 
-		const { astMaps, estree } = astConverter(file, PARSE_SETTINGS, true);
 		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
 			? 'module'
 			: 'script';
-		const scopeManager = analyze(estree, {
-			sourceType: estree.sourceType,
-			childVisitorKeys: visitorKeys,
-		});
-		const sourceCode = new SourceCode({
+		const scopeManager = new TsScopeManager(file, program, estree, astMaps, estree.sourceType);
+		// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
+		// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
+		// `TsScopeManager` itself stays free of this lint-pipeline policy
+		// (upstream eslint-scope parity tests rely on the un-injected
+		// shape); the names + de-dupe logic live next to `addGlobals` in
+		// `ts-scope-manager.ts`.
+		applyEslintGlobals(scopeManager);
+		const sourceCode = new LazySourceCode({
 			text: file.text,
 			ast: estree,
+			tsFile: file,
 			scopeManager,
-			visitorKeys,
-			parserServices: program
-				? {
-					...astMaps,
-					program,
-					hasFullTypeInformation: true,
-					emitDecoratorMetadata: undefined,
-					experimentalDecorators: undefined,
-					isolatedDeclarations: undefined,
-					getSymbolAtLocation: (node: any) =>
-						program!.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-					getTypeAtLocation: (node: any) =>
-						program!.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-				}
-				: {
-					// Syntax-only shape — match what @typescript-eslint/parser returns
-					// when `parserOptions.project` isn't set, so plugins fall back to
-					// their syntax-only paths instead of trying to call type-aware
-					// helpers that wouldn't exist.
-					...astMaps,
-					program: undefined,
-					emitDecoratorMetadata: undefined,
-					experimentalDecorators: undefined,
-					isolatedDeclarations: undefined,
-				},
-		});
-		const eventQueue = (sourceCode as unknown as { traverse(): any[] }).traverse();
-		cachedEstree = [file, sourceCode, eventQueue, program];
+			visitorKeys: visitorKeys as Record<string, string[]>,
+			parserServices: {
+				...astMaps,
+				program,
+				hasFullTypeInformation: true,
+				emitDecoratorMetadata: undefined,
+				experimentalDecorators: undefined,
+				isolatedDeclarations: undefined,
+				getSymbolAtLocation: (node: any) =>
+					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+				getTypeAtLocation: (node: any) =>
+					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+			},
+		}) as unknown as ESLint.SourceCode;
+		cachedEstree = { file, sourceCode, convertContext };
 	}
 	return {
-		sourceCode: cachedEstree[1],
-		eventQueue: cachedEstree[2],
-		program: cachedEstree[3],
+		sourceCode: cachedEstree.sourceCode,
 	};
-}
-
-function bindTsParents(node: ts.Node): void {
-	node.forEachChild(child => {
-		(child as { parent: ts.Node }).parent = node;
-		bindTsParents(child);
-	});
 }

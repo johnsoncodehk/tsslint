@@ -4,7 +4,6 @@ import core = require('@tsslint/core');
 import url = require('url');
 import fs = require('fs');
 import path = require('path');
-import worker_threads = require('worker_threads');
 import languagePlugins = require('./languagePlugins.js');
 
 import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
@@ -18,7 +17,6 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
-let linterSyntaxOnlyLanguageService!: ts.LanguageService;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -70,9 +68,16 @@ const originalHost: ts.LanguageServiceHost = {
 };
 const linterHost: ts.LanguageServiceHost = { ...originalHost };
 const originalService = ts.createLanguageService(linterHost);
-const originalSyntaxOnlyService = ts.createLanguageService(linterHost, undefined, true);
 
-export function createLocal() {
+// Linter is single-threaded by design. The previous version split into a
+// worker_threads worker for TTY mode (so the spinner could update during a
+// file's lint) and a local fallback for non-TTY. Real numbers showed worker
+// IPC overhead (JSON.stringify + JSON.parse + structured-clone of diagnostic
+// payloads + Worker spawn / teardown) wasn't earning its keep — and a single
+// `text` field on a 3 MB checker.ts duplicated across hundreds of diagnostics
+// blew JSON.stringify past V8's max string length, crashing the worker.
+// Keep a single in-process API; the spinner just updates between files.
+export function create() {
 	return {
 		setup(...args: Parameters<typeof setup>) {
 			return setup(...args);
@@ -88,88 +93,6 @@ export function createLocal() {
 		},
 	};
 }
-
-export function create() {
-	const worker = new worker_threads.Worker(__filename);
-	return {
-		setup(...args: Parameters<typeof setup>) {
-			return sendRequest(setup, ...args);
-		},
-		async lint(...[fileName, fix, cache]: Parameters<typeof lint>) {
-			const [res, newCache] = await sendRequest(lint, fileName, fix, cache);
-			Object.assign(cache, newCache); // Sync the cache
-			return res;
-		},
-		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
-			return sendRequest(hasCodeFixes, ...args);
-		},
-		async hasRules(...[fileName, cache]: Parameters<typeof hasRules>) {
-			const [res, newCache] = await sendRequest(hasRules, fileName, cache);
-			Object.assign(cache, newCache); // Sync the cache
-			return res;
-		},
-	};
-
-	function sendRequest<T extends (...args: any) => void>(t: T, ...args: any[]) {
-		return new Promise<Awaited<ReturnType<T>>>((resolve, reject) => {
-			const onMessage = (json: string) => {
-				cleanup();
-				const parsed = JSON.parse(json);
-				if (parsed && parsed.__error) {
-					reject(new Error(parsed.__error));
-				}
-				else {
-					resolve(parsed);
-				}
-			};
-			const onError = (err: Error) => {
-				cleanup();
-				reject(err);
-			};
-			const onExit = (code: number) => {
-				cleanup();
-				reject(new Error(`Worker exited with code ${code}`));
-			};
-			const cleanup = () => {
-				worker.off('message', onMessage);
-				worker.off('error', onError);
-				worker.off('messageerror', onError);
-				worker.off('exit', onExit);
-			};
-			worker.once('message', onMessage);
-			worker.once('error', onError);
-			worker.once('messageerror', onError);
-			worker.once('exit', onExit);
-			worker.postMessage(JSON.stringify([t.name, ...args]));
-		});
-	}
-}
-
-worker_threads.parentPort?.on('message', async json => {
-	let response: string;
-	try {
-		const data: [cmd: keyof typeof handlers, ...args: any[]] = JSON.parse(json);
-		const handler = handlers[data[0]] as ((...args: any[]) => unknown) | undefined;
-		if (!handler) {
-			throw new Error(`Unknown worker command: ${data[0]}`);
-		}
-		const result = await handler(...data.slice(1));
-		response = JSON.stringify(result);
-	}
-	catch (err) {
-		response = JSON.stringify({
-			__error: err instanceof Error ? (err.stack ?? err.message) : String(err),
-		});
-	}
-	worker_threads.parentPort!.postMessage(response);
-});
-
-const handlers = {
-	setup,
-	lint,
-	hasCodeFixes,
-	hasRules,
-};
 
 async function setup(
 	tsconfig: string,
@@ -200,7 +123,6 @@ async function setup(
 		}
 	}
 	linterLanguageService = originalService;
-	linterSyntaxOnlyLanguageService = originalSyntaxOnlyService;
 	language = undefined;
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
@@ -224,10 +146,6 @@ async function setup(
 		const proxy = createProxyLanguageService(linterLanguageService);
 		proxy.initialize(language);
 		linterLanguageService = proxy.proxy;
-
-		const syntaxOnly = createProxyLanguageService(linterSyntaxOnlyLanguageService);
-		syntaxOnly.initialize(language);
-		linterSyntaxOnlyLanguageService = syntaxOnly.proxy;
 	}
 
 	projectVersion++;
@@ -248,7 +166,6 @@ async function setup(
 		path.dirname(configFile),
 		config,
 		() => [],
-		linterSyntaxOnlyLanguageService,
 	);
 
 	return true;
@@ -305,46 +222,37 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 		diagnostics = linter.lint(fileName, fileCache);
 	}
 
+	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
+	// the transformed file to the original source. The original file
+	// might not be in the language service's program, so we substitute a
+	// SourceFile-shaped POJO with the real source text — `formatDiagnostics-
+	// WithColorAndContext` reads `.file.text` to render code snippets.
 	if (language) {
 		diagnostics = diagnostics
 			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
 			.filter(d => !!d);
-
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: getFileText(diagnostic.file.fileName),
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
+		const fileShim = new Map<string, { fileName: string; text: string }>();
+		const getShim = (fn: string) => {
+			let s = fileShim.get(fn);
+			if (!s) {
+				s = { fileName: fn, text: getFileText(fn) };
+				fileShim.set(fn, s);
+			}
+			return s;
+		};
+		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(d => ({
+			...d,
+			file: getShim(d.file.fileName) as any,
+			relatedInformation: d.relatedInformation?.map(info => ({
 				...info,
-				file: info.file
-					? {
-						fileName: info.file.fileName,
-						text: getFileText(info.file.fileName),
-					} as any
-					: undefined,
+				file: info.file ? getShim(info.file.fileName) as any : undefined,
 			})),
 		}));
 	}
-	else {
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(diagnostic => ({
-			...diagnostic,
-			file: {
-				fileName: diagnostic.file.fileName,
-				text: diagnostic.file.text,
-			} as any,
-			relatedInformation: diagnostic.relatedInformation?.map<ts.DiagnosticRelatedInformation>(info => ({
-				...info,
-				file: info.file
-					? {
-						fileName: info.file.fileName,
-						text: info.file.text,
-					} as any
-					: undefined,
-			})),
-		}));
-	}
+	// Plain-TS path: leave diagnostics as-is. `.file` is the program's real
+	// `ts.SourceFile` which already shares `lineMap` cache across all
+	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
+	// only computes line starts once per file).
 
 	return [diagnostics, fileCache] as const;
 }

@@ -12,15 +12,24 @@
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/compat-eslint"
 	},
+	"scripts": {
+		"bench": "tsc --build && node test/bench/run.js",
+		"test:predicate-coverage": "tsc --build && node test/predicate-coverage.test.js",
+		"test:jsx-react-x": "tsc --build && node test/jsx-react-x.test.mjs",
+		"test:upstream": "tsc --build && node test/upstream-runner.js"
+	},
 	"devDependencies": {
 		"@types/eslint": "^8.56.10",
+		"@typescript-eslint/scope-manager": "^8.16.0",
+		"@typescript-eslint/typescript-estree": "^8.16.0",
+		"eslint": ">=9.39.0 <10.0.0",
 		"typescript": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "*"
 	},
 	"dependencies": {
 		"@tsslint/types": "3.0.4",
-		"@typescript-eslint/scope-manager": "^8.16.0",
-		"@typescript-eslint/typescript-estree": "^8.16.0",
-		"@typescript-eslint/visitor-keys": "^8.16.0",
-		"eslint": ">=9.0.0 <9.28.0"
+		"esquery": "^1.5.0"
 	}
 }
