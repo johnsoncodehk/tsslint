@@ -2,37 +2,6 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 
-// `CodePathAnalyzer` is vendored from ESLint's
-// `lib/linter/code-path-analysis/` (see `lib/code-path-analysis/`).
-// ESLint doesn't expose CPA on any public surface
-// (`use-at-your-own-risk` only re-exports lint engines / `builtinRules`),
-// so we ship the source ourselves — that drops the last runtime
-// `eslint` package dependency. The vendored copy has its
-// `eslint/lib/shared/assert` reference replaced with a tiny inline
-// `ok()` and the `debug` package replaced with a no-op stub.
-// Lazy-loaded so cold lint runs that don't hit a CPA-using rule
-// (no-fallthrough / no-unreachable / getter-return / etc.) never
-// pay for parsing the ~4500 lines of analyzer source.
-let eslintInternals: {
-	CodePathAnalyzer: new(eventGenerator: {
-		// ESLint 9.39+ uses `eventGenerator.emit` (function) directly;
-		// ESLint 9.0-9.38 called `eventGenerator.emitter.emit`. Provide
-		// both shapes so we work across the supported range.
-		emit?: (name: string, args: unknown[]) => void;
-		emitter?: { emit(name: string, ...args: unknown[]): void };
-		enterNode(node: unknown): void;
-		leaveNode(node: unknown): void;
-	}) => { enterNode(node: unknown): void; leaveNode(node: unknown): void };
-} | undefined;
-function loadEslintInternals() {
-	if (!eslintInternals) {
-		eslintInternals = {
-			CodePathAnalyzer: require('./lib/code-path-analysis/code-path-analyzer.js'),
-		};
-	}
-	return eslintInternals;
-}
-
 // Build a parse-time-named wrapper around a rule listener. V8's CPU
 // profile reads the SharedFunctionInfo's parse-time-inferred name, so we
 // have to compile fresh source per rule with the rule id baked in as a
@@ -596,7 +565,11 @@ function runCpaInline(
 		enterNode: (target: unknown) => dispatchTarget(target, true, fast, errors, onTarget),
 		leaveNode: (target: unknown) => dispatchTarget(target, false, fast, errors, onTarget),
 	};
-	const { CodePathAnalyzer } = loadEslintInternals();
+	// CodePathAnalyzer is vendored from ESLint's `lib/linter/code-path-analysis/`
+	// into our `lib/code-path-analysis/` (ESLint exposes no public surface for
+	// it). Node `require` is already lazy + cached, so this loads on first
+	// CPA-mode lint and is reused thereafter — no module-level memo needed.
+	const CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js') as typeof import('./lib/code-path-analysis/code-path-analyzer');
 	const cpa = new CodePathAnalyzer(wrapped);
 	tsScanTraverse(file, match, convertContext as any, {
 		enterNode(target) {
