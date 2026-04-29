@@ -6,7 +6,7 @@ import { convertLazy } from './lib/lazy-estree';
 import { LazySourceCode } from './lib/lazy-source-code';
 import { decomposeSimple, isCodePathListener } from './lib/selector-analysis';
 import { convertComments, convertTokens } from './lib/tokens';
-import { tsScanTraverse } from './lib/ts-ast-scan';
+import { predicateAllKinds, predicateForTriggerSet, tsScanTraverse } from './lib/ts-ast-scan';
 import { applyEslintGlobals, TsScopeManager } from './lib/ts-scope-manager';
 import { visitorKeys } from './lib/visitor-keys';
 
@@ -488,9 +488,6 @@ function buildFastDispatch(
 //     if any type lacks a registered predicate (same philosophy as
 //     decomposeSimple — surface coverage gaps as hard errors).
 function buildScanPredicate(fast: FastDispatch) {
-	const { predicateForTriggerSet, predicateAllKinds } = require(
-		'./lib/ts-ast-scan',
-	) as typeof import('./lib/ts-ast-scan');
 	const usesCodePath = fast.codePath.size > 0;
 	const usesWildcard = fast.enterAll.length > 0 || fast.exitAll.length > 0;
 	if (usesCodePath || usesWildcard) {

@@ -33,6 +33,7 @@
 // these positions.
 
 import * as ts from 'typescript';
+import { xhtmlEntities } from './xhtml-entities';
 
 const SK = ts.SyntaxKind;
 
@@ -4938,7 +4939,6 @@ function convertJSXNamespaceOrIdentifier(node: ts.Node, parent: LazyNode): LazyN
 // `.value` (react/no-unescaped-entities, jsx-a11y accessibility checks,
 // whitespace detectors) need this parity — partial decoding silently
 // hides real entities behind their `&name;` source form.
-const { xhtmlEntities } = require('./xhtml-entities.js') as { xhtmlEntities: Record<string, string> };
 function unescapeJsxText(text: string): string {
 	if (!text.includes('&')) return text;
 	return text.replace(/&(?:#\d+|#x[\da-fA-F]+|[0-9a-zA-Z]+);/g, entity => {

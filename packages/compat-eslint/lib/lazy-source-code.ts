@@ -26,6 +26,7 @@
 // returning undefined.
 
 import * as ts from 'typescript';
+import { materialize } from './lazy-estree';
 import { buildCommentObject, walkInnerCommentsOf } from './tokens';
 
 const SK = ts.SyntaxKind;
@@ -587,7 +588,6 @@ export class LazySourceCode {
 		// holds the converter context.
 		const ctx = (this.ast as { _ctx?: unknown })._ctx;
 		if (!ctx) return null;
-		const { materialize } = require('./lazy-estree') as typeof import('./lazy-estree');
 		// Walk up to find a ts.Node that has an ESTree wrapper kind.
 		// Tokens / SyntaxList / etc. get folded into their parent's
 		// ESTree shape, so they don't have their own wrappers.

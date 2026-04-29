@@ -12,6 +12,7 @@
 
 import type { TSESTree } from '@typescript-eslint/types';
 import ts = require('typescript');
+import { materialize } from './lazy-estree';
 
 type AstMaps = {
 	esTreeNodeToTSNodeMap: WeakMap<TSESTree.Node, ts.Node>;
@@ -1480,9 +1481,6 @@ export class TsScopeManager {
 		// Builds a real ESTree counterpart with proper parent chain. Lazy
 		// has a generic-fallback for unsupported kinds and null returns,
 		// so this never throws.
-		const { materialize } = require(
-			'./lazy-estree',
-		) as typeof import('./lazy-estree');
 		return materialize(tsNode, {
 			ast: this.tsFile,
 			maps: this.astMaps,
