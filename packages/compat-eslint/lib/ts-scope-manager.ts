@@ -11,7 +11,7 @@
 // would miss block-scopes-without-decls that ESLint expects.
 
 import type { TSESTree } from '@typescript-eslint/types';
-import ts = require('typescript');
+import * as ts from 'typescript';
 import { materialize } from './lazy-estree';
 
 type AstMaps = {
