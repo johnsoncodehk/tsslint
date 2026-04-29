@@ -1,0 +1,59 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - run: pnpm run build
+
+      # Per-rule parity bench (~0.6 s) — gates against location-keyed
+      # divergence between compat-eslint and ESLint upstream.
+      - name: Parity bench
+        run: pnpm -F @tsslint/compat-eslint bench
+
+      # Vendored @typescript-eslint/scope-manager test suite.
+      - name: Upstream scope-manager
+        run: pnpm -F @tsslint/compat-eslint test:upstream
+
+      # Predicate coverage matrix for AST_NODE_TYPES.
+      - name: Predicate coverage
+        run: pnpm -F @tsslint/compat-eslint test:predicate-coverage
+
+      # JSX type-aware parity vs ESLint Linter on eslint-plugin-react-x.
+      - name: JSX react-x parity
+        run: pnpm -F @tsslint/compat-eslint test:jsx-react-x
+
+      # Lazy ESTree shape parity (every .ts under packages/) + identity
+      # invariants + smoke under visitorKeys traversal.
+      - name: Lazy ESTree parity
+        run: node packages/compat-eslint/test/lazy-estree.test.js
+
+      # Integration: selector dispatch + CPA fallback + per-rule error
+      # isolation through the full convertRule pipeline.
+      - name: Compat pipeline integration
+        run: node packages/compat-eslint/test/compat-pipeline.test.js
+
+      # Selector decomposition unit tests.
+      - name: Selector analysis
+        run: node packages/compat-eslint/test/selector-analysis.test.js
+
+      # TS-AST scan walker unit tests.
+      - name: TS-AST scan
+        run: node packages/compat-eslint/test/ts-ast-scan.test.js
