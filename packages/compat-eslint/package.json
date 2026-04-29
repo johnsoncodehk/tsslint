@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/compat-eslint",
-	"version": "3.0.4",
+	"version": "3.1.0",
 	"license": "MIT",
 	"files": [
 		"index.js",
@@ -30,7 +30,7 @@
 		"typescript": "*"
 	},
 	"dependencies": {
-		"@tsslint/types": "3.0.4",
+		"@tsslint/types": "3.1.0",
 		"esquery": "^1.5.0"
 	}
 }
