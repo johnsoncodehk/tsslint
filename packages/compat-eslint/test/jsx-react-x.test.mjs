@@ -7,10 +7,10 @@
 // compiled .test.js files. Run via:
 //   node packages/compat-eslint/test/jsx-react-x.test.mjs
 
-import { default as plugin } from 'eslint-plugin-react-x';
 import { Linter } from 'eslint';
-import * as ts from 'typescript';
+import { default as plugin } from 'eslint-plugin-react-x';
 import { createRequire } from 'node:module';
+import * as ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 const compat = require('../index.js');
@@ -95,15 +95,33 @@ const tsslintRule = compat.convertRule(rule, [], { id: ruleId });
 const compatReports = [];
 let compatError = null;
 const noopReporter = {
-	at() { return this; },
-	asWarning() { return this; },
-	asError() { return this; },
-	asSuggestion() { return this; },
-	withDeprecated() { return this; },
-	withUnnecessary() { return this; },
-	withFix() { return this; },
-	withRefactor() { return this; },
-	withoutCache() { return this; },
+	at() {
+		return this;
+	},
+	asWarning() {
+		return this;
+	},
+	asError() {
+		return this;
+	},
+	asSuggestion() {
+		return this;
+	},
+	withDeprecated() {
+		return this;
+	},
+	withUnnecessary() {
+		return this;
+	},
+	withFix() {
+		return this;
+	},
+	withRefactor() {
+		return this;
+	},
+	withoutCache() {
+		return this;
+	},
 };
 try {
 	tsslintRule({

@@ -446,7 +446,8 @@ function findTypeArgRoute(tsNode: ts.Node):
 			// JsxSelfClosingElement materialises to JSXElement; the
 			// `typeArguments` slot lives on its inner JSXOpeningElement.
 			if (k === SK.JsxSelfClosingElement) {
-				const opening = (owner as unknown as { openingElement?: { typeArguments?: { params?: unknown } } }).openingElement;
+				const opening =
+					(owner as unknown as { openingElement?: { typeArguments?: { params?: unknown } } }).openingElement;
 				const ta = opening?.typeArguments;
 				if (ta) void ta.params;
 				return;

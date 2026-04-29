@@ -999,7 +999,10 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 		{ name: 'jsx-fragment-children', code: `let _ = <><a /><b /></>;` },
 		{ name: 'jsx-fragment-text', code: `let _ = <>hello</>;` },
 		// Type arguments on opening element (TSX)
-		{ name: 'jsx-type-args', code: `function Generic<T>(p: { v: T }) { return null; } let _ = <Generic<number> v={1} />;` },
+		{
+			name: 'jsx-type-args',
+			code: `function Generic<T>(p: { v: T }) { return null; } let _ = <Generic<number> v={1} />;`,
+		},
 		// Whitespace handling — JSXText collapse rules differ in eager:
 		{ name: 'jsx-whitespace', code: `let _ = <div>  hello  world  </div>;` },
 		{ name: 'jsx-newline-text', code: 'let _ = <div>\n  hello\n  world\n</div>;' },

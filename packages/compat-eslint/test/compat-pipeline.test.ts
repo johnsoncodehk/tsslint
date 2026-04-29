@@ -1446,15 +1446,33 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
 		const r: any = {
-			at() { return r; },
-			asWarning() { return r; },
-			asError() { return r; },
-			asSuggestion() { return r; },
-			withFix() { return r; },
-			withRefactor() { return r; },
-			withDeprecated() { return r; },
-			withUnnecessary() { return r; },
-			withoutCache() { return r; },
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
 		};
 		return r;
 	};
@@ -1514,15 +1532,33 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 	const reportFn: any = (msg: string) => {
 		reports.push({ msg });
 		const r: any = {
-			at() { return r; },
-			asWarning() { return r; },
-			asError() { return r; },
-			asSuggestion() { return r; },
-			withFix() { return r; },
-			withRefactor() { return r; },
-			withDeprecated() { return r; },
-			withUnnecessary() { return r; },
-			withoutCache() { return r; },
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
 		};
 		return r;
 	};
@@ -2003,11 +2039,21 @@ type D = Awaited<Promise<number>>;
 		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
 		create() {
 			return {
-				onCodePathStart() { events.push('cpa-start'); },
-				onCodePathEnd() { events.push('cpa-end'); },
-				JSXElement() { events.push('JSXElement'); },
-				JSXOpeningElement(n: any) { events.push(`open:${n.name?.name ?? '?'}`); },
-				JSXAttribute(n: any) { events.push(`attr:${n.name?.name ?? '?'}`); },
+				onCodePathStart() {
+					events.push('cpa-start');
+				},
+				onCodePathEnd() {
+					events.push('cpa-end');
+				},
+				JSXElement() {
+					events.push('JSXElement');
+				},
+				JSXOpeningElement(n: any) {
+					events.push(`open:${n.name?.name ?? '?'}`);
+				},
+				JSXAttribute(n: any) {
+					events.push(`attr:${n.name?.name ?? '?'}`);
+				},
 			};
 		},
 	};
@@ -2060,9 +2106,33 @@ type D = Awaited<Promise<number>>;
 		const lc = file.getLineAndCharacterOfPosition(start);
 		reports.push({ line: lc.line + 1, column: lc.character + 1, message: msg });
 		const r: any = {
-			at() {return r}, asWarning(){return r}, asError(){return r}, asSuggestion(){return r},
-			withFix(){return r}, withRefactor(){return r}, withDeprecated(){return r},
-			withUnnecessary(){return r}, withoutCache(){return r},
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
 		};
 		return r;
 	};
@@ -2074,7 +2144,11 @@ type D = Awaited<Promise<number>>;
 		threw = e;
 	}
 
-	check('JSX rule: dispatch did not throw', threw === undefined, threw ? String((threw as Error).message ?? threw) : '');
+	check(
+		'JSX rule: dispatch did not throw',
+		threw === undefined,
+		threw ? String((threw as Error).message ?? threw) : '',
+	);
 	check('JSX rule: exactly one report (the img without alt)', reports.length === 1, `got ${reports.length}`);
 	check('JSX rule: report message is the missing-alt message', reports[0]?.message === 'img missing alt');
 	check('JSX rule: report points at the first <img />', reports[0]?.line === 2);

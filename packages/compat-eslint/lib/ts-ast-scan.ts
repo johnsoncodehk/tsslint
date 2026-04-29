@@ -367,8 +367,7 @@ const PREDICATES: Record<string, Predicate> = {
 	// `VariableDeclarator` enter on the catch param, triggering rules
 	// like `no-unassigned-vars` that listen on VariableDeclarator —
 	// fires false-positive on every `catch (e)`.
-	'VariableDeclarator': n =>
-		n.kind === SK.VariableDeclaration && n.parent?.kind !== SK.CatchClause,
+	'VariableDeclarator': n => n.kind === SK.VariableDeclaration && n.parent?.kind !== SK.CatchClause,
 
 	// --- Functions / Classes ------------------------------------------
 	'FunctionDeclaration': n => n.kind === SK.FunctionDeclaration && (n as ts.FunctionDeclaration).body !== undefined,
@@ -749,10 +748,8 @@ const PREDICATES: Record<string, Predicate> = {
 	'JSXSpreadAttribute': n => n.kind === SK.JsxSpreadAttribute,
 	// JsxExpression splits by `dotDotDotToken`: `{...x}` → JSXSpreadChild,
 	// `{x}` / `{}` → JSXExpressionContainer.
-	'JSXExpressionContainer': n =>
-		n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken === undefined,
-	'JSXSpreadChild': n =>
-		n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken !== undefined,
+	'JSXExpressionContainer': n => n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken === undefined,
+	'JSXSpreadChild': n => n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken !== undefined,
 	'JSXText': n => n.kind === SK.JsxText,
 	// JSXEmptyExpression has no own ts.SyntaxKind — it's synthesized by
 	// JSXExpressionContainer.expression when the JsxExpression has no
@@ -760,12 +757,10 @@ const PREDICATES: Record<string, Predicate> = {
 	// JsxExpression so narrow-trigger mode walks those nodes; dispatch
 	// goes through unwrapChain on JSXExpressionContainer which drills
 	// into the synthetic JSXEmptyExpression and fires its listener.
-	'JSXEmptyExpression': n =>
-		n.kind === SK.JsxExpression && (n as ts.JsxExpression).expression === undefined,
+	'JSXEmptyExpression': n => n.kind === SK.JsxExpression && (n as ts.JsxExpression).expression === undefined,
 	// Context-dependent — see isInJSXIdentifierPosition / chain helpers.
 	'JSXIdentifier': n => n.kind === SK.Identifier && isInJSXIdentifierPosition(n),
-	'JSXMemberExpression': n =>
-		n.kind === SK.PropertyAccessExpression && isInJSXMemberExpressionChain(n),
+	'JSXMemberExpression': n => n.kind === SK.PropertyAccessExpression && isInJSXMemberExpressionChain(n),
 	'JSXNamespacedName': n => n.kind === SK.JsxNamespacedName,
 };
 
