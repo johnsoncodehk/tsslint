@@ -127,27 +127,26 @@ interface DeferredReport {
 // Module-level state — populated by convertRule, queried at lint time.
 const ruleRegistry = new Map</* eslintRule */ ESLint.Rule.RuleModule, RuleEntry>();
 
-// Per-file shared cache: stash all rules' deferred reports built during a single
-// traversal pass; each rule's tsslintRule call replays its own bucket. If a rule
-// listener throws, capture it in `errors` so the rule's call can rethrow at
-// replay time (preserving TSSLint core's per-rule type-aware retry semantics).
-let sharedCache: {
-	file: ts.SourceFile;
-	reports: Map</* eslintRule */ ESLint.Rule.RuleModule, DeferredReport[]>;
-	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
-} | undefined;
-
-// sourceCode cache is per-file. The eventQueue itself is no longer
-// cached — every call to `runSharedTraversal` rebuilds it from the TS
-// AST scan, since the path now serves both CPA and non-CPA modes
-// uniformly (CPA's per-walk state can't be replayed from a stale queue
-// anyway). `convertContext` is kept so the TS-scan path can call
-// `materialize(tsNode, context)` for each hit without rebuilding the
-// converter state.
-let cachedEstree: {
+// Per-file lint state. Single object that bundles:
+//   - `sourceCode` / `convertContext`: lazy ESTree + LazySourceCode for
+//     this file. `convertContext` survives across rule replays so each
+//     `materialize(tsNode, context)` hit hits the same identity-preserved
+//     LazyNode cache.
+//   - `reports`: deferred per-rule reports collected during a single
+//     shared traversal; each tsslintRule call replays its own bucket.
+//   - `errors`: per-rule listener throws, captured so a rule's tsslintRule
+//     can rethrow at replay time (preserving TSSLint core's per-rule
+//     type-aware retry semantics).
+//
+// Everything in here invalidates together when `file` changes — there's
+// no scenario where one part is reusable without the others, so a single
+// per-file slot replaces the two separate caches the earlier design had.
+let perFileState: {
 	file: ts.SourceFile;
 	sourceCode: ESLint.SourceCode;
 	convertContext: unknown;
+	reports: Map</* eslintRule */ ESLint.Rule.RuleModule, DeferredReport[]>;
+	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 } | undefined;
 
 export function convertRule(
@@ -175,17 +174,24 @@ export function convertRule(
 	ruleRegistry.set(eslintRule, entry);
 
 	const tsslintRule: TSSLint.Rule = ({ file, report, program }) => {
-		if (sharedCache?.file !== file) {
-			sharedCache = { file, reports: new Map(), errors: new Map() };
-			runSharedTraversal(file, program, sharedCache.reports, sharedCache.errors);
+		if (perFileState?.file !== file) {
+			const { sourceCode, convertContext } = buildEstree(file, program);
+			perFileState = {
+				file,
+				sourceCode,
+				convertContext,
+				reports: new Map(),
+				errors: new Map(),
+			};
+			runSharedTraversal(file, program, perFileState);
 		}
 
-		const ruleError = sharedCache.errors.get(eslintRule);
+		const ruleError = perFileState.errors.get(eslintRule);
 		if (ruleError !== undefined) {
 			throw ruleError;
 		}
 
-		const myReports = sharedCache.reports.get(eslintRule);
+		const myReports = perFileState.reports.get(eslintRule);
 		if (!myReports || myReports.length === 0) {
 			return;
 		}
@@ -226,10 +232,9 @@ export function convertRule(
 function runSharedTraversal(
 	file: ts.SourceFile,
 	program: ts.Program,
-	reports: Map<ESLint.Rule.RuleModule, DeferredReport[]>,
-	errors: Map<ESLint.Rule.RuleModule, unknown>,
+	state: NonNullable<typeof perFileState>,
 ) {
-	const { sourceCode } = getEstree(file, program);
+	const { sourceCode, convertContext, reports, errors } = state;
 	const cwd = program.getCurrentDirectory();
 
 	let currentNode: any;
@@ -402,10 +407,10 @@ function runSharedTraversal(
 	//    whose `emit` / `enterNode` / `leaveNode` hooks dispatch inline.
 	//    No event queue — CPA's order of calls IS the dispatch order.
 	if (fast.codePath.size > 0) {
-		runCpaInline(file, fast, errors, onTarget);
+		runCpaInline(file, fast, errors, onTarget, convertContext);
 	}
 	else {
-		runTsScanInline(file, fast, errors, onTarget);
+		runTsScanInline(file, fast, errors, onTarget, convertContext);
 	}
 }
 
@@ -533,13 +538,11 @@ function runTsScanInline(
 	fast: FastDispatch,
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 	onTarget: (target: unknown) => void,
+	convertContext: unknown,
 ): void {
-	if (!cachedEstree) {
-		throw new Error('runTsScanInline called without an active sourceCode cache');
-	}
 	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
 	const match = buildScanPredicate(fast);
-	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
+	tsScanTraverse(file, match, convertContext as any, {
 		enterNode(target) {
 			dispatchTarget(target, true, fast, errors, onTarget);
 		},
@@ -560,10 +563,8 @@ function runCpaInline(
 	fast: FastDispatch,
 	errors: Map<ESLint.Rule.RuleModule, unknown>,
 	onTarget: (target: unknown) => void,
+	convertContext: unknown,
 ): void {
-	if (!cachedEstree) {
-		throw new Error('runCpaInline called without an active sourceCode cache');
-	}
 	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
 	const match = buildScanPredicate(fast);
 	// CPA emits `onCodePathStart` / `onCodePathSegment*` / etc. Dispatch
@@ -597,7 +598,7 @@ function runCpaInline(
 	};
 	const { CodePathAnalyzer } = loadEslintInternals();
 	const cpa = new CodePathAnalyzer(wrapped);
-	tsScanTraverse(file, match, cachedEstree.convertContext as any, {
+	tsScanTraverse(file, match, convertContext as any, {
 		enterNode(target) {
 			cpa.enterNode(target);
 		},
@@ -799,89 +800,90 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 	return obj != null && typeof (obj as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function';
 }
 
-function getEstree(file: ts.SourceFile, program: ts.Program) {
-	if (cachedEstree?.file !== file) {
-		// Skip @typescript-eslint/parser: parseForESLint dynamically loads the
-		// whole parser package on first call (the heaviest single dep) and just
-		// dispatches to typescript-estree's astConverter, which we already have
-		// a ts.SourceFile for. Calling it directly avoids the parser require.
-		const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
-		const { TsScopeManager, applyEslintGlobals } = require(
-			'./lib/ts-scope-manager',
-		) as typeof import('./lib/ts-scope-manager');
-		const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
-		const { LazySourceCode } = require('./lib/lazy-source-code') as typeof import('./lib/lazy-source-code');
+// Build a fresh `LazySourceCode` + lazy-estree convert context for `file`.
+// Pure: no module-level caching here — callers cache via `perFileState`.
+//
+// Skips @typescript-eslint/parser: `parseForESLint` dynamically loads the
+// whole parser package on first call (the heaviest single dep) and just
+// dispatches to typescript-estree's astConverter, which we already have a
+// ts.SourceFile for. Calling our own converter directly avoids the require.
+function buildEstree(file: ts.SourceFile, program: ts.Program): {
+	sourceCode: ESLint.SourceCode;
+	convertContext: unknown;
+} {
+	const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
+	const { TsScopeManager, applyEslintGlobals } = require(
+		'./lib/ts-scope-manager',
+	) as typeof import('./lib/ts-scope-manager');
+	const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
+	const { LazySourceCode } = require('./lib/lazy-source-code') as typeof import('./lib/lazy-source-code');
 
-		// Lazy ESTree shim (lib/lazy-estree.ts). Byte-identical to
-		// typescript-estree's eager Converter on every TS file under
-		// packages/, but materialises children on first read. Rules see
-		// real subtrees and can't null-deref into them.
-		const { astMaps, estree, context: convertContext } = convertLazy(file) as {
-			astMaps: any;
-			estree: any;
-			context: unknown;
-		};
-
-		// tokens / comments come from our own scanner-based converters
-		// (lib/tokens.ts) — byte-identical to typescript-estree's
-		// `convertTokens` / `convertComments` on every checked fixture.
-		// Rules like no-unnecessary-type-assertion call
-		// `sourceCode.getTokenAfter()` and need the tokens array — but
-		// most rules never touch tokens/comments. Defer the scan via lazy
-		// getters: cheap when no rule reads, ~80ms saved on large files.
-		const { convertTokens, convertComments } = require('./lib/tokens') as typeof import('./lib/tokens');
-		let _tokens: unknown[] | undefined;
-		let _comments: unknown[] | undefined;
-		Object.defineProperty(estree, 'tokens', {
-			configurable: true,
-			enumerable: true,
-			get: () => _tokens ??= convertTokens(file),
-			set: (v: unknown[]) => {
-				_tokens = v;
-			},
-		});
-		Object.defineProperty(estree, 'comments', {
-			configurable: true,
-			enumerable: true,
-			get: () => _comments ??= convertComments(file),
-			set: (v: unknown[]) => {
-				_comments = v;
-			},
-		});
-
-		estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
-			? 'module'
-			: 'script';
-		const scopeManager = new TsScopeManager(file, program, estree, astMaps, estree.sourceType);
-		// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
-		// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
-		// `TsScopeManager` itself stays free of this lint-pipeline policy
-		// (upstream eslint-scope parity tests rely on the un-injected
-		// shape); the names + de-dupe logic live next to `addGlobals` in
-		// `ts-scope-manager.ts`.
-		applyEslintGlobals(scopeManager);
-		const sourceCode = new LazySourceCode({
-			text: file.text,
-			ast: estree,
-			tsFile: file,
-			scopeManager,
-			visitorKeys: visitorKeys as Record<string, string[]>,
-			parserServices: {
-				...astMaps,
-				program,
-				hasFullTypeInformation: true,
-				emitDecoratorMetadata: undefined,
-				experimentalDecorators: undefined,
-				isolatedDeclarations: undefined,
-				getSymbolAtLocation: (node: any) =>
-					program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-				getTypeAtLocation: (node: any) =>
-					program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-			},
-		}) as unknown as ESLint.SourceCode;
-		cachedEstree = { file, sourceCode, convertContext };
-	}
-	return {
-		sourceCode: cachedEstree.sourceCode,
+	// Lazy ESTree shim (lib/lazy-estree.ts). Byte-identical to
+	// typescript-estree's eager Converter on every TS file under
+	// packages/, but materialises children on first read. Rules see
+	// real subtrees and can't null-deref into them.
+	const { astMaps, estree, context: convertContext } = convertLazy(file) as {
+		astMaps: any;
+		estree: any;
+		context: unknown;
 	};
+
+	// tokens / comments come from our own scanner-based converters
+	// (lib/tokens.ts) — byte-identical to typescript-estree's
+	// `convertTokens` / `convertComments` on every checked fixture.
+	// Rules like no-unnecessary-type-assertion call
+	// `sourceCode.getTokenAfter()` and need the tokens array — but
+	// most rules never touch tokens/comments. Defer the scan via lazy
+	// getters: cheap when no rule reads, ~80ms saved on large files.
+	const { convertTokens, convertComments } = require('./lib/tokens') as typeof import('./lib/tokens');
+	let _tokens: unknown[] | undefined;
+	let _comments: unknown[] | undefined;
+	Object.defineProperty(estree, 'tokens', {
+		configurable: true,
+		enumerable: true,
+		get: () => _tokens ??= convertTokens(file),
+		set: (v: unknown[]) => {
+			_tokens = v;
+		},
+	});
+	Object.defineProperty(estree, 'comments', {
+		configurable: true,
+		enumerable: true,
+		get: () => _comments ??= convertComments(file),
+		set: (v: unknown[]) => {
+			_comments = v;
+		},
+	});
+
+	estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
+		? 'module'
+		: 'script';
+	const scopeManager = new TsScopeManager(file, program, estree, astMaps, estree.sourceType);
+	// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
+	// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
+	// `TsScopeManager` itself stays free of this lint-pipeline policy
+	// (upstream eslint-scope parity tests rely on the un-injected
+	// shape); the names + de-dupe logic live next to `addGlobals` in
+	// `ts-scope-manager.ts`.
+	applyEslintGlobals(scopeManager);
+	const sourceCode = new LazySourceCode({
+		text: file.text,
+		ast: estree,
+		tsFile: file,
+		scopeManager,
+		visitorKeys: visitorKeys as Record<string, string[]>,
+		parserServices: {
+			...astMaps,
+			program,
+			hasFullTypeInformation: true,
+			emitDecoratorMetadata: undefined,
+			experimentalDecorators: undefined,
+			isolatedDeclarations: undefined,
+			getSymbolAtLocation: (node: any) =>
+				program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+			getTypeAtLocation: (node: any) =>
+				program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+		},
+	}) as unknown as ESLint.SourceCode;
+	return { sourceCode, convertContext };
 }
