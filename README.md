@@ -302,6 +302,7 @@ import {
   createIgnorePlugin,
   createCategoryPlugin,
   createDiagnosticsPlugin,
+  isCLI,
 } from '@tsslint/config';
 import ts from 'typescript';
 
@@ -316,8 +317,10 @@ export default defineConfig({
       'style/*': ts.DiagnosticCategory.Warning,
     }),
 
-    // Forward TypeScript's own diagnostics through the same pipeline
-    createDiagnosticsPlugin('semantic'),
+    // Forward TypeScript's own diagnostics through the same pipeline.
+    // Guard with `isCLI()` — tsserver already surfaces these in editors,
+    // so emitting them again from the plugin would double-report there.
+    ...(isCLI() ? [createDiagnosticsPlugin('semantic')] : []),
   ],
 });
 ```
