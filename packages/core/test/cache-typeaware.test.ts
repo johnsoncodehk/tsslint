@@ -7,8 +7,8 @@
 // Run via:
 //   node --experimental-strip-types --no-warnings packages/core/test/cache-typeaware.test.ts
 
-import * as ts from 'typescript';
 import type { Config, RuleContext } from '@tsslint/types';
+import * as ts from 'typescript';
 import type { FileLintCache } from '../index.js';
 
 const core = require('../index.js') as typeof import('../index.js');
@@ -63,12 +63,12 @@ function makeCache(): FileLintCache {
 			syntactic: ((rctx: RuleContext) => {
 				syntacticRan++;
 				rctx.report('plain', 0, 1);
-			}) as any,
+			}),
 			'type-aware': ((rctx: RuleContext) => {
 				typeAwareRan++;
 				void rctx.program; // probe trigger
 				rctx.report('typed', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -96,8 +96,8 @@ function makeCache(): FileLintCache {
 		rules: {
 			'report-then-touch': ((rctx: RuleContext) => {
 				rctx.report('first', 0, 1); // populates cache[1] via report()
-				void rctx.program;     // sets touchedProgram
-			}) as any,
+				void rctx.program; // sets touchedProgram
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -126,7 +126,7 @@ function makeCache(): FileLintCache {
 					void rctx.program;
 				}
 				rctx.report('hi', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -144,7 +144,9 @@ function makeCache(): FileLintCache {
 	check(
 		'/b.ts cache entry NOT written (sticky)',
 		!cacheB[1]['sometimes-typed'],
-		`expected cacheB empty due to sticky type-aware classification, got ${JSON.stringify(cacheB[1]['sometimes-typed'])}`,
+		`expected cacheB empty due to sticky type-aware classification, got ${
+			JSON.stringify(cacheB[1]['sometimes-typed'])
+		}`,
 	);
 }
 
@@ -158,7 +160,7 @@ function makeCache(): FileLintCache {
 				ran++;
 				void rctx.program;
 				rctx.report('typed', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -176,7 +178,7 @@ function makeCache(): FileLintCache {
 				start: 0,
 				length: 1,
 				source: 'tsslint',
-			} as ts.DiagnosticWithLocation]],
+			}]],
 		},
 		{},
 	];
@@ -200,7 +202,7 @@ function makeCache(): FileLintCache {
 				start: 0,
 				length: 1,
 				source: 'tsslint',
-			} as ts.DiagnosticWithLocation]],
+			}]],
 		},
 		{},
 	];
@@ -211,7 +213,7 @@ function makeCache(): FileLintCache {
 				ran2++;
 				void rctx.program;
 				rctx.report('typed', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter3 = core.createLinter(ctx2, '/', config2, () => []);
