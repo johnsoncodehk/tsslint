@@ -3,9 +3,10 @@
 	"version": "3.0.4",
 	"license": "MIT",
 	"files": [
-		"**/*.js",
-		"**/*.d.ts",
-		"bin"
+		"index.js",
+		"index.d.ts",
+		"lib/**/*.js",
+		"lib/**/*.d.ts"
 	],
 	"repository": {
 		"type": "git",
