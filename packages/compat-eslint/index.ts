@@ -1,6 +1,14 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
+import CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js');
+import { convertLazy } from './lib/lazy-estree';
+import { LazySourceCode } from './lib/lazy-source-code';
+import { decomposeSimple, isCodePathListener } from './lib/selector-analysis';
+import { convertComments, convertTokens } from './lib/tokens';
+import { tsScanTraverse } from './lib/ts-ast-scan';
+import { applyEslintGlobals, TsScopeManager } from './lib/ts-scope-manager';
+import { visitorKeys } from './lib/visitor-keys';
 
 // Build a parse-time-named wrapper around a rule listener. V8's CPU
 // profile reads the SharedFunctionInfo's parse-time-inferred name, so we
@@ -341,7 +349,6 @@ function runSharedTraversal(
 		}) as unknown as ESLint.Rule.RuleContext;
 		const ruleListeners = eslintRule.create(ruleContext);
 
-		const { isCodePathListener } = require('./lib/selector-analysis') as typeof import('./lib/selector-analysis');
 		for (const selector in ruleListeners) {
 			const listener = ruleListeners[selector];
 			if (!listener) continue;
@@ -424,9 +431,6 @@ interface FastDispatch {
 function buildFastDispatch(
 	allListeners: Array<[ESLint.Rule.RuleModule, string, (n: unknown) => void]>,
 ): FastDispatch {
-	const { decomposeSimple, isCodePathListener } = require(
-		'./lib/selector-analysis',
-	) as typeof import('./lib/selector-analysis');
 	const enter = new Map<string, DispatchEntry[]>();
 	const exit = new Map<string, DispatchEntry[]>();
 	const enterAll: DispatchEntry[] = [];
@@ -509,7 +513,6 @@ function runTsScanInline(
 	onTarget: (target: unknown) => void,
 	convertContext: unknown,
 ): void {
-	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
 	const match = buildScanPredicate(fast);
 	tsScanTraverse(file, match, convertContext as any, {
 		enterNode(target) {
@@ -534,7 +537,6 @@ function runCpaInline(
 	onTarget: (target: unknown) => void,
 	convertContext: unknown,
 ): void {
-	const { tsScanTraverse } = require('./lib/ts-ast-scan') as typeof import('./lib/ts-ast-scan');
 	const match = buildScanPredicate(fast);
 	// CPA emits `onCodePathStart` / `onCodePathSegment*` / etc. Dispatch
 	// directly to the per-event listener arrays we collected up front.
@@ -565,11 +567,6 @@ function runCpaInline(
 		enterNode: (target: unknown) => dispatchTarget(target, true, fast, errors, onTarget),
 		leaveNode: (target: unknown) => dispatchTarget(target, false, fast, errors, onTarget),
 	};
-	// CodePathAnalyzer is vendored from ESLint's `lib/linter/code-path-analysis/`
-	// into our `lib/code-path-analysis/` (ESLint exposes no public surface for
-	// it). Node `require` is already lazy + cached, so this loads on first
-	// CPA-mode lint and is reused thereafter — no module-level memo needed.
-	const CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js') as typeof import('./lib/code-path-analysis/code-path-analyzer');
 	const cpa = new CodePathAnalyzer(wrapped);
 	tsScanTraverse(file, match, convertContext as any, {
 		enterNode(target) {
@@ -784,13 +781,6 @@ function buildEstree(file: ts.SourceFile, program: ts.Program): {
 	sourceCode: ESLint.SourceCode;
 	convertContext: unknown;
 } {
-	const { visitorKeys } = require('./lib/visitor-keys') as typeof import('./lib/visitor-keys');
-	const { TsScopeManager, applyEslintGlobals } = require(
-		'./lib/ts-scope-manager',
-	) as typeof import('./lib/ts-scope-manager');
-	const { convertLazy } = require('./lib/lazy-estree') as typeof import('./lib/lazy-estree');
-	const { LazySourceCode } = require('./lib/lazy-source-code') as typeof import('./lib/lazy-source-code');
-
 	// Lazy ESTree shim (lib/lazy-estree.ts). Byte-identical to
 	// typescript-estree's eager Converter on every TS file under
 	// packages/, but materialises children on first read. Rules see
@@ -808,7 +798,6 @@ function buildEstree(file: ts.SourceFile, program: ts.Program): {
 	// `sourceCode.getTokenAfter()` and need the tokens array — but
 	// most rules never touch tokens/comments. Defer the scan via lazy
 	// getters: cheap when no rule reads, ~80ms saved on large files.
-	const { convertTokens, convertComments } = require('./lib/tokens') as typeof import('./lib/tokens');
 	let _tokens: unknown[] | undefined;
 	let _comments: unknown[] | undefined;
 	Object.defineProperty(estree, 'tokens', {
