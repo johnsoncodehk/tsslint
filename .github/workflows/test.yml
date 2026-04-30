@@ -61,3 +61,7 @@ jobs:
       # Core: type-aware rule probe (foundation for layer 1 cache).
       - name: Core probe
         run: node packages/core/test/probe.test.js
+
+      # Core: BuilderProgram POC for layer 2 cache invalidation.
+      - name: Core BuilderProgram POC
+        run: node packages/core/test/builder-program-poc.test.js
