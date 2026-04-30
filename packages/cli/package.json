@@ -23,6 +23,7 @@
 	"dependencies": {
 		"@tsslint/config": "3.1.0",
 		"@tsslint/core": "3.1.0",
+		"@tsslint/types": "3.1.0",
 		"@volar/language-core": "~2.4.0",
 		"@volar/language-hub": "0.0.1",
 		"@volar/typescript": "~2.4.0",

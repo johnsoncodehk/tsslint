@@ -3,6 +3,7 @@
 	"include": ["*", "lib/**/*", "test/**/*"],
 	"references": [
 		{ "path": "../core/tsconfig.json" },
-		{ "path": "../config/tsconfig.json" }
+		{ "path": "../config/tsconfig.json" },
+		{ "path": "../types/tsconfig.json" }
 	]
 }

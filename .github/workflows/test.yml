@@ -74,3 +74,7 @@ jobs:
       # CLI: cache file load / save / atomic write / version key.
       - name: CLI cache module
         run: node packages/cli/test/cache.test.js
+
+      # CLI: cache-flow — layer 1 cache integration with the linter.
+      - name: CLI cache-flow
+        run: node packages/cli/test/cache-flow.test.js
