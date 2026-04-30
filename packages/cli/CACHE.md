@@ -185,6 +185,103 @@ may reintroduce a per-report cache opt-out if needed — design TBD,
 likely a different shape (e.g. `withDependencies(...filePaths)` or
 similar declarative form) once layer 2 lands.
 
+## Pre-implementation checklist
+
+Run through these before writing any cache code. Each one corresponds
+to a real failure mode the old design either hit or could have hit.
+
+### Soundness
+
+1. **Write the regression tests first**, before any cache code:
+   - Edit `globals.d.ts` (`declare global { ... }`) → linted file must
+     re-check
+   - Edit imported file's exported type → linted file must re-check
+   - Switch `compilerOptions.lib` → all files re-check
+   - Edit `compilerOptions` other than lib → whole cache invalidates
+   - Add/remove rule in tsslint.config.ts → that rule's entries clear
+   - Rule that conditionally reads `program` → after sticky upgrade,
+     no stale serve
+
+   Each test corresponds to one invalidation path. Tests failing on
+   un-implemented spec is the goal — finishing them all defines done.
+
+2. **Cache miss is always safe**. Treat any uncertainty as a miss:
+   - `.tsbuildinfo` parse failure → miss
+   - `ruleModes` shape mismatch → miss
+   - `getProgram()` returns null → miss
+   - File stat throws → miss
+
+   Wrong cache hit corrupts a code-review tool. Wrong miss costs a
+   re-run. Bias hard.
+
+3. **`--fix` writes a file**. After a fix, that file's mtime moves
+   and its layer-1 entry must invalidate. If the fixed file is an
+   import dep of another, layer-2's BuilderProgram must see the
+   snapshot change and mark that other file affected. Both paths
+   need a regression test.
+
+### Cache key
+
+4. **Include TypeScript's version in the cache path key**. The current
+   key is `os.tmpdir()/tsslint-cache/<tsslint-version>/<hash>` — extend
+   to `<tsslint-version>/<ts-version>/<hash>`. `.tsbuildinfo` format
+   is TS-major-coupled; without this, a TS upgrade silently corrupts
+   layer 2.
+
+5. **Cache key already covers**: tsslint.config.ts mtime+size, tsconfig
+   path, language plugins. Don't break this on the rewrite.
+
+### Implementation
+
+6. **Atomic write**: `writeFileSync(file.tmp); rename(file.tmp, file)`.
+   Old `cache.ts` wrote in-place — SIGINT during write left half-JSON.
+   Cheap to fix.
+
+7. **BuilderProgram + LanguageService coexistence**: CLI uses
+   `ts.createLanguageService(host)`, which owns its program internally.
+   Wrapping in BuilderProgram requires `builder.getProgram() ===
+   languageService.getProgram()` to avoid double-building. Spike a
+   10-line POC standalone before touching the real CLI flow.
+
+8. **Multi-project / virtual files (Vue / MDX / Astro)**: language
+   plugins synthesize virtual `.ts` files with magic suffixes. Cache
+   key uses absolute path; verify virtual paths don't collide with
+   real ones in a fixture test before relying on it.
+
+### Operational
+
+9. **Add `--force` flag back**. Removed in the cache deletion. Users
+   need an escape hatch when something breaks.
+
+10. **Bench a warm-cache scenario**. `tsslint-dify-bench` only tests
+    cold runs; can't measure cache value or catch stale-result bugs.
+    Add: cold run → identical-input warm run (cache hit expected) →
+    edit `globals.d.ts` and warm run again (selective miss expected).
+    This is both perf metric and soundness regression gate.
+
+### Realistic upper bound
+
+Profile attached in CPU.20260430.062953.cpuprofile shows the cold-run
+breakdown for Dify web/ (5860 files):
+
+```
+~5.0 s  TS Program build (parse + bind + resolve)  — cache CANNOT save
+~4.4 s  lint pass (rule execution + walker)        — cache CAN save
+~1.8 s  process startup + render output            — cache CANNOT save
+─────
+11.3 s  total
+```
+
+`BuilderProgram` does not speed up cold-run program build — `.tsbuildinfo`
+stores file signatures and shape hashes, not parsed AST, so parse+bind
+must happen every cold start. The cache saves the lint pass on warm
+runs. **Upper bound: ~40% wall-time reduction on warm runs**, capped
+by the unavoidable Program build.
+
+Set this as the warm-run target before starting; if implementation
+doesn't get close, something's wrong with the design.
+
+
 ## Open questions
 
 - Should layer 2 be opt-in (`--incremental`) or default-on once it's
