@@ -11,6 +11,12 @@ export function createLinter(
 	rootDir: string,
 	config: Config | Config[],
 	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
+	// Rule IDs already known to be type-aware from a prior session (via
+	// the cache file's `ruleModes` map). Pre-seeding lets us treat those
+	// rules as type-aware on their first invocation in this session,
+	// before the runtime probe has a chance to classify them — closing
+	// the cold-session-with-stale-cache hole 3.0.4 had.
+	initialTypeAwareRules?: Iterable<string>,
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
@@ -38,6 +44,11 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
+	// Sticky type-aware classification. Once a rule has read
+	// `rulesContext.program` in any past or current session, it stays
+	// type-aware for the lifetime of this linter. Reads are gated by a
+	// getter on `program` that flips a per-rule flag during execution.
+	const typeAwareRules = new Set<string>(initialTypeAwareRules ?? []);
 
 	return {
 		lint(fileName: string): ts.DiagnosticWithLocation[] {
@@ -49,10 +60,14 @@ export function createLinter(
 
 			const program = ctx.languageService.getProgram()!;
 			const file = program.getSourceFile(fileName)!;
+			let touchedProgram = false;
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
 				file,
-				program,
+				get program() {
+					touchedProgram = true;
+					return program;
+				},
 				report,
 			};
 
@@ -67,6 +82,7 @@ export function createLinter(
 
 				currentRuleId = ruleId;
 
+				touchedProgram = false;
 				try {
 					rule(rulesContext);
 				}
@@ -77,6 +93,9 @@ export function createLinter(
 					else {
 						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
 					}
+				}
+				if (touchedProgram) {
+					typeAwareRules.add(currentRuleId);
 				}
 			}
 
@@ -274,6 +293,13 @@ export function createLinter(
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
+		// Snapshot of rules classified type-aware so far. The CLI reads
+		// this after a lint pass to persist into the cache file's
+		// `ruleModes` map, then feeds it back via `initialTypeAwareRules`
+		// on the next session.
+		getTypeAwareRules(): ReadonlySet<string> {
+			return typeAwareRules;
+		},
 	};
 
 	function getRulesForFile(fileName: string) {
