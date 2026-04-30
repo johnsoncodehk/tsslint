@@ -5,6 +5,7 @@ require('./lib/fs-cache.js');
 import ts = require('typescript');
 import path = require('path');
 import worker = require('./lib/worker.js');
+import cache = require('./lib/cache.js');
 import fs = require('fs');
 import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
@@ -25,6 +26,7 @@ Options:
   --ts-macro-project <glob...>  Lint TS Macro projects
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
+  --force                       Ignore cache (re-lint every file)
   --failures-only               Only print errors and messages (skip warnings and suggestions)
   -h, --help                    Show this help message
 
@@ -80,6 +82,7 @@ class Project {
 	options: ts.CompilerOptions = {};
 	configFile: string | undefined;
 	currentFileIndex = 0;
+	cacheData: cache.CacheData = cache.emptyCache();
 	pendingHeader: string | undefined;
 
 	constructor(
@@ -145,6 +148,20 @@ class Project {
 		this.pendingHeader = `${label} ${relPath} ${
 			colors.gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
 		}`;
+
+		// Load layer-1 cache unless --force was passed. The cache file path
+		// key includes tsslint version, TS version, tsconfig, languages,
+		// and configFile mtime+size — anything that changes the rule set or
+		// the toolchain mints a fresh file. See packages/cli/lib/cache.ts.
+		if (!process.argv.includes('--force')) {
+			this.cacheData = cache.loadCache(
+				this.tsconfig,
+				this.configFile,
+				this.languages,
+				ts.version,
+				ts.sys.createHash,
+			);
+		}
 
 		return this;
 	}
@@ -331,6 +348,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			project.configFile!,
 			project.rawFileNames,
 			project.options,
+			Object.keys(project.cacheData.ruleModes),
 		);
 		if (setupResult !== true) {
 			renderer.diagnostic(formatConfigError(project.configFile!, setupResult));
@@ -343,19 +361,34 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		while (project.currentFileIndex < project.fileNames.length) {
 			const fileName = project.fileNames[project.currentFileIndex++];
 
-			if (!fs.statSync(fileName, { throwIfNoEntry: false })) {
+			const fileStat = fs.statSync(fileName, { throwIfNoEntry: false });
+			if (!fileStat) {
 				continue;
+			}
+
+			let fileCache = project.cacheData.files[fileName];
+			if (!fileCache) {
+				fileCache = { mtime: fileStat.mtimeMs, rules: {} };
+				project.cacheData.files[fileName] = fileCache;
 			}
 
 			const diagnostics = await linterWorker.lint(
 				fileName,
 				process.argv.includes('--fix'),
+				fileCache,
+				fileStat.mtimeMs,
 			);
 
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
+					// Cache-hit diagnostics come back without their rule
+					// having registered a fix this session — `hasCodeFixes`
+					// only sees fresh runs. Fall back to the cached
+					// per-rule `hasFix` flag for the diagnostic's rule.
+					hasFix ||= !!fileCache.rules[String(diagnostic.code)]?.hasFix;
+
 					let output: string;
 
 					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
@@ -403,6 +436,24 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			}
 			processed++;
 		}
+
+		// Snapshot the linter's runtime classification back into the cache
+		// file's `ruleModes`. Next session reads this and seeds the linter
+		// via `initialTypeAwareRules` so rules are classified correctly
+		// from the first invocation, before the runtime probe re-runs.
+		const typeAware = await linterWorker.getTypeAwareRules();
+		project.cacheData.ruleModes = {};
+		for (const ruleId of typeAware) {
+			project.cacheData.ruleModes[ruleId] = 'type-aware';
+		}
+		cache.saveCache(
+			project.tsconfig,
+			project.configFile!,
+			project.languages,
+			ts.version,
+			project.cacheData,
+			ts.sys.createHash,
+		);
 
 		await startWorker(linterWorker);
 	}

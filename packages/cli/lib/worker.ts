@@ -3,7 +3,10 @@ import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import url = require('url');
 import path = require('path');
+import fs = require('fs');
 import languagePlugins = require('./languagePlugins.js');
+import cacheFlow = require('./cache-flow.js');
+import type { FileCache } from './cache.js';
 
 import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
 import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
@@ -90,6 +93,9 @@ export function create() {
 		hasRules(...args: Parameters<typeof hasRules>) {
 			return hasRules(...args);
 		},
+		getTypeAwareRules() {
+			return [...linter.getTypeAwareRules()];
+		},
 	};
 }
 
@@ -99,6 +105,7 @@ async function setup(
 	configFile: string,
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
+	initialTypeAwareRules: readonly string[],
 ): Promise<true | string> {
 	let config: config.Config | config.Config[];
 	try {
@@ -165,18 +172,29 @@ async function setup(
 		path.dirname(configFile),
 		config,
 		() => [],
+		initialTypeAwareRules,
 	);
 
 	return true;
 }
 
-function lint(fileName: string, fix: boolean) {
+function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
 
 	if (fix) {
-		diagnostics = linter.lint(fileName);
+		// Drop cache entries for rules that registered a fix in any prior
+		// session — we need to actually run those rules now to rebuild the
+		// `getEdits` callbacks (closures don't survive the JSON cache).
+		// Rules with no fixes can stay cached.
+		for (const ruleId of Object.keys(fileCache.rules)) {
+			if (fileCache.rules[ruleId].hasFix) {
+				delete fileCache.rules[ruleId];
+			}
+		}
+		const program = linterLanguageService.getProgram()!;
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program);
 		shouldCheck = false;
 
 		let fixes = linter
@@ -205,12 +223,17 @@ function lint(fileName: string, fix: boolean) {
 		const oldText = ts.sys.readFile(fileName);
 		if (newText !== oldText) {
 			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+			// File content moved — refresh mtime so the next lint pass
+			// invalidates layer-1 cache entries for this file. lintWithCache
+			// compares fileCache.mtime against the fileMtime we pass in.
+			fileMtime = fs.statSync(fileName).mtimeMs;
 			shouldCheck = true;
 		}
 	}
 
 	if (shouldCheck) {
-		diagnostics = linter.lint(fileName);
+		const program = linterLanguageService.getProgram()!;
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program);
 	}
 
 	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
