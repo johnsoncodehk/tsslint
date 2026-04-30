@@ -4,6 +4,23 @@ import type * as ts from 'typescript';
 import path = require('path');
 import minimatch = require('minimatch');
 
+// Per-file diagnostic cache. Keyed by ruleId — each entry holds the
+// rule's last-known result (with `hasFix` so the CLI can decide whether
+// to surface `--fix` even on a cache hit). The CLI handles file-level
+// invalidation (mtime check) and cross-session persistence; this type
+// is just the in-memory shape core reads from and writes to.
+//
+// Diagnostics stored here have `file` cleared (`undefined as any`) —
+// they're rehydrated with the current `ts.SourceFile` on cache hit.
+// The CLI's serialization layer drops / restores them across the
+// JSON boundary.
+export interface RuleCache {
+	hasFix: boolean;
+	diagnostics: ts.DiagnosticWithLocation[];
+}
+
+export type FileLintCache = Record</* ruleId */ string, RuleCache>;
+
 export type Linter = ReturnType<typeof createLinter>;
 
 export function createLinter(
@@ -51,7 +68,7 @@ export function createLinter(
 	const typeAwareRules = new Set<string>(initialTypeAwareRules ?? []);
 
 	return {
-		lint(fileName: string): ts.DiagnosticWithLocation[] {
+		lint(fileName: string, fileCache?: FileLintCache): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
 
 			const rules = getRulesForFile(fileName);
@@ -82,6 +99,27 @@ export function createLinter(
 
 				currentRuleId = ruleId;
 
+				const ruleCache = fileCache?.[currentRuleId];
+				// Cache hit only when:
+				//   - cache has an entry for this rule
+				//   - rule has not been classified type-aware
+				// For type-aware rules we never trust the cache, regardless
+				// of whether the entry was written this session or carried
+				// over from before classification.
+				if (ruleCache && !typeAwareRules.has(currentRuleId)) {
+					for (const cached of ruleCache.diagnostics) {
+						lintResult[1].set({
+							...cached,
+							file: rulesContext.file,
+							relatedInformation: cached.relatedInformation?.map(info => ({
+								...info,
+								file: info.file ? program.getSourceFile(info.file.fileName) : undefined,
+							})),
+						}, []);
+					}
+					continue;
+				}
+
 				touchedProgram = false;
 				try {
 					rule(rulesContext);
@@ -96,6 +134,25 @@ export function createLinter(
 				}
 				if (touchedProgram) {
 					typeAwareRules.add(currentRuleId);
+				}
+
+				if (fileCache) {
+					if (typeAwareRules.has(currentRuleId)) {
+						// Discard any entry — could have been written by
+						// `report()` during the run before the program access,
+						// or stale from a prior session that didn't classify
+						// this rule.
+						delete fileCache[currentRuleId];
+					}
+					else {
+						fileCache[currentRuleId] ??= { hasFix: false, diagnostics: [] };
+						for (const [_, fixes] of lintResult[1]) {
+							if (fixes.length) {
+								fileCache[currentRuleId].hasFix = true;
+								break;
+							}
+						}
+					}
 				}
 			}
 
@@ -138,6 +195,23 @@ export function createLinter(
 				};
 				let location: [Error, number] = [new Error(), 1];
 				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
+
+				// Push a serialization-friendly twin of the diagnostic into
+				// the cache as the rule reports. If the rule turns out to be
+				// type-aware (touchedProgram flips later in the same call),
+				// the post-rule cleanup deletes this entry — the cache only
+				// retains entries for rules confirmed syntactic.
+				if (fileCache) {
+					fileCache[currentRuleId] ??= { hasFix: false, diagnostics: [] };
+					fileCache[currentRuleId].diagnostics.push({
+						...error,
+						file: undefined as any,
+						relatedInformation: error.relatedInformation?.map(info => ({
+							...info,
+							file: info.file ? { fileName: info.file.fileName } as any : undefined,
+						})),
+					});
+				}
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {

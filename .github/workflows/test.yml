@@ -65,3 +65,11 @@ jobs:
       # Core: BuilderProgram POC for layer 2 cache invalidation.
       - name: Core BuilderProgram POC
         run: node packages/core/test/builder-program-poc.test.js
+
+      # Core: layer 1 cache (per-file, per-rule, syntactic-only).
+      - name: Core layer 1 cache
+        run: node packages/core/test/cache-layer1.test.js
+
+      # CLI: cache file load / save / atomic write / version key.
+      - name: CLI cache module
+        run: node packages/cli/test/cache.test.js

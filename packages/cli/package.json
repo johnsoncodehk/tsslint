@@ -9,8 +9,11 @@
 		"tsslint": "./bin/tsslint.js"
 	},
 	"files": [
-		"**/*.js",
-		"**/*.d.ts"
+		"index.js",
+		"index.d.ts",
+		"bin/**/*",
+		"lib/**/*.js",
+		"lib/**/*.d.ts"
 	],
 	"repository": {
 		"type": "git",
