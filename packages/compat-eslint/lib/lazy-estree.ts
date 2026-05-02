@@ -336,13 +336,11 @@ abstract class LazyNode {
 		this._loc = v;
 	}
 
-	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext, registerInMaps = true) {
+	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
 		this._ts = tsNode;
 		this.parent = parent;
 		this._ctx = context ?? parent!._ctx;
-		// Synthetic wrapper nodes (TSTypeAnnotation) shouldn't claim the TS
-		// node's map slot — that slot belongs to the inner converted node.
-		if (registerInMaps) {
+		if (this._registersInMaps()) {
 			this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 			// esTreeNodeToTSNodeMap is a facade reading _ts — no .set needed.
 		}
@@ -357,6 +355,15 @@ abstract class LazyNode {
 		}
 	}
 
+	// Real ESTree nodes claim the TS node's slot in tsNodeToESTreeNodeMap.
+	// Synthetic intermediates (extending SyntheticLazyNode) don't — that
+	// slot belongs to the inner converted node. Method dispatch through
+	// the prototype chain means subclass overrides are visible during
+	// super(), even though field initialisers haven't run yet.
+	protected _registersInMaps(): boolean {
+		return true;
+	}
+
 	// Extend this node's range to cover `childRange`. Used by parent nodes
 	// that absorb a child's range (e.g. Identifier swallowing its
 	// typeAnnotation, matching typescript-estree's `fixParentLocation`).
@@ -368,6 +375,29 @@ abstract class LazyNode {
 		if (childRange[1] > r[1]) r[1] = childRange[1];
 		// Invalidate cached loc — will recompute next .loc read.
 		this._loc = undefined;
+	}
+}
+
+// Architectural boundary: synthetic intermediates extend this base instead
+// of LazyNode directly. They represent ESTree nodes with no direct TS
+// counterpart (TSTypeAnnotation wrapping a TypeNode, ClassBody wrapping
+// class members, ChainExpression wrapping an OptionalChain, etc.) — or
+// share a TS node with an inner node that's the canonical map owner.
+//
+// Adding a synthetic class is a deliberate architectural act: the TS
+// parent chain doesn't reach the new node directly, so bottom-up
+// materialise needs a wrapper-route entry (TYPE_SLOT_TRIGGERS /
+// WRAPPER_DRILLS / findJSXOwnerRoute / pattern-position routing /
+// findTypeArgRoute / ChainExpressionWrappingNode dispatch) to traverse
+// through it. Without one, bottom-up of a node inside the synthetic
+// produces a parent reference pointing at the wrapper-less ESTree
+// parent — a silently-wrong shape.
+//
+// Grep `extends SyntheticLazyNode` to find every current synthetic class;
+// each entry there should have a corresponding navigation-table line.
+abstract class SyntheticLazyNode extends LazyNode {
+	protected override _registersInMaps(): boolean {
+		return false;
 	}
 }
 
@@ -2213,11 +2243,11 @@ function wrapChainIfNeeded(
 // ExportNamedWrappingNode this wrapper claims the TS slot in the
 // cache; `unwrapChain` in `ts-ast-scan.ts` re-expands the chain at
 // dispatch time so listeners on the inner type still fire.
-class ChainExpressionWrappingNode extends LazyNode {
+class ChainExpressionWrappingNode extends SyntheticLazyNode {
 	readonly type = 'ChainExpression' as const;
 	readonly expression: LazyNode;
 	constructor(tsNode: ts.Node, parent: LazyNode, expression: LazyNode) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		// Take the wrapped node's range — eager createNode passes the same TS
 		// node, so loc is identical and the lazy getter recomputes when needed.
 		this.range = expression.range.slice() as [number, number];
@@ -2241,13 +2271,13 @@ function convertTypeParameters(
 	return new TSTypeParameterDeclarationNode(typeParams, parent);
 }
 
-class TSTypeParameterDeclarationNode extends LazyNode {
+class TSTypeParameterDeclarationNode extends SyntheticLazyNode {
 	readonly type = 'TSTypeParameterDeclaration' as const;
 	private _params?: (LazyNode | null)[];
 	private _typeParams: ts.NodeArray<ts.TypeParameterDeclaration>;
 	constructor(typeParams: ts.NodeArray<ts.TypeParameterDeclaration>, parent: LazyNode) {
 		const host = typeParams[0].parent;
-		super(host, parent, undefined, false);
+		super(host, parent);
 		this._typeParams = typeParams;
 		const start = typeParams.pos - 1;
 		const end = typeParams.end + 1;
@@ -2269,13 +2299,13 @@ function convertTypeArguments(
 	return new TSTypeParameterInstantiationNode(typeArgs, parent);
 }
 
-class TSTypeParameterInstantiationNode extends LazyNode {
+class TSTypeParameterInstantiationNode extends SyntheticLazyNode {
 	readonly type = 'TSTypeParameterInstantiation' as const;
 	private _params?: (LazyNode | null)[];
 	private _typeArgs: ts.NodeArray<ts.TypeNode>;
 	constructor(typeArgs: ts.NodeArray<ts.TypeNode>, parent: LazyNode) {
 		const host = typeArgs[0].parent;
-		super(host, parent, undefined, false);
+		super(host, parent);
 		this._typeArgs = typeArgs;
 		// Eager finds the actual `>` token to handle nested generics
 		// (`Foo<Bar<Baz>>` shares `>>`). We scan forward from the last
@@ -2438,15 +2468,12 @@ class VariableDeclaratorNode extends LazyNode {
 	}
 }
 
-class TSTypeAnnotationNode extends LazyNode {
+class TSTypeAnnotationNode extends SyntheticLazyNode {
 	readonly type = 'TSTypeAnnotation' as const;
 	private _typeAnnotation?: LazyNode | null;
 
 	constructor(tsTypeNode: ts.Node, parent: LazyNode, range: [number, number]) {
-		// `registerInMaps: false` — this wrapper is synthetic (no direct TS
-		// counterpart). The TS type node belongs to the inner conversion
-		// (e.g. TSNumberKeyword), which registers itself when materialised.
-		super(tsTypeNode, parent, undefined, false);
+		super(tsTypeNode, parent);
 		this.range = range;
 	}
 
@@ -2529,11 +2556,11 @@ function convertLiteralType(tsNode: ts.LiteralTypeNode, parent: LazyNode): LazyN
 	if (tsNode.literal.kind === SK.NullKeyword) {
 		const node = new TypeKeywordNode('TSNullKeyword', tsNode.literal, parent);
 		// Cache under BOTH the inner NullKeyword (set by the LazyNode
-		// constructor's registerInMaps) AND the outer LiteralType — without
-		// the outer entry, the Parameter.type wrapper route's
-		// `tsNodeToESTreeNodeMap.get(LiteralType)` post-check after `trigger`
-		// fails and throws "wrapper route did not register the inner node"
-		// on `function f(x: null = null)` and similar patterns.
+		// constructor) AND the outer LiteralType — without the outer entry,
+		// the Parameter.type wrapper route's `tsNodeToESTreeNodeMap.get(
+		// LiteralType)` post-check after `trigger` fails and throws
+		// "wrapper route did not register the inner node" on
+		// `function f(x: null = null)` and similar patterns.
 		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, node);
 		return node;
 	}
@@ -2551,12 +2578,12 @@ class TSLiteralTypeNode extends LazyNode {
 // `typeof import('x')` produces a TSTypeQuery whose exprName is a
 // TSImportType. The wrapper takes the same TS node identity (matching
 // eager line 1962).
-class TSTypeQueryWrappingNode extends LazyNode {
+class TSTypeQueryWrappingNode extends SyntheticLazyNode {
 	readonly type = 'TSTypeQuery' as const;
 	readonly typeArguments = undefined;
 	readonly exprName: LazyNode;
 	constructor(tsNode: ts.ImportTypeNode, parent: LazyNode, exprName: LazyNode) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		// Re-point the TS node map to the outer wrapper.
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 		(exprName as { parent: LazyNode }).parent = this;
@@ -2699,11 +2726,11 @@ class ClassNode extends LazyNode {
 	}
 }
 
-class ClassBodyNode extends LazyNode {
+class ClassBodyNode extends SyntheticLazyNode {
 	readonly type = 'ClassBody' as const;
 	private _body?: (LazyNode | null)[];
 	constructor(classTsNode: ts.ClassDeclaration | ts.ClassExpression, parent: LazyNode, range: [number, number]) {
-		super(classTsNode, parent, undefined, false);
+		super(classTsNode, parent);
 		this.range = range;
 	}
 	get body() {
@@ -2716,7 +2743,7 @@ class ClassBodyNode extends LazyNode {
 // Method-as-FunctionExpression — eager (line 826) builds the FunctionExpression
 // with `id: null`, `range: [parameters.pos - 1, end]`, and per-context kind.
 // Used as `value` for both class MethodDefinition and object Property.
-class MethodFunctionExpressionNode extends LazyNode {
+class MethodFunctionExpressionNode extends SyntheticLazyNode {
 	// Body-less methods (abstract or interface-style) emit
 	// TSEmptyBodyFunctionExpression instead of FunctionExpression.
 	readonly type: 'FunctionExpression' | 'TSEmptyBodyFunctionExpression';
@@ -2734,7 +2761,7 @@ class MethodFunctionExpressionNode extends LazyNode {
 		tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
 		parent: LazyNode,
 	) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		// Eager method range starts one before parameters' first paren.
 		let start = tsNode.parameters.pos - 1;
 		const end = tsNode.end;
@@ -2887,14 +2914,14 @@ class MethodDefinitionNode extends LazyNode {
 // Synthetic Identifier for `constructor` — eager line 905 builds an
 // Identifier node spanning just the keyword. We replicate the range
 // (start of method, length of "constructor").
-class ConstructorKeyIdentifierNode extends LazyNode {
+class ConstructorKeyIdentifierNode extends SyntheticLazyNode {
 	readonly type = 'Identifier' as const;
 	readonly name = 'constructor' as const;
 	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
 	readonly typeAnnotation = undefined;
 	constructor(tsNode: ts.ConstructorDeclaration, parent: LazyNode) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		// Find the `constructor` keyword: it's the first token after any
 		// modifiers and before the `(`. Easiest: it ends one before the
 		// parameter list start.
@@ -2977,7 +3004,7 @@ class ArrayPatternNode extends LazyNode {
 // pattern with a default value. typescript-estree's range covers from
 // the binding NAME (not the BindingElement's outer start, which would
 // include the property key in the object case) through the initializer.
-class BindingAssignmentPatternNode extends LazyNode {
+class BindingAssignmentPatternNode extends SyntheticLazyNode {
 	readonly type = 'AssignmentPattern' as const;
 	readonly decorators: never[] = EMPTY_ARRAY;
 	readonly optional = false;
@@ -2985,7 +3012,7 @@ class BindingAssignmentPatternNode extends LazyNode {
 	readonly left: LazyNode;
 	private _right?: LazyNode | null;
 	constructor(tsNode: ts.BindingElement, parent: LazyNode, left: LazyNode) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		const start = tsNode.name.getStart(this._ctx.ast);
 		const end = tsNode.initializer!.end;
 		this.range = [start, end];
@@ -3183,11 +3210,11 @@ class TSEnumDeclarationNode extends LazyNode {
 	}
 }
 
-class TSEnumBodyNode extends LazyNode {
+class TSEnumBodyNode extends SyntheticLazyNode {
 	readonly type = 'TSEnumBody' as const;
 	private _members?: (LazyNode | null)[];
 	constructor(enumTsNode: ts.EnumDeclaration, parent: LazyNode, range: [number, number]) {
-		super(enumTsNode, parent, undefined, false);
+		super(enumTsNode, parent);
 		this.range = range;
 	}
 	get members() {
@@ -3707,7 +3734,7 @@ class ExpressionWithTypeArgumentsNode extends LazyNode {
 // `scope.block === node` and `def.node === node` to identify their
 // scope — `TsScope.block` and `TsDefinition.node` unwrap the
 // wrapper there.
-class ExportNamedWrappingNode extends LazyNode {
+class ExportNamedWrappingNode extends SyntheticLazyNode {
 	readonly type = 'ExportNamedDeclaration' as const;
 	readonly attributes: never[] = EMPTY_ARRAY;
 	readonly assertions: never[] = EMPTY_ARRAY;
@@ -3716,7 +3743,7 @@ class ExportNamedWrappingNode extends LazyNode {
 	readonly exportKind: 'value' | 'type';
 	readonly declaration: LazyNode;
 	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		this.range = range;
 		// Inner gets re-pointed to us in the maps (eager registers the
 		// wrapper as the canonical mapping for the original TS node) AND
@@ -3737,12 +3764,12 @@ class ExportNamedWrappingNode extends LazyNode {
 	}
 }
 
-class ExportDefaultWrappingNode extends LazyNode {
+class ExportDefaultWrappingNode extends SyntheticLazyNode {
 	readonly type = 'ExportDefaultDeclaration' as const;
 	readonly exportKind: 'value' = 'value';
 	readonly declaration: LazyNode;
 	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		this.range = range;
 		(declaration as { parent: LazyNode }).parent = this;
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
@@ -3903,14 +3930,14 @@ class TSInterfaceDeclarationNode extends LazyNode {
 	}
 }
 
-class TSInterfaceBodyNode extends LazyNode {
+class TSInterfaceBodyNode extends SyntheticLazyNode {
 	readonly type = 'TSInterfaceBody' as const;
 	private _body?: (LazyNode | null)[];
 
 	constructor(interfaceTsNode: ts.InterfaceDeclaration, parent: LazyNode, range: [number, number]) {
 		// Synthetic — body is the same `{` block as the interface, no
 		// independent TS node, so don't pollute the maps.
-		super(interfaceTsNode, parent, undefined, false);
+		super(interfaceTsNode, parent);
 		this.range = range;
 	}
 	get body() {
@@ -4681,7 +4708,7 @@ class JSXElementNode extends LazyNode {
 		if (this._openingElement) return this._openingElement;
 		const t = this._ts;
 		if (t.kind === SK.JsxSelfClosingElement) {
-			return this._openingElement = new JSXOpeningElementNode(t as ts.JsxSelfClosingElement, this, true);
+			return this._openingElement = new JSXOpeningElementNode(t as ts.JsxSelfClosingElement, this);
 		}
 		return this._openingElement = convertChild((t as ts.JsxElement).openingElement, this) as LazyNode;
 	}
@@ -4701,6 +4728,11 @@ class JSXElementNode extends LazyNode {
 	}
 }
 
+// Hybrid: a real ESTree node when wrapping a ts.JsxOpeningElement, but
+// synthetic when wrapping a ts.JsxSelfClosingElement (the outer JSXElement
+// owns that TS slot). The `_registersInMaps` override below picks the
+// right behavior from the wrapped TS kind, so both call sites use the
+// same constructor.
 class JSXOpeningElementNode extends LazyNode {
 	readonly type = 'JSXOpeningElement' as const;
 	readonly selfClosing: boolean;
@@ -4712,13 +4744,13 @@ class JSXOpeningElementNode extends LazyNode {
 	constructor(
 		tsNode: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
 		parent: LazyNode | null,
-		synthetic = false,
 	) {
-		// `synthetic=true` for the inner opening element of a self-closing
-		// JsxSelfClosingElement — the JsxSelfClosingElement TS slot is owned
-		// by the outer JSXElement, not by this opening element.
-		super(tsNode, parent, undefined, !synthetic);
+		super(tsNode, parent);
 		this.selfClosing = tsNode.kind === SK.JsxSelfClosingElement;
+	}
+
+	protected override _registersInMaps(): boolean {
+		return this._ts.kind !== SK.JsxSelfClosingElement;
 	}
 
 	get name(): LazyNode {
@@ -4817,11 +4849,11 @@ class JSXExpressionContainerNode extends LazyNode {
 	}
 }
 
-class JSXEmptyExpressionNode extends LazyNode {
+class JSXEmptyExpressionNode extends SyntheticLazyNode {
 	readonly type = 'JSXEmptyExpression' as const;
 	constructor(tsNode: ts.JsxExpression, parent: LazyNode) {
 		// Synthetic — the JsxExpression TS slot is owned by JSXExpressionContainerNode.
-		super(tsNode, parent, undefined, false);
+		super(tsNode, parent);
 		// Range matches eager: `[start+1, end-1]` to exclude the `{` `}`.
 		this.range = [tsNode.getStart(this._ctx.ast) + 1, tsNode.getEnd() - 1];
 	}
@@ -4854,11 +4886,10 @@ class JSXTextNode extends LazyNode {
 	}
 }
 
-// JSXIdentifier — synthetic in the sense that it has no own TS kind; it
-// wraps an Identifier (or sub-piece of a JsxNamespacedName). Tag-name
-// identifiers DO claim the cache slot (typescript-estree's
-// convertJSXIdentifier registers them); identifiers inside JsxNamespacedName
-// don't (the JSXNamespacedName owns that slot).
+// JSXIdentifier — wraps an Identifier or sub-piece of a JsxNamespacedName.
+// Each instance owns its inner ts.Identifier slot (distinct from the
+// outer JsxNamespacedName / tag-name owner), so registration is always
+// safe.
 class JSXIdentifierNode extends LazyNode {
 	readonly type = 'JSXIdentifier' as const;
 	readonly name: string;
@@ -4866,10 +4897,9 @@ class JSXIdentifierNode extends LazyNode {
 		tsNode: ts.Node,
 		parent: LazyNode | null,
 		name: string,
-		registerInMaps = true,
 		range?: [number, number],
 	) {
-		super(tsNode, parent, undefined, registerInMaps);
+		super(tsNode, parent);
 		this.name = name;
 		if (range) this.range = range;
 	}
@@ -4890,7 +4920,7 @@ class JSXMemberExpressionNode extends LazyNode {
 		// Inner identifier of a member-expression chain — slot is owned by
 		// the property's own ts.Identifier, so we DO register here (matches
 		// typescript-estree's convertJSXIdentifier behavior).
-		return this._property = new JSXIdentifierNode(name, this, name.text, true);
+		return this._property = new JSXIdentifierNode(name, this, name.text);
 	}
 }
 
@@ -4905,12 +4935,12 @@ class JSXNamespacedNameNode extends LazyNode {
 		// namespace JSXIdentifier doesn't register against namespace.parent
 		// (which would conflict). The namespace ts.Identifier itself has a
 		// distinct TS node, so we register that.
-		return this._namespace = new JSXIdentifierNode(ns, this, ns.text, true);
+		return this._namespace = new JSXIdentifierNode(ns, this, ns.text);
 	}
 	get name(): JSXIdentifierNode {
 		if (this._name) return this._name;
 		const nm = (this._ts as ts.JsxNamespacedName).name;
-		return this._name = new JSXIdentifierNode(nm, this, nm.text, true);
+		return this._name = new JSXIdentifierNode(nm, this, nm.text);
 	}
 }
 
@@ -4928,10 +4958,10 @@ function convertJSXTagName(node: ts.Node, parent: LazyNode): LazyNode {
 		// `<this />` — typescript-estree falls back to convertJSXNamespaceOrIdentifier
 		// which then calls convertJSXIdentifier (treats it as a JSXIdentifier
 		// with name='this'). Mirror that.
-		return new JSXIdentifierNode(node, parent, 'this', true);
+		return new JSXIdentifierNode(node, parent, 'this');
 	}
 	const id = node as ts.Identifier;
-	return new JSXIdentifierNode(id, parent, id.text, true);
+	return new JSXIdentifierNode(id, parent, id.text);
 }
 
 // JSX attribute-name dispatch: a JsxNamespacedName (`<el ns:attr=… />`)
@@ -4941,7 +4971,7 @@ function convertJSXNamespaceOrIdentifier(node: ts.Node, parent: LazyNode): LazyN
 		return new JSXNamespacedNameNode(node, parent);
 	}
 	const id = node as ts.Identifier;
-	return new JSXIdentifierNode(id, parent, id.text, true);
+	return new JSXIdentifierNode(id, parent, id.text);
 }
 
 // JsxText / JsxAttribute-string entity decoding. typescript-estree's
