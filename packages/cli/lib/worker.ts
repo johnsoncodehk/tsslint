@@ -161,6 +161,16 @@ async function setup(
 	linterLanguageService = originalService;
 	language = undefined;
 
+	// Reset per-project state. Multi-project runs reuse the same worker
+	// (in-process) — without this, cross-project file paths accumulate in
+	// `snapshots` / `versions` (memory leak) and `affectedFiles` from a
+	// prior project would mis-classify this project's files as cache-hit
+	// candidates if their absolute paths happened to overlap.
+	snapshots.clear();
+	versions.clear();
+	affectedFiles = undefined;
+	currentBuilder = undefined;
+
 	const plugins = await languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
 		const { getScriptSnapshot } = originalHost;
