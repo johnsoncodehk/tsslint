@@ -294,40 +294,131 @@ const INTERFACE_MEMBER_KINDS_SET = (() => {
 // running the if-chain. Most tree-walks land on parents like
 // SourceFile / Block / ReturnStatement / BinaryExpression-but-not-LHS — none
 // of which appear here — so this catches the vast majority of calls.
+
+// ─── SHAPE TABLE ─────────────────────────────────────────────────────────
+//
+// Single source of truth for "where typescript-estree's ESTree shape
+// diverges from the raw TS AST". Two divergence categories are encoded
+// here:
+//
+// 1. SKIP: a TS kind is structural-only (no ESTree counterpart in this
+//    position) and should be transparent to materialise's parent walk.
+//    The walk skips past, so the next-level real ESTree ancestor becomes
+//    the child's parent. Examples: SyntaxList (marker), JsxAttributes
+//    (container), VariableDeclarationList inside VariableStatement
+//    (folded into VariableDeclaration), CatchClause's
+//    VariableDeclaration shim (catch param is direct), HeritageClause
+//    extends (lifted to ClassDeclaration.superClass).
+//
+// 2. WRAPPER (added incrementally below; not in this initial table —
+//    findWrapperRoute still owns those for now): a slot needs a synthetic
+//    ESTree wrapper between the TS child and the materialised parent
+//    (e.g. TSTypeAnnotation between PropertySignature and the type kind).
+//    Future commits move those into this table too.
+//
+// Adding a new shape divergence MUST update this table — the bottom-up
+// walk consults it as the single authority. Also keeps the knowledge
+// near each parent kind rather than scattered across if/else cascades.
+type SkipDecision = boolean | ((walker: ts.Node) => boolean);
+const SKIP_AS_PARENT: Partial<Record<ts.SyntaxKind, SkipDecision>> = {
+	[SK.SyntaxList]: true,
+	[SK.CaseBlock]: true,
+	[SK.NamedImports]: true,
+	[SK.ImportClause]: true,
+	[SK.JsxAttributes]: true,
+	[SK.VariableDeclarationList]: w => w.parent?.kind === SK.VariableStatement,
+	[SK.VariableDeclaration]: w => w.parent?.kind === SK.CatchClause,
+	[SK.HeritageClause]: w => (w as ts.HeritageClause).token === SK.ExtendsKeyword,
+	[SK.ExpressionWithTypeArguments]: w =>
+		w.parent?.kind === SK.HeritageClause
+		&& (w.parent as ts.HeritageClause).token === SK.ExtendsKeyword,
+};
+function shouldSkipAsParent(walker: ts.Node): boolean {
+	const decision = SKIP_AS_PARENT[walker.kind];
+	if (decision === undefined) return false;
+	return typeof decision === 'function' ? decision(walker) : decision;
+}
+
+// Per-parent-kind: how to materialise the type-position child via the
+// parent's getter chain. typescript-estree always wraps these slots in
+// a synthetic TSTypeAnnotation; the trigger drills the path that builds
+// the wrapper + registers the inner TypeNode in the cache.
+//
+// Adding a TS parent kind that has a `.type` slot rendered through a
+// TSTypeAnnotation wrapper means one new line here — the wrapper-route
+// dispatch picks it up automatically.
+const TYPE_SLOT_TRIGGERS: Partial<Record<ts.SyntaxKind, (owner: any) => void>> = {
+	[SK.VariableDeclaration]: o => {
+		// VariableDeclaration.type is exposed via `id.typeAnnotation.typeAnnotation`
+		// (the binding name carries the annotation in the ESTree shape).
+		const id = o.id;
+		if (id?.typeAnnotation) void id.typeAnnotation.typeAnnotation;
+	},
+	[SK.Parameter]: o => {
+		// Owner may be AssignmentPattern (default value) or
+		// TSParameterProperty (`private x: T`); drill through to the
+		// binding name to reach `.typeAnnotation`.
+		let cur = o;
+		if (cur.parameter) cur = cur.parameter;
+		if (cur.left) cur = cur.left;
+		if (cur.typeAnnotation) void cur.typeAnnotation.typeAnnotation;
+	},
+	[SK.FunctionDeclaration]: o => {
+		const inner = unwrapInner(o) as any;
+		if (inner.returnType) void inner.returnType.typeAnnotation;
+	},
+	[SK.FunctionExpression]: o => {
+		const inner = unwrapInner(o) as any;
+		if (inner.returnType) void inner.returnType.typeAnnotation;
+	},
+	[SK.ArrowFunction]: o => {
+		const inner = unwrapInner(o) as any;
+		if (inner.returnType) void inner.returnType.typeAnnotation;
+	},
+	[SK.PropertySignature]: o => {
+		if (o.typeAnnotation) void o.typeAnnotation.typeAnnotation;
+	},
+	[SK.MethodSignature]: o => {
+		if (o.returnType) void o.returnType.typeAnnotation;
+	},
+	[SK.CallSignature]: o => {
+		if (o.returnType) void o.returnType.typeAnnotation;
+	},
+	[SK.ConstructSignature]: o => {
+		if (o.returnType) void o.returnType.typeAnnotation;
+	},
+	[SK.IndexSignature]: o => {
+		if (o.typeAnnotation) void o.typeAnnotation.typeAnnotation;
+	},
+	[SK.FunctionType]: o => {
+		if (o.returnType) void o.returnType.typeAnnotation;
+	},
+	[SK.ConstructorType]: o => {
+		if (o.returnType) void o.returnType.typeAnnotation;
+	},
+};
+
+// Pattern-position parent kinds (BinaryExpression-LHS / for-loop-LHS /
+// nested-pattern host) — these reach findWrapperRoute via the
+// pattern-literal-target path. Type-slot parent kinds are derived from
+// TYPE_SLOT_TRIGGERS so the bitmap can never drift from the table.
+const PATTERN_POSITION_PARENTS = [
+	SK.BinaryExpression,
+	SK.ForOfStatement,
+	SK.ForInStatement,
+	SK.ArrayLiteralExpression,
+	SK.ObjectLiteralExpression,
+	SK.PropertyAssignment,
+	SK.ShorthandPropertyAssignment,
+	SK.SpreadElement,
+	SK.SpreadAssignment,
+	SK.ParenthesizedExpression,
+] as const;
+
 const WRAPPER_ROUTE_PARENT_BITMAP = (() => {
 	const a = new Uint8Array(400);
-	for (
-		const k of [
-			SK.BinaryExpression,
-			SK.ForOfStatement,
-			SK.ForInStatement,
-			SK.ArrayLiteralExpression,
-			SK.ObjectLiteralExpression,
-			SK.PropertyAssignment,
-			SK.ShorthandPropertyAssignment,
-			SK.SpreadElement,
-			SK.SpreadAssignment,
-			SK.ParenthesizedExpression,
-			SK.VariableDeclaration,
-			SK.Parameter,
-			SK.FunctionDeclaration,
-			SK.FunctionExpression,
-			SK.ArrowFunction,
-			// Signature-kind parents whose `.type` slot is wrapped in a
-			// synthetic TSTypeAnnotation in the ESTree shape (typescript-
-			// estree always emits the wrapper). Without these, bottom-up
-			// materialise of an inner type kind lands `parent` directly on
-			// TSPropertySignature / TSMethodSignature / etc. — missing the
-			// wrapper layer rules expect to walk through.
-			SK.PropertySignature,
-			SK.MethodSignature,
-			SK.CallSignature,
-			SK.ConstructSignature,
-			SK.IndexSignature,
-			SK.FunctionType,
-			SK.ConstructorType,
-		]
-	) a[k] = 1;
+	for (const k of PATTERN_POSITION_PARENTS) a[k] = 1;
+	for (const kStr of Object.keys(TYPE_SLOT_TRIGGERS)) a[+kStr] = 1;
 	return a;
 })();
 
@@ -710,101 +801,14 @@ function findWrapperRoute(tsNode: ts.Node):
 			},
 		};
 	}
-	// `let x: T = ...` — VariableDeclaration.type goes through Identifier.typeAnnotation
-	if (tsParent.kind === SK.VariableDeclaration && (tsParent as ts.VariableDeclaration).type === tsNode) {
-		return {
-			ownerTsNode: tsParent,
-			trigger: owner => {
-				// Chain through `id` (builds Identifier + TSTypeAnnotation
-				// wrapper) then `typeAnnotation` (the wrapper's own getter,
-				// which finally calls convertChild on the inner type and
-				// registers it in the cache).
-				const id = (owner as unknown as { id: unknown }).id as { typeAnnotation: { typeAnnotation: unknown } } | null;
-				if (id?.typeAnnotation) {
-					void id.typeAnnotation.typeAnnotation;
-				}
-			},
-		};
-	}
-	// `function f(x: T)` — Parameter.type goes through the Identifier
-	// returned by convertParameter, which carries `typeAnnotation`. The
-	// owner cache slot may hold AssignmentPatternNode (default value) or
-	// TSParameterPropertyNode (`private x: T`); drill through to the
-	// binding name to reach `.typeAnnotation`.
-	if (tsParent.kind === SK.Parameter && (tsParent as ts.ParameterDeclaration).type === tsNode) {
-		return {
-			ownerTsNode: tsParent,
-			trigger: owner => {
-				let cur = owner as unknown as {
-					parameter?: { left?: unknown; typeAnnotation?: unknown };
-					left?: unknown;
-					typeAnnotation?: unknown;
-				};
-				if (cur.parameter) cur = cur.parameter;
-				if (cur.left) cur = cur.left;
-				const ta = cur.typeAnnotation as { typeAnnotation: unknown } | undefined;
-				if (ta) void ta.typeAnnotation;
-			},
-		};
-	}
-	// `function f(): T` / `(): T => ...` — function-like return type goes
-	// through the function node's `returnType` getter (a TSTypeAnnotation
-	// wrapper). Owner may be ExportNamedWrappingNode etc. when the
-	// declaration is exported (`export function f(): T`); unwrap first.
-	if (
-		(tsParent.kind === SK.FunctionDeclaration
-			|| tsParent.kind === SK.FunctionExpression
-			|| tsParent.kind === SK.ArrowFunction)
-		&& (tsParent as ts.SignatureDeclaration).type === tsNode
-	) {
-		return {
-			ownerTsNode: tsParent,
-			trigger: owner => {
-				const inner = unwrapInner(owner);
-				const rt = (inner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
-				if (rt) void rt.typeAnnotation;
-			},
-		};
-	}
-	// `interface I { a: T; b(): T }` — Property/Method/IndexSignature.type
-	// (and MethodSignature.type, the return type) goes through the
-	// signature node's `typeAnnotation` / `returnType` getter, both of
-	// which produce a synthetic TSTypeAnnotation wrapper. Without routing,
-	// bottom-up materialise of an inner type kind (TSStringKeyword,
-	// TSVoidKeyword, etc.) lands `parent` on TSPropertySignature /
-	// TSMethodSignature directly — typescript-estree always shows the
-	// TSTypeAnnotation wrapper between them.
-	if (
-		tsParent.kind === SK.PropertySignature
-		&& (tsParent as ts.PropertySignature).type === tsNode
-	) {
-		return {
-			ownerTsNode: tsParent,
-			trigger: owner => {
-				const ta = (owner as unknown as { typeAnnotation?: { typeAnnotation: unknown } }).typeAnnotation;
-				if (ta) void ta.typeAnnotation;
-			},
-		};
-	}
-	if (
-		(tsParent.kind === SK.MethodSignature
-			|| tsParent.kind === SK.CallSignature
-			|| tsParent.kind === SK.ConstructSignature
-			|| tsParent.kind === SK.IndexSignature
-			|| tsParent.kind === SK.FunctionType
-			|| tsParent.kind === SK.ConstructorType)
-		&& (tsParent as ts.SignatureDeclarationBase).type === tsNode
-	) {
-		return {
-			ownerTsNode: tsParent,
-			trigger: owner => {
-				const rt = (owner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
-				if (rt) void rt.typeAnnotation;
-				// IndexSignature uses `typeAnnotation`, not `returnType`.
-				const ta = (owner as unknown as { typeAnnotation?: { typeAnnotation: unknown } }).typeAnnotation;
-				if (ta) void ta.typeAnnotation;
-			},
-		};
+	// All `.type` slot wrappers (VariableDeclaration / Parameter /
+	// FunctionLike return / Signature kinds) are declared in
+	// TYPE_SLOT_TRIGGERS. Each entry is the trigger callback that
+	// drills the parent's getter chain to materialise the synthetic
+	// TSTypeAnnotation wrapper + register the inner type in the cache.
+	const typeTrigger = TYPE_SLOT_TRIGGERS[tsParent.kind];
+	if (typeTrigger && (tsParent as { type?: ts.Node }).type === tsNode) {
+		return { ownerTsNode: tsParent, trigger: typeTrigger };
 	}
 	return null;
 }
@@ -865,71 +869,11 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	let parent: LazyNode | null = null;
 	const tsCache = ctx.maps.tsNodeToESTreeNodeMap;
 	while (walker) {
-		const wk = walker.kind;
-		// Structural-only TS kinds with no ESTree counterpart in their
-		// usual position — walker skips past so the child's parent
-		// resolves to the next-level real ESTree ancestor.
-		// - SyntaxList: marker only.
-		// - CaseBlock: SwitchStatement.cases jumps directly to clauses
-		//   in ESTree, so SwitchCase's parent is SwitchStatement.
-		// - VariableDeclarationList: only structural inside a VariableStatement
-		//   (folded into VariableDeclaration). When standalone (for-init in
-		//   `for (var x in y)` etc.) it maps to ESTree VariableDeclaration via
-		//   VariableDeclarationListAsNode — keep that mapping.
-		// - NamedImports / ImportClause: ImportSpecifier / ImportDefault-
-		//   Specifier / ImportNamespaceSpecifier all sit directly under
-		//   ImportDeclaration in ESTree (specifiers[]), so a bottom-up
-		//   walk from any specifier should land on the ImportDeclaration
-		//   wrapper rather than building intermediate generic nodes.
-		// - JsxAttributes: TS holds the attribute list (between `<` and
-		//   `>`) in a wrapper container, but typescript-estree elides it
-		//   and exposes attributes directly via `JSXOpeningElement.attributes`.
-		//   Without skipping, every {x} attribute value's bottom-up
-		//   materialise creates a phantom TSJsxAttributes (GenericTSNode);
-		//   on Dify web/ that meant ~9,659 wasted allocations / run.
-		//   Skipping aligns the parent chain with the ESTree shape: a
-		//   JSXAttribute's parent is JSXOpeningElement directly.
-		if (
-			wk === SK.SyntaxList
-			|| wk === SK.CaseBlock
-			|| wk === SK.NamedImports
-			|| wk === SK.ImportClause
-			|| wk === SK.JsxAttributes
-			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)
-			// `try { } catch (e) {}` — TS wraps the catch param in a
-			// VariableDeclaration shim (CatchClause.variableDeclaration), but
-			// ESTree exposes the param directly as CatchClause.param. Without
-			// skipping, bottom-up materialise of the inner Identifier lands
-			// `parent` on a phantom VariableDeclarator → VariableDeclaration
-			// chain. Mirrors the structural skip already in tsScanTraverse.
-			|| (wk === SK.VariableDeclaration && walker.parent?.kind === SK.CatchClause)
-		) {
-			walker = walker.parent;
-			continue;
-		}
-		// `class B extends A` — typescript-estree elides the
-		// HeritageClause + ExpressionWithTypeArguments wrappers and lifts
-		// the inner expression directly into ClassDeclaration.superClass.
-		// Without skipping these on the bottom-up walk, materialize trips
-		// on HeritageClause's null convertChild result and returns a
-		// GenericTSNode instead of building the inner Identifier — every
-		// rule that walks `parent.type` from a superclass identifier sees
-		// the wrong shape (id-length, no-shadow, etc.). `implements` clauses
-		// stay wrapped in TSClassImplements (typescript-estree's
-		// `convertHeritageClauses`), so we only skip when the heritage
-		// token is `extends`.
-		if (
-			wk === SK.HeritageClause
-			&& (walker as ts.HeritageClause).token === SK.ExtendsKeyword
-		) {
-			walker = walker.parent;
-			continue;
-		}
-		if (
-			wk === SK.ExpressionWithTypeArguments
-			&& walker.parent?.kind === SK.HeritageClause
-			&& (walker.parent as ts.HeritageClause).token === SK.ExtendsKeyword
-		) {
+		// Structural-only TS kinds (no ESTree counterpart in their usual
+		// position) are declared in SKIP_AS_PARENT. The walker skips past
+		// them so the child's parent resolves to the next-level real
+		// ESTree ancestor.
+		if (shouldSkipAsParent(walker)) {
 			walker = walker.parent;
 			continue;
 		}
