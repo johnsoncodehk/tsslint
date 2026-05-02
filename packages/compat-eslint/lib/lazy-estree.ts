@@ -339,6 +339,94 @@ function shouldSkipAsParent(walker: ts.Node): boolean {
 	return typeof decision === 'function' ? decision(walker) : decision;
 }
 
+// Wrapper-drill entries: when materialise's walk-up hits a CACHED ancestor
+// whose ESTree shape WRAPS the child's actual parent (synthetic
+// intermediate slot without TS counterpart), drill into the slot to set
+// the right parent. Without these, e.g. a class method's parameter
+// resolves `parent.parent` as ClassDeclaration directly, missing the
+// ClassBody wrapper between.
+//
+// Entries are evaluated in order; first match wins. Adding a new drill
+// case = one new entry (declarative match + drill function).
+interface WrapperDrill {
+	match: (walker: ts.Node, drillFromType: string | undefined, innermostChild: ts.Node) => boolean;
+	drill: (drillFrom: any, walker: ts.Node) => LazyNode | undefined;
+}
+const WRAPPER_DRILLS: WrapperDrill[] = [
+	// Class members → ClassBody. ts.ClassDeclaration/Expression children
+	// (Method/Property/Static block etc.) live in ESTree under
+	// ClassDeclaration.body (a ClassBody wrapper).
+	{
+		match: (w, _dt, child) =>
+			(w.kind === SK.ClassDeclaration || w.kind === SK.ClassExpression)
+			&& CLASS_MEMBER_KINDS_SET[child.kind] === 1,
+		drill: drillFrom => drillFrom.body,
+	},
+	// Interface members → TSInterfaceBody. Same pattern.
+	{
+		match: (w, _dt, child) =>
+			w.kind === SK.InterfaceDeclaration
+			&& INTERFACE_MEMBER_KINDS_SET[child.kind] === 1,
+		drill: drillFrom => drillFrom.body,
+	},
+	// Enum members → TSEnumBody.
+	{
+		match: (w, _dt, child) =>
+			w.kind === SK.EnumDeclaration
+			&& child.kind === SK.EnumMember,
+		drill: drillFrom => drillFrom.body,
+	},
+	// `class A { constructor(public x = 0) {} }` — Parameter cached as
+	// TSParameterProperty wrapper. The parameter's initializer slot
+	// belongs to AssignmentPattern (sitting at wrapper.parameter).
+	{
+		match: (w, dt, child) =>
+			w.kind === SK.Parameter
+			&& dt === 'TSParameterProperty'
+			&& child === (w as ts.ParameterDeclaration).initializer,
+		drill: drillFrom => {
+			const ap = drillFrom.parameter;
+			return ap && ap.type === 'AssignmentPattern' ? ap : undefined;
+		},
+	},
+	// Class methods (MethodDefinition / TSAbstractMethodDefinition) wrap a
+	// FunctionExpression in `.value`. Children of the underlying ts.Method/
+	// Constructor/GetAccessor/SetAccessor map to slots on FunctionExpression
+	// (params, body, returnType, typeParameters) EXCEPT for `name`.
+	{
+		match: (w, dt, child) =>
+			(dt === 'MethodDefinition' || dt === 'TSAbstractMethodDefinition')
+			&& (w.kind === SK.MethodDeclaration || w.kind === SK.Constructor
+				|| w.kind === SK.GetAccessor || w.kind === SK.SetAccessor)
+			&& child !== (w.kind !== SK.Constructor
+				? (w as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
+				: undefined),
+		drill: drillFrom => drillFrom.value,
+	},
+	// Object-literal method shorthand / accessors wrap into Property.value.
+	{
+		match: (w, dt, child) =>
+			dt === 'Property'
+			&& (w.kind === SK.MethodDeclaration || w.kind === SK.GetAccessor || w.kind === SK.SetAccessor)
+			&& child !== (w as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name,
+		drill: drillFrom => drillFrom.value,
+	},
+	// `const { x = 1 } = o` — BindingElement's name (and default
+	// initializer) live at Property.value.left / .right (AssignmentPattern).
+	{
+		match: (w, _dt, child) =>
+			w.kind === SK.BindingElement
+			&& (w as ts.BindingElement).initializer !== undefined
+			&& w.parent?.kind === SK.ObjectBindingPattern
+			&& (child === (w as ts.BindingElement).name
+				|| child === (w as ts.BindingElement).initializer),
+		drill: drillFrom => {
+			const v = drillFrom.value;
+			return v && v.type === 'AssignmentPattern' ? v : undefined;
+		},
+	},
+];
+
 // Per-parent-kind: how to materialise the type-position child via the
 // parent's getter chain. typescript-estree always wraps these slots in
 // a synthetic TSTypeAnnotation; the trigger drills the path that builds
@@ -551,47 +639,39 @@ function findJSXOwnerRoute(tsNode: ts.Node):
 	return null;
 }
 
+// TS parent kinds that expose a `typeArguments: ts.NodeArray<TypeNode>`
+// field. Looked up by parent kind during findTypeArgRoute. Bottom-up
+// materialise of a TypeNode in this position routes through the parent's
+// `typeArguments.params` getter (which produces the synthetic
+// TSTypeParameterInstantiation wrapper that typescript-estree emits).
+//
+// JsxSelfClosingElement is special: it materialises as JSXElement, so
+// `typeArguments` lives on the synthetic openingElement instead.
+const TYPE_ARG_HOSTS: Partial<Record<ts.SyntaxKind, (parent: ts.Node) => ts.NodeArray<ts.TypeNode> | undefined>> = {
+	[SK.TypeReference]: p => (p as ts.TypeReferenceNode).typeArguments,
+	[SK.ImportType]: p => (p as ts.ImportTypeNode).typeArguments,
+	[SK.NewExpression]: p => (p as ts.NewExpression).typeArguments,
+	[SK.TaggedTemplateExpression]: p => (p as ts.TaggedTemplateExpression).typeArguments,
+	[SK.ExpressionWithTypeArguments]: p => (p as ts.ExpressionWithTypeArguments).typeArguments,
+	[SK.CallExpression]: p => (p as ts.CallExpression).typeArguments,
+	[SK.JsxOpeningElement]: p => (p as ts.JsxOpeningElement).typeArguments,
+	[SK.JsxSelfClosingElement]: p => (p as ts.JsxSelfClosingElement).typeArguments,
+};
 function findTypeArgRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void }
 	| null
 {
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
-	const k = tsParent.kind;
-	let typeArgs: ts.NodeArray<ts.TypeNode> | undefined;
-	switch (k) {
-		case SK.TypeReference:
-			typeArgs = (tsParent as ts.TypeReferenceNode).typeArguments;
-			break;
-		case SK.ImportType:
-			typeArgs = (tsParent as ts.ImportTypeNode).typeArguments;
-			break;
-		case SK.NewExpression:
-			typeArgs = (tsParent as ts.NewExpression).typeArguments;
-			break;
-		case SK.TaggedTemplateExpression:
-			typeArgs = (tsParent as ts.TaggedTemplateExpression).typeArguments;
-			break;
-		case SK.ExpressionWithTypeArguments:
-			typeArgs = (tsParent as ts.ExpressionWithTypeArguments).typeArguments;
-			break;
-		case SK.CallExpression:
-			typeArgs = (tsParent as ts.CallExpression).typeArguments;
-			break;
-		case SK.JsxOpeningElement:
-		case SK.JsxSelfClosingElement:
-			typeArgs = (tsParent as ts.JsxOpeningElement | ts.JsxSelfClosingElement).typeArguments;
-			break;
-		default:
-			return null;
-	}
+	const getTypeArgs = TYPE_ARG_HOSTS[tsParent.kind];
+	if (!getTypeArgs) return null;
+	const typeArgs = getTypeArgs(tsParent);
 	if (!typeArgs || typeArgs.indexOf(tsNode as ts.TypeNode) < 0) return null;
+	const isSelfClosing = tsParent.kind === SK.JsxSelfClosingElement;
 	return {
 		ownerTsNode: tsParent,
 		trigger: owner => {
-			// JsxSelfClosingElement materialises to JSXElement; the
-			// `typeArguments` slot lives on its inner JSXOpeningElement.
-			if (k === SK.JsxSelfClosingElement) {
+			if (isSelfClosing) {
 				const opening =
 					(owner as unknown as { openingElement?: { typeArguments?: { params?: unknown } } }).openingElement;
 				const ta = opening?.typeArguments;
@@ -880,34 +960,11 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		const cachedAnc = tsCache.get(walker);
 		if (cachedAnc) {
 			parent = cachedAnc as LazyNode;
-			// Wrapper drill-through: the cached ESTree may wrap the actual
-			// parent because the wrapper has synthetic intermediate slots
-			// without TS counterparts. The TS-up-walk lands on the wrapper;
-			// drill in based on which slot the child is in.
-			//
-			// 1. Class members (Method/Property/Static block etc.) under
-			//    ts.ClassDeclaration/Expression: ESTree puts them in
-			//    `ClassBody.body`. Without drill, `node.parent` reads as
-			//    ClassDeclaration, so `node.parent.parent` skips one level
-			//    and rules using `parent.parent.<class-prop>` (e.g.
-			//    no-useless-constructor: `parent.parent.superClass`) miss.
-			// 2. Interface / Enum members: same pattern via TSInterfaceBody /
-			//    TSEnumBody.
-			// 3. ts.Parameter cached as TSParameterProperty: AssignmentPattern
-			//    (default value) sits at `wrapper.parameter`, so a child
-			//    landing on the parameter's `initializer` slot must take
-			//    AssignmentPattern as its parent. Without this, CPA's
-			//    `processCodePathToEnter` for AssignmentPattern checks
-			//    `parent.right === node` to push a fork context, the check
-			//    fails (TSParameterProperty has no `.right`), the push is
-			//    skipped, and the matching pop on `AssignmentPattern:exit`
-			//    crashes in `popForkContext` reading null `replaceHead`.
-			//    Repro: `class A { constructor(public x: number = 0) {} }`.
-			const innermostChild = toBuild.length > 0 ? toBuild[toBuild.length - 1] : tsNode;
-			const wk = walker.kind;
-			// Unwrap Export wrappers first — for `export class Foo {}` the
-			// cache holds ExportNamedDeclaration { declaration: ClassDecl },
-			// and class members live inside the inner declaration's body.
+			// Step 1: unwrap Export wrappers. For `export class Foo {}` the
+			// cache holds ExportNamedDeclaration { declaration: ClassDecl };
+			// the actual parent of class members is the inner declaration,
+			// not the wrapper. Default to the inner; specific drills below
+			// can override (class body, function value, etc.).
 			let drillFrom: LazyNode = parent;
 			let drillType = (drillFrom as { type?: string }).type;
 			while (drillType === 'ExportNamedDeclaration' || drillType === 'ExportDefaultDeclaration') {
@@ -916,97 +973,16 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 				drillFrom = decl;
 				drillType = (drillFrom as { type?: string }).type;
 			}
-			// Default after Export-unwrap: the child's parent is the inner
-			// declaration, not the Export wrapper. Without this, parameters of
-			// `export function f(x)` resolve `parent` as ExportNamedDeclaration
-			// instead of FunctionDeclaration — id-length, no-param-reassign,
-			// and any rule reading `param.parent.type === 'FunctionDeclaration'`
-			// silently miss. Specific further drills (class body, function
-			// value, etc.) override below.
 			if (drillFrom !== parent) parent = drillFrom;
-			if (
-				(wk === SK.ClassDeclaration || wk === SK.ClassExpression)
-				&& CLASS_MEMBER_KINDS_SET[innermostChild.kind] === 1
-			) {
-				const body = (drillFrom as unknown as { body?: LazyNode }).body;
-				if (body) parent = body;
-			}
-			else if (
-				wk === SK.InterfaceDeclaration
-				&& INTERFACE_MEMBER_KINDS_SET[innermostChild.kind] === 1
-			) {
-				const body = (drillFrom as unknown as { body?: LazyNode }).body;
-				if (body) parent = body;
-			}
-			else if (
-				wk === SK.EnumDeclaration
-				&& innermostChild.kind === SK.EnumMember
-			) {
-				const body = (drillFrom as unknown as { body?: LazyNode }).body;
-				if (body) parent = body;
-			}
-			else if (
-				wk === SK.Parameter
-				&& drillType === 'TSParameterProperty'
-				&& innermostChild === (walker as ts.ParameterDeclaration).initializer
-			) {
-				const ap = (drillFrom as unknown as { parameter?: LazyNode }).parameter;
-				if (ap && (ap as { type?: string }).type === 'AssignmentPattern') {
-					parent = ap;
-				}
-			}
-			else if (
-				(drillType === 'MethodDefinition' || drillType === 'TSAbstractMethodDefinition')
-				&& (wk === SK.MethodDeclaration || wk === SK.Constructor
-					|| wk === SK.GetAccessor || wk === SK.SetAccessor)
-			) {
-				// Children of ts.MethodDeclaration/Constructor/GetAccessor/
-				// SetAccessor map onto FunctionExpression slots (params, body,
-				// returnType, typeParameters) EXCEPT for `name` (the method key).
-				// Drill into `value` for the function-expression slots.
-				const namedChild = wk !== SK.Constructor
-					? (walker as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
-					: undefined;
-				if (innermostChild !== namedChild) {
-					const value = (drillFrom as unknown as { value?: LazyNode }).value;
-					if (value) parent = value;
-				}
-			}
-			else if (
-				drillType === 'Property'
-				&& (wk === SK.MethodDeclaration || wk === SK.GetAccessor || wk === SK.SetAccessor)
-			) {
-				const namedChild =
-					(walker as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name;
-				if (innermostChild !== namedChild) {
-					const value = (drillFrom as unknown as { value?: LazyNode }).value;
-					if (value) parent = value;
-				}
-			}
-			else if (
-				wk === SK.BindingElement
-				&& (walker as ts.BindingElement).initializer !== undefined
-				&& walker.parent?.kind === SK.ObjectBindingPattern
-				&& (
-					innermostChild === (walker as ts.BindingElement).name
-					|| innermostChild === (walker as ts.BindingElement).initializer
-				)
-			) {
-				// `const { x = 1 } = o` — typescript-estree wraps the
-				// BindingElement's name in AssignmentPattern when the element
-				// has a default. Top-down build does this via the value getter.
-				// Bottom-up materialize for the inner name lands on the
-				// BindingElement's Property wrapper directly without the
-				// AssignmentPattern between, so id-length /
-				// no-shadow-restricted-names / etc. read parent.type as
-				// 'Property' instead of 'AssignmentPattern' and miss. Trigger
-				// `Property.value` to force the wrapper build, then route
-				// parent through it. The default-value (BindingElement.initializer)
-				// lives at AssignmentPattern.right, so the same drill applies
-				// when the innermost child is the initializer.
-				const v = (drillFrom as unknown as { value?: LazyNode }).value;
-				if (v && (v as { type?: string }).type === 'AssignmentPattern') {
-					parent = v;
+			// Step 2: apply the first matching wrapper drill (synthetic
+			// intermediate slot like ClassBody / FunctionExpression.value /
+			// AssignmentPattern). See WRAPPER_DRILLS for the table.
+			const innermostChild = toBuild.length > 0 ? toBuild[toBuild.length - 1] : tsNode;
+			for (const d of WRAPPER_DRILLS) {
+				if (d.match(walker, drillType, innermostChild)) {
+					const drilled = d.drill(drillFrom as any, walker);
+					if (drilled) parent = drilled;
+					break;
 				}
 			}
 			break;
