@@ -1813,6 +1813,42 @@ defineShape<ts.PropertyAssignment>(SK.PropertyAssignment, {
 		value: { tsField: 'initializer' },
 	},
 });
+// Pure type-tag shapes — no slots, no fields. The ESTree node carries
+// only the `type` discriminator and inherited range/loc/parent.
+defineShape<ts.SuperExpression>(SK.SuperKeyword, { type: 'Super', slots: {} });
+defineShape<ts.ThisExpression>(SK.ThisKeyword, { type: 'ThisExpression', slots: {} });
+defineShape<ts.ThisTypeNode>(SK.ThisType, { type: 'TSThisType', slots: {} });
+defineShape<ts.EmptyStatement>(SK.EmptyStatement, { type: 'EmptyStatement', slots: {} });
+defineShape<ts.JsxOpeningFragment>(SK.JsxOpeningFragment, { type: 'JSXOpeningFragment', slots: {} });
+defineShape<ts.JsxClosingFragment>(SK.JsxClosingFragment, { type: 'JSXClosingFragment', slots: {} });
+// `null` literal in expression position. The LiteralType wrapper case
+// (`type X = null`) is handled separately in convertLiteralType, which
+// emits TSNullKeyword instead.
+defineShape<ts.NullLiteral>(SK.NullKeyword, {
+	type: 'Literal',
+	slots: {},
+	defaults: { value: null, raw: 'null' },
+});
+defineShape<ts.PrivateIdentifier>(SK.PrivateIdentifier, {
+	type: 'PrivateIdentifier',
+	slots: {},
+	consts: tn => ({ name: tn.text.slice(1) }),
+});
+defineShape<ts.JsxSpreadAttribute>(SK.JsxSpreadAttribute, {
+	type: 'JSXSpreadAttribute',
+	slots: { argument: { tsField: 'expression' } },
+});
+defineShape<ts.JsxClosingElement>(SK.JsxClosingElement, {
+	type: 'JSXClosingElement',
+	slots: { name: { tsField: 'tagName', via: convertJSXTagName } },
+});
+defineShape<ts.ClassStaticBlockDeclaration>(SK.ClassStaticBlockDeclaration, {
+	type: 'StaticBlock',
+	slots: {
+		body: { tsField: 'body', via: (block, parent) => convertChildren(block.statements, parent) },
+	},
+	defaults: { decorators: EMPTY_ARRAY },
+});
 
 function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 	const ShapeCls = SHAPE_CLASSES.get(child.kind);
@@ -1862,8 +1898,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return wrapChainIfNeeded(new CallExpressionNode(ce, parent), ce, parent);
 		}
-		case SK.ClassStaticBlockDeclaration:
-			return new StaticBlockNode(child, parent);
 		case SK.MetaProperty:
 			return new MetaPropertyNode(child as ts.MetaProperty, parent);
 		case SK.TrueKeyword:
@@ -1977,8 +2011,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new BreakOrContinueNode('BreakStatement', child as ts.BreakStatement, parent);
 		case SK.ContinueStatement:
 			return new BreakOrContinueNode('ContinueStatement', child as ts.ContinueStatement, parent);
-		case SK.EmptyStatement:
-			return new EmptyStatementNode(child, parent);
 		case SK.ClassDeclaration:
 			return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
 		case SK.ClassExpression:
@@ -2035,12 +2067,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		}
 		case SK.OmittedExpression:
 			return null;
-		case SK.NullKeyword:
-			return new NullLiteralNode(child, parent);
-		case SK.SuperKeyword:
-			return new SuperNode(child, parent);
-		case SK.ThisKeyword:
-			return new ThisExpressionNode(child, parent);
 		case SK.ExpressionWithTypeArguments: {
 			// Parent-aware shape (mirrors eager line 1858). The TS parent
 			// chain — not our lazy parent — is what carries this signal:
@@ -2060,12 +2086,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return new ExpressionWithTypeArgumentsNode(ewta, parent, tag);
 		}
-		case SK.PrivateIdentifier:
-			return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
 		case SK.MappedType:
 			return new TSMappedTypeNode(child as ts.MappedTypeNode, parent);
-		case SK.ThisType:
-			return new TSThisTypeNode(child, parent);
 		case SK.TypePredicate:
 			return new TSTypePredicateNode(child as ts.TypePredicateNode, parent);
 		case SK.EnumDeclaration:
@@ -2079,18 +2101,10 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new JSXElementNode(child, parent);
 		case SK.JsxOpeningElement:
 			return new JSXOpeningElementNode(child as ts.JsxOpeningElement, parent);
-		case SK.JsxClosingElement:
-			return new JSXClosingElementNode(child, parent);
 		case SK.JsxFragment:
 			return new JSXFragmentNode(child, parent);
-		case SK.JsxOpeningFragment:
-			return new JSXOpeningFragmentNode(child, parent);
-		case SK.JsxClosingFragment:
-			return new JSXClosingFragmentNode(child, parent);
 		case SK.JsxAttribute:
 			return new JSXAttributeNode(child, parent);
-		case SK.JsxSpreadAttribute:
-			return new JSXSpreadAttributeNode(child, parent);
 		case SK.JsxExpression:
 			return (child as ts.JsxExpression).dotDotDotToken
 				? new JSXSpreadChildNode(child, parent)
@@ -3087,29 +3101,6 @@ class BindingElementNode extends LazyNode {
 	}
 }
 
-class NullLiteralNode extends LazyNode {
-	readonly type = 'Literal' as const;
-	readonly value = null;
-	readonly raw = 'null';
-}
-
-class SuperNode extends LazyNode {
-	readonly type = 'Super' as const;
-}
-
-class ThisExpressionNode extends LazyNode {
-	readonly type = 'ThisExpression' as const;
-}
-
-class PrivateIdentifierNode extends LazyNode {
-	readonly type = 'PrivateIdentifier' as const;
-	readonly name: string;
-	constructor(tsNode: ts.PrivateIdentifier, parent: LazyNode) {
-		super(tsNode, parent);
-		this.name = tsNode.text.slice(1);
-	}
-}
-
 class TSMappedTypeNode extends LazyNode {
 	readonly type = 'TSMappedType' as const;
 	readonly readonly: boolean | '+' | '-' | undefined;
@@ -3141,10 +3132,6 @@ class TSMappedTypeNode extends LazyNode {
 	get typeAnnotation() {
 		return this._typeAnnotation ??= convertChild((this._ts as ts.MappedTypeNode).type, this);
 	}
-}
-
-class TSThisTypeNode extends LazyNode {
-	readonly type = 'TSThisType' as const;
 }
 
 class TSTypePredicateNode extends LazyNode {
@@ -3459,10 +3446,6 @@ class BreakOrContinueNode extends LazyNode {
 	get label() {
 		return this._label ??= convertChild((this._ts as ts.BreakOrContinueStatement).label, this);
 	}
-}
-
-class EmptyStatementNode extends LazyNode {
-	readonly type = 'EmptyStatement' as const;
 }
 
 // NamedTupleMember: with `...` becomes TSRestType wrapping the member.
@@ -4565,18 +4548,6 @@ class ImportExpressionNode extends LazyNode {
 }
 
 // `class C { static { ... } }` — class static initialiser block.
-class StaticBlockNode extends LazyNode {
-	readonly type = 'StaticBlock' as const;
-	readonly decorators: never[] = EMPTY_ARRAY;
-	private _body?: (LazyNode | null)[];
-	get body() {
-		return this._body ??= convertChildren(
-			(this._ts as ts.ClassStaticBlockDeclaration).body.statements,
-			this,
-		);
-	}
-}
-
 // `new.target` and `import.meta`. typescript-estree emits
 // MetaProperty { meta: Identifier, property: Identifier } where the
 // `meta` Identifier is synthetic (TS has only the keyword tokens).
@@ -4773,16 +4744,6 @@ class JSXOpeningElementNode extends LazyNode {
 	}
 }
 
-class JSXClosingElementNode extends LazyNode {
-	readonly type = 'JSXClosingElement' as const;
-	private _name?: LazyNode;
-	get name(): LazyNode {
-		if (this._name) return this._name;
-		const t = this._ts as ts.JsxClosingElement;
-		return this._name = convertJSXTagName(t.tagName, this);
-	}
-}
-
 class JSXFragmentNode extends LazyNode {
 	readonly type = 'JSXFragment' as const;
 	private _openingFragment?: LazyNode;
@@ -4803,14 +4764,6 @@ class JSXFragmentNode extends LazyNode {
 	}
 }
 
-class JSXOpeningFragmentNode extends LazyNode {
-	readonly type = 'JSXOpeningFragment' as const;
-}
-
-class JSXClosingFragmentNode extends LazyNode {
-	readonly type = 'JSXClosingFragment' as const;
-}
-
 class JSXAttributeNode extends LazyNode {
 	readonly type = 'JSXAttribute' as const;
 	private _name?: LazyNode;
@@ -4823,15 +4776,6 @@ class JSXAttributeNode extends LazyNode {
 	get value(): LazyNode | null {
 		if (this._value !== undefined) return this._value;
 		return this._value = convertChild((this._ts as ts.JsxAttribute).initializer, this);
-	}
-}
-
-class JSXSpreadAttributeNode extends LazyNode {
-	readonly type = 'JSXSpreadAttribute' as const;
-	private _argument?: LazyNode | null;
-	get argument(): LazyNode | null {
-		if (this._argument !== undefined) return this._argument;
-		return this._argument = convertChild((this._ts as ts.JsxSpreadAttribute).expression, this);
 	}
 }
 
