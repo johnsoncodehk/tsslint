@@ -1191,7 +1191,227 @@ function convertChildAsPattern(child: ts.Node | undefined | null, parent: LazyNo
 	}
 }
 
+// ─── SHAPE TABLE (top-down) ──────────────────────────────────────────────
+//
+// Same idea as the bottom-up SKIP_AS_PARENT / TYPE_SLOT_TRIGGERS / etc.
+// tables: each TS SyntaxKind whose lazy class has only mechanical
+// `get x() { return this._x ??= convertChild(this._ts.field, this); }`
+// getters lives in SHAPES instead of as a hand-written subclass.
+// Single source of truth for both directions:
+//   - top-down: makeShapeClass turns a ShapeDef into a LazyNode subclass
+//     with memoised getters
+//   - bottom-up: existing materialise consults the same registry to know
+//     which class to instantiate
+// Adding a new mechanical TS kind = one new SHAPES entry instead of a
+// new subclass + a new switch case in convertChildInner.
+//
+// SHAPES only handles the mechanical pattern. Subclasses with custom
+// constructor logic (range mutation, modifier-derived flags, conditional
+// branching) stay hand-written. The factory + table live alongside.
+type ShapeSlotConvert = 'convertChild' | 'convertChildren' | 'convertChildAsPattern';
+interface ShapeSlotDef {
+	tsField: string;
+	via?: ShapeSlotConvert;
+}
+interface ShapeDef {
+	type: string;
+	slots: Record<string, ShapeSlotDef>;
+}
+const SHAPE_CLASSES = new Map<ts.SyntaxKind, new (tsNode: ts.Node, parent: LazyNode | null) => LazyNode>();
+function defineShape(tsKind: ts.SyntaxKind, def: ShapeDef): void {
+	const cls = class extends LazyNode {
+		readonly type = def.type;
+	};
+	for (const [getter, slot] of Object.entries(def.slots)) {
+		const cacheKey = '_' + getter;
+		Object.defineProperty(cls.prototype, getter, {
+			get(this: any) {
+				if (this[cacheKey] !== undefined) return this[cacheKey];
+				const tsValue = this._ts[slot.tsField];
+				if (tsValue == null) return this[cacheKey] = null;
+				const via = slot.via ?? 'convertChild';
+				if (via === 'convertChildren') return this[cacheKey] = convertChildren(tsValue, this);
+				if (via === 'convertChildAsPattern') return this[cacheKey] = convertChildAsPattern(tsValue, this);
+				return this[cacheKey] = convertChild(tsValue, this);
+			},
+			configurable: true,
+		});
+	}
+	SHAPE_CLASSES.set(tsKind, cls);
+}
+
+// Mechanical shapes. Each entry replaces a hand-written subclass +
+// switch case below. Pure declarative form — top-down getters AND
+// bottom-up materialise both consult this single registry.
+defineShape(SK.IfStatement, {
+	type: 'IfStatement',
+	slots: {
+		test: { tsField: 'expression' },
+		consequent: { tsField: 'thenStatement' },
+		alternate: { tsField: 'elseStatement' },
+	},
+});
+defineShape(SK.ReturnStatement, {
+	type: 'ReturnStatement',
+	slots: { argument: { tsField: 'expression' } },
+});
+defineShape(SK.UnionType, {
+	type: 'TSUnionType',
+	slots: { types: { tsField: 'types', via: 'convertChildren' } },
+});
+defineShape(SK.IntersectionType, {
+	type: 'TSIntersectionType',
+	slots: { types: { tsField: 'types', via: 'convertChildren' } },
+});
+defineShape(SK.ArrayType, {
+	type: 'TSArrayType',
+	slots: { elementType: { tsField: 'elementType' } },
+});
+defineShape(SK.TypeLiteral, {
+	type: 'TSTypeLiteral',
+	slots: { members: { tsField: 'members', via: 'convertChildren' } },
+});
+defineShape(SK.IndexedAccessType, {
+	type: 'TSIndexedAccessType',
+	slots: {
+		objectType: { tsField: 'objectType' },
+		indexType: { tsField: 'indexType' },
+	},
+});
+// SK.LiteralType NOT migrated: convertLiteralType has a special case
+// for `null` (wraps NullKeyword as bare TSNullKeyword to match eager).
+defineShape(SK.QualifiedName, {
+	type: 'TSQualifiedName',
+	slots: {
+		left: { tsField: 'left' },
+		right: { tsField: 'right' },
+	},
+});
+defineShape(SK.TypeAssertionExpression, {
+	type: 'TSTypeAssertion',
+	slots: {
+		expression: { tsField: 'expression' },
+		typeAnnotation: { tsField: 'type' },
+	},
+});
+defineShape(SK.SatisfiesExpression, {
+	type: 'TSSatisfiesExpression',
+	slots: {
+		expression: { tsField: 'expression' },
+		typeAnnotation: { tsField: 'type' },
+	},
+});
+defineShape(SK.ConditionalType, {
+	type: 'TSConditionalType',
+	slots: {
+		checkType: { tsField: 'checkType' },
+		extendsType: { tsField: 'extendsType' },
+		trueType: { tsField: 'trueType' },
+		falseType: { tsField: 'falseType' },
+	},
+});
+defineShape(SK.InferType, {
+	type: 'TSInferType',
+	slots: { typeParameter: { tsField: 'typeParameter' } },
+});
+defineShape(SK.ModuleBlock, {
+	type: 'TSModuleBlock',
+	slots: { body: { tsField: 'statements', via: 'convertChildren' } },
+});
+defineShape(SK.Decorator, {
+	type: 'Decorator',
+	slots: { expression: { tsField: 'expression' } },
+});
+// SK.ObjectLiteralExpression NOT migrated: convertChildInner picks
+// ObjectPattern vs ObjectExpression based on `allowPattern` flag.
+// Same for ArrayLiteralExpression. SHAPES table is a static dispatch
+// (TS kind → ESTree class); pattern-context dispatch stays in
+// convertChildInner's switch.
+defineShape(SK.ThrowStatement, {
+	type: 'ThrowStatement',
+	slots: { argument: { tsField: 'expression' } },
+});
+defineShape(SK.TryStatement, {
+	type: 'TryStatement',
+	slots: {
+		block: { tsField: 'tryBlock' },
+		handler: { tsField: 'catchClause' },
+		finalizer: { tsField: 'finallyBlock' },
+	},
+});
+defineShape(SK.WhileStatement, {
+	type: 'WhileStatement',
+	slots: {
+		test: { tsField: 'expression' },
+		body: { tsField: 'statement' },
+	},
+});
+defineShape(SK.DoStatement, {
+	type: 'DoWhileStatement',
+	slots: {
+		test: { tsField: 'expression' },
+		body: { tsField: 'statement' },
+	},
+});
+defineShape(SK.ForStatement, {
+	type: 'ForStatement',
+	slots: {
+		init: { tsField: 'initializer' },
+		test: { tsField: 'condition' },
+		update: { tsField: 'incrementor' },
+		body: { tsField: 'statement' },
+	},
+});
+defineShape(SK.LabeledStatement, {
+	type: 'LabeledStatement',
+	slots: {
+		label: { tsField: 'label' },
+		body: { tsField: 'statement' },
+	},
+});
+defineShape(SK.AwaitExpression, {
+	type: 'AwaitExpression',
+	slots: { argument: { tsField: 'expression' } },
+});
+defineShape(SK.TupleType, {
+	type: 'TSTupleType',
+	slots: { elementTypes: { tsField: 'elements', via: 'convertChildren' } },
+});
+defineShape(SK.OptionalType, {
+	type: 'TSOptionalType',
+	slots: { typeAnnotation: { tsField: 'type' } },
+});
+defineShape(SK.RestType, {
+	type: 'TSRestType',
+	slots: { typeAnnotation: { tsField: 'type' } },
+});
+defineShape(SK.ConditionalExpression, {
+	type: 'ConditionalExpression',
+	slots: {
+		test: { tsField: 'condition' },
+		consequent: { tsField: 'whenTrue' },
+		alternate: { tsField: 'whenFalse' },
+	},
+});
+defineShape(SK.NonNullExpression, {
+	type: 'TSNonNullExpression',
+	slots: { expression: { tsField: 'expression' } },
+});
+defineShape(SK.ExternalModuleReference, {
+	type: 'TSExternalModuleReference',
+	slots: { expression: { tsField: 'expression' } },
+});
+defineShape(SK.ImportAttribute, {
+	type: 'ImportAttribute',
+	slots: {
+		key: { tsField: 'name' },
+		value: { tsField: 'value' },
+	},
+});
+
 function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
+	const ShapeCls = SHAPE_CLASSES.get(child.kind);
+	if (ShapeCls) return new ShapeCls(child, parent);
 	switch (child.kind) {
 		case SK.SourceFile:
 			return new ProgramNode(child as ts.SourceFile, parent);
@@ -1211,12 +1431,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new LiteralNode(child as ts.StringLiteral, parent);
 		case SK.ExpressionStatement:
 			return new ExpressionStatementNode(child, parent);
-		case SK.ReturnStatement:
-			return new ReturnStatementNode(child, parent);
 		case SK.Block:
 			return new BlockStatementNode(child, parent);
-		case SK.IfStatement:
-			return new IfStatementNode(child, parent);
 		case SK.BinaryExpression: {
 			// Comma operator becomes ESTree SequenceExpression (matches
 			// typescript-estree's `convertBinaryExpression`). All other
@@ -1271,8 +1487,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new ImportNamespaceSpecifierNode(child, parent);
 		case SK.ImportClause:
 			return new ImportDefaultSpecifierNode(child as ts.ImportClause, parent);
-		case SK.ImportAttribute:
-			return new ImportAttributeNode(child, parent);
 		case SK.InterfaceDeclaration:
 			return new TSInterfaceDeclarationNode(child as ts.InterfaceDeclaration, parent);
 		case SK.PropertySignature:
@@ -1281,20 +1495,10 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new TSMethodSignatureNode(child as ts.MethodSignature, parent);
 		case SK.FunctionType:
 			return new TSFunctionTypeNode(child, parent);
-		case SK.UnionType:
-			return new TSUnionTypeNode(child, parent);
-		case SK.IntersectionType:
-			return new TSIntersectionTypeNode(child, parent);
-		case SK.ArrayType:
-			return new TSArrayTypeNode(child, parent);
-		case SK.TypeLiteral:
-			return new TSTypeLiteralNode(child, parent);
 		case SK.TypeQuery:
 			return new TSTypeQueryNode(child, parent);
 		case SK.TypeOperator:
 			return new TSTypeOperatorNode(child as ts.TypeOperatorNode, parent);
-		case SK.IndexedAccessType:
-			return new TSIndexedAccessTypeNode(child, parent);
 		case SK.LiteralType:
 			return convertLiteralType(child as ts.LiteralTypeNode, parent);
 		case SK.ParenthesizedType:
@@ -1308,8 +1512,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			}
 			return inner;
 		}
-		case SK.QualifiedName:
-			return new TSQualifiedNameNode(child, parent);
 		case SK.CallSignature:
 			return new TSCallishSignatureNode('TSCallSignatureDeclaration', child as ts.CallSignatureDeclaration, parent);
 		case SK.ConstructSignature:
@@ -1328,8 +1530,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return convertExportAssignment(child as ts.ExportAssignment, parent);
 		case SK.ImportEqualsDeclaration:
 			return new TSImportEqualsDeclarationNode(child as ts.ImportEqualsDeclaration, parent);
-		case SK.ExternalModuleReference:
-			return new TSExternalModuleReferenceNode(child, parent);
 		case SK.TypeAliasDeclaration:
 			return new TSTypeAliasDeclarationNode(child as ts.TypeAliasDeclaration, parent);
 		case SK.PrefixUnaryExpression:
@@ -1338,18 +1538,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new UnaryLikeExpressionNode(child as ts.PostfixUnaryExpression, parent, false);
 		case SK.TypeOfExpression:
 			return new TypeofExpressionNode(child, parent);
-		case SK.NonNullExpression:
-			return new TSNonNullExpressionNode(child, parent);
-		case SK.TupleType:
-			return new TSTupleTypeNode(child, parent);
 		case SK.NamedTupleMember:
 			return convertNamedTupleMember(child as ts.NamedTupleMember, parent);
-		case SK.OptionalType:
-			return new TSOptionalTypeNode(child, parent);
-		case SK.RestType:
-			return new TSRestTypeNode(child, parent);
-		case SK.ConditionalExpression:
-			return new ConditionalExpressionNode(child, parent);
 		case SK.NewExpression:
 			return new NewExpressionNode(child, parent);
 		case SK.NoSubstitutionTemplateLiteral:
@@ -1386,18 +1576,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new TSTemplateLiteralTypeNode(child, parent);
 		case SK.RegularExpressionLiteral:
 			return new RegExpLiteralNode(child as ts.RegularExpressionLiteral, parent);
-		case SK.ThrowStatement:
-			return new ThrowStatementNode(child, parent);
-		case SK.TryStatement:
-			return new TryStatementNode(child, parent);
 		case SK.CatchClause:
 			return new CatchClauseNode(child, parent);
-		case SK.WhileStatement:
-			return new WhileStatementNode(child, parent);
-		case SK.DoStatement:
-			return new DoWhileStatementNode(child, parent);
-		case SK.ForStatement:
-			return new ForStatementNode(child, parent);
 		case SK.ForInStatement:
 			return new ForInStatementNode(child, parent);
 		case SK.ForOfStatement:
@@ -1412,12 +1592,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new BreakOrContinueNode('BreakStatement', child as ts.BreakStatement, parent);
 		case SK.ContinueStatement:
 			return new BreakOrContinueNode('ContinueStatement', child as ts.ContinueStatement, parent);
-		case SK.LabeledStatement:
-			return new LabeledStatementNode(child, parent);
 		case SK.EmptyStatement:
 			return new EmptyStatementNode(child, parent);
-		case SK.AwaitExpression:
-			return new AwaitExpressionNode(child, parent);
 		case SK.YieldExpression:
 			return new YieldExpressionNode(child as ts.YieldExpression, parent);
 		case SK.ClassDeclaration:
@@ -1507,32 +1683,20 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		}
 		case SK.PrivateIdentifier:
 			return new PrivateIdentifierNode(child as ts.PrivateIdentifier, parent);
-		case SK.TypeAssertionExpression:
-			return new TSTypeAssertionNode(child, parent);
-		case SK.SatisfiesExpression:
-			return new TSSatisfiesExpressionNode(child, parent);
 		case SK.ConstructorType:
 			return new TSConstructorTypeNode(child as ts.ConstructorTypeNode, parent);
 		case SK.MappedType:
 			return new TSMappedTypeNode(child as ts.MappedTypeNode, parent);
-		case SK.ConditionalType:
-			return new TSConditionalTypeNode(child, parent);
-		case SK.InferType:
-			return new TSInferTypeNode(child, parent);
 		case SK.ThisType:
 			return new TSThisTypeNode(child, parent);
 		case SK.TypePredicate:
 			return new TSTypePredicateNode(child as ts.TypePredicateNode, parent);
 		case SK.ModuleDeclaration:
 			return new TSModuleDeclarationNode(child as ts.ModuleDeclaration, parent);
-		case SK.ModuleBlock:
-			return new TSModuleBlockNode(child, parent);
 		case SK.EnumDeclaration:
 			return new TSEnumDeclarationNode(child as ts.EnumDeclaration, parent);
 		case SK.EnumMember:
 			return new TSEnumMemberNode(child as ts.EnumMember, parent);
-		case SK.Decorator:
-			return new DecoratorNode(child, parent);
 		case SK.HeritageClause:
 			return null; // handled inline by ClassNode
 		case SK.VariableDeclarationList:
@@ -1991,14 +2155,6 @@ class ExpressionStatementNode extends LazyNode {
 	}
 }
 
-class ReturnStatementNode extends LazyNode {
-	readonly type = 'ReturnStatement' as const;
-	private _argument?: LazyNode | null;
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.ReturnStatement).expression, this);
-	}
-}
-
 class BlockStatementNode extends LazyNode {
 	readonly type = 'BlockStatement' as const;
 	private _body?: (LazyNode | null)[];
@@ -2020,55 +2176,7 @@ class BlockStatementNode extends LazyNode {
 	}
 }
 
-class IfStatementNode extends LazyNode {
-	readonly type = 'IfStatement' as const;
-	private _test?: LazyNode | null;
-	private _consequent?: LazyNode | null;
-	private _alternate?: LazyNode | null;
-	get test() {
-		return this._test ??= convertChild((this._ts as ts.IfStatement).expression, this);
-	}
-	get consequent() {
-		return this._consequent ??= convertChild((this._ts as ts.IfStatement).thenStatement, this);
-	}
-	get alternate() {
-		return this._alternate ??= convertChild((this._ts as ts.IfStatement).elseStatement, this);
-	}
-}
-
 // Type-position nodes — direct 1:1 with typescript-estree's cases.
-
-class TSUnionTypeNode extends LazyNode {
-	readonly type = 'TSUnionType' as const;
-	private _types?: (LazyNode | null)[];
-	get types() {
-		return this._types ??= convertChildren((this._ts as ts.UnionTypeNode).types, this);
-	}
-}
-
-class TSIntersectionTypeNode extends LazyNode {
-	readonly type = 'TSIntersectionType' as const;
-	private _types?: (LazyNode | null)[];
-	get types() {
-		return this._types ??= convertChildren((this._ts as ts.IntersectionTypeNode).types, this);
-	}
-}
-
-class TSArrayTypeNode extends LazyNode {
-	readonly type = 'TSArrayType' as const;
-	private _elementType?: LazyNode | null;
-	get elementType() {
-		return this._elementType ??= convertChild((this._ts as ts.ArrayTypeNode).elementType, this);
-	}
-}
-
-class TSTypeLiteralNode extends LazyNode {
-	readonly type = 'TSTypeLiteral' as const;
-	private _members?: (LazyNode | null)[];
-	get members() {
-		return this._members ??= convertChildren((this._ts as ts.TypeLiteralNode).members, this);
-	}
-}
 
 class TSTypeQueryNode extends LazyNode {
 	readonly type = 'TSTypeQuery' as const;
@@ -2093,18 +2201,6 @@ class TSTypeOperatorNode extends LazyNode {
 	}
 	get typeAnnotation() {
 		return this._typeAnnotation ??= convertChild((this._ts as ts.TypeOperatorNode).type, this);
-	}
-}
-
-class TSIndexedAccessTypeNode extends LazyNode {
-	readonly type = 'TSIndexedAccessType' as const;
-	private _objectType?: LazyNode | null;
-	private _indexType?: LazyNode | null;
-	get objectType() {
-		return this._objectType ??= convertChild((this._ts as ts.IndexedAccessTypeNode).objectType, this);
-	}
-	get indexType() {
-		return this._indexType ??= convertChild((this._ts as ts.IndexedAccessTypeNode).indexType, this);
 	}
 }
 
@@ -2194,18 +2290,6 @@ class TSImportTypeNode extends LazyNode {
 	get typeArguments() {
 		if (this._typeArguments !== undefined) return this._typeArguments;
 		return this._typeArguments = convertTypeArguments((this._ts as ts.ImportTypeNode).typeArguments, this) ?? null;
-	}
-}
-
-class TSQualifiedNameNode extends LazyNode {
-	readonly type = 'TSQualifiedName' as const;
-	private _left?: LazyNode | null;
-	private _right?: LazyNode | null;
-	get left() {
-		return this._left ??= convertChild((this._ts as ts.QualifiedName).left, this);
-	}
-	get right() {
-		return this._right ??= convertChild((this._ts as ts.QualifiedName).right, this);
 	}
 }
 
@@ -2737,30 +2821,6 @@ class PrivateIdentifierNode extends LazyNode {
 	}
 }
 
-class TSTypeAssertionNode extends LazyNode {
-	readonly type = 'TSTypeAssertion' as const;
-	private _expression?: LazyNode | null;
-	private _typeAnnotation?: LazyNode | null;
-	get expression() {
-		return this._expression ??= convertChild((this._ts as ts.TypeAssertion).expression, this);
-	}
-	get typeAnnotation() {
-		return this._typeAnnotation ??= convertChild((this._ts as ts.TypeAssertion).type, this);
-	}
-}
-
-class TSSatisfiesExpressionNode extends LazyNode {
-	readonly type = 'TSSatisfiesExpression' as const;
-	private _expression?: LazyNode | null;
-	private _typeAnnotation?: LazyNode | null;
-	get expression() {
-		return this._expression ??= convertChild((this._ts as ts.SatisfiesExpression).expression, this);
-	}
-	get typeAnnotation() {
-		return this._typeAnnotation ??= convertChild((this._ts as ts.SatisfiesExpression).type, this);
-	}
-}
-
 class TSConstructorTypeNode extends LazyNode {
 	readonly type = 'TSConstructorType' as const;
 	readonly abstract: boolean;
@@ -2819,34 +2879,6 @@ class TSMappedTypeNode extends LazyNode {
 	}
 }
 
-class TSConditionalTypeNode extends LazyNode {
-	readonly type = 'TSConditionalType' as const;
-	private _checkType?: LazyNode | null;
-	private _extendsType?: LazyNode | null;
-	private _trueType?: LazyNode | null;
-	private _falseType?: LazyNode | null;
-	get checkType() {
-		return this._checkType ??= convertChild((this._ts as ts.ConditionalTypeNode).checkType, this);
-	}
-	get extendsType() {
-		return this._extendsType ??= convertChild((this._ts as ts.ConditionalTypeNode).extendsType, this);
-	}
-	get trueType() {
-		return this._trueType ??= convertChild((this._ts as ts.ConditionalTypeNode).trueType, this);
-	}
-	get falseType() {
-		return this._falseType ??= convertChild((this._ts as ts.ConditionalTypeNode).falseType, this);
-	}
-}
-
-class TSInferTypeNode extends LazyNode {
-	readonly type = 'TSInferType' as const;
-	private _typeParameter?: LazyNode | null;
-	get typeParameter() {
-		return this._typeParameter ??= convertChild((this._ts as ts.InferTypeNode).typeParameter, this);
-	}
-}
-
 class TSThisTypeNode extends LazyNode {
 	readonly type = 'TSThisType' as const;
 }
@@ -2900,14 +2932,6 @@ class TSModuleDeclarationNode extends LazyNode {
 	}
 	get body() {
 		return this._body ??= convertChild((this._ts as ts.ModuleDeclaration).body, this);
-	}
-}
-
-class TSModuleBlockNode extends LazyNode {
-	readonly type = 'TSModuleBlock' as const;
-	private _body?: (LazyNode | null)[];
-	get body() {
-		return this._body ??= convertChildren((this._ts as ts.ModuleBlock).statements, this);
 	}
 }
 
@@ -2970,14 +2994,6 @@ class TSEnumMemberNode extends LazyNode {
 	}
 	get initializer() {
 		return this._initializer ??= convertChild((this._ts as ts.EnumMember).initializer, this);
-	}
-}
-
-class DecoratorNode extends LazyNode {
-	readonly type = 'Decorator' as const;
-	private _expression?: LazyNode | null;
-	get expression() {
-		return this._expression ??= convertChild((this._ts as ts.Decorator).expression, this);
 	}
 }
 
@@ -3152,30 +3168,6 @@ class RegExpLiteralNode extends LazyNode {
 	}
 }
 
-class ThrowStatementNode extends LazyNode {
-	readonly type = 'ThrowStatement' as const;
-	private _argument?: LazyNode | null;
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.ThrowStatement).expression, this);
-	}
-}
-
-class TryStatementNode extends LazyNode {
-	readonly type = 'TryStatement' as const;
-	private _block?: LazyNode | null;
-	private _handler?: LazyNode | null;
-	private _finalizer?: LazyNode | null;
-	get block() {
-		return this._block ??= convertChild((this._ts as ts.TryStatement).tryBlock, this);
-	}
-	get handler() {
-		return this._handler ??= convertChild((this._ts as ts.TryStatement).catchClause, this);
-	}
-	get finalizer() {
-		return this._finalizer ??= convertChild((this._ts as ts.TryStatement).finallyBlock, this);
-	}
-}
-
 class CatchClauseNode extends LazyNode {
 	readonly type = 'CatchClause' as const;
 	private _param?: LazyNode | null;
@@ -3186,50 +3178,6 @@ class CatchClauseNode extends LazyNode {
 	}
 	get body() {
 		return this._body ??= convertChild((this._ts as ts.CatchClause).block, this);
-	}
-}
-
-class WhileStatementNode extends LazyNode {
-	readonly type = 'WhileStatement' as const;
-	private _test?: LazyNode | null;
-	private _body?: LazyNode | null;
-	get test() {
-		return this._test ??= convertChild((this._ts as ts.WhileStatement).expression, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.WhileStatement).statement, this);
-	}
-}
-
-class DoWhileStatementNode extends LazyNode {
-	readonly type = 'DoWhileStatement' as const;
-	private _test?: LazyNode | null;
-	private _body?: LazyNode | null;
-	get test() {
-		return this._test ??= convertChild((this._ts as ts.DoStatement).expression, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.DoStatement).statement, this);
-	}
-}
-
-class ForStatementNode extends LazyNode {
-	readonly type = 'ForStatement' as const;
-	private _init?: LazyNode | null;
-	private _test?: LazyNode | null;
-	private _update?: LazyNode | null;
-	private _body?: LazyNode | null;
-	get init() {
-		return this._init ??= convertChild((this._ts as ts.ForStatement).initializer, this);
-	}
-	get test() {
-		return this._test ??= convertChild((this._ts as ts.ForStatement).condition, this);
-	}
-	get update() {
-		return this._update ??= convertChild((this._ts as ts.ForStatement).incrementor, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.ForStatement).statement, this);
 	}
 }
 
@@ -3309,28 +3257,8 @@ class BreakOrContinueNode extends LazyNode {
 	}
 }
 
-class LabeledStatementNode extends LazyNode {
-	readonly type = 'LabeledStatement' as const;
-	private _label?: LazyNode | null;
-	private _body?: LazyNode | null;
-	get label() {
-		return this._label ??= convertChild((this._ts as ts.LabeledStatement).label, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.LabeledStatement).statement, this);
-	}
-}
-
 class EmptyStatementNode extends LazyNode {
 	readonly type = 'EmptyStatement' as const;
-}
-
-class AwaitExpressionNode extends LazyNode {
-	readonly type = 'AwaitExpression' as const;
-	private _argument?: LazyNode | null;
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.AwaitExpression).expression, this);
-	}
 }
 
 class YieldExpressionNode extends LazyNode {
@@ -3343,14 +3271,6 @@ class YieldExpressionNode extends LazyNode {
 	}
 	get argument() {
 		return this._argument ??= convertChild((this._ts as ts.YieldExpression).expression, this);
-	}
-}
-
-class TSTupleTypeNode extends LazyNode {
-	readonly type = 'TSTupleType' as const;
-	private _elementTypes?: (LazyNode | null)[];
-	get elementTypes() {
-		return this._elementTypes ??= convertChildren((this._ts as ts.TupleTypeNode).elements, this);
 	}
 }
 
@@ -3393,38 +3313,6 @@ class TSRestTypeWrappingNamedTupleMemberNode extends LazyNode {
 			(inner as unknown as { range: [number, number] }).range = [lbl.range[0], inner.range[1]];
 		}
 		return this._typeAnnotation = inner;
-	}
-}
-
-class TSOptionalTypeNode extends LazyNode {
-	readonly type = 'TSOptionalType' as const;
-	private _typeAnnotation?: LazyNode | null;
-	get typeAnnotation() {
-		return this._typeAnnotation ??= convertChild((this._ts as ts.OptionalTypeNode).type, this);
-	}
-}
-
-class TSRestTypeNode extends LazyNode {
-	readonly type = 'TSRestType' as const;
-	private _typeAnnotation?: LazyNode | null;
-	get typeAnnotation() {
-		return this._typeAnnotation ??= convertChild((this._ts as ts.RestTypeNode).type, this);
-	}
-}
-
-class ConditionalExpressionNode extends LazyNode {
-	readonly type = 'ConditionalExpression' as const;
-	private _test?: LazyNode | null;
-	private _consequent?: LazyNode | null;
-	private _alternate?: LazyNode | null;
-	get test() {
-		return this._test ??= convertChild((this._ts as ts.ConditionalExpression).condition, this);
-	}
-	get consequent() {
-		return this._consequent ??= convertChild((this._ts as ts.ConditionalExpression).whenTrue, this);
-	}
-	get alternate() {
-		return this._alternate ??= convertChild((this._ts as ts.ConditionalExpression).whenFalse, this);
 	}
 }
 
@@ -3636,14 +3524,6 @@ class TypeofExpressionNode extends LazyNode {
 	}
 }
 
-class TSNonNullExpressionNode extends LazyNode {
-	readonly type = 'TSNonNullExpression' as const;
-	private _expression?: LazyNode | null;
-	get expression() {
-		return this._expression ??= convertChild((this._ts as ts.NonNullExpression).expression, this);
-	}
-}
-
 // Export forms — typescript-estree picks ExportNamedDeclaration vs
 // ExportAllDeclaration vs ExportDefaultDeclaration vs TSExportAssignment
 // based on the structure. Mirror.
@@ -3840,14 +3720,6 @@ class TSImportEqualsDeclarationNode extends LazyNode {
 	}
 	get moduleReference() {
 		return this._moduleReference ??= convertChild((this._ts as ts.ImportEqualsDeclaration).moduleReference, this);
-	}
-}
-
-class TSExternalModuleReferenceNode extends LazyNode {
-	readonly type = 'TSExternalModuleReference' as const;
-	private _expression?: LazyNode | null;
-	get expression() {
-		return this._expression ??= convertChild((this._ts as ts.ExternalModuleReference).expression, this);
 	}
 }
 
@@ -4123,18 +3995,6 @@ class ImportNamespaceSpecifierNode extends LazyNode {
 
 	get local() {
 		return this._local ??= convertChild((this._ts as ts.NamespaceImport).name, this);
-	}
-}
-
-class ImportAttributeNode extends LazyNode {
-	readonly type = 'ImportAttribute' as const;
-	private _key?: LazyNode | null;
-	private _value?: LazyNode | null;
-	get key() {
-		return this._key ??= convertChild((this._ts as ts.ImportAttribute).name, this);
-	}
-	get value() {
-		return this._value ??= convertChild((this._ts as ts.ImportAttribute).value, this);
 	}
 }
 
