@@ -2,6 +2,13 @@
 // particular) pound on statSync per file and benefit from in-process caching.
 require('./lib/fs-cache.js');
 
+// Env vars for downstream packages must be set BEFORE any import that
+// transitively loads them — they're read at module-load time, not on use.
+process.env.TSSLINT_CLI = '1';
+if (process.argv.includes('--debug-estree')) {
+	process.env.TSSLINT_DEBUG_ESTREE = '1';
+}
+
 import ts = require('typescript');
 import path = require('path');
 import worker = require('./lib/worker.js');
@@ -11,8 +18,6 @@ import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
 import colors = require('./lib/colors.js');
 import render = require('./lib/render.js');
-
-process.env.TSSLINT_CLI = '1';
 
 const HELP = `
 Usage: tsslint [options]
@@ -29,6 +34,7 @@ Options:
   --force                       Ignore cache (re-lint every file)
   --failures-only               Only print errors and messages (skip warnings and suggestions)
   --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
+  --debug-estree                After linting, print the actual ESTree node types converted by @tsslint/compat-eslint and their counts
   -h, --help                    Show this help message
 
 Examples:
@@ -360,6 +366,34 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		lines.push(colors.cyan('syntactic') + colors.gray(` (${syntactic.size})`));
 		for (const id of [...syntactic].sort()) lines.push('  ' + id);
 		for (const l of lines) renderer.info(l);
+	}
+
+	if (process.argv.includes('--debug-estree')) {
+		// compat-eslint's lazy-estree publishes a per-`type` counter on
+		// globalThis under Symbol.for('@tsslint/compat-eslint:node-type-counts')
+		// when TSSLINT_DEBUG_ESTREE=1 (set above before any import). Reading
+		// from the shared global side-steps Node's per-package module-
+		// resolution: the user's project typically loads compat-eslint
+		// from its OWN node_modules, while a `require()` here would land
+		// on the CLI's neighbour copy — different module instances,
+		// different counters. globalThis closes that gap.
+		const COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-counts');
+		const counts = (globalThis as any)[COUNTS_KEY] as Map<string, number> | undefined;
+		const sorted = counts
+			? [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+			: [];
+		const total = sorted.reduce((s, [, n]) => s + n, 0);
+		const widthName = sorted.reduce((w, [n]) => Math.max(w, n.length), 0);
+		renderer.info(
+			colors.cyan('estree node types')
+				+ colors.gray(` (${sorted.length} kinds, ${total.toLocaleString()} nodes)`),
+		);
+		for (const [name, n] of sorted) {
+			renderer.info('  ' + name.padEnd(widthName) + '  ' + colors.gray(n.toLocaleString()));
+		}
+		if (!sorted.length) {
+			renderer.info(colors.gray('  (no nodes converted — no @tsslint/compat-eslint rules ran)'));
+		}
 	}
 
 	renderer.dispose();

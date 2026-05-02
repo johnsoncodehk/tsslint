@@ -37,6 +37,38 @@ import { xhtmlEntities } from './xhtml-entities';
 
 const SK = ts.SyntaxKind;
 
+// Debug instrumentation: when enabled, every materialised LazyNode bumps
+// a per-`type` counter so `--debug-estree` (or callers using the env var
+// directly) can dump the actual conversion volume per ESTree node type.
+//
+// Counter lives on globalThis under a Symbol.for key so all loaded
+// compat-eslint instances in the same process share one map. This
+// matters because the user's project typically resolves compat-eslint
+// against ITS node_modules, while the CLI's --debug-estree handler
+// reads the count via its OWN module resolution — different instances,
+// same Node process. Without globalThis sharing, the CLI would see an
+// empty counter even though linting populated one.
+//
+// Cost when off: a single boolean check per construction, no allocation.
+// Cost when on: one queueMicrotask per construction. We defer the read
+// because the subclass's `readonly type = '...'` field is initialised
+// AFTER `super(...)` returns — class-property assignments compile to
+// constructor body statements that execute post-`super()`. Reading
+// `this.type` synchronously here would observe `undefined`.
+const DEBUG_ESTREE = process.env.TSSLINT_DEBUG_ESTREE === '1';
+const COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-counts');
+type GlobalCountsHolder = { [k in typeof COUNTS_KEY]?: Map<string, number> };
+const _global = globalThis as unknown as GlobalCountsHolder;
+const nodeTypeCounts: Map<string, number> = _global[COUNTS_KEY] ??= new Map();
+
+export function getNodeTypeCounts(): ReadonlyMap<string, number> {
+	return nodeTypeCounts;
+}
+
+export function resetNodeTypeCounts(): void {
+	nodeTypeCounts.clear();
+}
+
 export interface LazyAstMaps {
 	// One direction is a real WeakMap (cache for tsNode → lazyNode lookup).
 	// The other is a thin facade that just reads `lazyNode._ts` directly,
@@ -130,6 +162,15 @@ abstract class LazyNode {
 		if (registerInMaps) {
 			this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 			// esTreeNodeToTSNodeMap is a facade reading _ts — no .set needed.
+		}
+		if (DEBUG_ESTREE) {
+			// `this.type` is set by the subclass's `readonly type = '...'`
+			// field initialiser, which runs AFTER super() returns. Defer to
+			// the next microtask so the read sees the final value.
+			queueMicrotask(() => {
+				const t = (this as unknown as { type: string }).type;
+				nodeTypeCounts.set(t, (nodeTypeCounts.get(t) ?? 0) + 1);
+			});
 		}
 	}
 
