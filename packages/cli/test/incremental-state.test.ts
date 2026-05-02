@@ -89,7 +89,10 @@ const hostShim = {
 function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 	const orig = process.stderr.write.bind(process.stderr);
 	let buf = '';
-	(process.stderr.write as any) = (chunk: any) => { buf += String(chunk); return true; };
+	(process.stderr.write as any) = (chunk: any) => {
+		buf += String(chunk);
+		return true;
+	};
 	try {
 		const result = fn();
 		return { result, stderr: buf };
@@ -210,8 +213,12 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 	});
 	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'irrelevant' };
 	const { result, stderr } = captureStderr(() => {
-		try { return inc.reconstructOldBuilder(tsStub, valid, hostShim); }
-		catch { return 'THREW' as const; }
+		try {
+			return inc.reconstructOldBuilder(tsStub, valid, hostShim);
+		}
+		catch {
+			return 'THREW' as const;
+		}
 	});
 	check('missing load APIs → no throw', result !== 'THREW');
 	check('missing load APIs → undefined result', result === undefined);
@@ -227,8 +234,12 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 {
 	const fakeBuilder = {} as ts.BuilderProgram;
 	const { result, stderr } = captureStderr(() => {
-		try { return inc.captureIncrementalState(ts.version, fakeBuilder); }
-		catch { return 'THREW' as const; }
+		try {
+			return inc.captureIncrementalState(ts.version, fakeBuilder);
+		}
+		catch {
+			return 'THREW' as const;
+		}
 	});
 	check('missing emitBuildInfo → no throw', result !== 'THREW');
 	check('missing emitBuildInfo → undefined state', result === undefined);
@@ -239,11 +250,17 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 // ── Test 9: emitBuildInfo throws → undefined + warn, no throw out ──────
 {
 	const throwingBuilder = {
-		emitBuildInfo() { throw new Error('simulated TS internal failure'); },
+		emitBuildInfo() {
+			throw new Error('simulated TS internal failure');
+		},
 	} as unknown as ts.BuilderProgram;
 	const { result, stderr } = captureStderr(() => {
-		try { return inc.captureIncrementalState(ts.version, throwingBuilder); }
-		catch { return 'THREW' as const; }
+		try {
+			return inc.captureIncrementalState(ts.version, throwingBuilder);
+		}
+		catch {
+			return 'THREW' as const;
+		}
 	});
 	check('throwing emitBuildInfo → no throw', result !== 'THREW');
 	check('throwing emitBuildInfo → undefined state', result === undefined);
@@ -261,15 +278,21 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 	const throwingTs = new Proxy(ts, {
 		get(target, prop) {
 			if (prop === 'getBuildInfo') {
-				return () => { throw new Error('synthetic parse failure'); };
+				return () => {
+					throw new Error('synthetic parse failure');
+				};
 			}
 			return (target as any)[prop];
 		},
 	});
 	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'whatever' };
 	const { result, stderr } = captureStderr(() => {
-		try { return inc.reconstructOldBuilder(throwingTs, valid, hostShim); }
-		catch { return 'THREW' as const; }
+		try {
+			return inc.reconstructOldBuilder(throwingTs, valid, hostShim);
+		}
+		catch {
+			return 'THREW' as const;
+		}
 	});
 	check('throwing getBuildInfo → no throw', result !== 'THREW');
 	check('throwing getBuildInfo → undefined result', result === undefined);
@@ -307,8 +330,12 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 		},
 	} as unknown as ts.BuilderProgram;
 	const { result, stderr } = captureStderr(() => {
-		try { return inc.captureIncrementalState(ts.version, oversizedBuilder); }
-		catch { return 'THREW' as const; }
+		try {
+			return inc.captureIncrementalState(ts.version, oversizedBuilder);
+		}
+		catch {
+			return 'THREW' as const;
+		}
 	});
 	check('oversized buildinfo → no throw', result !== 'THREW');
 	check('oversized buildinfo → undefined state', result === undefined);

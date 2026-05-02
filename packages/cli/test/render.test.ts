@@ -146,7 +146,7 @@ function withCapture(isTTY: boolean, fn: (renderer: import('../lib/render').Rend
 		r.info('after empty');
 	});
 	check(
-		'empty summary doesn\'t set content flag',
+		"empty summary doesn't set content flag",
 		out === 'after empty\n',
 		`got: ${JSON.stringify(out)}`,
 	);
@@ -166,7 +166,7 @@ function withCapture(isTTY: boolean, fn: (renderer: import('../lib/render').Rend
 		`got: ${JSON.stringify(ttyOut)}`,
 	);
 	check(
-		'diagnostic doesn\'t indent in non-TTY',
+		"diagnostic doesn't indent in non-TTY",
 		nonTtyOut === '\nline1\nline2\n',
 		`got: ${JSON.stringify(nonTtyOut)}`,
 	);

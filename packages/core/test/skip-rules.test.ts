@@ -5,8 +5,8 @@
 // Run via:
 //   node packages/core/test/skip-rules.test.js
 
-import * as ts from 'typescript';
 import type { Config, RuleContext } from '@tsslint/types';
+import * as ts from 'typescript';
 
 const core = require('../index.js') as typeof import('../index.js');
 

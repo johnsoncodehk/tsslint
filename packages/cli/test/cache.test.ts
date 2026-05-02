@@ -91,8 +91,12 @@ function configWithMarker(marker: string): string {
 		while (stack.length) {
 			const dir = stack.pop()!;
 			let entries: fs.Dirent[];
-			try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-			catch { continue; }
+			try {
+				entries = fs.readdirSync(dir, { withFileTypes: true });
+			}
+			catch {
+				continue;
+			}
 			for (const e of entries) {
 				const full = path.join(dir, e.name);
 				if (e.isDirectory()) stack.push(full);
@@ -101,9 +105,11 @@ function configWithMarker(marker: string): string {
 						const content = fs.readFileSync(full, 'utf8');
 						const parsed = JSON.parse(content);
 						// Find the one we just wrote (heuristic: empty data).
-						if (parsed.version === 'v2'
+						if (
+							parsed.version === 'v2'
 							&& Object.keys(parsed.ruleModes).length === 0
-							&& Object.keys(parsed.files).length === 0) {
+							&& Object.keys(parsed.files).length === 0
+						) {
 							return full;
 						}
 					}
@@ -150,8 +156,12 @@ function configWithMarker(marker: string): string {
 	while (stack.length) {
 		const dir = stack.pop()!;
 		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-		catch { continue; }
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		}
+		catch {
+			continue;
+		}
 		for (const e of entries) {
 			const full = path.join(dir, e.name);
 			if (e.isDirectory()) stack.push(full);
@@ -163,8 +173,10 @@ function configWithMarker(marker: string): string {
 	for (const f of all) {
 		try {
 			const o = JSON.parse(fs.readFileSync(f, 'utf8'));
-			if (o.version === 'v2' && Object.keys(o.files).length === 0
-				&& Object.keys(o.ruleModes).length === 0) {
+			if (
+				o.version === 'v2' && Object.keys(o.files).length === 0
+				&& Object.keys(o.ruleModes).length === 0
+			) {
 				// Could be from a previous test; pick first.
 				target = f;
 				break;
@@ -248,8 +260,12 @@ function configWithMarker(marker: string): string {
 	while (stack.length) {
 		const dir = stack.pop()!;
 		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-		catch { continue; }
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		}
+		catch {
+			continue;
+		}
 		for (const e of entries) {
 			const full = path.join(dir, e.name);
 			if (e.isDirectory()) stack.push(full);
@@ -274,8 +290,12 @@ function configWithMarker(marker: string): string {
 	while (stack.length) {
 		const dir = stack.pop()!;
 		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-		catch { continue; }
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		}
+		catch {
+			continue;
+		}
 		for (const e of entries) {
 			const full = path.join(dir, e.name);
 			if (e.isDirectory()) stack.push(full);
@@ -331,8 +351,12 @@ function configWithMarker(marker: string): string {
 	while (stack.length) {
 		const dir = stack.pop()!;
 		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-		catch { continue; }
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		}
+		catch {
+			continue;
+		}
 		for (const e of entries) {
 			const full = path.join(dir, e.name);
 			if (e.isDirectory()) stack.push(full);
@@ -356,7 +380,9 @@ function configWithMarker(marker: string): string {
 		check('incrementalState wrong type → empty cache', loaded.incrementalState === undefined);
 
 		const corrupt2 = {
-			version: 'v2', ruleModes: {}, files: {},
+			version: 'v2',
+			ruleModes: {},
+			files: {},
 			incrementalState: { version: 'v3' /* tsBuildInfoText missing */ },
 		};
 		fs.writeFileSync(target, JSON.stringify(corrupt2));

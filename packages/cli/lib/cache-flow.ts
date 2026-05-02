@@ -8,8 +8,8 @@
 // CLI's responsibility — serialization, mtime invalidation, sticky
 // type-aware cleanup.
 
+import { type Linter, NO_CACHE } from '@tsslint/core';
 import type * as ts from 'typescript';
-import { NO_CACHE, type Linter } from '@tsslint/core';
 import type { FileCache, SerializedDiagnostic } from './cache.js';
 
 export function lintWithCache(

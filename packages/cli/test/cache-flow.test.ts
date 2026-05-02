@@ -4,8 +4,8 @@
 // Run via:
 //   node packages/cli/test/cache-flow.test.js
 
-import * as ts from 'typescript';
 import type { Config, RuleContext } from '@tsslint/types';
+import * as ts from 'typescript';
 import type { FileCache } from '../lib/cache.js';
 
 const core = require('@tsslint/core') as typeof import('@tsslint/core');
@@ -327,7 +327,10 @@ function emptyFileCache(mtime = 0): FileCache {
 	const program = ctx.languageService.getProgram()!;
 
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
-	const second = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
+	const second = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, {
+		incremental: true,
+		typeAwareUnaffected: true,
+	});
 	check('second call did NOT re-run type-aware rule', runs === 1);
 	check('second call still produced 1 diagnostic', second.length === 1);
 	check(
@@ -536,11 +539,11 @@ function emptyFileCache(mtime = 0): FileCache {
 		linter1.getTypeAwareRules().has('mixed-mode'),
 	);
 	check(
-		'session 1: early-return file got an entry (rule wasn\'t yet type-aware at write time)',
+		"session 1: early-return file got an entry (rule wasn't yet type-aware at write time)",
 		!!cacheSkip.rules['mixed-mode'],
 	);
 	check(
-		'session 1: early-return file\'s entry has 0 diagnostics (rule reported nothing)',
+		"session 1: early-return file's entry has 0 diagnostics (rule reported nothing)",
 		cacheSkip.rules['mixed-mode']?.diagnostics.length === 0,
 	);
 
@@ -576,7 +579,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	check(
 		'session 2: rule body did NOT execute on early-return file (cache skipped it)',
 		!earlyReturnRanInSession2,
-		'cache-hit means we skip the rule entirely — body shouldn\'t run',
+		"cache-hit means we skip the rule entirely — body shouldn't run",
 	);
 	void linter2; // type-only ref; linterMonitored is the one we observe
 }

@@ -73,8 +73,12 @@ function findCacheFiles(): string[] {
 	while (stack.length) {
 		const cur = stack.pop()!;
 		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(cur, { withFileTypes: true }); }
-		catch { continue; }
+		try {
+			entries = fs.readdirSync(cur, { withFileTypes: true });
+		}
+		catch {
+			continue;
+		}
 		for (const e of entries) {
 			const full = path.join(cur, e.name);
 			if (e.isDirectory()) stack.push(full);
@@ -228,7 +232,8 @@ function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: str
 	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-l2-')));
 	const markerPath = path.join(dir, 'marker.log');
 	const rulePath = path.join(dir, 'type-aware-rule.ts');
-	fs.writeFileSync(rulePath,
+	fs.writeFileSync(
+		rulePath,
 		`import { defineRule } from '${repoRoot}/packages/config/index.js';\n`
 			+ `import * as fs from 'fs';\n`
 			+ `export default defineRule(({ file, program, report }) => {\n`
@@ -237,16 +242,21 @@ function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: str
 			+ `  report('type-aware ran', 0, 1);\n`
 			+ `});\n`,
 	);
-	fs.writeFileSync(path.join(dir, 'tsconfig.json'),
+	fs.writeFileSync(
+		path.join(dir, 'tsconfig.json'),
 		JSON.stringify({
 			compilerOptions: {
-				target: 'es2020', module: 'esnext', moduleResolution: 'bundler',
-				strict: true, skipLibCheck: true,
+				target: 'es2020',
+				module: 'esnext',
+				moduleResolution: 'bundler',
+				strict: true,
+				skipLibCheck: true,
 			},
 			include: ['*.ts', '*.d.ts'],
 		}),
 	);
-	fs.writeFileSync(path.join(dir, 'tsslint.config.ts'),
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
 		`import { defineConfig } from '${repoRoot}/packages/config/index.js';\n`
 			+ `export default defineConfig({\n`
 			+ `  include: ['fixture.ts'],\n`
