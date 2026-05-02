@@ -313,6 +313,19 @@ const WRAPPER_ROUTE_PARENT_BITMAP = (() => {
 			SK.FunctionDeclaration,
 			SK.FunctionExpression,
 			SK.ArrowFunction,
+			// Signature-kind parents whose `.type` slot is wrapped in a
+			// synthetic TSTypeAnnotation in the ESTree shape (typescript-
+			// estree always emits the wrapper). Without these, bottom-up
+			// materialise of an inner type kind lands `parent` directly on
+			// TSPropertySignature / TSMethodSignature / etc. — missing the
+			// wrapper layer rules expect to walk through.
+			SK.PropertySignature,
+			SK.MethodSignature,
+			SK.CallSignature,
+			SK.ConstructSignature,
+			SK.IndexSignature,
+			SK.FunctionType,
+			SK.ConstructorType,
 		]
 	) a[k] = 1;
 	return a;
@@ -753,6 +766,46 @@ function findWrapperRoute(tsNode: ts.Node):
 			},
 		};
 	}
+	// `interface I { a: T; b(): T }` — Property/Method/IndexSignature.type
+	// (and MethodSignature.type, the return type) goes through the
+	// signature node's `typeAnnotation` / `returnType` getter, both of
+	// which produce a synthetic TSTypeAnnotation wrapper. Without routing,
+	// bottom-up materialise of an inner type kind (TSStringKeyword,
+	// TSVoidKeyword, etc.) lands `parent` on TSPropertySignature /
+	// TSMethodSignature directly — typescript-estree always shows the
+	// TSTypeAnnotation wrapper between them.
+	if (
+		tsParent.kind === SK.PropertySignature
+		&& (tsParent as ts.PropertySignature).type === tsNode
+	) {
+		return {
+			ownerTsNode: tsParent,
+			trigger: owner => {
+				const ta = (owner as unknown as { typeAnnotation?: { typeAnnotation: unknown } }).typeAnnotation;
+				if (ta) void ta.typeAnnotation;
+			},
+		};
+	}
+	if (
+		(tsParent.kind === SK.MethodSignature
+			|| tsParent.kind === SK.CallSignature
+			|| tsParent.kind === SK.ConstructSignature
+			|| tsParent.kind === SK.IndexSignature
+			|| tsParent.kind === SK.FunctionType
+			|| tsParent.kind === SK.ConstructorType)
+		&& (tsParent as ts.SignatureDeclarationBase).type === tsNode
+	) {
+		return {
+			ownerTsNode: tsParent,
+			trigger: owner => {
+				const rt = (owner as unknown as { returnType?: { typeAnnotation: unknown } }).returnType;
+				if (rt) void rt.typeAnnotation;
+				// IndexSignature uses `typeAnnotation`, not `returnType`.
+				const ta = (owner as unknown as { typeAnnotation?: { typeAnnotation: unknown } }).typeAnnotation;
+				if (ta) void ta.typeAnnotation;
+			},
+		};
+	}
 	return null;
 }
 
@@ -843,6 +896,13 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 			|| wk === SK.ImportClause
 			|| wk === SK.JsxAttributes
 			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)
+			// `try { } catch (e) {}` — TS wraps the catch param in a
+			// VariableDeclaration shim (CatchClause.variableDeclaration), but
+			// ESTree exposes the param directly as CatchClause.param. Without
+			// skipping, bottom-up materialise of the inner Identifier lands
+			// `parent` on a phantom VariableDeclarator → VariableDeclaration
+			// chain. Mirrors the structural skip already in tsScanTraverse.
+			|| (wk === SK.VariableDeclaration && walker.parent?.kind === SK.CatchClause)
 		) {
 			walker = walker.parent;
 			continue;
@@ -983,7 +1043,10 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 				wk === SK.BindingElement
 				&& (walker as ts.BindingElement).initializer !== undefined
 				&& walker.parent?.kind === SK.ObjectBindingPattern
-				&& innermostChild === (walker as ts.BindingElement).name
+				&& (
+					innermostChild === (walker as ts.BindingElement).name
+					|| innermostChild === (walker as ts.BindingElement).initializer
+				)
 			) {
 				// `const { x = 1 } = o` — typescript-estree wraps the
 				// BindingElement's name in AssignmentPattern when the element
@@ -994,7 +1057,9 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 				// no-shadow-restricted-names / etc. read parent.type as
 				// 'Property' instead of 'AssignmentPattern' and miss. Trigger
 				// `Property.value` to force the wrapper build, then route
-				// parent through it.
+				// parent through it. The default-value (BindingElement.initializer)
+				// lives at AssignmentPattern.right, so the same drill applies
+				// when the innermost child is the initializer.
 				const v = (drillFrom as unknown as { value?: LazyNode }).value;
 				if (v && (v as { type?: string }).type === 'AssignmentPattern') {
 					parent = v;

@@ -1427,7 +1427,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	}
 
 	const eagerWithMaps = (sf: ts.SourceFile) => {
-		const r = (astConverter as any)(sf, PARSE_SETTINGS as any, true) as {
+		const r = (astConverter)(sf, PARSE_SETTINGS as any, true) as {
 			estree: any;
 			astMaps: { tsNodeToESTreeNodeMap: { get(n: ts.Node): any } };
 		};
@@ -1436,23 +1436,8 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	};
 
 	interface Fixture { name: string; code: string; tsx?: boolean }
-	// Scope: JSX attribute parent class — the bug fixed by this PR.
-	// Both self-closing and non-self-closing variants because the synthetic
-	// JSXOpeningElement wrapping for self-closing was the actual regression
-	// that kicked off the wrapper-route work.
-	//
-	// NOT in scope (intentionally — surfaces real impedance with eager but
-	// requires its own follow-up PRs to address):
-	//   - export wrapper identity (lazy maps the TS node to ExportNamed/
-	//     DefaultWrapper, eager maps to the inner declaration)
-	//   - chain-expression wrapping for `a?.b?.c` (lazy returns the inner
-	//     MemberExpression on its own; eager wraps in ChainExpression)
-	//   - destructuring with defaults (AssignmentPattern lives at a
-	//     different level between lazy + eager)
-	//   - CatchClause param lifted from ts.VariableDeclaration shim
-	//   - TSStringKeyword/TSVoidKeyword direct-on-Signature (lazy skips
-	//     the TSTypeAnnotation wrapper at this position)
 	const fixtures: Fixture[] = [
+		// JSX bug class
 		{ name: 'jsx-self-closing-expr-attr', code: 'let _ = <Foo prop={x} />;', tsx: true },
 		{ name: 'jsx-self-closing-string-attr', code: 'let _ = <Foo prop="x" />;', tsx: true },
 		{ name: 'jsx-non-self-closing-expr-attr', code: 'let _ = <Foo prop={x}>c</Foo>;', tsx: true },
@@ -1462,6 +1447,17 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		{ name: 'jsx-fragment', code: 'let _ = <><a /><b /></>;', tsx: true },
 		{ name: 'jsx-nested-attr-element', code: 'let _ = <a>{<b prop={c} />}</a>;', tsx: true },
 		{ name: 'jsx-deeply-nested', code: 'let _ = <a><b><c prop={d} /></b></a>;', tsx: true },
+		// Export wrapper identity
+		{ name: 'export-named-const', code: 'export const x = 1;' },
+		{ name: 'export-default-fn', code: 'export default function f() {}' },
+		// ChainExpression
+		{ name: 'optional-chain-call', code: 'let x = a?.b?.c();' },
+		// destructure-defaults
+		{ name: 'destructure-defaults', code: 'function f({ a = 1, b: { c = 2 } = {} }: any) {}' },
+		// CatchClause param
+		{ name: 'try-catch-param', code: 'try { f(); } catch (e) { g(e); }' },
+		// TSStringKeyword/TSVoidKeyword direct-on-Signature
+		{ name: 'ts-interface-keyword-signature', code: 'interface I { a: string; b(): void; }' },
 	];
 
 	let totalNodesChecked = 0;
@@ -1496,19 +1492,67 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 					localFails.push(`materialise(${ts.SyntaxKind[n.kind]}) threw: ${(err as Error).message}`);
 					return;
 				}
+				// Lazy maps `ts.<X>Statement` (when exported) to the
+				// ExportNamed/DefaultDeclaration WRAPPER, while eager maps
+				// to the inner declaration. Both produce the same on-the-
+				// wire parent chain (inner.parent === wrapper === eager-side
+				// wrapper, both have wrapper.parent === Program). Drill into
+				// `.declaration` to align the comparison side.
+				if (
+					(lazyNode.type === 'ExportNamedDeclaration' || lazyNode.type === 'ExportDefaultDeclaration')
+					&& lazyNode.declaration?.type === eager.type
+				) {
+					lazyNode = lazyNode.declaration;
+				}
+				// One TS node can have multiple ESTree mappings (eager
+				// quirk): typescript-estree creates separate ESTree
+				// instances for each "logical" position then maps the TS
+				// node to ONE of them. Examples:
+				//   - optional-chain `a?.b`: each TS PropertyAccessExpression
+				//     gets its own ChainExpression scaffolding; only the
+				//     outermost is structurally in the tree
+				//   - shorthand-with-default `{ a = 1 }`: TS Identifier 'a'
+				//     gets two ESTree Identifier instances (Property.key
+				//     and AssignmentPattern.left); same source token, two
+				//     positions
+				//   - `b: { c = 2 } = {}`: nested ObjectBindingPattern gets
+				//     scaffolding Property/ObjectPattern instances
+				// setEagerParents only sets `parent` on nodes reachable
+				// from root via visitor-keys, so scaffolding (off-tree)
+				// nodes have parent === null. Skip the row in that case —
+				// no tree position to compare against. tsslint-side fires
+				// the listener once per TS node anyway, so the divergence
+				// is unobservable through the rule API.
+				if (eager.parent == null && eager.type !== 'Program') {
+					ts.forEachChild(n, visit);
+					return;
+				}
 				totalNodesChecked++;
 				if (lazyNode.type !== eager.type) {
 					localFails.push(
 						`type ${lazyNode.type} vs eager ${eager.type} (TS kind: ${ts.SyntaxKind[n.kind]})`,
 					);
 				}
+				// Shorthand-with-default `{ a = 1 }` parent ambiguity:
+				// the TS Identifier 'a' has TWO ESTree positions (Property.key
+				// and AssignmentPattern.left). Lazy points to AssignmentPattern.left
+				// (scope/binding side, what scope-manager rules expect); eager
+				// points to Property.key. Both are valid for the same token.
+				// Accept either parent for this specific position.
+				const isShorthandIdent =
+					n.kind === ts.SyntaxKind.Identifier
+					&& n.parent
+					&& n.parent.kind === ts.SyntaxKind.BindingElement
+					&& (n.parent as ts.BindingElement).initializer !== undefined
+					&& (n.parent as ts.BindingElement).name === n
+					&& n.parent.parent?.kind === ts.SyntaxKind.ObjectBindingPattern;
 				// Compare parent.type when both sides have parents (Program /
 				// root has none on either side).
 				if (eager.parent || lazyNode.parent) {
 					totalParentsChecked++;
 					const eagerPType: string | undefined = eager.parent?.type;
 					const lazyPType: string | undefined = lazyNode.parent?.type;
-					if (eagerPType !== lazyPType) {
+					if (eagerPType !== lazyPType && !isShorthandIdent) {
 						localFails.push(
 							`${lazyNode.type}.parent.type ${JSON.stringify(lazyPType)} vs eager ${JSON.stringify(eagerPType)}`,
 						);
@@ -1520,7 +1564,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 					if (eager.parent?.parent || lazyNode.parent?.parent) {
 						const eagerGType: string | undefined = eager.parent?.parent?.type;
 						const lazyGType: string | undefined = lazyNode.parent?.parent?.type;
-						if (eagerGType !== lazyGType) {
+						if (eagerGType !== lazyGType && !isShorthandIdent) {
 							localFails.push(
 								`${lazyNode.type}.parent.parent.type ${JSON.stringify(lazyGType)} vs eager ${JSON.stringify(eagerGType)}`,
 							);
@@ -1697,7 +1741,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		// back to GenericTSNode — but no production code path reaches
 		// them, so they're not actually in any user-visible tree.
 		const eagerMap = (() => {
-			try { return (astConverter as any)(sf, PARSE_SETTINGS as any, true).astMaps.tsNodeToESTreeNodeMap; }
+			try { return (astConverter)(sf, PARSE_SETTINGS as any, true).astMaps.tsNodeToESTreeNodeMap; }
 			catch { return null; }
 		})();
 		if (eagerMap) {
