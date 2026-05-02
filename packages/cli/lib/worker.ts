@@ -4,9 +4,16 @@ import core = require('@tsslint/core');
 import url = require('url');
 import path = require('path');
 import fs = require('fs');
+import crypto = require('crypto');
 import languagePlugins = require('./languagePlugins.js');
 import cacheFlow = require('./cache-flow.js');
+import incrementalState = require('./incremental-state.js');
 import type { FileCache } from './cache.js';
+import type { IncrementalState } from './incremental-state.js';
+
+// Fallback if `ts.sys.createHash` is undefined on this host (Node ≥ 22.6
+// always provides it via crypto, but the type is optional). sha256 hex.
+const defaultHash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
 import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
 import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
@@ -19,15 +26,12 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
-// Layer 2 state. When `--incremental` is on, we wrap the LS's program in
-// a SemanticDiagnosticsBuilderProgram and walk affected files once at
-// setup. cache-flow consults this set to decide whether type-aware rules
-// can be cache-hit. `undefined` here = layer 1 only (cache-flow's default
-// safe behavior — type-aware rules always re-run).
-//
-// Without cross-session BP state (tsbuildinfo), the first session sees
-// every file as affected on cold start; the wiring lands here so the
-// state-persistence work can plug in without touching cache-flow.
+// Layer 2 state. When `--incremental` is on, we diff the prior session's
+// stored content hashes + transitive dep lists against the current
+// program to decide which files' type-relevant inputs have moved. cache-
+// flow consults this set to decide whether type-aware rules can be
+// cache-hit. `undefined` = layer 1 only (cache-flow's default safe
+// behavior).
 let affectedFiles: Set<string> | undefined;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
@@ -106,6 +110,9 @@ export function create() {
 		getTypeAwareRules() {
 			return [...linter.getTypeAwareRules()];
 		},
+		buildIncrementalState() {
+			return buildIncrementalState();
+		},
 	};
 }
 
@@ -117,6 +124,7 @@ async function setup(
 	_options: ts.CompilerOptions,
 	initialTypeAwareRules: readonly string[],
 	incremental: boolean,
+	prevIncrementalState: IncrementalState | undefined,
 ): Promise<true | string> {
 	let config: config.Config | config.Config[];
 	try {
@@ -186,37 +194,33 @@ async function setup(
 		initialTypeAwareRules,
 	);
 
-	affectedFiles = incremental ? computeAffectedFiles() : undefined;
+	if (incremental) {
+		const program = linterLanguageService.getProgram()!;
+		affectedFiles = incrementalState.computeAffectedFiles(
+			prevIncrementalState,
+			program,
+			ts.sys.createHash ?? defaultHash,
+		);
+	}
+	else {
+		affectedFiles = undefined;
+	}
 
 	return true;
 }
 
-// Wrap LS's program in a SemanticDiagnosticsBuilderProgram and drain the
-// affected-file iterator. Without an `oldProgram` (cross-session state
-// not yet persisted), every file counts as affected on cold runs — so
-// the returned set is large but correctness is preserved. cache-flow
-// consults `!affectedFiles.has(fileName)` for `typeAwareUnaffected`.
-function computeAffectedFiles(): Set<string> {
+// Build a fresh state snapshot to persist alongside the cache file.
+// Called by the CLI at end of project, after the lint loop. Wraps the
+// current LS program in a BuilderProgram once to harvest `getAll-
+// Dependencies`, then hashes file texts.
+function buildIncrementalState(): IncrementalState | undefined {
+	if (!affectedFiles) return undefined;
 	const program = linterLanguageService.getProgram()!;
 	const builder = ts.createSemanticDiagnosticsBuilderProgram(
 		program,
 		{ createHash: ts.sys.createHash },
 	);
-	const set = new Set<string>();
-	while (true) {
-		const result = builder.getSemanticDiagnosticsOfNextAffectedFile();
-		if (!result) break;
-		const a = result.affected;
-		if ('fileName' in a) {
-			set.add(a.fileName);
-		}
-		else {
-			// Whole-program affected — config option flip, lib change, etc.
-			// Conservatively mark every source file affected.
-			for (const sf of a.getSourceFiles()) set.add(sf.fileName);
-		}
-	}
-	return set;
+	return incrementalState.buildIncrementalState(builder, ts.sys.createHash ?? defaultHash);
 }
 
 function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {

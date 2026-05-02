@@ -351,6 +351,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			project.options,
 			Object.keys(project.cacheData.ruleModes),
 			process.argv.includes('--incremental'),
+			project.cacheData.incrementalState,
 		);
 		if (setupResult !== true) {
 			renderer.diagnostic(formatConfigError(project.configFile!, setupResult));
@@ -448,6 +449,12 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		for (const ruleId of typeAware) {
 			project.cacheData.ruleModes[ruleId] = 'type-aware';
 		}
+		// Layer 2: harvest content hashes + transitive deps from a fresh
+		// BuilderProgram pass over the LS program. Persists alongside the
+		// per-rule cache so the next `--incremental` session can compute
+		// affected files. Falls through to `undefined` on layer-1-only
+		// runs, matching the schema contract.
+		project.cacheData.incrementalState = await linterWorker.buildIncrementalState();
 		cache.saveCache(
 			project.tsconfig,
 			project.configFile!,

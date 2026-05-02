@@ -82,3 +82,7 @@ jobs:
       # CLI: end-to-end integration via subprocess on a temp fixture.
       - name: CLI integration
         run: node packages/cli/test/integration.test.js
+
+      # CLI: layer 2 cross-session affected-file diff.
+      - name: CLI incremental state
+        run: node packages/cli/test/incremental-state.test.js

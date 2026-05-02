@@ -25,6 +25,7 @@ import os = require('os');
 import crypto = require('crypto');
 
 import type * as ts from 'typescript';
+import type { IncrementalState } from './incremental-state.js';
 
 const pkg = require('../package.json');
 
@@ -39,6 +40,12 @@ export interface CacheData {
 	// which currently means the same thing: cache write happens).
 	ruleModes: Record</* ruleId */ string, 'type-aware'>;
 	files: Record</* abs file path */ string, FileCache>;
+	// Layer 2 cross-session state. Present iff the previous session ran
+	// with `--incremental`. Lets the next session compute which files'
+	// type-relevant inputs (incl. ambient `.d.ts`) have changed since.
+	// See `lib/incremental-state.ts`. Optional so layer-1-only sessions
+	// stay schema-clean.
+	incrementalState?: IncrementalState;
 }
 
 export interface FileCache {
