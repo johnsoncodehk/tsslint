@@ -187,6 +187,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	let hasFix = false;
 	let allFilesNum = 0;
 	let processed = 0;
+	let cached = 0;
 	let passed = 0;
 	let errors = 0;
 	let warnings = 0;
@@ -298,6 +299,9 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	}
 
 	const hints: string[] = [];
+	if (cached) {
+		hints.push(colors.cyan('--force') + colors.gray(' to ignore cache'));
+	}
 	if (hasFix) {
 		hints.push(colors.cyan('--fix') + colors.gray(' to apply fixes'));
 	}
@@ -371,6 +375,15 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			if (!fileCache) {
 				fileCache = { mtime: fileStat.mtimeMs, rules: {} };
 				project.cacheData.files[fileName] = fileCache;
+			}
+			else if (fileCache.mtime === fileStat.mtimeMs && Object.keys(fileCache.rules).length) {
+				// File text untouched since the prev session AND we have at
+				// least one rule's diagnostics cached for it — treat as a
+				// warm hit for the `--force` summary hint. Layer 2's BP
+				// might still re-run type-aware rules if their deps moved,
+				// but the user-visible signal here is just "cache had
+				// something for this file."
+				cached++;
 			}
 
 			const diagnostics = await linterWorker.lint(
