@@ -507,6 +507,43 @@ function findWrapperRoute(tsNode: ts.Node):
 	const tsParent = tsNode.parent;
 	if (!tsParent) return null;
 
+	// JsxAttribute / JsxSpreadAttribute: ESTree exposes attributes via
+	// JSXOpeningElement.attributes — synthetic for JsxSelfClosingElement
+	// (whose materialise is JSXElement, not JSXOpeningElement). Without a
+	// route, bottom-up materialise of an attribute under a self-closing tag
+	// lands `attribute.parent = JSXElement` instead of the synthetic
+	// JSXOpeningElement that eager produces. Route through the
+	// owning element's `openingElement.attributes` getter (or directly
+	// `attributes` for non-self-closing JsxOpeningElement) so the
+	// JSXAttribute children land with the correct synthetic parent in both
+	// cases. The TS parent chain is JsxAttribute → JsxAttributes → owning
+	// element; the JsxAttributes container has no ESTree counterpart and is
+	// also skipped in materialise's walk-up.
+	if (
+		(tsNode.kind === SK.JsxAttribute || tsNode.kind === SK.JsxSpreadAttribute)
+		&& tsParent.kind === SK.JsxAttributes
+		&& tsParent.parent
+	) {
+		const owner = tsParent.parent;
+		const ownerKind = owner.kind;
+		if (ownerKind === SK.JsxOpeningElement || ownerKind === SK.JsxSelfClosingElement) {
+			return {
+				ownerTsNode: owner,
+				trigger: ownerNode => {
+					if (ownerKind === SK.JsxSelfClosingElement) {
+						// owner materialises as JSXElement; attributes live on
+						// its synthetic openingElement.
+						const opening = (ownerNode as unknown as { openingElement?: { attributes?: unknown } }).openingElement;
+						if (opening) void opening.attributes;
+					}
+					else {
+						void (ownerNode as unknown as { attributes?: unknown }).attributes;
+					}
+				},
+			};
+		}
+	}
+
 	// JSX: ts.Identifier / ts.PropertyAccessExpression / ts.JsxNamespacedName
 	// sitting on a JSX tag-name path or JsxAttribute name path must
 	// materialize via the parent's JSX-aware getter (which produces

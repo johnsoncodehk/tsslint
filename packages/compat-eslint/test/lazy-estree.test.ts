@@ -1157,6 +1157,229 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 //   - BOM in source — TS parser normalises before we see it; the lazy
 //     layer inherits whatever the SourceFile reports.
 
+// --- Bottom-up materialise: JsxAttributes parent skip --------------------
+//
+// `materialize()`'s parent walk treats SK.JsxAttributes as structural
+// (skipped, like SyntaxList / NamedImports / CaseBlock). Reason: TS holds
+// JSX attributes in a wrapper container between `<` and `>`, but
+// typescript-estree exposes them directly via `JSXOpeningElement.attributes`
+// — there's no `'TSJsxAttributes'` type in the ESTree shape. Without the
+// skip, every `{x}` attribute value's bottom-up materialise minted a
+// phantom GenericTSNode (cost: 9,659 wasted allocations on Dify's 5867
+// files for one type-aware rule).
+//
+// These tests pin the invariants the skip produces, in shapes the existing
+// top-down parity cases don't directly exercise:
+//   - bottom-up materialise of a node inside a `prop={x}` value lands on
+//     JSXAttribute → JSXOpeningElement (not TSJsxAttributes anywhere)
+//   - same for self-closing tags
+//   - sibling attributes' bottom-up walks land on the SAME JSXOpeningElement
+//   - spread attribute `{...rest}` walks correctly too
+//   - JSX child `{x}` (NOT inside an attribute) is unaffected — never
+//     touched JsxAttributes in the first place
+//   - whole-tree walk after a full lazy build never produces a node whose
+//     `.type === 'TSJsxAttributes'`
+
+function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression | undefined {
+	let found: ts.JsxExpression | undefined;
+	const visit = (n: ts.Node) => {
+		if (found) return;
+		if (n.kind === ts.SyntaxKind.JsxExpression && (n as ts.JsxExpression).expression) {
+			// If attrName given, only match the JsxExpression that's the value of
+			// a JsxAttribute with matching name.
+			if (attrName) {
+				const attr = n.parent;
+				if (attr?.kind === ts.SyntaxKind.JsxAttribute && (attr as ts.JsxAttribute).name?.getText() === attrName) {
+					found = n as ts.JsxExpression;
+					return;
+				}
+			}
+			else {
+				found = n as ts.JsxExpression;
+				return;
+			}
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	return found;
+}
+
+// ── 1: bottom-up from `{x}` attr value on self-closing element ─────────
+{
+	const sf = parseTsx('let _ = <Foo prop={x} />;');
+	const { context } = lazy.convertLazy(sf);
+	const tsExpr = findTsJsxExpr(sf, 'prop')!;
+	const lazyExpr = lazy.materialize(tsExpr, context) as any;
+	check('bottom-up: JSXExpressionContainer materialised', lazyExpr.type === 'JSXExpressionContainer');
+	const attr = lazyExpr.parent;
+	check('bottom-up: parent is JSXAttribute', attr.type === 'JSXAttribute');
+	const opening = attr.parent;
+	check(
+		'bottom-up: JSXAttribute.parent is JSXOpeningElement (not TSJsxAttributes)',
+		opening.type === 'JSXOpeningElement',
+		`got: ${opening.type}`,
+	);
+}
+
+// ── 2: bottom-up from `{x}` attr value on non-self-closing element ────
+{
+	const sf = parseTsx('let _ = <Foo prop={x}>child</Foo>;');
+	const { context } = lazy.convertLazy(sf);
+	const tsExpr = findTsJsxExpr(sf, 'prop')!;
+	const lazyExpr = lazy.materialize(tsExpr, context) as any;
+	const opening = lazyExpr.parent.parent;
+	check(
+		'non-self-closing: JSXAttribute.parent is JSXOpeningElement',
+		opening.type === 'JSXOpeningElement',
+		`got: ${opening.type}`,
+	);
+}
+
+// ── 3: sibling `{a}` and `{b}` walks share the same JSXOpeningElement ──
+{
+	const sf = parseTsx('let _ = <Foo p1={a} p2={b} />;');
+	const { context } = lazy.convertLazy(sf);
+	const exprA = findTsJsxExpr(sf, 'p1')!;
+	const exprB = findTsJsxExpr(sf, 'p2')!;
+	const lazyA = lazy.materialize(exprA, context) as any;
+	const lazyB = lazy.materialize(exprB, context) as any;
+	check(
+		'siblings: shared JSXOpeningElement parent (cache hit)',
+		lazyA.parent.parent === lazyB.parent.parent,
+	);
+	check(
+		'siblings: parent type is JSXOpeningElement',
+		lazyA.parent.parent.type === 'JSXOpeningElement',
+	);
+}
+
+// ── 4a: spread attribute `{...rest}` walks correctly (self-closing) ────
+{
+	const sf = parseTsx('let _ = <Foo {...rest} />;');
+	const { context } = lazy.convertLazy(sf);
+	// JsxSpreadAttribute is a direct TS-AST kind (not a JsxExpression with
+	// dotDotDotToken — that one's for JSX child spread `<X>{...arr}</X>`).
+	let tsSpreadAttr: ts.JsxSpreadAttribute | undefined;
+	const visitSpreadAttr = (n: ts.Node) => {
+		if (n.kind === ts.SyntaxKind.JsxSpreadAttribute) {
+			tsSpreadAttr = n as ts.JsxSpreadAttribute;
+		}
+		ts.forEachChild(n, visitSpreadAttr);
+	};
+	visitSpreadAttr(sf);
+	const lazySpreadAttr = lazy.materialize(tsSpreadAttr!, context) as any;
+	check('spread (self-closing): JSXSpreadAttribute materialised', lazySpreadAttr.type === 'JSXSpreadAttribute');
+	check(
+		'spread (self-closing): parent is JSXOpeningElement (not JSXElement)',
+		lazySpreadAttr.parent.type === 'JSXOpeningElement',
+		`got: ${lazySpreadAttr.parent.type}`,
+	);
+}
+
+// ── 4b: spread attribute on non-self-closing too ───────────────────────
+{
+	const sf = parseTsx('let _ = <Foo {...rest}>x</Foo>;');
+	const { context } = lazy.convertLazy(sf);
+	let tsSpreadAttr: ts.JsxSpreadAttribute | undefined;
+	const visitSpreadAttr = (n: ts.Node) => {
+		if (n.kind === ts.SyntaxKind.JsxSpreadAttribute) {
+			tsSpreadAttr = n as ts.JsxSpreadAttribute;
+		}
+		ts.forEachChild(n, visitSpreadAttr);
+	};
+	visitSpreadAttr(sf);
+	const lazySpreadAttr = lazy.materialize(tsSpreadAttr!, context) as any;
+	check(
+		'spread (non-self-closing): parent is JSXOpeningElement',
+		lazySpreadAttr.parent.type === 'JSXOpeningElement',
+		`got: ${lazySpreadAttr.parent.type}`,
+	);
+}
+
+// ── 5: JSX child `{x}` (not in attribute) walks to JSXElement directly ──
+//
+// This path never touched JsxAttributes even before the fix, so the
+// behaviour should be unchanged. Pin it so we notice if some future refactor
+// accidentally makes it depend on the JsxAttributes skip.
+{
+	const sf = parseTsx('let _ = <Foo>{x}</Foo>;');
+	const { context } = lazy.convertLazy(sf);
+	let tsChild: ts.JsxExpression | undefined;
+	const visit = (n: ts.Node) => {
+		if (n.kind === ts.SyntaxKind.JsxExpression && n.parent?.kind === ts.SyntaxKind.JsxElement) {
+			tsChild = n as ts.JsxExpression;
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	const lazyChild = lazy.materialize(tsChild!, context) as any;
+	check('jsx child {x}: parent is JSXElement', lazyChild.parent.type === 'JSXElement');
+}
+
+// ── 6: deeply nested JSX `{<Y prop={z} />}` — walk from inner z ─────────
+{
+	const sf = parseTsx('let _ = <Foo a={<Bar b={z} />} />;');
+	const { context } = lazy.convertLazy(sf);
+	const innerExpr = findTsJsxExpr(sf, 'b')!;
+	const lazyZ = lazy.materialize(innerExpr, context) as any;
+	check(
+		'nested: inner attr value walks to inner JSXOpeningElement',
+		lazyZ.parent.parent.type === 'JSXOpeningElement',
+		`got: ${lazyZ.parent.parent.type}`,
+	);
+	// Also verify the outer attr value chain is correct.
+	const outerExpr = findTsJsxExpr(sf, 'a')!;
+	const lazyOuterVal = lazy.materialize(outerExpr, context) as any;
+	check(
+		'nested: outer attr value walks to outer JSXOpeningElement',
+		lazyOuterVal.parent.parent.type === 'JSXOpeningElement',
+	);
+}
+
+// ── 7: whole-tree walk produces no `'TSJsxAttributes'` node ────────────
+//
+// Catch-all. After a full convertLazy + visit-everything pass over a JSX
+// fixture exercising every attribute shape, no materialised node should
+// have `type === 'TSJsxAttributes'`. Prevents regression if someone reverts
+// the JsxAttributes line in the skip list. visitorKeys drives the walk so
+// that lazy getters (openingElement / attributes / value / etc.) actually
+// fire — Object.keys() alone misses them.
+{
+	const sf = parseTsx(
+		'let _ = <Foo a="x" b={1} {...rest} c><Bar d={<Baz e={2} />} /></Foo>;',
+	);
+	const { estree } = lazy.convertLazy(sf);
+	const visitorKeys = require('../lib/visitor-keys.js') as { visitorKeys: Record<string, string[]> };
+	const seenTypes = new Set<string>();
+	const seen = new WeakSet<object>();
+	const walk = (n: any) => {
+		if (n == null || typeof n !== 'object') return;
+		if (seen.has(n)) return;
+		seen.add(n);
+		if (typeof n.type === 'string') seenTypes.add(n.type);
+		const keys = visitorKeys.visitorKeys[n.type];
+		if (!keys) return;
+		for (const k of keys) {
+			const v = n[k];
+			if (Array.isArray(v)) for (const x of v) walk(x);
+			else walk(v);
+		}
+	};
+	walk(estree);
+	check(
+		'no TSJsxAttributes anywhere in the tree',
+		!seenTypes.has('TSJsxAttributes'),
+		`saw: ${[...seenTypes].filter(t => t.startsWith('TS')).join(', ')}`,
+	);
+	check(
+		'saw JSXOpeningElement (sanity)',
+		seenTypes.has('JSXOpeningElement'),
+		`seen: ${[...seenTypes].sort().join(', ')}`,
+	);
+	check('saw JSXSpreadAttribute (sanity)', seenTypes.has('JSXSpreadAttribute'));
+}
+
 // --- Done ---------------------------------------------------------------
 
 console.log(`\n${failures.length === 0 ? 'all pass' : `${failures.length} FAILED`}`);
