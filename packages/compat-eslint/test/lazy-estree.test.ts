@@ -1380,6 +1380,129 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	check('saw JSXSpreadAttribute (sanity)', seenTypes.has('JSXSpreadAttribute'));
 }
 
+// --- Debug-estree counter (env-gated globalThis instrumentation) -------
+//
+// Counter is gated by env TSSLINT_DEBUG_ESTREE=1 (read at module load).
+// To exercise both the off and on paths cleanly, spawn a child Node
+// process with the desired env, run a small inline script that builds a
+// LazyNode, and print the resulting counter via getNodeTypeCounts().
+
+const { spawnSync } = require('child_process') as typeof import('child_process');
+const repoCompatEslint = require.resolve('../index.js');
+
+function runChild(env: NodeJS.ProcessEnv, code: string): { stdout: string; stderr: string; status: number } {
+	const r = spawnSync(process.execPath, ['-e', code], {
+		env: { ...process.env, ...env },
+		encoding: 'utf8',
+	});
+	return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status ?? -1 };
+}
+
+// Inline driver: load lazy, build the source file, force materialisation
+// of the JSX subtree by reading getters (otherwise the counter only sees
+// the eager Program node), then read getNodeTypeCounts on the next
+// microtask so the deferred queueMicrotask bumps have landed.
+const childCommon = `
+const ts = require('typescript');
+const lazy = require(${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/lazy-estree.js'))});
+const visitorKeys = require(${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/visitor-keys.js'))}).visitorKeys;
+const sf = ts.createSourceFile('/t.tsx', 'let _ = <Foo a={x} b={y} />;', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const { estree } = lazy.convertLazy(sf);
+const seen = new WeakSet();
+function walk(n) {
+  if (n == null || typeof n !== 'object' || seen.has(n)) return;
+  seen.add(n);
+  const keys = visitorKeys[n.type];
+  if (!keys) return;
+  for (const k of keys) {
+    const v = n[k];
+    if (Array.isArray(v)) for (const x of v) walk(x);
+    else walk(v);
+  }
+}
+walk(estree);
+Promise.resolve().then(() => {
+  const counts = lazy.getNodeTypeCounts();
+  process.stdout.write(JSON.stringify([...counts.entries()].sort()) + '\\n');
+});
+`;
+
+// ── 8: env unset → counter empty ───────────────────────────────────────
+{
+	const r = runChild({ TSSLINT_DEBUG_ESTREE: '' }, childCommon);
+	check('off-path: child exited 0', r.status === 0, r.stderr);
+	check('off-path: counter empty', r.stdout.trim() === '[]', `got: ${r.stdout.trim()}`);
+}
+
+// ── 9: env set → counter populated ─────────────────────────────────────
+{
+	const r = runChild({ TSSLINT_DEBUG_ESTREE: '1' }, childCommon);
+	check('on-path: child exited 0', r.status === 0, r.stderr);
+	const parsed = JSON.parse(r.stdout.trim()) as Array<[string, number]>;
+	const map = new Map(parsed);
+	check('on-path: counter has Program', (map.get('Program') ?? 0) >= 1);
+	check('on-path: counter has JSXOpeningElement', (map.get('JSXOpeningElement') ?? 0) >= 1);
+	check('on-path: counter has JSXAttribute', (map.get('JSXAttribute') ?? 0) >= 1);
+	check(
+		'on-path: counter has NO TSJsxAttributes (skip works)',
+		!map.has('TSJsxAttributes'),
+		`got TS-prefixed: ${parsed.filter(([t]) => t.startsWith('TS')).map(([t, n]) => `${t}=${n}`).join(', ')}`,
+	);
+}
+
+// ── 10: globalThis-shared counter — second require() instance sees it ──
+{
+	const childTwoInstances = `
+const ts = require('typescript');
+// Load lazy-estree TWICE via different require paths to mimic the
+// CLI-vs-project module-resolution split. delete from cache between
+// to force a fresh module instance, then check that counts populated by
+// the first instance are visible from the second's getNodeTypeCounts().
+const path1 = ${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/lazy-estree.js'))};
+const lazy1 = require(path1);
+const sf = ts.createSourceFile('/t.tsx', 'let _ = <Foo a={x} />;', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+lazy1.convertLazy(sf);
+delete require.cache[require.resolve(path1)];
+const lazy2 = require(path1);
+Promise.resolve().then(() => {
+  const c1 = lazy1.getNodeTypeCounts();
+  const c2 = lazy2.getNodeTypeCounts();
+  // Same Map instance backing both — both should report identical entries.
+  process.stdout.write(JSON.stringify({
+    sameSize: c1.size === c2.size,
+    sameProgramCount: c1.get('Program') === c2.get('Program'),
+    nonEmpty: c2.size > 0,
+  }) + '\\n');
+});
+`;
+	const r = runChild({ TSSLINT_DEBUG_ESTREE: '1' }, childTwoInstances);
+	check('shared-counter: child exited 0', r.status === 0, r.stderr);
+	const parsed = JSON.parse(r.stdout.trim()) as { sameSize: boolean; sameProgramCount: boolean; nonEmpty: boolean };
+	check('shared-counter: second instance sees populated counter', parsed.nonEmpty);
+	check('shared-counter: both instances see same map size', parsed.sameSize);
+	check('shared-counter: both instances see same Program count', parsed.sameProgramCount);
+}
+
+// ── 11: resetNodeTypeCounts() clears the counter ───────────────────────
+{
+	const code = `
+const ts = require('typescript');
+const lazy = require(${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/lazy-estree.js'))});
+lazy.convertLazy(ts.createSourceFile('/t.tsx', 'let _ = <Foo a={x} />;', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+Promise.resolve().then(() => {
+  const before = lazy.getNodeTypeCounts().size;
+  lazy.resetNodeTypeCounts();
+  const after = lazy.getNodeTypeCounts().size;
+  process.stdout.write(JSON.stringify({ before, after }) + '\\n');
+});
+`;
+	const r = runChild({ TSSLINT_DEBUG_ESTREE: '1' }, code);
+	check('reset: child exited 0', r.status === 0, r.stderr);
+	const { before, after } = JSON.parse(r.stdout.trim());
+	check('reset: before non-empty', before > 0);
+	check('reset: after empty', after === 0);
+}
+
 // --- Done ---------------------------------------------------------------
 
 console.log(`\n${failures.length === 0 ? 'all pass' : `${failures.length} FAILED`}`);
