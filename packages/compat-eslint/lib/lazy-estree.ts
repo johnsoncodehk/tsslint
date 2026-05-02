@@ -791,11 +791,20 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		//   ImportDeclaration in ESTree (specifiers[]), so a bottom-up
 		//   walk from any specifier should land on the ImportDeclaration
 		//   wrapper rather than building intermediate generic nodes.
+		// - JsxAttributes: TS holds the attribute list (between `<` and
+		//   `>`) in a wrapper container, but typescript-estree elides it
+		//   and exposes attributes directly via `JSXOpeningElement.attributes`.
+		//   Without skipping, every {x} attribute value's bottom-up
+		//   materialise creates a phantom TSJsxAttributes (GenericTSNode);
+		//   on Dify web/ that meant ~9,659 wasted allocations / run.
+		//   Skipping aligns the parent chain with the ESTree shape: a
+		//   JSXAttribute's parent is JSXOpeningElement directly.
 		if (
 			wk === SK.SyntaxList
 			|| wk === SK.CaseBlock
 			|| wk === SK.NamedImports
 			|| wk === SK.ImportClause
+			|| wk === SK.JsxAttributes
 			|| (wk === SK.VariableDeclarationList && walker.parent?.kind === SK.VariableStatement)
 		) {
 			walker = walker.parent;
