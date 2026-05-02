@@ -24,42 +24,9 @@ const tsParser = require('@typescript-eslint/parser');
 
 const { RULES } = require('./rules.config.js') as { RULES: Array<[string, unknown[]?]> };
 
-// Repo-root-relative paths for the dogfood corpus. All real
-// production .ts files in the monorepo (excluding .d.ts, fixtures,
-// tests, bench, node_modules, worktrees).
+import { DOGFOOD_FILES } from './dogfood-corpus';
+
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
-const DOGFOOD_FILES = [
-	'packages/cli/index.ts',
-	'packages/cli/lib/cache.ts',
-	'packages/cli/lib/colors.ts',
-	'packages/cli/lib/fs-cache.ts',
-	'packages/cli/lib/languagePlugins.ts',
-	'packages/cli/lib/render.ts',
-	'packages/cli/lib/worker.ts',
-	'packages/compat-eslint/index.ts',
-	'packages/compat-eslint/lib/lazy-estree.ts',
-	'packages/compat-eslint/lib/selector-analysis.ts',
-	'packages/compat-eslint/lib/tokens.ts',
-	'packages/compat-eslint/lib/ts-ast-scan.ts',
-	'packages/compat-eslint/lib/ts-scope-manager.ts',
-	'packages/compat-eslint/lib/visitor-keys.ts',
-	'packages/config/index.ts',
-	'packages/config/lib/eslint-gen.ts',
-	'packages/config/lib/eslint-types.ts',
-	'packages/config/lib/eslint.ts',
-	'packages/config/lib/plugins/category.ts',
-	'packages/config/lib/plugins/diagnostics.ts',
-	'packages/config/lib/plugins/ignore.ts',
-	'packages/config/lib/tsl.ts',
-	'packages/config/lib/tslint-gen.ts',
-	'packages/config/lib/tslint-types.ts',
-	'packages/config/lib/tslint.ts',
-	'packages/config/lib/utils.ts',
-	'packages/core/index.ts',
-	'packages/types/index.ts',
-	'packages/typescript-plugin/index.ts',
-	'tsslint.config.ts',
-];
 
 interface DiagLoc {
 	file: string;
@@ -68,7 +35,7 @@ interface DiagLoc {
 	ruleId: string;
 }
 
-function buildProgram(files: string[]) {
+function buildProgram(files: readonly string[]) {
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.ES2020 });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
 	const realLib = ts.createSourceFile(

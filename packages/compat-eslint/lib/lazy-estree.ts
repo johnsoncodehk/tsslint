@@ -537,8 +537,26 @@ const SKIP_AS_PARENT: Partial<Record<ts.SyntaxKind, SkipDecision>> = {
 	[SK.SyntaxList]: true,
 	[SK.CaseBlock]: true,
 	[SK.NamedImports]: true,
+	[SK.NamedExports]: true,
 	[SK.ImportClause]: true,
 	[SK.JsxAttributes]: true,
+	// TS wraps each `${expr}` in a TemplateSpan with the trailing literal
+	// piece. ESTree flattens: TemplateLiteral.expressions and .quasis are
+	// siblings, no per-span container. Skip past TemplateSpan so the
+	// expressions/literal-pieces resolve to TemplateLiteral as parent.
+	[SK.TemplateSpan]: true,
+	// TS MappedType wraps the iterating identifier in a TypeParameter
+	// container; ESTree exposes the bare name on TSMappedType.key. Skip
+	// past TypeParameter so the inner Identifier resolves to TSMappedType,
+	// matching typescript-estree's convertMappedType output.
+	[SK.TypeParameter]: w => w.parent?.kind === SK.MappedType,
+	// `import('foo')` type: TS wraps the string literal in a LiteralType
+	// (so the AST shape is ImportTypeNode { argument: LiteralType {
+	// literal: StringLiteral } }). ESTree exposes TSImportType.argument
+	// as the bare StringLiteral — no TSLiteralType in between. Skip the
+	// LiteralType so bottom-up materialise of the inner StringLiteral
+	// resolves to TSImportType as parent.
+	[SK.LiteralType]: w => w.parent?.kind === SK.ImportType,
 	[SK.VariableDeclarationList]: w => w.parent?.kind === SK.VariableStatement,
 	[SK.VariableDeclaration]: w => w.parent?.kind === SK.CatchClause,
 	[SK.HeritageClause]: w => (w as ts.HeritageClause).token === SK.ExtendsKeyword,
@@ -638,6 +656,15 @@ const WRAPPER_DRILLS: WrapperDrill[] = [
 			return v && v.type === 'AssignmentPattern' ? v : undefined;
 		},
 	},
+	// `typeof import('x')` — the TSTypeQueryWrappingNode claims the
+	// ImportType's TS slot in the cache, but the inner TSImportType
+	// (TSTypeQuery.exprName) is what holds the import's children. Without
+	// this drill, bottom-up materialise of the import's argument lands
+	// on TSTypeQuery directly, missing the inner TSImportType layer.
+	{
+		match: (w, dt) => w.kind === SK.ImportType && dt === 'TSTypeQuery',
+		drill: drillFrom => drillFrom.exprName,
+	},
 ];
 
 // Per-parent-kind: how to materialise the type-position child via the
@@ -696,6 +723,24 @@ const TYPE_SLOT_TRIGGERS: Partial<Record<ts.SyntaxKind, (owner: any) => void>> =
 	},
 	[SK.ConstructorType]: o => {
 		if (o.returnType) void o.returnType.typeAnnotation;
+	},
+	[SK.PropertyDeclaration]: o => {
+		// PropertyDefinition / AccessorProperty / TSAbstract* — class field.
+		if (o.typeAnnotation) void o.typeAnnotation.typeAnnotation;
+	},
+	[SK.MethodDeclaration]: o => {
+		// MethodDefinition / Property (object shorthand) — method body is a
+		// FunctionExpression at .value; returnType lives there.
+		if (o.value?.returnType) void o.value.returnType.typeAnnotation;
+	},
+	[SK.GetAccessor]: o => {
+		// MethodDefinition kind:'get' / Property kind:'get'.
+		if (o.value?.returnType) void o.value.returnType.typeAnnotation;
+	},
+	[SK.TypePredicate]: o => {
+		// `x is T` — the predicate's inner type itself wraps in a nested
+		// TSTypeAnnotation.
+		if (o.typeAnnotation) void o.typeAnnotation.typeAnnotation;
 	},
 };
 
@@ -2614,19 +2659,24 @@ class TSImportTypeNode extends LazyNode {
 		}
 	}
 
-	// eager exposes `source` (= argument.literal — the StringLiteral) and
-	// `argument` is a deprecated alias.
+	// eager flattens the LiteralType wrapper around the string argument:
+	// TSImportType.argument / .source = the inner StringLiteral directly,
+	// with parent === TSImportType. Build the inner once, share between
+	// both getters.
 	get source() {
 		if (this._source !== undefined) return this._source;
-		const argEstree = this._argumentEstree ??= convertChild((this._ts as ts.ImportTypeNode).argument, this);
-		// argEstree is a TSLiteralType wrapping a StringLiteral.
-		const lit = (argEstree as unknown as { literal?: LazyNode | null } | null)?.literal ?? null;
-		return this._source = lit;
+		this._argumentEstree ??= this._buildArgument();
+		return this._source = this._argumentEstree;
 	}
-
-	// Deprecated alias for source — eager wires this via #withDeprecatedAliasGetter.
 	get argument() {
-		return this._argumentEstree ??= convertChild((this._ts as ts.ImportTypeNode).argument, this);
+		return this._argumentEstree ??= this._buildArgument();
+	}
+	private _buildArgument(): LazyNode | null {
+		const arg = (this._ts as ts.ImportTypeNode).argument;
+		if (arg.kind === SK.LiteralType) {
+			return convertChild((arg as ts.LiteralTypeNode).literal, this);
+		}
+		return convertChild(arg, this);
 	}
 
 	get qualifier() {
@@ -4333,6 +4383,13 @@ class AssignmentPatternNode extends LazyNode {
 	constructor(tsNode: ts.ParameterDeclaration, parent: LazyNode, left: LazyNode) {
 		super(tsNode, parent);
 		this.left = left;
+		// Re-point the wrapped binding name — without this, the inner's
+		// parent stays as the function passed to convertParameter, so
+		// bottom-up materialise of the binding identifier sees
+		// `parent.type === 'FunctionDeclaration'` instead of the
+		// AssignmentPattern wrapper. Same pattern as
+		// BindingAssignmentPatternNode.
+		(left as { parent: LazyNode }).parent = this;
 		// AssignmentPattern range starts at the param name (eager strips
 		// modifiers from the range — line 1182).
 		const start = (tsNode.name as ts.Node).getStart(this._ctx.ast);
