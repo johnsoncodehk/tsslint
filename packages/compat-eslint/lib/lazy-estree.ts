@@ -2356,7 +2356,7 @@ class TSTypeAnnotationNode extends LazyNode {
 
 // Type-position keywords (`any`, `number`, `string`, …). All have the same
 // shape — just `type: 'TSXxxKeyword'`. Group them under one class to avoid
-// 14 near-identical declarations.
+// 13 near-identical declarations.
 // Type-keyword union — narrowed from KnownEstreeType to the keyword
 // subset so the constructor's `type` parameter can't accept a
 // non-keyword name by mistake.
