@@ -351,18 +351,14 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		// double-listing the same id across multi-project runs.
 		for (const id of typeAware) syntactic.delete(id);
 
+		// Always emit both headers — even with count 0 — so the format
+		// stays consistent across runs (otherwise a project with only
+		// type-aware rules looks visually different from one with both).
 		const lines: string[] = [];
-		if (typeAware.size) {
-			lines.push(colors.cyan('type-aware') + colors.gray(` (${typeAware.size})`));
-			for (const id of [...typeAware].sort()) lines.push('  ' + id);
-		}
-		if (syntactic.size) {
-			lines.push(colors.cyan('syntactic') + colors.gray(` (${syntactic.size})`));
-			for (const id of [...syntactic].sort()) lines.push('  ' + id);
-		}
-		if (!lines.length) {
-			lines.push(colors.gray('(no rules ran)'));
-		}
+		lines.push(colors.cyan('type-aware') + colors.gray(` (${typeAware.size})`));
+		for (const id of [...typeAware].sort()) lines.push('  ' + id);
+		lines.push(colors.cyan('syntactic') + colors.gray(` (${syntactic.size})`));
+		for (const id of [...syntactic].sort()) lines.push('  ' + id);
 		for (const l of lines) renderer.info(l);
 	}
 
