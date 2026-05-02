@@ -291,6 +291,31 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 	check('version mismatch → no warning', s2 === '');
 }
 
+// ── Test 12: oversized buildinfo → undefined + warn ────────────────────
+// Hard cap on `tsBuildInfoText` size protects against pathological
+// monorepos where the captured state grows past V8's max-string limit
+// or makes JSON.stringify of the surrounding cache feel sticky. Cap
+// fires → warn + skip persistence (next run starts cold for layer 2).
+{
+	// Fabricate a builder that emits a 65MB buildinfo blob. We only
+	// exercise the size-guard path; the actual TS-emitted text is
+	// always small in practice (Dify 5867 files = ~3.6MB).
+	const huge = 'x'.repeat(65 * 1024 * 1024);
+	const oversizedBuilder = {
+		emitBuildInfo(write: (path: string, content: string) => void) {
+			write('whatever', huge);
+		},
+	} as unknown as ts.BuilderProgram;
+	const { result, stderr } = captureStderr(() => {
+		try { return inc.captureIncrementalState(ts.version, oversizedBuilder); }
+		catch { return 'THREW' as const; }
+	});
+	check('oversized buildinfo → no throw', result !== 'THREW');
+	check('oversized buildinfo → undefined state', result === undefined);
+	check('oversized buildinfo → warning printed', /warn/.test(stderr));
+	check('oversized buildinfo → warning mentions cap', /cap/.test(stderr));
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

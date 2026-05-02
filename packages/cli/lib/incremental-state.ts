@@ -36,6 +36,15 @@ import type * as ts from 'typescript';
 // stored in `IncrementalState.tsBuildInfoText`.
 export const SYNTHETIC_BUILD_INFO_PATH = '/__tsslint__.tsbuildinfo';
 
+// Hard cap on the captured buildinfo text length. The TS internal
+// format is compact (~3.6MB on Dify's 5867 files), so 64MB leaves
+// ~10–15× headroom on that scale — comfortably below V8's max string
+// length and below the size where JSON.stringify of the surrounding
+// cache object starts to feel sticky. If the cap fires we warn + skip
+// persistence (cold start next session is preferable to a multi-second
+// JSON serialise hit on every run).
+const MAX_BUILD_INFO_BYTES = 64 * 1024 * 1024;
+
 export interface IncrementalState {
 	version: string;
 	// Raw text TS wrote via `BuilderProgram.emitBuildInfo`. Opaque to
@@ -161,5 +170,14 @@ export function captureIncrementalState(
 		return undefined;
 	}
 	if (!captured) return undefined;
+	if (captured.length > MAX_BUILD_INFO_BYTES) {
+		const mb = (captured.length / 1024 / 1024).toFixed(1);
+		const capMb = MAX_BUILD_INFO_BYTES / 1024 / 1024;
+		warn(
+			`Incremental state too large (${mb}MB > ${capMb}MB cap). `
+				+ `Type-aware cache cannot be persisted — next run will start cold.`,
+		);
+		return undefined;
+	}
 	return { version: INCREMENTAL_STATE_VERSION, tsBuildInfoText: captured };
 }
