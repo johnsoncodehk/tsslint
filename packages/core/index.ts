@@ -6,6 +6,13 @@ import minimatch = require('minimatch');
 
 export type Linter = ReturnType<typeof createLinter>;
 
+// Marker stamped onto diagnostics by `Reporter.withoutCache()`. The CLI
+// cache-flow filters these out before serialising to disk so they're
+// never replayed from a warm cache hit. Symbol-keyed (via Symbol.for so
+// it's stable across module instances) — invisible to JSON.stringify and
+// to `{...spread}` so it doesn't leak into the serialised cache.
+export const NO_CACHE = Symbol.for('@tsslint/no-cache');
+
 export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
@@ -197,6 +204,10 @@ export function createLinter(
 							title,
 							getEdits,
 						});
+						return this;
+					},
+					withoutCache() {
+						(error as any)[NO_CACHE] = true;
 						return this;
 					},
 				};

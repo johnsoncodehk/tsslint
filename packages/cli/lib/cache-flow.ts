@@ -9,7 +9,7 @@
 // type-aware cleanup.
 
 import type * as ts from 'typescript';
-import type { Linter } from '@tsslint/core';
+import { NO_CACHE, type Linter } from '@tsslint/core';
 import type { FileCache, SerializedDiagnostic } from './cache.js';
 
 export function lintWithCache(
@@ -97,9 +97,16 @@ export function lintWithCache(
 				break;
 			}
 		}
+		// Drop diagnostics the rule marked via `Reporter.withoutCache()` —
+		// the rule is asserting they depend on inputs we don't track in
+		// the cache key, so a warm replay would be unsound. They're still
+		// included in the live `fresh` array returned from this function;
+		// they just don't survive to disk.
 		fileCache.rules[ruleId] = {
 			hasFix,
-			diagnostics: diags.map(serializeDiagnostic),
+			diagnostics: diags
+				.filter(d => !(d as any)[NO_CACHE])
+				.map(serializeDiagnostic),
 		};
 	}
 

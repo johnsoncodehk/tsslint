@@ -427,6 +427,98 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
+// ── Test 15: withoutCache() — diagnostic returned but not persisted ─────
+//
+// `Reporter.withoutCache()` is the rule's contract: "this finding's
+// correctness depends on inputs neither layer tracks; please don't
+// replay it from the cache." The current run still surfaces the
+// diagnostic; it just isn't written to disk, so the next warm hit on
+// the same file won't see it.
+{
+	const ctx = makeContext({ '/a.ts': 'const x = 1;' });
+	const config: Config = {
+		rules: {
+			env_dependent: ((rctx: RuleContext) => {
+				rctx.report('depends on env', 0, 1).withoutCache();
+				rctx.report('plain', 0, 1);
+			}),
+		},
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const diags = cacheFlow.lintWithCache(
+		linter,
+		'/a.ts',
+		cache,
+		1,
+		ctx.languageService.getProgram()!,
+	);
+	check('current run returns both diagnostics', diags.length === 2);
+	check(
+		'cache entry exists for the rule',
+		!!cache.rules['env_dependent'],
+	);
+	check(
+		'only the non-marked diagnostic is persisted',
+		cache.rules['env_dependent']?.diagnostics.length === 1,
+		`expected 1 cached diagnostic, got ${cache.rules['env_dependent']?.diagnostics.length}`,
+	);
+	check(
+		'persisted diagnostic is the plain one',
+		cache.rules['env_dependent']?.diagnostics[0]?.messageText === 'plain',
+	);
+}
+
+// ── Test 16: withoutCache() — second run cache-hits with the survivor ───
+{
+	const ctx = makeContext({ '/a.ts': 'const x = 1;' });
+	const config: Config = {
+		rules: {
+			env_dependent: ((rctx: RuleContext) => {
+				rctx.report('depends on env', 0, 1).withoutCache();
+				rctx.report('plain', 0, 1);
+			}),
+		},
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+
+	// Second run with the same mtime — rule cache-hits, only the
+	// persisted diagnostic comes back.
+	const linter2 = core.createLinter(ctx, '/', config, () => []);
+	const diags = cacheFlow.lintWithCache(
+		linter2,
+		'/a.ts',
+		cache,
+		1,
+		ctx.languageService.getProgram()!,
+	);
+	check('warm cache hit returns 1 diagnostic', diags.length === 1);
+	check('warm replay drops the marked one', diags[0]?.messageText === 'plain');
+}
+
+// ── Test 17: NO_CACHE marker doesn't leak through serialisation ─────────
+//
+// Symbol-keyed property must stay invisible to JSON.stringify and to
+// `{...spread}` so the on-disk cache stays clean.
+{
+	const ctx = makeContext({ '/a.ts': 'const x = 1;' });
+	const config: Config = {
+		rules: {
+			r: ((rctx: RuleContext) => {
+				rctx.report('marked', 0, 1).withoutCache();
+			}),
+		},
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	// rule entry exists but with 0 diagnostics — no smuggled keys.
+	const json = JSON.stringify(cache);
+	check('NO_CACHE marker not visible in serialised cache', !json.includes('no-cache'));
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {
