@@ -3,6 +3,10 @@ import type * as ESLint from 'eslint';
 import type * as ts from 'typescript';
 import CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js');
 import { convertLazy } from './lib/lazy-estree';
+
+// Debug surface — see lib/lazy-estree.ts. Gated by env TSSLINT_DEBUG_ESTREE=1
+// (set by the CLI's --debug-estree flag, or directly by external callers).
+export { getNodeTypeCounts, resetNodeTypeCounts } from './lib/lazy-estree';
 import { LazySourceCode } from './lib/lazy-source-code';
 import { decomposeSimple, isCodePathListener } from './lib/selector-analysis';
 import { convertComments, convertTokens } from './lib/tokens';
