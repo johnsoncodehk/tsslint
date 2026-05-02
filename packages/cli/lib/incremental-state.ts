@@ -3,29 +3,55 @@
 // the next session can compute which files' type-relevant inputs have
 // moved.
 //
-// Why not `.tsbuildinfo`? TS's `BuilderProgram` reads/writes that file
-// via internal APIs (`getProgramBuildInfo` / `createBuilderProgramUsing-
-// ProgramBuildInfo`), and the format is explicitly TS-major-coupled.
-// Going through the public `getAllDependencies` + a content-hash digest
-// trades some cache hit rate (we invalidate on body-only edits where
-// TS's shape signatures wouldn't) for a sustainable contract that
-// doesn't break on TS upgrades.
+// Path interning: every unique file path is stored once in a `paths`
+// table and referenced by integer index in deps lists. A naive
+// representation balloons past V8's max string length on Dify-scale
+// projects (5867 source files × hundreds of transitive deps each →
+// multi-hundred-MB JSON). With interning, paths are written once and
+// deps become number arrays — fits comfortably under any practical
+// limit and serialises faster.
+//
+// Why not `.tsbuildinfo`? TS reads/writes it via `getProgramBuildInfo` /
+// `createBuilderProgramUsingProgramBuildInfo`, both internal and TS-
+// major-coupled. Going through public `BuilderProgram.getAllDependencies`
+// + a content-hash digest trades some hit rate (we invalidate on body-
+// only edits where TS's shape signatures wouldn't) for a contract that
+// survives TS upgrades.
 
 import type * as ts from 'typescript';
 
 export interface IncrementalState {
 	version: string;
-	files: Record</* fileName */ string, {
+	// Interned path table. Indices into this array are used in `files`
+	// keys and `deps` values throughout the rest of the structure.
+	paths: string[];
+	// `files[i]` is the entry for the file at `paths[i]`. Sparse: only
+	// indices for source files actually present in the program at save
+	// time appear. Deps are indices into `paths` — typically a much
+	// smaller integer payload than the full path strings repeated.
+	files: Record</* pathIndex */ string, {
 		contentHash: string;
-		// Transitive dependency file paths as `BuilderProgram.getAll-
-		// Dependencies` reported them at the previous session's end.
-		// Includes ambient `.d.ts` files and lib files — the gap that
-		// per-file mtime caches can't close.
-		deps: string[];
+		deps: number[];
 	}>;
 }
 
-export const INCREMENTAL_STATE_VERSION = 'v1';
+export const INCREMENTAL_STATE_VERSION = 'v2';
+
+// Files we don't track. node_modules content changes after `pnpm install`
+// / `npm install`, which users typically pair with `--force` or a fresh
+// CI run. Tracking node_modules deps blows the JSON past V8's max string
+// length even with path interning (Dify-scale: 16M dep refs → 80MB+).
+// Lib files only change when `compilerOptions.lib` flips, already
+// covered by the cache path key.
+//
+// The trade-off: a `pnpm install` that bumps `@types/*` between two
+// `tsslint --incremental` runs serves stale type-aware results until
+// the next `--force`. Acceptable for CLI use; documented in CACHE.md.
+function isUserFile(sf: ts.SourceFile, program: ts.Program): boolean {
+	if (program.isSourceFileDefaultLibrary(sf)) return false;
+	if (sf.fileName.includes('/node_modules/')) return false;
+	return true;
+}
 
 // Build a fresh state snapshot from a wrapped BuilderProgram, to save
 // alongside the cache file. Called after the lint pass.
@@ -34,40 +60,57 @@ export const INCREMENTAL_STATE_VERSION = 'v1';
 // script-mode `.d.ts`) don't show up in any specific file's
 // `getAllDependencies` because no file explicitly imports them — they
 // connect via global scope. To catch their edits, we treat every
-// non-lib script-mode `.d.ts` as a universal dep. Lib files are
-// excluded because they only change when `compilerOptions.lib` flips,
-// which already invalidates the entire cache file via the path key.
+// user-controlled script-mode `.d.ts` as a universal dep.
 export function buildIncrementalState(
 	builder: ts.BuilderProgram,
 	hash: (s: string) => string,
 ): IncrementalState {
 	const program = builder.getProgram();
+	const sourceFiles = program.getSourceFiles().filter(sf => isUserFile(sf, program));
+
+	// Build the path table — one entry per tracked user file. The index
+	// of each file's path becomes its key in `files` and its identifier
+	// in every dep list. node_modules / lib are excluded — see
+	// `isUserFile` for rationale.
+	const paths: string[] = [];
+	const pathIndex = new Map<string, number>();
+	for (const sf of sourceFiles) {
+		const i = paths.length;
+		paths.push(sf.fileName);
+		pathIndex.set(sf.fileName, i);
+	}
+
 	// Detect script-mode .d.ts via `externalModuleIndicator`. Field is
-	// internal in TS's public types but stable at runtime — used by tools
-	// across the ecosystem (typescript-eslint, ts-morph) for the same
-	// reason. The public `ts.isExternalModule` check would work too but
-	// is itself runtime-only at the API level.
-	const ambients: string[] = [];
-	for (const sf of program.getSourceFiles()) {
+	// internal in TS's public types but stable at runtime — used by
+	// typescript-eslint and ts-morph for the same purpose.
+	const ambientIndices: number[] = [];
+	for (const sf of sourceFiles) {
 		if (
 			sf.isDeclarationFile
 			&& !(sf as { externalModuleIndicator?: unknown }).externalModuleIndicator
-			&& !program.isSourceFileDefaultLibrary(sf)
 		) {
-			ambients.push(sf.fileName);
+			ambientIndices.push(pathIndex.get(sf.fileName)!);
 		}
 	}
 
 	const files: IncrementalState['files'] = {};
-	for (const sf of program.getSourceFiles()) {
-		const deps = new Set(builder.getAllDependencies(sf));
-		for (const a of ambients) deps.add(a);
-		files[sf.fileName] = {
+	for (const sf of sourceFiles) {
+		const idx = pathIndex.get(sf.fileName)!;
+		const depSet = new Set<number>();
+		// Filter transitive deps to user files only — node_modules deps
+		// would explode the cache size (transitive @types/* alone runs
+		// into millions of references on monorepo-scale projects).
+		for (const d of builder.getAllDependencies(sf)) {
+			const di = pathIndex.get(d);
+			if (di !== undefined) depSet.add(di);
+		}
+		for (const a of ambientIndices) depSet.add(a);
+		files[String(idx)] = {
 			contentHash: hash(sf.text),
-			deps: [...deps],
+			deps: [...depSet],
 		};
 	}
-	return { version: INCREMENTAL_STATE_VERSION, files };
+	return { version: INCREMENTAL_STATE_VERSION, paths, files };
 }
 
 // Diff a previous state against the current program to figure out which
@@ -88,42 +131,55 @@ export function computeAffectedFiles(
 		return affected;
 	}
 
-	// Step 1: hash every current file. Files whose own content moved go
-	// straight into `changed`. Files newly added (no prev entry) go into
-	// `affected` directly — we have nothing cached for them anyway.
+	// Resolve `prev.paths[idx]` lazily. Building a Map<path, idx> for
+	// reverse lookup pays off: we hit it once per current source file
+	// (to find prev entry) and once per dep index (to read current hash).
+	const prevPathToIdx = new Map<string, number>();
+	for (let i = 0; i < prev.paths.length; i++) {
+		prevPathToIdx.set(prev.paths[i], i);
+	}
+
+	// Step 1: hash every current file. Track which prev indices have
+	// content that moved — the propagation step uses this set.
 	const currentHashes = new Map<string, string>();
-	const changed = new Set<string>();
+	const changedPrevIdx = new Set<number>();
 	for (const sf of sourceFiles) {
 		const h = hash(sf.text);
 		currentHashes.set(sf.fileName, h);
-		const prevEntry = prev.files[sf.fileName];
-		if (!prevEntry) {
+		const pi = prevPathToIdx.get(sf.fileName);
+		if (pi === undefined) {
+			// New file — no prior entry. Affected; nothing to record in
+			// `changedPrevIdx` because no prev consumer could list it.
 			affected.add(sf.fileName);
+			continue;
 		}
-		else if (prevEntry.contentHash !== h) {
-			changed.add(sf.fileName);
+		const prevEntry = prev.files[String(pi)];
+		if (!prevEntry || prevEntry.contentHash !== h) {
+			changedPrevIdx.add(pi);
 			affected.add(sf.fileName);
 		}
 	}
-	// Files removed from the program also count as a change — anyone who
-	// listed them in `deps` is now affected.
-	for (const prevName of Object.keys(prev.files)) {
-		if (!currentHashes.has(prevName)) {
-			changed.add(prevName);
+	// Files removed from the program also count as changed — anyone who
+	// listed them in deps is now affected.
+	for (let i = 0; i < prev.paths.length; i++) {
+		if (!currentHashes.has(prev.paths[i])) {
+			changedPrevIdx.add(i);
 		}
 	}
 
 	// Step 2: propagate. A file is affected if any of its prior deps
-	// landed in `changed`. We use the prev session's dep list — if the
-	// dep graph itself changed (file F gained or lost an import), F's
-	// own content moved, so it's already in `changed` → propagating from
-	// stale deps stays sound.
+	// (by index) landed in `changedPrevIdx`. We use the prev session's
+	// dep list — if the dep graph itself changed (file F gained or lost
+	// an import), F's own content moved, so F is already in `affected`
+	// → propagating from stale deps stays sound.
 	for (const sf of sourceFiles) {
 		if (affected.has(sf.fileName)) continue;
-		const prevEntry = prev.files[sf.fileName];
-		if (!prevEntry) continue; // already added above
+		const pi = prevPathToIdx.get(sf.fileName);
+		if (pi === undefined) continue; // already added
+		const prevEntry = prev.files[String(pi)];
+		if (!prevEntry) continue;
 		for (const dep of prevEntry.deps) {
-			if (changed.has(dep)) {
+			if (changedPrevIdx.has(dep)) {
 				affected.add(sf.fileName);
 				break;
 			}

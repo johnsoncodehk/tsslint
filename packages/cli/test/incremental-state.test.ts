@@ -31,6 +31,23 @@ function fakeHash(s: string): string {
 	return String(h);
 }
 
+// Build an interned IncrementalState from a friendlier path-keyed
+// representation. Keeps tests readable.
+function makeState(
+	entries: Array<{ name: string; hash: string; deps: string[] }>,
+): IncrementalState {
+	const paths = entries.map(e => e.name);
+	const idx = new Map(paths.map((p, i) => [p, i]));
+	const files: IncrementalState['files'] = {};
+	for (let i = 0; i < entries.length; i++) {
+		files[String(i)] = {
+			contentHash: entries[i].hash,
+			deps: entries[i].deps.map(d => idx.get(d)!),
+		};
+	}
+	return { version: inc.INCREMENTAL_STATE_VERSION, paths, files };
+}
+
 // Build a minimal Program from in-memory file map. Lib not needed for
 // these tests — we only exercise getSourceFiles / sf.fileName / sf.text.
 function buildProgram(files: Record<string, string>): ts.Program {
@@ -71,10 +88,7 @@ function buildProgram(files: Record<string, string>): ts.Program {
 // ── Test 2: state version mismatch → all affected ───────────────────────
 {
 	const program = buildProgram({ '/a.ts': 'const x = 1;' });
-	const stale: IncrementalState = {
-		version: 'v0',
-		files: { '/a.ts': { contentHash: fakeHash('const x = 1;'), deps: ['/a.ts'] } },
-	} as any;
+	const stale = { ...makeState([{ name: '/a.ts', hash: fakeHash('const x = 1;'), deps: ['/a.ts'] }]), version: 'v0' };
 	const affected = inc.computeAffectedFiles(stale, program, fakeHash);
 	check('schema bump → all affected', affected.has('/a.ts'));
 }
@@ -85,15 +99,11 @@ function buildProgram(files: Record<string, string>): ts.Program {
 // "everything matches" check we mirror that into prev too.
 {
 	const program = buildProgram({ '/a.ts': 'const x = 1;', '/b.ts': 'const y = 2;' });
-	const prev: IncrementalState = {
-		version: inc.INCREMENTAL_STATE_VERSION,
-		files: Object.fromEntries(
-			program.getSourceFiles().map(sf => [sf.fileName, {
-				contentHash: fakeHash(sf.text),
-				deps: [sf.fileName],
-			}]),
-		),
-	};
+	const prev = makeState(program.getSourceFiles().map(sf => ({
+		name: sf.fileName,
+		hash: fakeHash(sf.text),
+		deps: [sf.fileName],
+	})));
 	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
 	check('a.ts NOT affected (hash matches)', !affected.has('/a.ts'));
 	check('b.ts NOT affected (hash matches)', !affected.has('/b.ts'));
@@ -109,13 +119,10 @@ function buildProgram(files: Record<string, string>): ts.Program {
 		'/a.ts': 'const x = 1;',
 		'/b.ts': 'const y = 99;',
 	});
-	const prev: IncrementalState = {
-		version: inc.INCREMENTAL_STATE_VERSION,
-		files: {
-			'/a.ts': { contentHash: fakeHash('const x = 1;'), deps: ['/a.ts'] },
-			'/b.ts': { contentHash: fakeHash('const y = 2;'), deps: ['/a.ts', '/b.ts'] },
-		},
-	};
+	const prev = makeState([
+		{ name: '/a.ts', hash: fakeHash('const x = 1;'), deps: ['/a.ts'] },
+		{ name: '/b.ts', hash: fakeHash('const y = 2;'), deps: ['/a.ts', '/b.ts'] },
+	]);
 	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
 	check('b.ts affected (own content changed)', affected.has('/b.ts'));
 	check('a.ts NOT affected (unchanged)', !affected.has('/a.ts'));
@@ -133,15 +140,12 @@ function buildProgram(files: Record<string, string>): ts.Program {
 		'/use2.ts': 'const b = FOO;',
 		'/standalone.ts': 'const c = 42;',
 	});
-	const prev: IncrementalState = {
-		version: inc.INCREMENTAL_STATE_VERSION,
-		files: {
-			'/globals.d.ts': { contentHash: fakeHash('declare const FOO: number;'), deps: ['/globals.d.ts'] },
-			'/use1.ts': { contentHash: fakeHash('const a = FOO;'), deps: ['/globals.d.ts', '/use1.ts'] },
-			'/use2.ts': { contentHash: fakeHash('const b = FOO;'), deps: ['/globals.d.ts', '/use2.ts'] },
-			'/standalone.ts': { contentHash: fakeHash('const c = 42;'), deps: ['/standalone.ts'] },
-		},
-	};
+	const prev = makeState([
+		{ name: '/globals.d.ts', hash: fakeHash('declare const FOO: number;'), deps: ['/globals.d.ts'] },
+		{ name: '/use1.ts', hash: fakeHash('const a = FOO;'), deps: ['/globals.d.ts', '/use1.ts'] },
+		{ name: '/use2.ts', hash: fakeHash('const b = FOO;'), deps: ['/globals.d.ts', '/use2.ts'] },
+		{ name: '/standalone.ts', hash: fakeHash('const c = 42;'), deps: ['/standalone.ts'] },
+	]);
 	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
 	check('globals.d.ts affected (own change)', affected.has('/globals.d.ts'));
 	check('use1.ts affected (dep changed)', affected.has('/use1.ts'));
@@ -158,12 +162,9 @@ function buildProgram(files: Record<string, string>): ts.Program {
 		'/old.ts': 'const o = 1;',
 		'/new.ts': 'const n = 2;',
 	});
-	const prev: IncrementalState = {
-		version: inc.INCREMENTAL_STATE_VERSION,
-		files: {
-			'/old.ts': { contentHash: fakeHash('const o = 1;'), deps: ['/old.ts'] },
-		},
-	};
+	const prev = makeState([
+		{ name: '/old.ts', hash: fakeHash('const o = 1;'), deps: ['/old.ts'] },
+	]);
 	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
 	check('new.ts affected (newly added)', affected.has('/new.ts'));
 	check('old.ts NOT affected (unchanged)', !affected.has('/old.ts'));
@@ -178,13 +179,10 @@ function buildProgram(files: Record<string, string>): ts.Program {
 	const program = buildProgram({
 		'/still-here.ts': 'const z = 3;',
 	});
-	const prev: IncrementalState = {
-		version: inc.INCREMENTAL_STATE_VERSION,
-		files: {
-			'/removed.ts': { contentHash: fakeHash('export const r = 1;'), deps: ['/removed.ts'] },
-			'/still-here.ts': { contentHash: fakeHash('const z = 3;'), deps: ['/removed.ts', '/still-here.ts'] },
-		},
-	};
+	const prev = makeState([
+		{ name: '/removed.ts', hash: fakeHash('export const r = 1;'), deps: ['/removed.ts'] },
+		{ name: '/still-here.ts', hash: fakeHash('const z = 3;'), deps: ['/removed.ts', '/still-here.ts'] },
+	]);
 	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
 	check(
 		'still-here.ts affected (dep removed)',
@@ -193,7 +191,7 @@ function buildProgram(files: Record<string, string>): ts.Program {
 	);
 }
 
-// ── Test 8: hash collision in deps doesn't false-positive ───────────────
+// ── Test 8: independent file change doesn't false-positive ──────────────
 //
 // File A has dep file C. C is unchanged. A's content unchanged. Even
 // though something else (D) changed, A is unaffected.
@@ -203,14 +201,11 @@ function buildProgram(files: Record<string, string>): ts.Program {
 		'/c.ts': 'const c = 1;',
 		'/d.ts': 'const d = 99;',  // changed
 	});
-	const prev: IncrementalState = {
-		version: inc.INCREMENTAL_STATE_VERSION,
-		files: {
-			'/a.ts': { contentHash: fakeHash('const x = 1;'), deps: ['/c.ts', '/a.ts'] },
-			'/c.ts': { contentHash: fakeHash('const c = 1;'), deps: ['/c.ts'] },
-			'/d.ts': { contentHash: fakeHash('const d = 1;'), deps: ['/d.ts'] },
-		},
-	};
+	const prev = makeState([
+		{ name: '/a.ts', hash: fakeHash('const x = 1;'), deps: ['/c.ts', '/a.ts'] },
+		{ name: '/c.ts', hash: fakeHash('const c = 1;'), deps: ['/c.ts'] },
+		{ name: '/d.ts', hash: fakeHash('const d = 1;'), deps: ['/d.ts'] },
+	]);
 	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
 	check('a.ts NOT affected (deps unchanged, own unchanged)', !affected.has('/a.ts'));
 	check('d.ts affected (own content changed)', affected.has('/d.ts'));
