@@ -2,9 +2,18 @@ import ts = require('typescript');
 import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import url = require('url');
-import fs = require('fs');
 import path = require('path');
+import fs = require('fs');
+import crypto = require('crypto');
 import languagePlugins = require('./languagePlugins.js');
+import cacheFlow = require('./cache-flow.js');
+import incrementalState = require('./incremental-state.js');
+import type { FileCache } from './cache.js';
+import type { IncrementalState } from './incremental-state.js';
+
+// Fallback if `ts.sys.createHash` is undefined on this host (Node ≥ 22.6
+// always provides it via crypto, but the type is optional). sha256 hex.
+const defaultHash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
 import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
 import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
@@ -17,6 +26,16 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
+// Layer 2 state. We wrap the LS program in a SemanticDiagnostics-
+// BuilderProgram (with the prev session's BP fed back via TS's internal
+// `tsBuildInfoText` round-trip) and walk affected files once. cache-
+// flow consults this set to decide whether type-aware rules can be
+// cache-hit. Always populated under the CLI; `--force` opts out by
+// clearing the loaded cache, not by disabling layer 2.
+let affectedFiles: Set<string> | undefined;
+// The current session's BP — held until end-of-project so we can
+// capture its updated buildinfo text for next session's persistence.
+let currentBuilder: ts.SemanticDiagnosticsBuilderProgram | undefined;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -38,7 +57,16 @@ const originalHost: ts.LanguageServiceHost = {
 		return fileNames;
 	},
 	getScriptVersion(fileName) {
-		return versions.get(fileName)?.toString() ?? '0';
+		// In-session bumps win — `--fix` updates this map after writing
+		// the file. Otherwise fall back to the on-disk mtime so the
+		// version reflects content across CLI invocations. Layer 2's
+		// BuilderProgram diff relies on this — without it, every cross-
+		// session file looks unchanged (always '0') even when the
+		// content moved on disk.
+		const inSession = versions.get(fileName);
+		if (inSession !== undefined) return inSession.toString();
+		const stat = fs.statSync(fileName, { throwIfNoEntry: false });
+		return stat ? stat.mtimeMs.toString() : '0';
 	},
 	getScriptSnapshot(fileName) {
 		if (!snapshots.has(fileName)) {
@@ -83,13 +111,19 @@ export function create() {
 			return setup(...args);
 		},
 		lint(...args: Parameters<typeof lint>) {
-			return lint(...args)[0];
+			return lint(...args);
 		},
 		hasCodeFixes(...args: Parameters<typeof hasCodeFixes>) {
 			return hasCodeFixes(...args);
 		},
 		hasRules(...args: Parameters<typeof hasRules>) {
-			return hasRules(...args)[0];
+			return hasRules(...args);
+		},
+		getTypeAwareRules() {
+			return [...linter.getTypeAwareRules()];
+		},
+		buildIncrementalState() {
+			return buildIncrementalState();
 		},
 	};
 }
@@ -100,6 +134,8 @@ async function setup(
 	configFile: string,
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
+	initialTypeAwareRules: readonly string[],
+	prevIncrementalState: IncrementalState | undefined,
 ): Promise<true | string> {
 	let config: config.Config | config.Config[];
 	try {
@@ -124,6 +160,16 @@ async function setup(
 	}
 	linterLanguageService = originalService;
 	language = undefined;
+
+	// Reset per-project state. Multi-project runs reuse the same worker
+	// (in-process) — without this, cross-project file paths accumulate in
+	// `snapshots` / `versions` (memory leak) and `affectedFiles` from a
+	// prior project would mis-classify this project's files as cache-hit
+	// candidates if their absolute paths happened to overlap.
+	snapshots.clear();
+	versions.clear();
+	affectedFiles = undefined;
+	currentBuilder = undefined;
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
@@ -151,12 +197,18 @@ async function setup(
 	projectVersion++;
 	typeRootsVersion++;
 	fileNames = _fileNames;
-	options = plugins.some(plugin => plugin.typescript?.extraFileExtensions.length)
-		? {
-			..._options,
-			allowNonTsExtensions: true,
-		}
-		: _options;
+	// Internal API path: BuilderProgram.emitBuildInfo only produces
+	// content when these options are set. Override the user's values
+	// (their own tsc --incremental builds shouldn't share this file).
+	// The synthetic path is never written to disk — captured via
+	// writeFile callback at end of session.
+	options = {
+		...(plugins.some(plugin => plugin.typescript?.extraFileExtensions.length)
+			? { ..._options, allowNonTsExtensions: true }
+			: _options),
+		incremental: true,
+		tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
+	};
 	linter = core.createLinter(
 		{
 			languageService: linterLanguageService,
@@ -166,27 +218,99 @@ async function setup(
 		path.dirname(configFile),
 		config,
 		() => [],
+		initialTypeAwareRules,
 	);
+
+	{
+		const program = linterLanguageService.getProgram()!;
+		// Reconstruct the prev session's BP from cached buildinfo text,
+		// fall through to undefined on any failure (cold-start path).
+		const oldBuilder = incrementalState.reconstructOldBuilder(ts, prevIncrementalState, {
+			useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
+			getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
+		});
+		currentBuilder = ts.createSemanticDiagnosticsBuilderProgram(
+			program,
+			{ createHash: ts.sys.createHash ?? defaultHash },
+			oldBuilder as ts.SemanticDiagnosticsBuilderProgram | undefined,
+		);
+		affectedFiles = new Set();
+		// Drain via `ignoreSourceFile` to record affected files without
+		// computing their semantic diagnostics. The diagnostic compute is
+		// the expensive part of the drain (~38s on Dify cold) — TSSLint's
+		// own lint pass triggers semantic checks lazily for the symbols
+		// type-aware rules query, not the full program. Doing it twice
+		// wasted time. The graph-propagation work (which determines
+		// affected via reference graph) still runs internally.
+		// `ignoreSourceFile`'s typed param is SourceFile only, but TS
+		// internally calls it with the same `affected` value the iterator
+		// returns — which can also be a Program (whole-program affected
+		// path, e.g. lib flip). Handle both shapes at runtime via the
+		// `fileName` discriminator.
+		const recordAffected = (sf: ts.SourceFile) => {
+			const a = sf as ts.SourceFile | ts.Program;
+			if ('fileName' in a) {
+				affectedFiles!.add(a.fileName);
+			}
+			else {
+				for (const f of a.getSourceFiles()) affectedFiles!.add(f.fileName);
+			}
+			return true;
+		};
+		while (true) {
+			const result = currentBuilder.getSemanticDiagnosticsOfNextAffectedFile(
+				undefined,
+				recordAffected,
+			);
+			if (!result) break;
+			// Should not reach here — `ignoreSourceFile` always returns true.
+		}
+	}
 
 	return true;
 }
 
-function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
+// Capture the current session's BP state for persistence. Called by
+// the CLI at end of project. Returns undefined when not in incremental
+// mode or when capture fails.
+function buildIncrementalState(): IncrementalState | undefined {
+	if (!currentBuilder) return undefined;
+	return incrementalState.captureIncrementalState(ts.version, currentBuilder);
+}
+
+function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
 
+	// Layer 2 signals. `incremental` is always true under the CLI now —
+	// `--force` opts out by clearing the loaded cache instead.
+	//   typeAwareUnaffected: file's deps haven't moved since prev session,
+	//                so cached type-aware entries can be reused this run.
+	//                False in --fix mode — fixes mutate files mid-session
+	//                and invalidate the setup-time affected snapshot for
+	//                downstream files; we'd rather re-run than serve stale.
+	const typeAwareUnaffected = !fix && !affectedFiles!.has(fileName);
+
 	if (fix) {
-		if (Object.values(fileCache[1]).some(([hasFix]) => hasFix)) {
-			// Reset the cache if there are any fixes applied.
-			fileCache[1] = {};
-			fileCache[2] = {};
+		// Drop cache entries for rules that registered a fix in any prior
+		// session — we need to actually run those rules now to rebuild the
+		// `getEdits` callbacks (closures don't survive the JSON cache).
+		// Rules with no fixes can stay cached.
+		for (const ruleId of Object.keys(fileCache.rules)) {
+			if (fileCache.rules[ruleId].hasFix) {
+				delete fileCache.rules[ruleId];
+			}
 		}
-		diagnostics = linter.lint(fileName, fileCache);
+		const program = linterLanguageService.getProgram()!;
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+			incremental: true,
+			typeAwareUnaffected,
+		});
 		shouldCheck = false;
 
 		let fixes = linter
-			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics, fileCache[2])
+			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
 			.filter(fix => fix.fixId === 'tsslint');
 
 		if (language) {
@@ -211,15 +335,20 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 		const oldText = ts.sys.readFile(fileName);
 		if (newText !== oldText) {
 			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
-			fileCache[0] = fs.statSync(fileName).mtimeMs;
-			fileCache[1] = {};
-			fileCache[2] = {};
+			// File content moved — refresh mtime so the next lint pass
+			// invalidates layer-1 cache entries for this file. lintWithCache
+			// compares fileCache.mtime against the fileMtime we pass in.
+			fileMtime = fs.statSync(fileName).mtimeMs;
 			shouldCheck = true;
 		}
 	}
 
 	if (shouldCheck) {
-		diagnostics = linter.lint(fileName, fileCache);
+		const program = linterLanguageService.getProgram()!;
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+			incremental: true,
+			typeAwareUnaffected,
+		});
 	}
 
 	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
@@ -254,7 +383,7 @@ function lint(fileName: string, fix: boolean, fileCache: core.FileLintCache) {
 	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
 	// only computes line starts once per file).
 
-	return [diagnostics, fileCache] as const;
+	return diagnostics;
 }
 
 function getFileText(fileName: string) {
@@ -265,6 +394,6 @@ function hasCodeFixes(fileName: string) {
 	return linter.hasCodeFixes(fileName);
 }
 
-function hasRules(fileName: string, minimatchCache: core.FileLintCache[2]) {
-	return [Object.keys(linter.getRules(fileName, minimatchCache)).length > 0, minimatchCache] as const;
+function hasRules(fileName: string) {
+	return Object.keys(linter.getRules(fileName)).length > 0;
 }

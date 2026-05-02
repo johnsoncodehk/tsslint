@@ -4,22 +4,26 @@ import type * as ts from 'typescript';
 import path = require('path');
 import minimatch = require('minimatch');
 
-export type FileLintCache = [
-	mtime: number,
-	lintResult: Record<
-		/* ruleId */ string,
-		[hasFix: boolean, diagnostics: ts.DiagnosticWithLocation[]]
-	>,
-	minimatchResult: Record<string, boolean>,
-];
-
 export type Linter = ReturnType<typeof createLinter>;
+
+// Marker stamped onto diagnostics by `Reporter.withoutCache()`. The CLI
+// cache-flow filters these out before serialising to disk so they're
+// never replayed from a warm cache hit. Symbol-keyed (via Symbol.for so
+// it's stable across module instances) — invisible to JSON.stringify and
+// to `{...spread}` so it doesn't leak into the serialised cache.
+export const NO_CACHE = Symbol.for('@tsslint/no-cache');
 
 export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
 	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
+	// Rule IDs already known to be type-aware from a prior session (via
+	// the cache file's `ruleModes` map). Pre-seeding lets us treat those
+	// rules as type-aware on their first invocation in this session,
+	// before the runtime probe has a chance to classify them — closing
+	// the cold-session-with-stale-cache hole 3.0.4 had.
+	initialTypeAwareRules?: Iterable<string>,
 ) {
 	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
@@ -47,21 +51,29 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
-	// Rules that touched `rulesContext.program` are type-aware: their
-	// diagnostics depend on cross-file type information that the per-file
-	// mtime cache can't track. We never write their results to cache, and
-	// we ignore any pre-existing cached entry for them so a session that
-	// classifies a rule as type-aware doesn't keep serving stale data
-	// from a previous session that didn't.
-	const typeAwareRules = new Set</* ruleId */ string>();
+	// Sticky type-aware classification. Once a rule has read
+	// `rulesContext.program` in any past or current session, it stays
+	// type-aware for the lifetime of this linter. Reads are gated by a
+	// getter on `program` that flips a per-rule flag during execution.
+	const typeAwareRules = new Set<string>(initialTypeAwareRules ?? []);
 
 	return {
-		lint(fileName: string, cache?: FileLintCache): ts.DiagnosticWithLocation[] {
+		// `options.skipRules`: rule IDs the caller already has cached
+		// results for. Core just doesn't run them — the caller is
+		// responsible for merging cached output into the final diagnostic
+		// list. Decoupling cache lifecycle from core means future cache
+		// changes (BuilderProgram-based invalidation, schema bumps) live
+		// in the CLI without churning this layer.
+		lint(
+			fileName: string,
+			options?: { skipRules?: ReadonlySet<string> },
+		): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
+			const skipRules = options?.skipRules;
 
-			const rules = getRulesForFile(fileName, cache?.[2]);
+			const rules = getRulesForFile(fileName);
 			const token = ctx.languageServiceHost.getCancellationToken?.();
-			const configs = getConfigsForFile(fileName, cache?.[2]);
+			const configs = getConfigsForFile(fileName);
 
 			const program = ctx.languageService.getProgram()!;
 			const file = program.getSourceFile(fileName)!;
@@ -87,22 +99,7 @@ export function createLinter(
 
 				currentRuleId = ruleId;
 
-				const ruleCache = cache?.[1][currentRuleId];
-				if (ruleCache && !typeAwareRules.has(currentRuleId)) {
-					let lintResult = lintResults.get(fileName);
-					if (!lintResult) {
-						lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
-					}
-					for (const cacheDiagnostic of ruleCache[1]) {
-						lintResult[1].set({
-							...cacheDiagnostic,
-							file: rulesContext.file,
-							relatedInformation: cacheDiagnostic.relatedInformation?.map(info => ({
-								...info,
-								file: info.file ? program.getSourceFile(info.file.fileName) : undefined,
-							})),
-						}, []);
-					}
+				if (skipRules?.has(currentRuleId)) {
 					continue;
 				}
 
@@ -120,26 +117,6 @@ export function createLinter(
 				}
 				if (touchedProgram) {
 					typeAwareRules.add(currentRuleId);
-				}
-
-				if (cache) {
-					if (typeAwareRules.has(currentRuleId)) {
-						// Rule is type-aware: discard any cache entry (this
-						// session may have written one through `report()`
-						// before the program access; a previous session may
-						// have left a stale one too).
-						delete cache[1][currentRuleId];
-					}
-					else {
-						cache[1][currentRuleId] ??= [false, []];
-
-						for (const [_, fixes] of lintResult[1]) {
-							if (fixes.length) {
-								cache[1][currentRuleId][0] = true;
-								break;
-							}
-						}
-					}
 				}
 			}
 
@@ -182,20 +159,6 @@ export function createLinter(
 				};
 				let location: [Error, number] = [new Error(), 1];
 				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
-				let cachedObj: ts.DiagnosticWithLocation | undefined;
-
-				if (cache) {
-					cachedObj = {
-						...error,
-						file: undefined as any,
-						relatedInformation: error.relatedInformation?.map(info => ({
-							...info,
-							file: info.file ? { fileName: info.file.fileName } as any : undefined,
-						})),
-					};
-					cache[1][currentRuleId] ??= [false, []];
-					cache[1][currentRuleId][1].push(cachedObj);
-				}
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
@@ -244,15 +207,7 @@ export function createLinter(
 						return this;
 					},
 					withoutCache() {
-						if (cachedObj) {
-							const ruleCache = cache?.[1][currentRuleId];
-							if (ruleCache) {
-								const index = ruleCache[1].indexOf(cachedObj);
-								if (index >= 0) {
-									ruleCache[1].splice(index, 1);
-								}
-							}
-						}
+						(error as any)[NO_CACHE] = true;
 						return this;
 					},
 				};
@@ -270,12 +225,20 @@ export function createLinter(
 			}
 			return false;
 		},
+		// Per-diagnostic fix presence — used by the CLI cache layer to
+		// snapshot `hasFix` for a rule's cache entry without reaching
+		// into core's internal `diagnostic2Fixes` map.
+		hasFixForDiagnostic(fileName: string, diagnostic: ts.DiagnosticWithLocation): boolean {
+			const lintResult = lintResults.get(fileName);
+			if (!lintResult) return false;
+			const fixes = lintResult[1].get(diagnostic);
+			return !!fixes && fixes.length > 0;
+		},
 		getCodeFixes(
 			fileName: string,
 			start: number,
 			end: number,
 			diagnostics?: ts.Diagnostic[],
-			minimatchCache?: FileLintCache[2],
 		) {
 			const lintResult = lintResults.get(fileName);
 			if (!lintResult) {
@@ -283,7 +246,7 @@ export function createLinter(
 			}
 
 			const file = lintResult[0];
-			const configs = getConfigsForFile(fileName, minimatchCache);
+			const configs = getConfigsForFile(fileName);
 			const result: ts.CodeFixAction[] = [];
 
 			for (const [diagnostic, actions] of lintResult[1]) {
@@ -364,13 +327,20 @@ export function createLinter(
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
+		// Snapshot of rules classified type-aware so far. The CLI reads
+		// this after a lint pass to persist into the cache file's
+		// `ruleModes` map, then feeds it back via `initialTypeAwareRules`
+		// on the next session.
+		getTypeAwareRules(): ReadonlySet<string> {
+			return typeAwareRules;
+		},
 	};
 
-	function getRulesForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+	function getRulesForFile(fileName: string) {
 		let rules = fileRules.get(fileName);
 		if (!rules) {
 			rules = {};
-			const configs = getConfigsForFile(fileName, minimatchCache);
+			const configs = getConfigsForFile(fileName);
 			for (const config of configs) {
 				collectRules(rules, config.rules, []);
 			}
@@ -386,7 +356,7 @@ export function createLinter(
 		return rules;
 	}
 
-	function getConfigsForFile(fileName: string, minimatchCache: undefined | FileLintCache[2]) {
+	function getConfigsForFile(fileName: string) {
 		let result = fileConfigs.get(fileName);
 		if (!result) {
 			result = configs.filter(({ include, exclude }) => {
@@ -403,21 +373,12 @@ export function createLinter(
 		return result;
 
 		function _minimatch(pattern: string) {
-			if (minimatchCache) {
-				if (pattern in minimatchCache) {
-					return minimatchCache[pattern];
-				}
-			}
 			let normalized = normalizedPath.get(pattern);
 			if (!normalized) {
 				normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
 				normalizedPath.set(pattern, normalized);
 			}
-			const res = minimatch.minimatch(fileName, normalized, { dot: true });
-			if (minimatchCache) {
-				minimatchCache[pattern] = res;
-			}
-			return res;
+			return minimatch.minimatch(fileName, normalized, { dot: true });
 		}
 	}
 
