@@ -1216,11 +1216,19 @@ interface ShapeSlotDef {
 interface ShapeDef {
 	type: string;
 	slots: Record<string, ShapeSlotDef>;
+	// Optional callback that derives readonly fields from the TS node
+	// (e.g. computing `delegate` from `asteriskToken`, `const`/`in`/`out`
+	// from modifier flags). Applied in the constructor after super().
+	consts?: (tsNode: any) => Record<string, unknown>;
 }
 const SHAPE_CLASSES = new Map<ts.SyntaxKind, new (tsNode: ts.Node, parent: LazyNode | null) => LazyNode>();
 function defineShape(tsKind: ts.SyntaxKind, def: ShapeDef): void {
 	const cls = class extends LazyNode {
 		readonly type = def.type;
+		constructor(tsNode: ts.Node, parent: LazyNode | null) {
+			super(tsNode, parent);
+			if (def.consts) Object.assign(this, def.consts(tsNode));
+		}
 	};
 	for (const [getter, slot] of Object.entries(def.slots)) {
 		const cacheKey = '_' + getter;
@@ -1408,6 +1416,25 @@ defineShape(SK.ImportAttribute, {
 		value: { tsField: 'value' },
 	},
 });
+// Constructor-derived fields (`consts`):
+defineShape(SK.TypeParameter, {
+	type: 'TSTypeParameter',
+	consts: (tn: ts.TypeParameterDeclaration) => ({
+		const: !!tn.modifiers?.some(m => m.kind === SK.ConstKeyword),
+		in: !!tn.modifiers?.some(m => m.kind === SK.InKeyword),
+		out: !!tn.modifiers?.some(m => m.kind === SK.OutKeyword),
+	}),
+	slots: {
+		name: { tsField: 'name' },
+		constraint: { tsField: 'constraint' },
+		default: { tsField: 'default' },
+	},
+});
+defineShape(SK.YieldExpression, {
+	type: 'YieldExpression',
+	consts: (tn: ts.YieldExpression) => ({ delegate: !!tn.asteriskToken }),
+	slots: { argument: { tsField: 'expression' } },
+});
 
 function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 	const ShapeCls = SHAPE_CLASSES.get(child.kind);
@@ -1594,8 +1621,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new BreakOrContinueNode('ContinueStatement', child as ts.ContinueStatement, parent);
 		case SK.EmptyStatement:
 			return new EmptyStatementNode(child, parent);
-		case SK.YieldExpression:
-			return new YieldExpressionNode(child as ts.YieldExpression, parent);
 		case SK.ClassDeclaration:
 			return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
 		case SK.ClassExpression:
@@ -1660,8 +1685,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return new SuperNode(child, parent);
 		case SK.ThisKeyword:
 			return new ThisExpressionNode(child, parent);
-		case SK.TypeParameter:
-			return new TSTypeParameterNode(child as ts.TypeParameterDeclaration, parent);
 		case SK.ExpressionWithTypeArguments: {
 			// Parent-aware shape (mirrors eager line 1858). The TS parent
 			// chain — not our lazy parent — is what carries this signal:
@@ -2786,32 +2809,6 @@ class ThisExpressionNode extends LazyNode {
 	readonly type = 'ThisExpression' as const;
 }
 
-class TSTypeParameterNode extends LazyNode {
-	readonly type = 'TSTypeParameter' as const;
-	readonly const: boolean;
-	readonly in: boolean;
-	readonly out: boolean;
-	private _name?: LazyNode | null;
-	private _constraint?: LazyNode | null;
-	private _default?: LazyNode | null;
-
-	constructor(tsNode: ts.TypeParameterDeclaration, parent: LazyNode) {
-		super(tsNode, parent);
-		this.const = !!tsNode.modifiers?.some(m => m.kind === SK.ConstKeyword);
-		this.in = !!tsNode.modifiers?.some(m => m.kind === SK.InKeyword);
-		this.out = !!tsNode.modifiers?.some(m => m.kind === SK.OutKeyword);
-	}
-	get name() {
-		return this._name ??= convertChild((this._ts as ts.TypeParameterDeclaration).name, this);
-	}
-	get constraint() {
-		return this._constraint ??= convertChild((this._ts as ts.TypeParameterDeclaration).constraint, this);
-	}
-	get default() {
-		return this._default ??= convertChild((this._ts as ts.TypeParameterDeclaration).default, this);
-	}
-}
-
 class PrivateIdentifierNode extends LazyNode {
 	readonly type = 'PrivateIdentifier' as const;
 	readonly name: string;
@@ -3259,19 +3256,6 @@ class BreakOrContinueNode extends LazyNode {
 
 class EmptyStatementNode extends LazyNode {
 	readonly type = 'EmptyStatement' as const;
-}
-
-class YieldExpressionNode extends LazyNode {
-	readonly type = 'YieldExpression' as const;
-	readonly delegate: boolean;
-	private _argument?: LazyNode | null;
-	constructor(tsNode: ts.YieldExpression, parent: LazyNode) {
-		super(tsNode, parent);
-		this.delegate = !!tsNode.asteriskToken;
-	}
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.YieldExpression).expression, this);
-	}
 }
 
 // NamedTupleMember: with `...` becomes TSRestType wrapping the member.
