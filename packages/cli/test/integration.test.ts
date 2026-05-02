@@ -210,7 +210,8 @@ function readCacheForFixture(fixtureDir: string): unknown {
 		check('cache written under --incremental', !!data);
 		check(
 			'incrementalState persisted to cache file',
-			!!data?.incrementalState && Object.keys(data.incrementalState.files).length > 0,
+			!!data?.incrementalState && typeof data.incrementalState.tsBuildInfoText === 'string'
+				&& data.incrementalState.tsBuildInfoText.length > 0,
 		);
 	}
 	finally {

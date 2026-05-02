@@ -26,13 +26,15 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
-// Layer 2 state. When `--incremental` is on, we diff the prior session's
-// stored content hashes + transitive dep lists against the current
-// program to decide which files' type-relevant inputs have moved. cache-
-// flow consults this set to decide whether type-aware rules can be
-// cache-hit. `undefined` = layer 1 only (cache-flow's default safe
-// behavior).
+// Layer 2 state. When `--incremental` is on, we wrap the LS program in
+// a SemanticDiagnosticsBuilderProgram (with the prev session's BP fed
+// back via TS's internal `tsBuildInfoText` round-trip) and walk
+// affected files once. cache-flow consults this set to decide whether
+// type-aware rules can be cache-hit. `undefined` = layer 1 only.
 let affectedFiles: Set<string> | undefined;
+// The current session's BP — held until end-of-project so we can
+// capture its updated buildinfo text for next session's persistence.
+let currentBuilder: ts.SemanticDiagnosticsBuilderProgram | undefined;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -54,7 +56,16 @@ const originalHost: ts.LanguageServiceHost = {
 		return fileNames;
 	},
 	getScriptVersion(fileName) {
-		return versions.get(fileName)?.toString() ?? '0';
+		// In-session bumps win — `--fix` updates this map after writing
+		// the file. Otherwise fall back to the on-disk mtime so the
+		// version reflects content across CLI invocations. Layer 2's
+		// BuilderProgram diff relies on this — without it, every cross-
+		// session file looks unchanged (always '0') even when the
+		// content moved on disk.
+		const inSession = versions.get(fileName);
+		if (inSession !== undefined) return inSession.toString();
+		const stat = fs.statSync(fileName, { throwIfNoEntry: false });
+		return stat ? stat.mtimeMs.toString() : '0';
 	},
 	getScriptSnapshot(fileName) {
 		if (!snapshots.has(fileName)) {
@@ -182,6 +193,18 @@ async function setup(
 			allowNonTsExtensions: true,
 		}
 		: _options;
+	if (incremental) {
+		// Internal API path: BuilderProgram.emitBuildInfo only produces
+		// content when these options are set. Override the user's values
+		// (their own tsc --incremental builds shouldn't share this file).
+		// The synthetic path is never written to disk — captured via
+		// writeFile callback at end of session.
+		options = {
+			...options,
+			incremental: true,
+			tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
+		};
+	}
 	linter = core.createLinter(
 		{
 			languageService: linterLanguageService,
@@ -196,31 +219,46 @@ async function setup(
 
 	if (incremental) {
 		const program = linterLanguageService.getProgram()!;
-		affectedFiles = incrementalState.computeAffectedFiles(
-			prevIncrementalState,
+		// Reconstruct the prev session's BP from cached buildinfo text,
+		// fall through to undefined on any failure (cold-start path).
+		const oldBuilder = incrementalState.reconstructOldBuilder(ts, prevIncrementalState, {
+			useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
+			getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
+		});
+		currentBuilder = ts.createSemanticDiagnosticsBuilderProgram(
 			program,
-			ts.sys.createHash ?? defaultHash,
+			{ createHash: ts.sys.createHash ?? defaultHash },
+			oldBuilder as ts.SemanticDiagnosticsBuilderProgram | undefined,
 		);
+		affectedFiles = new Set();
+		while (true) {
+			const result = currentBuilder.getSemanticDiagnosticsOfNextAffectedFile();
+			if (!result) break;
+			const a = result.affected;
+			if ('fileName' in a) {
+				affectedFiles.add(a.fileName);
+			}
+			else {
+				// Whole-program affected — config option flip, lib change.
+				// Conservatively mark every source file affected.
+				for (const sf of a.getSourceFiles()) affectedFiles.add(sf.fileName);
+			}
+		}
 	}
 	else {
 		affectedFiles = undefined;
+		currentBuilder = undefined;
 	}
 
 	return true;
 }
 
-// Build a fresh state snapshot to persist alongside the cache file.
-// Called by the CLI at end of project, after the lint loop. Wraps the
-// current LS program in a BuilderProgram once to harvest `getAll-
-// Dependencies`, then hashes file texts.
+// Capture the current session's BP state for persistence. Called by
+// the CLI at end of project. Returns undefined when not in incremental
+// mode or when capture fails.
 function buildIncrementalState(): IncrementalState | undefined {
-	if (!affectedFiles) return undefined;
-	const program = linterLanguageService.getProgram()!;
-	const builder = ts.createSemanticDiagnosticsBuilderProgram(
-		program,
-		{ createHash: ts.sys.createHash },
-	);
-	return incrementalState.buildIncrementalState(builder, ts.sys.createHash ?? defaultHash);
+	if (!currentBuilder) return undefined;
+	return incrementalState.captureIncrementalState(currentBuilder);
 }
 
 function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {

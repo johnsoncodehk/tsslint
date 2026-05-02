@@ -1,14 +1,13 @@
-// Tests for the layer 2 cross-session diff. Given a stored
-// `IncrementalState` from a prior session and a current Program, the
-// `computeAffectedFiles` function should return the set of files whose
-// type-relevant inputs (own content, transitive deps incl. ambient
-// `.d.ts`) have changed.
+// Round-trip tests for the layer 2 cross-session state. Verifies that
+// capturing a BP's state via TS internal `emitBuildInfo` produces a
+// text the next session can feed back through
+// `createBuilderProgramUsingIncrementalBuildInfo` to get an oldBP that
+// correctly diffs the current program.
 //
 // Run via:
 //   node packages/cli/test/incremental-state.test.js
 
 import * as ts from 'typescript';
-import type { IncrementalState } from '../lib/incremental-state.js';
 
 const inc = require('../lib/incremental-state.js') as typeof import('../lib/incremental-state.js');
 
@@ -23,193 +22,162 @@ function check(name: string, cond: boolean, detail?: string) {
 	}
 }
 
-// Trivial deterministic hash for tests — we just need stable+collision-free
-// for the strings we throw at it.
-function fakeHash(s: string): string {
-	let h = 0;
-	for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-	return String(h);
-}
+const realLib = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
+const libContent = ts.sys.readFile(realLib) ?? '';
+const libName = realLib.split(/[\\/]/).pop()!;
 
-// Build an interned IncrementalState from a friendlier path-keyed
-// representation. Keeps tests readable.
-function makeState(
-	entries: Array<{ name: string; hash: string; deps: string[] }>,
-): IncrementalState {
-	const paths = entries.map(e => e.name);
-	const idx = new Map(paths.map((p, i) => [p, i]));
-	const files: IncrementalState['files'] = {};
-	for (let i = 0; i < entries.length; i++) {
-		files[String(i)] = {
-			contentHash: entries[i].hash,
-			deps: entries[i].deps.map(d => idx.get(d)!),
-		};
-	}
-	return { version: inc.INCREMENTAL_STATE_VERSION, paths, files };
-}
-
-// Build a minimal Program from in-memory file map. Lib not needed for
-// these tests — we only exercise getSourceFiles / sf.fileName / sf.text.
 function buildProgram(files: Record<string, string>): ts.Program {
-	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
-	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
-	const realLib = ts.createSourceFile(realLibPath, realLibContent, ts.ScriptTarget.Latest, true);
-	const sourceFiles = new Map<string, ts.SourceFile>();
-	for (const [name, text] of Object.entries(files)) {
-		sourceFiles.set(name, ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true));
-	}
 	const host: ts.CompilerHost = {
-		getSourceFile: n => sourceFiles.get(n) ?? (n === realLibPath ? realLib : undefined),
-		getDefaultLibFileName: () => realLibPath,
+		getSourceFile(name) {
+			if (name in files) {
+				const text = files[name];
+				const sf = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
+				// BP requires a `version` field on each SourceFile. Production
+				// LS sets this from `host.getScriptVersion`; here we derive
+				// from content length so edited files get a different version
+				// (otherwise BP's diff sees no change and skips propagation).
+				(sf as unknown as { version: string }).version = String(text.length) + ':' + text.charCodeAt(0);
+				return sf;
+			}
+			if (name === realLib) {
+				const sf = ts.createSourceFile(realLib, libContent, ts.ScriptTarget.Latest, true);
+				(sf as unknown as { version: string }).version = String(libContent.length);
+				return sf;
+			}
+			return undefined;
+		},
+		getDefaultLibFileName: () => realLib,
 		writeFile: () => {},
 		getCurrentDirectory: () => '/',
 		getDirectories: () => [],
-		fileExists: n => sourceFiles.has(n) || n === realLibPath,
-		readFile: n => files[n] ?? (n === realLibPath ? realLibContent : undefined),
+		fileExists: n => n in files || n === realLib,
+		readFile: n => files[n] ?? (n === realLib ? libContent : undefined),
 		getCanonicalFileName: n => n,
 		useCaseSensitiveFileNames: () => true,
 		getNewLine: () => '\n',
 	};
 	return ts.createProgram({
-		rootNames: [...sourceFiles.keys()],
-		options: { target: ts.ScriptTarget.Latest, noEmit: true, lib: [realLibPath.split(/[\\/]/).pop()!] },
+		rootNames: Object.keys(files),
+		options: {
+			target: ts.ScriptTarget.Latest,
+			noEmit: true,
+			incremental: true,
+			tsBuildInfoFile: inc.SYNTHETIC_BUILD_INFO_PATH,
+			lib: [libName],
+		},
 		host,
 	});
 }
 
-// ── Test 1: no prior state → all source files are affected ──────────────
-{
-	const program = buildProgram({ '/a.ts': 'const x = 1;', '/b.ts': 'const y = 2;' });
-	const affected = inc.computeAffectedFiles(undefined, program, fakeHash);
-	check('a.ts affected (no prev state)', affected.has('/a.ts'));
-	check('b.ts affected (no prev state)', affected.has('/b.ts'));
+function affectedFileNames(builder: ts.SemanticDiagnosticsBuilderProgram): Set<string> {
+	const set = new Set<string>();
+	while (true) {
+		const r = builder.getSemanticDiagnosticsOfNextAffectedFile();
+		if (!r) break;
+		if ('fileName' in r.affected) set.add(r.affected.fileName);
+		else for (const sf of r.affected.getSourceFiles()) set.add(sf.fileName);
+	}
+	return set;
 }
 
-// ── Test 2: state version mismatch → all affected ───────────────────────
+const hostShim = {
+	useCaseSensitiveFileNames: () => true,
+	getCurrentDirectory: () => '/',
+};
+
+// ── Test 1: captureIncrementalState produces text on a fresh BP ─────────
 {
-	const program = buildProgram({ '/a.ts': 'const x = 1;' });
-	const stale = { ...makeState([{ name: '/a.ts', hash: fakeHash('const x = 1;'), deps: ['/a.ts'] }]), version: 'v0' };
-	const affected = inc.computeAffectedFiles(stale, program, fakeHash);
-	check('schema bump → all affected', affected.has('/a.ts'));
+	const program = buildProgram({ '/a.ts': 'export const x: number = 1;' });
+	const builder = ts.createSemanticDiagnosticsBuilderProgram(
+		program,
+		{ createHash: ts.sys.createHash },
+	);
+	affectedFileNames(builder); // drain
+	const state = inc.captureIncrementalState(builder);
+	check('state captured', !!state);
+	check('state version is v3', state?.version === inc.INCREMENTAL_STATE_VERSION);
+	check('tsBuildInfoText is non-empty', !!state && state.tsBuildInfoText.length > 0);
 }
 
-// ── Test 3: identical state → no user files affected ────────────────────
-//
-// lib.*.d.ts files would also be in `program.getSourceFiles()`. For the
-// "everything matches" check we mirror that into prev too.
+// ── Test 2: reconstructOldBuilder + diff round-trip — identical program ─
 {
-	const program = buildProgram({ '/a.ts': 'const x = 1;', '/b.ts': 'const y = 2;' });
-	const prev = makeState(program.getSourceFiles().map(sf => ({
-		name: sf.fileName,
-		hash: fakeHash(sf.text),
-		deps: [sf.fileName],
-	})));
-	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
-	check('a.ts NOT affected (hash matches)', !affected.has('/a.ts'));
-	check('b.ts NOT affected (hash matches)', !affected.has('/b.ts'));
-	check('no user file affected', !affected.has('/a.ts') && !affected.has('/b.ts'));
-}
-
-// ── Test 4: file content changed → only that file in affected ───────────
-//
-// b.ts has /a.ts in its deps. a.ts unchanged. b.ts content changed.
-// Only b.ts is affected.
-{
-	const program = buildProgram({
-		'/a.ts': 'const x = 1;',
-		'/b.ts': 'const y = 99;',
+	const program1 = buildProgram({
+		'/a.ts': 'export const x: number = 1;',
+		'/b.ts': "import { x } from './a'; export const y = x + 1;",
 	});
-	const prev = makeState([
-		{ name: '/a.ts', hash: fakeHash('const x = 1;'), deps: ['/a.ts'] },
-		{ name: '/b.ts', hash: fakeHash('const y = 2;'), deps: ['/a.ts', '/b.ts'] },
-	]);
-	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
-	check('b.ts affected (own content changed)', affected.has('/b.ts'));
-	check('a.ts NOT affected (unchanged)', !affected.has('/a.ts'));
-}
+	const builder1 = ts.createSemanticDiagnosticsBuilderProgram(
+		program1,
+		{ createHash: ts.sys.createHash },
+	);
+	affectedFileNames(builder1);
+	const captured = inc.captureIncrementalState(builder1)!;
 
-// ── Test 5: dep file changed → all consumers affected ───────────────────
-//
-// The killer case for layer 2: editing globals.d.ts (or any ambient file)
-// must propagate to every file that listed it as a dep. That's what
-// per-file mtime caching can't catch.
-{
-	const program = buildProgram({
-		'/globals.d.ts': 'declare const FOO: string;',  // changed from `: number;`
-		'/use1.ts': 'const a = FOO;',
-		'/use2.ts': 'const b = FOO;',
-		'/standalone.ts': 'const c = 42;',
+	const program2 = buildProgram({
+		'/a.ts': 'export const x: number = 1;',
+		'/b.ts': "import { x } from './a'; export const y = x + 1;",
 	});
-	const prev = makeState([
-		{ name: '/globals.d.ts', hash: fakeHash('declare const FOO: number;'), deps: ['/globals.d.ts'] },
-		{ name: '/use1.ts', hash: fakeHash('const a = FOO;'), deps: ['/globals.d.ts', '/use1.ts'] },
-		{ name: '/use2.ts', hash: fakeHash('const b = FOO;'), deps: ['/globals.d.ts', '/use2.ts'] },
-		{ name: '/standalone.ts', hash: fakeHash('const c = 42;'), deps: ['/standalone.ts'] },
-	]);
-	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
-	check('globals.d.ts affected (own change)', affected.has('/globals.d.ts'));
-	check('use1.ts affected (dep changed)', affected.has('/use1.ts'));
-	check('use2.ts affected (dep changed)', affected.has('/use2.ts'));
+	const oldBP = inc.reconstructOldBuilder(ts, captured, hostShim);
+	check('reconstruct produced an oldBP', !!oldBP);
+	const builder2 = ts.createSemanticDiagnosticsBuilderProgram(
+		program2,
+		{ createHash: ts.sys.createHash },
+		oldBP as ts.SemanticDiagnosticsBuilderProgram,
+	);
+	const affected = affectedFileNames(builder2);
 	check(
-		'standalone.ts NOT affected (no globals.d.ts in deps)',
-		!affected.has('/standalone.ts'),
+		'identical program → no user files affected',
+		!affected.has('/a.ts') && !affected.has('/b.ts'),
+		`got affected: ${[...affected].join(', ')}`,
 	);
 }
 
-// ── Test 6: new file (in current, not prev) → affected ──────────────────
+// ── Test 3: round-trip catches edits to imported file ───────────────────
 {
-	const program = buildProgram({
-		'/old.ts': 'const o = 1;',
-		'/new.ts': 'const n = 2;',
+	const program1 = buildProgram({
+		'/a.ts': 'export const x: number = 1;',
+		'/b.ts': "import { x } from './a'; export const y = x + 1;",
 	});
-	const prev = makeState([
-		{ name: '/old.ts', hash: fakeHash('const o = 1;'), deps: ['/old.ts'] },
-	]);
-	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
-	check('new.ts affected (newly added)', affected.has('/new.ts'));
-	check('old.ts NOT affected (unchanged)', !affected.has('/old.ts'));
-}
-
-// ── Test 7: removed file → its consumers are affected ───────────────────
-//
-// /removed.ts is gone. /still-here.ts had it in deps. The consumer
-// must re-check because its type info may have changed (import error,
-// missing export, etc.).
-{
-	const program = buildProgram({
-		'/still-here.ts': 'const z = 3;',
-	});
-	const prev = makeState([
-		{ name: '/removed.ts', hash: fakeHash('export const r = 1;'), deps: ['/removed.ts'] },
-		{ name: '/still-here.ts', hash: fakeHash('const z = 3;'), deps: ['/removed.ts', '/still-here.ts'] },
-	]);
-	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
-	check(
-		'still-here.ts affected (dep removed)',
-		affected.has('/still-here.ts'),
-		'consumer must re-check when a transitive dep disappears',
+	const builder1 = ts.createSemanticDiagnosticsBuilderProgram(
+		program1,
+		{ createHash: ts.sys.createHash },
 	);
+	affectedFileNames(builder1);
+	const captured = inc.captureIncrementalState(builder1)!;
+
+	// /a.ts changes its public type — should propagate to /b.ts.
+	const program2 = buildProgram({
+		'/a.ts': 'export const x: string = "1";',
+		'/b.ts': "import { x } from './a'; export const y = x + 1;",
+	});
+	const oldBP = inc.reconstructOldBuilder(ts, captured, hostShim);
+	const builder2 = ts.createSemanticDiagnosticsBuilderProgram(
+		program2,
+		{ createHash: ts.sys.createHash },
+		oldBP as ts.SemanticDiagnosticsBuilderProgram,
+	);
+	const affected = affectedFileNames(builder2);
+	check('a.ts affected', affected.has('/a.ts'));
+	check('b.ts affected (importer of a.ts)', affected.has('/b.ts'));
 }
 
-// ── Test 8: independent file change doesn't false-positive ──────────────
-//
-// File A has dep file C. C is unchanged. A's content unchanged. Even
-// though something else (D) changed, A is unaffected.
+// ── Test 4: undefined prev → cold start (oldBP undefined) ───────────────
 {
-	const program = buildProgram({
-		'/a.ts': 'const x = 1;',
-		'/c.ts': 'const c = 1;',
-		'/d.ts': 'const d = 99;',  // changed
-	});
-	const prev = makeState([
-		{ name: '/a.ts', hash: fakeHash('const x = 1;'), deps: ['/c.ts', '/a.ts'] },
-		{ name: '/c.ts', hash: fakeHash('const c = 1;'), deps: ['/c.ts'] },
-		{ name: '/d.ts', hash: fakeHash('const d = 1;'), deps: ['/d.ts'] },
-	]);
-	const affected = inc.computeAffectedFiles(prev, program, fakeHash);
-	check('a.ts NOT affected (deps unchanged, own unchanged)', !affected.has('/a.ts'));
-	check('d.ts affected (own content changed)', affected.has('/d.ts'));
-	check('c.ts NOT affected', !affected.has('/c.ts'));
+	const oldBP = inc.reconstructOldBuilder(ts, undefined, hostShim);
+	check('undefined prev → undefined oldBP', oldBP === undefined);
+}
+
+// ── Test 5: schema version mismatch → cold start ────────────────────────
+{
+	const stale = { version: 'v0', tsBuildInfoText: '' };
+	const oldBP = inc.reconstructOldBuilder(ts, stale as any, hostShim);
+	check('version mismatch → undefined oldBP', oldBP === undefined);
+}
+
+// ── Test 6: corrupted tsBuildInfoText → cold start ──────────────────────
+{
+	const corrupted = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: '{garbage' };
+	const oldBP = inc.reconstructOldBuilder(ts, corrupted, hostShim);
+	check('corrupted text → undefined oldBP', oldBP === undefined);
 }
 
 // ── Done ────────────────────────────────────────────────────────────────
