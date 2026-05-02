@@ -200,14 +200,14 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	}
 }
 
-// ── Test 6: --incremental accepted, doesn't break the lint pass ─────────
+// ── Test 6: incrementalState always persisted (layer 2 default-on) ─────
 {
 	const dir = makeFixture();
 	try {
-		const r = runCli(dir, '--incremental');
-		check('--incremental run produced diagnostic', r.stdout.includes('no-console'));
+		const r = runCli(dir);
+		check('default run produced diagnostic', r.stdout.includes('no-console'));
 		const data = readCacheForFixture(dir) as any;
-		check('cache written under --incremental', !!data);
+		check('cache written', !!data);
 		check(
 			'incrementalState persisted to cache file',
 			!!data?.incrementalState && typeof data.incrementalState.tsBuildInfoText === 'string'
@@ -265,18 +265,18 @@ function markerLineCount(markerPath: string): number {
 	return fs.readFileSync(markerPath, 'utf8').split('\n').filter(Boolean).length;
 }
 
-// ── Test 7 (layer 2): --incremental skips type-aware rule on warm run ───
+// ── Test 7 (layer 2): warm run skips type-aware rule (cache hit) ────────
 {
 	const { dir, markerPath } = makeTypeAwareFixture();
 	try {
-		runCli(dir, '--incremental');
+		runCli(dir);
 		const afterCold = markerLineCount(markerPath);
-		check('cold --incremental ran rule once', afterCold === 1);
+		check('cold ran rule once', afterCold === 1);
 
-		runCli(dir, '--incremental');
+		runCli(dir);
 		const afterWarm = markerLineCount(markerPath);
 		check(
-			'warm --incremental did NOT re-run rule (layer 2 cache hit)',
+			'warm did NOT re-run rule (layer 2 cache hit)',
 			afterWarm === 1,
 			`expected 1 marker line, got ${afterWarm}`,
 		);
@@ -295,7 +295,7 @@ function markerLineCount(markerPath: string): number {
 {
 	const { dir, markerPath, ambient } = makeTypeAwareFixture();
 	try {
-		runCli(dir, '--incremental');
+		runCli(dir);
 		check('cold ran rule once', markerLineCount(markerPath) === 1);
 
 		// Mutate the ambient declaration. fixture.ts's text doesn't change.
@@ -303,7 +303,7 @@ function markerLineCount(markerPath: string): number {
 		const t = new Date(Date.now() + 60_000);
 		fs.utimesSync(ambient, t, t);
 
-		runCli(dir, '--incremental');
+		runCli(dir);
 		check(
 			'ambient edit forced fixture.ts re-lint (layer 2 invalidation)',
 			markerLineCount(markerPath) === 2,
@@ -311,7 +311,7 @@ function markerLineCount(markerPath: string): number {
 		);
 
 		// And the cache should re-hit again on the next warm run.
-		runCli(dir, '--incremental');
+		runCli(dir);
 		check(
 			'warm after ambient edit cache-hits again',
 			markerLineCount(markerPath) === 2,
@@ -322,18 +322,22 @@ function markerLineCount(markerPath: string): number {
 	}
 }
 
-// ── Test 9 (layer 2): without --incremental, type-aware rule always runs ─
+// ── Test 9 (--force): type-aware rule re-runs every time ────────────────
+//
+// `--force` is the opt-out from layer 2. It skips the cache load, so
+// the linter starts cold every invocation — the type-aware rule has
+// no prev state to cache-hit against and runs fresh.
 {
 	const { dir, markerPath } = makeTypeAwareFixture();
 	try {
-		runCli(dir);
-		check('cold ran rule once (no --incremental)', markerLineCount(markerPath) === 1);
+		runCli(dir, '--force');
+		check('first --force ran rule once', markerLineCount(markerPath) === 1);
 
-		runCli(dir);
+		runCli(dir, '--force');
 		check(
-			'warm without --incremental re-ran type-aware rule (no layer 2)',
+			'second --force re-ran type-aware rule',
 			markerLineCount(markerPath) === 2,
-			`expected 2 marker lines, got ${markerLineCount(markerPath)} — type-aware rules without layer 2 are not cached`,
+			`expected 2 marker lines, got ${markerLineCount(markerPath)} — --force should bypass layer 2`,
 		);
 	}
 	finally {

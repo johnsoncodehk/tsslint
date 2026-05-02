@@ -26,11 +26,12 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
-// Layer 2 state. When `--incremental` is on, we wrap the LS program in
-// a SemanticDiagnosticsBuilderProgram (with the prev session's BP fed
-// back via TS's internal `tsBuildInfoText` round-trip) and walk
-// affected files once. cache-flow consults this set to decide whether
-// type-aware rules can be cache-hit. `undefined` = layer 1 only.
+// Layer 2 state. We wrap the LS program in a SemanticDiagnostics-
+// BuilderProgram (with the prev session's BP fed back via TS's internal
+// `tsBuildInfoText` round-trip) and walk affected files once. cache-
+// flow consults this set to decide whether type-aware rules can be
+// cache-hit. Always populated under the CLI; `--force` opts out by
+// clearing the loaded cache, not by disabling layer 2.
 let affectedFiles: Set<string> | undefined;
 // The current session's BP — held until end-of-project so we can
 // capture its updated buildinfo text for next session's persistence.
@@ -134,7 +135,6 @@ async function setup(
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
 	initialTypeAwareRules: readonly string[],
-	incremental: boolean,
 	prevIncrementalState: IncrementalState | undefined,
 ): Promise<true | string> {
 	let config: config.Config | config.Config[];
@@ -187,24 +187,18 @@ async function setup(
 	projectVersion++;
 	typeRootsVersion++;
 	fileNames = _fileNames;
-	options = plugins.some(plugin => plugin.typescript?.extraFileExtensions.length)
-		? {
-			..._options,
-			allowNonTsExtensions: true,
-		}
-		: _options;
-	if (incremental) {
-		// Internal API path: BuilderProgram.emitBuildInfo only produces
-		// content when these options are set. Override the user's values
-		// (their own tsc --incremental builds shouldn't share this file).
-		// The synthetic path is never written to disk — captured via
-		// writeFile callback at end of session.
-		options = {
-			...options,
-			incremental: true,
-			tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
-		};
-	}
+	// Internal API path: BuilderProgram.emitBuildInfo only produces
+	// content when these options are set. Override the user's values
+	// (their own tsc --incremental builds shouldn't share this file).
+	// The synthetic path is never written to disk — captured via
+	// writeFile callback at end of session.
+	options = {
+		...(plugins.some(plugin => plugin.typescript?.extraFileExtensions.length)
+			? { ..._options, allowNonTsExtensions: true }
+			: _options),
+		incremental: true,
+		tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
+	};
 	linter = core.createLinter(
 		{
 			languageService: linterLanguageService,
@@ -217,7 +211,7 @@ async function setup(
 		initialTypeAwareRules,
 	);
 
-	if (incremental) {
+	{
 		const program = linterLanguageService.getProgram()!;
 		// Reconstruct the prev session's BP from cached buildinfo text,
 		// fall through to undefined on any failure (cold-start path).
@@ -262,10 +256,6 @@ async function setup(
 			// Should not reach here — `ignoreSourceFile` always returns true.
 		}
 	}
-	else {
-		affectedFiles = undefined;
-		currentBuilder = undefined;
-	}
 
 	return true;
 }
@@ -283,16 +273,14 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
 
-	// Layer 2 signals.
-	//   incremental: master switch. drives whether type-aware entries
-	//                are written this session (so the NEXT one can read).
+	// Layer 2 signals. `incremental` is always true under the CLI now —
+	// `--force` opts out by clearing the loaded cache instead.
 	//   typeAwareUnaffected: file's deps haven't moved since prev session,
 	//                so cached type-aware entries can be reused this run.
 	//                False in --fix mode — fixes mutate files mid-session
 	//                and invalidate the setup-time affected snapshot for
 	//                downstream files; we'd rather re-run than serve stale.
-	const incremental = !!affectedFiles;
-	const typeAwareUnaffected = incremental && !fix && !affectedFiles!.has(fileName);
+	const typeAwareUnaffected = !fix && !affectedFiles!.has(fileName);
 
 	if (fix) {
 		// Drop cache entries for rules that registered a fix in any prior
@@ -306,7 +294,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 		}
 		const program = linterLanguageService.getProgram()!;
 		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
-			incremental,
+			incremental: true,
 			typeAwareUnaffected,
 		});
 		shouldCheck = false;
@@ -348,7 +336,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	if (shouldCheck) {
 		const program = linterLanguageService.getProgram()!;
 		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
-			incremental,
+			incremental: true,
 			typeAwareUnaffected,
 		});
 	}

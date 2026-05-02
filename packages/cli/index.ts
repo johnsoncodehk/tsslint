@@ -27,7 +27,6 @@ Options:
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
   --force                       Ignore cache (re-lint every file)
-  --incremental                 Cache type-aware rule results across sessions (layer 2)
   --failures-only               Only print errors and messages (skip warnings and suggestions)
   -h, --help                    Show this help message
 
@@ -350,7 +349,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			project.rawFileNames,
 			project.options,
 			Object.keys(project.cacheData.ruleModes),
-			process.argv.includes('--incremental'),
 			project.cacheData.incrementalState,
 		);
 		if (setupResult !== true) {
