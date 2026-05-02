@@ -19,18 +19,18 @@ export function lintWithCache(
 	fileMtime: number,
 	program: ts.Program,
 	options?: {
-		// Layer 2 signal from the caller: BuilderProgram (or equivalent
-		// affected-file tracker) says this file's type-relevant inputs —
-		// own text, transitive imports, ambient declarations, lib —
-		// haven't moved since the cached entries were written.
-		//
-		// When true: type-aware rules behave like syntactic ones for
-		// caching purposes — cached entries can be reused, and fresh runs
-		// write back. When false / undefined: type-aware rules are always
-		// re-run and their cache entries deleted. The default is the
-		// safe one because mtime alone can't catch ambient-declaration
-		// edits that change a file's effective types without touching
-		// its text.
+		// Layer 2 master switch. Driven by the CLI's `--incremental` flag.
+		// When false / undefined (mode A), type-aware rules are never
+		// cached: their entries are deleted after each run. When true
+		// (mode B), type-aware rules' fresh results get persisted so the
+		// next session can reuse them.
+		incremental?: boolean;
+		// File-level signal: the caller's affected-file tracker says this
+		// file's type-relevant inputs (own text, transitive deps incl.
+		// ambient `.d.ts` and lib) haven't moved since the prior session.
+		// Only meaningful in mode B. When true, type-aware rule cache
+		// entries are also cache-hit-eligible (skipped via the run's
+		// skipRules set).
 		typeAwareUnaffected?: boolean;
 	},
 ): ts.DiagnosticWithLocation[] {
@@ -42,7 +42,8 @@ export function lintWithCache(
 		fileCache.rules = {};
 	}
 
-	const typeAwareCanCache = options?.typeAwareUnaffected === true;
+	const writeTypeAware = options?.incremental === true;
+	const trustTypeAwareCache = writeTypeAware && options?.typeAwareUnaffected === true;
 	const typeAware = linter.getTypeAwareRules();
 
 	// Cache hit only when this file has a cache entry for the rule AND
@@ -53,7 +54,7 @@ export function lintWithCache(
 	const skipRules = new Set<string>();
 	for (const ruleId of Object.keys(fileCache.rules)) {
 		if (typeAware.has(ruleId)) {
-			if (typeAwareCanCache) {
+			if (trustTypeAwareCache) {
 				skipRules.add(ruleId);
 			}
 			// else: re-run; the post-rule write path will overwrite the
@@ -77,13 +78,14 @@ export function lintWithCache(
 	}
 
 	// For every rule that actually ran (i.e. not skipped), update the
-	// cache. Type-aware rules without the unaffected signal: delete any
-	// entry, never write. Otherwise (syntactic, or type-aware with
-	// signal): write the freshly-computed entry.
+	// cache. Type-aware rules in mode A (no `incremental`): delete any
+	// entry, never write. Otherwise (syntactic, or type-aware in mode
+	// B): write the freshly-computed entry — even if the file was
+	// considered affected this run, so the next session can cache-hit.
 	const allRuleIds = Object.keys(linter.getRules(fileName));
 	for (const ruleId of allRuleIds) {
 		if (skipRules.has(ruleId)) continue;
-		if (typeAware.has(ruleId) && !typeAwareCanCache) {
+		if (typeAware.has(ruleId) && !writeTypeAware) {
 			delete fileCache.rules[ruleId];
 			continue;
 		}

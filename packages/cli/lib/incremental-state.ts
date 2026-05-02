@@ -29,15 +29,42 @@ export const INCREMENTAL_STATE_VERSION = 'v1';
 
 // Build a fresh state snapshot from a wrapped BuilderProgram, to save
 // alongside the cache file. Called after the lint pass.
+//
+// Ambient `.d.ts` files (`declare global`, top-level declarations in
+// script-mode `.d.ts`) don't show up in any specific file's
+// `getAllDependencies` because no file explicitly imports them — they
+// connect via global scope. To catch their edits, we treat every
+// non-lib script-mode `.d.ts` as a universal dep. Lib files are
+// excluded because they only change when `compilerOptions.lib` flips,
+// which already invalidates the entire cache file via the path key.
 export function buildIncrementalState(
 	builder: ts.BuilderProgram,
 	hash: (s: string) => string,
 ): IncrementalState {
+	const program = builder.getProgram();
+	// Detect script-mode .d.ts via `externalModuleIndicator`. Field is
+	// internal in TS's public types but stable at runtime — used by tools
+	// across the ecosystem (typescript-eslint, ts-morph) for the same
+	// reason. The public `ts.isExternalModule` check would work too but
+	// is itself runtime-only at the API level.
+	const ambients: string[] = [];
+	for (const sf of program.getSourceFiles()) {
+		if (
+			sf.isDeclarationFile
+			&& !(sf as { externalModuleIndicator?: unknown }).externalModuleIndicator
+			&& !program.isSourceFileDefaultLibrary(sf)
+		) {
+			ambients.push(sf.fileName);
+		}
+	}
+
 	const files: IncrementalState['files'] = {};
-	for (const sf of builder.getProgram().getSourceFiles()) {
+	for (const sf of program.getSourceFiles()) {
+		const deps = new Set(builder.getAllDependencies(sf));
+		for (const a of ambients) deps.add(a);
 		files[sf.fileName] = {
 			contentHash: hash(sf.text),
-			deps: [...builder.getAllDependencies(sf)],
+			deps: [...deps],
 		};
 	}
 	return { version: INCREMENTAL_STATE_VERSION, files };

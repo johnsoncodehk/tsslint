@@ -296,7 +296,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	const cache = emptyFileCache(1);
 	const program = ctx.languageService.getProgram()!;
 
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { typeAwareUnaffected: true });
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
 	check('first call ran (no cache yet)', runs === 1);
 	check(
 		'type-aware entry written under unaffected signal',
@@ -326,8 +326,8 @@ function emptyFileCache(mtime = 0): FileCache {
 	const cache = emptyFileCache(1);
 	const program = ctx.languageService.getProgram()!;
 
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { typeAwareUnaffected: true });
-	const second = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { typeAwareUnaffected: true });
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
+	const second = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
 	check('second call did NOT re-run type-aware rule', runs === 1);
 	check('second call still produced 1 diagnostic', second.length === 1);
 	check(
@@ -358,7 +358,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	const program = ctx.languageService.getProgram()!;
 
 	// Mode B: write the entry.
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { typeAwareUnaffected: true });
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
 	check('layer-2 first run cached the entry', !!cache.rules['typed']);
 
 	// Mode A (default): file is affected. Re-run, drop entry.
@@ -367,7 +367,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	check('mode-A re-run dropped the entry', !cache.rules['typed']);
 }
 
-// ── Test 13 (layer 2): default (no signal) preserves mode-A semantics ────
+// ── Test 13 (layer 2): mode A (no incremental) never caches type-aware ──
 {
 	const ctx = makeContext({ '/a.ts': 'const x = 1;' });
 	const config: Config = {
@@ -382,13 +382,49 @@ function emptyFileCache(mtime = 0): FileCache {
 	const cache = emptyFileCache(1);
 	const program = ctx.languageService.getProgram()!;
 
-	// No options arg passed at all — should behave like mode A.
+	// No options arg → mode A. Type-aware rules never cached.
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
 	check('default (no options) does NOT cache type-aware', !cache.rules['typed']);
 
-	// Explicit false also defaults to mode A.
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { typeAwareUnaffected: false });
-	check('explicit false does NOT cache type-aware', !cache.rules['typed']);
+	// Explicit incremental=false also mode A.
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: false });
+	check('explicit incremental=false does NOT cache type-aware', !cache.rules['typed']);
+}
+
+// ── Test 14 (layer 2): incremental writes type-aware even when affected ─
+//
+// First-time-ever (cold session) under --incremental: there's no prior
+// entry to hit, but we must still WRITE one so the next session can
+// hit. The split between "trust cache" (typeAwareUnaffected) and "write
+// cache" (incremental) is the gate.
+{
+	const ctx = makeContext({ '/a.ts': 'const x = 1;' });
+	let runs = 0;
+	const config: Config = {
+		rules: {
+			typed: ((rctx: RuleContext) => {
+				runs++;
+				void rctx.program;
+				rctx.report('typed', 0, 1);
+			}),
+		},
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const program = ctx.languageService.getProgram()!;
+
+	// Cold session under --incremental: no prev state, file is "affected"
+	// (unaffected=false). Must run AND write entry.
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, {
+		incremental: true,
+		typeAwareUnaffected: false,
+	});
+	check('cold session ran the rule', runs === 1);
+	check(
+		'cold session under --incremental wrote type-aware entry',
+		!!cache.rules['typed'],
+		'entry needed for next session to cache-hit',
+	);
 }
 
 // ── Done ────────────────────────────────────────────────────────────────

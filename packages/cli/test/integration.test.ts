@@ -206,8 +206,134 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	try {
 		const r = runCli(dir, '--incremental');
 		check('--incremental run produced diagnostic', r.stdout.includes('no-console'));
-		const data = readCacheForFixture(dir);
+		const data = readCacheForFixture(dir) as any;
 		check('cache written under --incremental', !!data);
+		check(
+			'incrementalState persisted to cache file',
+			!!data?.incrementalState && Object.keys(data.incrementalState.files).length > 0,
+		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// Build a fixture that exercises layer 2: a type-aware rule that touches
+// `program` (classifies it type-aware via the runtime probe), writes the
+// linted file's name to a marker file each time it runs, and reports a
+// fixed diagnostic. The marker file's line count tells us how many times
+// the rule actually executed across runs.
+function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: string; fixture: string } {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-l2-')));
+	const markerPath = path.join(dir, 'marker.log');
+	const rulePath = path.join(dir, 'type-aware-rule.ts');
+	fs.writeFileSync(rulePath,
+		`import { defineRule } from '${repoRoot}/packages/config/index.js';\n`
+			+ `import * as fs from 'fs';\n`
+			+ `export default defineRule(({ file, program, report }) => {\n`
+			+ `  void program.getTypeChecker();\n`
+			+ `  fs.appendFileSync(${JSON.stringify(markerPath)}, file.fileName + '\\n');\n`
+			+ `  report('type-aware ran', 0, 1);\n`
+			+ `});\n`,
+	);
+	fs.writeFileSync(path.join(dir, 'tsconfig.json'),
+		JSON.stringify({
+			compilerOptions: {
+				target: 'es2020', module: 'esnext', moduleResolution: 'bundler',
+				strict: true, skipLibCheck: true,
+			},
+			include: ['*.ts', '*.d.ts'],
+		}),
+	);
+	fs.writeFileSync(path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig } from '${repoRoot}/packages/config/index.js';\n`
+			+ `export default defineConfig({\n`
+			+ `  include: ['fixture.ts'],\n`
+			+ `  rules: { 'type-aware': (await import('${rulePath}')) },\n`
+			+ `});\n`,
+	);
+	const ambient = path.join(dir, 'ambient.d.ts');
+	const fixture = path.join(dir, 'fixture.ts');
+	fs.writeFileSync(ambient, `declare const FOO: number;\n`);
+	fs.writeFileSync(fixture, `const z = FOO;\nexport {};\n`);
+	return { dir, markerPath, ambient, fixture };
+}
+
+function markerLineCount(markerPath: string): number {
+	if (!fs.existsSync(markerPath)) return 0;
+	return fs.readFileSync(markerPath, 'utf8').split('\n').filter(Boolean).length;
+}
+
+// ── Test 7 (layer 2): --incremental skips type-aware rule on warm run ───
+{
+	const { dir, markerPath } = makeTypeAwareFixture();
+	try {
+		runCli(dir, '--incremental');
+		const afterCold = markerLineCount(markerPath);
+		check('cold --incremental ran rule once', afterCold === 1);
+
+		runCli(dir, '--incremental');
+		const afterWarm = markerLineCount(markerPath);
+		check(
+			'warm --incremental did NOT re-run rule (layer 2 cache hit)',
+			afterWarm === 1,
+			`expected 1 marker line, got ${afterWarm}`,
+		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 8 (layer 2): editing ambient.d.ts forces re-run on dependent ───
+//
+// The killer case for layer 2: ambient declaration edits don't move the
+// dependent file's mtime, so layer 1 alone would silently serve stale
+// type-aware results. The cross-session affected-file diff (content hash
+// + transitive deps) must catch this.
+{
+	const { dir, markerPath, ambient } = makeTypeAwareFixture();
+	try {
+		runCli(dir, '--incremental');
+		check('cold ran rule once', markerLineCount(markerPath) === 1);
+
+		// Mutate the ambient declaration. fixture.ts's text doesn't change.
+		fs.writeFileSync(ambient, `declare const FOO: string;\n`);
+		const t = new Date(Date.now() + 60_000);
+		fs.utimesSync(ambient, t, t);
+
+		runCli(dir, '--incremental');
+		check(
+			'ambient edit forced fixture.ts re-lint (layer 2 invalidation)',
+			markerLineCount(markerPath) === 2,
+			`expected 2 marker lines after ambient edit, got ${markerLineCount(markerPath)}`,
+		);
+
+		// And the cache should re-hit again on the next warm run.
+		runCli(dir, '--incremental');
+		check(
+			'warm after ambient edit cache-hits again',
+			markerLineCount(markerPath) === 2,
+		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 9 (layer 2): without --incremental, type-aware rule always runs ─
+{
+	const { dir, markerPath } = makeTypeAwareFixture();
+	try {
+		runCli(dir);
+		check('cold ran rule once (no --incremental)', markerLineCount(markerPath) === 1);
+
+		runCli(dir);
+		check(
+			'warm without --incremental re-ran type-aware rule (no layer 2)',
+			markerLineCount(markerPath) === 2,
+			`expected 2 marker lines, got ${markerLineCount(markerPath)} — type-aware rules without layer 2 are not cached`,
+		);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });

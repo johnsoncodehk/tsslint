@@ -228,11 +228,16 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
 
-	// Layer 2 signal: file is unaffected if --incremental is on AND the
-	// BuilderProgram pass at setup didn't list this file. In `--fix` mode
-	// we conservatively force `false` — fixes mutate files mid-session,
-	// invalidating the setup-time affected snapshot for downstream files.
-	const typeAwareUnaffected = !!affectedFiles && !fix && !affectedFiles.has(fileName);
+	// Layer 2 signals.
+	//   incremental: master switch. drives whether type-aware entries
+	//                are written this session (so the NEXT one can read).
+	//   typeAwareUnaffected: file's deps haven't moved since prev session,
+	//                so cached type-aware entries can be reused this run.
+	//                False in --fix mode — fixes mutate files mid-session
+	//                and invalidate the setup-time affected snapshot for
+	//                downstream files; we'd rather re-run than serve stale.
+	const incremental = !!affectedFiles;
+	const typeAwareUnaffected = incremental && !fix && !affectedFiles!.has(fileName);
 
 	if (fix) {
 		// Drop cache entries for rules that registered a fix in any prior
@@ -246,6 +251,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 		}
 		const program = linterLanguageService.getProgram()!;
 		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+			incremental,
 			typeAwareUnaffected,
 		});
 		shouldCheck = false;
@@ -287,6 +293,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	if (shouldCheck) {
 		const program = linterLanguageService.getProgram()!;
 		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+			incremental,
 			typeAwareUnaffected,
 		});
 	}
