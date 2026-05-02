@@ -180,6 +180,66 @@ const hostShim = {
 	check('corrupted text → undefined oldBP', oldBP === undefined);
 }
 
+// ── Test 7: TS missing internal load APIs → cold start ──────────────────
+// Future TS could rename `getBuildInfo` /
+// `createBuilderProgramUsingIncrementalBuildInfo`. We must not throw.
+{
+	const tsStub = new Proxy(ts, {
+		get(target, prop) {
+			if (prop === 'getBuildInfo' || prop === 'createBuilderProgramUsingIncrementalBuildInfo') {
+				return undefined;
+			}
+			return (target as any)[prop];
+		},
+	}) as typeof ts;
+	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'irrelevant' };
+	let threw = false;
+	let result: ts.BuilderProgram | undefined;
+	try {
+		result = inc.reconstructOldBuilder(tsStub, valid, hostShim);
+	}
+	catch {
+		threw = true;
+	}
+	check('missing load APIs → no throw', !threw);
+	check('missing load APIs → undefined result', result === undefined);
+}
+
+// ── Test 8: BuilderProgram missing emitBuildInfo → undefined, no throw ──
+// The save path must degrade gracefully if a future TS removes or
+// renames `BuilderProgram.emitBuildInfo`. Otherwise the CLI throws
+// after lint completes, losing all results.
+{
+	const fakeBuilder = {} as ts.BuilderProgram;
+	let threw = false;
+	let result: ReturnType<typeof inc.captureIncrementalState>;
+	try {
+		result = inc.captureIncrementalState(fakeBuilder);
+	}
+	catch {
+		threw = true;
+	}
+	check('missing emitBuildInfo → no throw', !threw);
+	check('missing emitBuildInfo → undefined state', result === undefined);
+}
+
+// ── Test 9: emitBuildInfo throws → undefined, no throw out ──────────────
+{
+	const throwingBuilder = {
+		emitBuildInfo() { throw new Error('simulated TS internal failure'); },
+	} as unknown as ts.BuilderProgram;
+	let threw = false;
+	let result: ReturnType<typeof inc.captureIncrementalState>;
+	try {
+		result = inc.captureIncrementalState(throwingBuilder);
+	}
+	catch {
+		threw = true;
+	}
+	check('throwing emitBuildInfo → no throw', !threw);
+	check('throwing emitBuildInfo → undefined state', result === undefined);
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

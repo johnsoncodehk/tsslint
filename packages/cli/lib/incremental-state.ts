@@ -95,17 +95,28 @@ export function reconstructOldBuilder(
 // `emitBuildInfo` is on the runtime `BuilderProgram` shape but not in
 // the public d.ts (the public surface only exposes the `emit()` family
 // that wraps it). Cast through `unknown` to silence the type error;
-// runtime is stable.
+// runtime is stable across TS 5.x → 6.x.
+//
+// On any failure (method missing on a future TS, or it threw), return
+// undefined. Caller persists no `incrementalState` for this session,
+// which means next session starts cold for layer 2 — the layer-1
+// mtime cache still works. Wrong miss > wrong hit.
 export function captureIncrementalState(
 	builder: ts.BuilderProgram,
 ): IncrementalState | undefined {
-	let captured: string | undefined;
 	const builderAny = builder as unknown as {
-		emitBuildInfo(writeFile: (path: string, content: string) => void): void;
+		emitBuildInfo?(writeFile: (path: string, content: string) => void): void;
 	};
-	builderAny.emitBuildInfo((_path, content) => {
-		captured = content;
-	});
+	if (typeof builderAny.emitBuildInfo !== 'function') return undefined;
+	let captured: string | undefined;
+	try {
+		builderAny.emitBuildInfo((_path, content) => {
+			captured = content;
+		});
+	}
+	catch {
+		return undefined;
+	}
 	if (!captured) return undefined;
 	return { version: INCREMENTAL_STATE_VERSION, tsBuildInfoText: captured };
 }
