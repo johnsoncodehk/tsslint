@@ -10,7 +10,7 @@
 
 import type * as ts from 'typescript';
 import type { Linter } from '@tsslint/core';
-import type { FileCache, SerializedDiagnostic, SerializedRelatedInfo } from './cache.js';
+import type { FileCache, SerializedDiagnostic } from './cache.js';
 
 export function lintWithCache(
 	linter: Linter,
@@ -18,6 +18,21 @@ export function lintWithCache(
 	fileCache: FileCache,
 	fileMtime: number,
 	program: ts.Program,
+	options?: {
+		// Layer 2 signal from the caller: BuilderProgram (or equivalent
+		// affected-file tracker) says this file's type-relevant inputs —
+		// own text, transitive imports, ambient declarations, lib —
+		// haven't moved since the cached entries were written.
+		//
+		// When true: type-aware rules behave like syntactic ones for
+		// caching purposes — cached entries can be reused, and fresh runs
+		// write back. When false / undefined: type-aware rules are always
+		// re-run and their cache entries deleted. The default is the
+		// safe one because mtime alone can't catch ambient-declaration
+		// edits that change a file's effective types without touching
+		// its text.
+		typeAwareUnaffected?: boolean;
+	},
 ): ts.DiagnosticWithLocation[] {
 	// File mtime is the layer-1 invalidation key. Anything that touched
 	// the file's text drops every cached rule entry — those rules will
@@ -27,16 +42,24 @@ export function lintWithCache(
 		fileCache.rules = {};
 	}
 
-	// Cache hit only when:
-	//   - this file has a cache entry for the rule
-	//   - the rule has not been classified type-aware (in any past or
-	//     current session)
-	// Type-aware rules' entries get cleaned up below regardless of
-	// whether they're stale from before this fix shipped.
+	const typeAwareCanCache = options?.typeAwareUnaffected === true;
 	const typeAware = linter.getTypeAwareRules();
+
+	// Cache hit only when this file has a cache entry for the rule AND
+	// either:
+	//   - the rule is not classified type-aware, or
+	//   - the rule is type-aware but the caller signalled the file is
+	//     unaffected this session (layer 2)
 	const skipRules = new Set<string>();
 	for (const ruleId of Object.keys(fileCache.rules)) {
-		if (!typeAware.has(ruleId)) {
+		if (typeAware.has(ruleId)) {
+			if (typeAwareCanCache) {
+				skipRules.add(ruleId);
+			}
+			// else: re-run; the post-rule write path will overwrite the
+			// stale entry or delete it depending on classification.
+		}
+		else {
 			skipRules.add(ruleId);
 		}
 	}
@@ -54,12 +77,13 @@ export function lintWithCache(
 	}
 
 	// For every rule that actually ran (i.e. not skipped), update the
-	// cache. Type-aware rules: delete any entry, never write. Syntactic:
-	// write the freshly-computed entry.
+	// cache. Type-aware rules without the unaffected signal: delete any
+	// entry, never write. Otherwise (syntactic, or type-aware with
+	// signal): write the freshly-computed entry.
 	const allRuleIds = Object.keys(linter.getRules(fileName));
 	for (const ruleId of allRuleIds) {
 		if (skipRules.has(ruleId)) continue;
-		if (typeAware.has(ruleId)) {
+		if (typeAware.has(ruleId) && !typeAwareCanCache) {
 			delete fileCache.rules[ruleId];
 			continue;
 		}
@@ -100,7 +124,7 @@ function serializeDiagnostic(d: ts.DiagnosticWithLocation): SerializedDiagnostic
 		relatedInformation: relatedInformation?.map(info => ({
 			...info,
 			file: info.file ? { fileName: info.file.fileName } : undefined,
-		})) as SerializedRelatedInfo[] | undefined,
+		})),
 	};
 }
 
