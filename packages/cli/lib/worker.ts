@@ -231,18 +231,35 @@ async function setup(
 			oldBuilder as ts.SemanticDiagnosticsBuilderProgram | undefined,
 		);
 		affectedFiles = new Set();
-		while (true) {
-			const result = currentBuilder.getSemanticDiagnosticsOfNextAffectedFile();
-			if (!result) break;
-			const a = result.affected;
+		// Drain via `ignoreSourceFile` to record affected files without
+		// computing their semantic diagnostics. The diagnostic compute is
+		// the expensive part of the drain (~38s on Dify cold) — TSSLint's
+		// own lint pass triggers semantic checks lazily for the symbols
+		// type-aware rules query, not the full program. Doing it twice
+		// wasted time. The graph-propagation work (which determines
+		// affected via reference graph) still runs internally.
+		// `ignoreSourceFile`'s typed param is SourceFile only, but TS
+		// internally calls it with the same `affected` value the iterator
+		// returns — which can also be a Program (whole-program affected
+		// path, e.g. lib flip). Handle both shapes at runtime via the
+		// `fileName` discriminator.
+		const recordAffected = (sf: ts.SourceFile) => {
+			const a = sf as ts.SourceFile | ts.Program;
 			if ('fileName' in a) {
-				affectedFiles.add(a.fileName);
+				affectedFiles!.add(a.fileName);
 			}
 			else {
-				// Whole-program affected — config option flip, lib change.
-				// Conservatively mark every source file affected.
-				for (const sf of a.getSourceFiles()) affectedFiles.add(sf.fileName);
+				for (const f of a.getSourceFiles()) affectedFiles!.add(f.fileName);
 			}
+			return true;
+		};
+		while (true) {
+			const result = currentBuilder.getSemanticDiagnosticsOfNextAffectedFile(
+				undefined,
+				recordAffected,
+			);
+			if (!result) break;
+			// Should not reach here — `ignoreSourceFile` always returns true.
 		}
 	}
 	else {
