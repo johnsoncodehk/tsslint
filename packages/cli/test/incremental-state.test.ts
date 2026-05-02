@@ -183,7 +183,7 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 // ── Test 5: schema version mismatch → cold start ────────────────────────
 {
 	const stale = { version: 'v0', tsBuildInfoText: '' };
-	const oldBP = inc.reconstructOldBuilder(ts, stale as any, hostShim);
+	const oldBP = inc.reconstructOldBuilder(ts, stale, hostShim);
 	check('version mismatch → undefined oldBP', oldBP === undefined);
 }
 
@@ -207,7 +207,7 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 			}
 			return (target as any)[prop];
 		},
-	}) as typeof ts;
+	});
 	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'irrelevant' };
 	const { result, stderr } = captureStderr(() => {
 		try { return inc.reconstructOldBuilder(tsStub, valid, hostShim); }
@@ -265,7 +265,7 @@ function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
 			}
 			return (target as any)[prop];
 		},
-	}) as typeof ts;
+	});
 	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'whatever' };
 	const { result, stderr } = captureStderr(() => {
 		try { return inc.reconstructOldBuilder(throwingTs, valid, hostShim); }

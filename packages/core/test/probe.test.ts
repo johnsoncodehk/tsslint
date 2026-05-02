@@ -57,7 +57,7 @@ function makeContext(files: Record<string, string>) {
 		rules: {
 			plain: ((rctx: RuleContext) => {
 				rctx.report('plain', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -76,7 +76,7 @@ function makeContext(files: Record<string, string>) {
 			'type-aware': ((rctx: RuleContext) => {
 				void rctx.program;
 				rctx.report('typed', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -102,7 +102,7 @@ function makeContext(files: Record<string, string>) {
 					void rctx.program;
 				}
 				rctx.report('hi', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -124,7 +124,7 @@ function makeContext(files: Record<string, string>) {
 			'syntactic-now': ((rctx: RuleContext) => {
 				ran++;
 				rctx.report('hi', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => [], ['syntactic-now']);
@@ -145,7 +145,7 @@ function makeContext(files: Record<string, string>) {
 			r: ((rctx: RuleContext) => {
 				void rctx.program;
 				rctx.report('x', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);

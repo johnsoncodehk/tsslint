@@ -54,7 +54,7 @@ function makeContext(files: Record<string, string>) {
 			r: ((rctx: RuleContext) => {
 				runs++;
 				rctx.report('hi', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -73,11 +73,11 @@ function makeContext(files: Record<string, string>) {
 			a: ((rctx: RuleContext) => {
 				aRuns++;
 				rctx.report('a', 0, 1);
-			}) as any,
+			}),
 			b: ((rctx: RuleContext) => {
 				bRuns++;
 				rctx.report('b', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -96,7 +96,7 @@ function makeContext(files: Record<string, string>) {
 			r: ((rctx: RuleContext) => {
 				runs++;
 				rctx.report('x', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
@@ -116,7 +116,7 @@ function makeContext(files: Record<string, string>) {
 			r: ((rctx: RuleContext) => {
 				void rctx.program;
 				rctx.report('x', 0, 1);
-			}) as any,
+			}),
 		},
 	};
 	// Seed as type-aware. Then skip the rule. Classification persists.
@@ -132,10 +132,10 @@ function makeContext(files: Record<string, string>) {
 		rules: {
 			fixable: ((rctx: RuleContext) => {
 				rctx.report('fix me', 0, 1).withFix('apply', () => []);
-			}) as any,
+			}),
 			plain: ((rctx: RuleContext) => {
 				rctx.report('plain', 1, 2);
-			}) as any,
+			}),
 		},
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
