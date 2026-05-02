@@ -28,6 +28,7 @@ Options:
   --fix                         Apply automatic fixes
   --force                       Ignore cache (re-lint every file)
   --failures-only               Only print errors and messages (skip warnings and suggestions)
+  --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
   -h, --help                    Show this help message
 
 Examples:
@@ -326,6 +327,45 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	}
 
 	renderer.summary(summaryLines);
+
+	if (process.argv.includes('--list-rules')) {
+		// Derive from the per-project cacheData: any rule with an entry
+		// in `ruleModes` is type-aware; the rest came up as cached
+		// entries on per-file maps without being classified, so they
+		// ran as syntactic. Output is grouped + alphabetised so it's
+		// stable across runs and easy to diff.
+		const typeAware = new Set<string>();
+		const syntactic = new Set<string>();
+		for (const project of projects) {
+			for (const ruleId of Object.keys(project.cacheData.ruleModes)) {
+				typeAware.add(ruleId);
+			}
+			for (const file of Object.values(project.cacheData.files)) {
+				for (const ruleId of Object.keys(file.rules)) {
+					if (!project.cacheData.ruleModes[ruleId]) syntactic.add(ruleId);
+				}
+			}
+		}
+		// A rule classified type-aware in any project is type-aware
+		// everywhere — drop it from the syntactic side to avoid
+		// double-listing the same id across multi-project runs.
+		for (const id of typeAware) syntactic.delete(id);
+
+		const lines: string[] = [];
+		if (typeAware.size) {
+			lines.push(colors.cyan('type-aware') + colors.gray(` (${typeAware.size})`));
+			for (const id of [...typeAware].sort()) lines.push('  ' + id);
+		}
+		if (syntactic.size) {
+			lines.push(colors.cyan('syntactic') + colors.gray(` (${syntactic.size})`));
+			for (const id of [...syntactic].sort()) lines.push('  ' + id);
+		}
+		if (!lines.length) {
+			lines.push(colors.gray('(no rules ran)'));
+		}
+		for (const l of lines) renderer.info(l);
+	}
+
 	renderer.dispose();
 
 	process.exit((errors || messages || configErrors) ? 1 : 0);
