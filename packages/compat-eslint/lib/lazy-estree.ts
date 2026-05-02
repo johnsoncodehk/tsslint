@@ -1208,21 +1208,25 @@ function convertChildAsPattern(child: ts.Node | undefined | null, parent: LazyNo
 // SHAPES only handles the mechanical pattern. Subclasses with custom
 // constructor logic (range mutation, modifier-derived flags, conditional
 // branching) stay hand-written. The factory + table live alongside.
-type ShapeSlotConvert =
+type ShapeSlotConvert<TsT> =
 	| 'convertChild'
 	| 'convertChildren'
 	| 'convertChildAsPattern'
-	| ((tsValue: any, parent: LazyNode) => any);
-interface ShapeSlotDef {
-	tsField: string;
+	| ((tsValue: TsT, parent: LazyNode) => any);
+interface ShapeSlotDef<TsParent, TsT = any> {
+	// Constrain to keys whose value type extends ts.Node | NodeArray | undefined.
+	// Catches typos at the migration call site.
+	tsField: keyof TsParent & string;
 	// How to convert the TS value. Defaults to 'convertChild'. Function
 	// option lets a slot route through a custom converter (e.g.
 	// `convertTypeAnnotation` for synthetic-wrapper-bearing type slots).
-	via?: ShapeSlotConvert;
+	via?: ShapeSlotConvert<TsT>;
 	// Value when the TS field is null/undefined. Default 'null' — matches
 	// typescript-estree for value slots (`init`, `expression`, etc.).
 	// Type-position slots (`returnType`, `typeAnnotation`, `typeArguments`)
-	// use 'undefined' to match eager's distinction.
+	// use 'undefined' to match eager's distinction. Note: even
+	// `whenAbsent: 'undefined'` slots become own-properties on the instance
+	// (eager emits them via Object.keys round-trip parity).
 	whenAbsent?: 'null' | 'undefined';
 }
 // Sentinel: cache value "not yet computed". Lets factory-built getters
@@ -1232,9 +1236,9 @@ interface ShapeSlotDef {
 // distinction (e.g. ReturnStatement.argument is null when bare; type
 // annotations are undefined when absent).
 const SHAPE_UNSET = Symbol('shape-unset');
-interface ShapeDef {
+interface ShapeDef<TsT extends ts.Node = ts.Node> {
 	type: string;
-	slots: Record<string, ShapeSlotDef>;
+	slots: Record<string, ShapeSlotDef<TsT>>;
 	// Static field defaults — values that don't depend on the TS node
 	// (e.g. UnaryExpression's `operator: 'void'`, ObjectPattern's
 	// `decorators: EMPTY_ARRAY`). Per-instance assignment matches how
@@ -1243,10 +1247,10 @@ interface ShapeDef {
 	// Per-instance callback that derives readonly fields from the TS
 	// node (e.g. computing `delegate` from `asteriskToken`,
 	// `const`/`in`/`out` from modifier flags). Applied after super().
-	consts?: (tsNode: any) => Record<string, unknown>;
+	consts?: (tsNode: TsT) => Record<string, unknown>;
 }
 const SHAPE_CLASSES = new Map<ts.SyntaxKind, new(tsNode: ts.Node, parent: LazyNode | null) => LazyNode>();
-function defineShape(tsKind: ts.SyntaxKind, def: ShapeDef): void {
+function defineShape<TsT extends ts.Node>(tsKind: ts.SyntaxKind, def: ShapeDef<TsT>): void {
 	const slotKeys = Object.keys(def.slots).map(g => '_' + g);
 	const cls = class extends LazyNode {
 		readonly type = def.type;
@@ -1256,7 +1260,7 @@ function defineShape(tsKind: ts.SyntaxKind, def: ShapeDef): void {
 			// "not yet read" from "computed and got null/undefined".
 			for (const k of slotKeys) (this as any)[k] = SHAPE_UNSET;
 			if (def.defaults) Object.assign(this, def.defaults);
-			if (def.consts) Object.assign(this, def.consts(tsNode));
+			if (def.consts) Object.assign(this, def.consts(tsNode as TsT));
 		}
 	};
 	for (const [getter, slot] of Object.entries(def.slots)) {
@@ -1282,7 +1286,7 @@ function defineShape(tsKind: ts.SyntaxKind, def: ShapeDef): void {
 // Mechanical shapes. Each entry replaces a hand-written subclass +
 // switch case below. Pure declarative form — top-down getters AND
 // bottom-up materialise both consult this single registry.
-defineShape(SK.IfStatement, {
+defineShape<ts.IfStatement>(SK.IfStatement, {
 	type: 'IfStatement',
 	slots: {
 		test: { tsField: 'expression' },
@@ -1290,27 +1294,27 @@ defineShape(SK.IfStatement, {
 		alternate: { tsField: 'elseStatement' },
 	},
 });
-defineShape(SK.ReturnStatement, {
+defineShape<ts.ReturnStatement>(SK.ReturnStatement, {
 	type: 'ReturnStatement',
 	slots: { argument: { tsField: 'expression' } },
 });
-defineShape(SK.UnionType, {
+defineShape<ts.UnionTypeNode>(SK.UnionType, {
 	type: 'TSUnionType',
 	slots: { types: { tsField: 'types', via: 'convertChildren' } },
 });
-defineShape(SK.IntersectionType, {
+defineShape<ts.IntersectionTypeNode>(SK.IntersectionType, {
 	type: 'TSIntersectionType',
 	slots: { types: { tsField: 'types', via: 'convertChildren' } },
 });
-defineShape(SK.ArrayType, {
+defineShape<ts.ArrayTypeNode>(SK.ArrayType, {
 	type: 'TSArrayType',
 	slots: { elementType: { tsField: 'elementType' } },
 });
-defineShape(SK.TypeLiteral, {
+defineShape<ts.TypeLiteralNode>(SK.TypeLiteral, {
 	type: 'TSTypeLiteral',
 	slots: { members: { tsField: 'members', via: 'convertChildren' } },
 });
-defineShape(SK.IndexedAccessType, {
+defineShape<ts.IndexedAccessTypeNode>(SK.IndexedAccessType, {
 	type: 'TSIndexedAccessType',
 	slots: {
 		objectType: { tsField: 'objectType' },
@@ -1319,28 +1323,28 @@ defineShape(SK.IndexedAccessType, {
 });
 // SK.LiteralType NOT migrated: convertLiteralType has a special case
 // for `null` (wraps NullKeyword as bare TSNullKeyword to match eager).
-defineShape(SK.QualifiedName, {
+defineShape<ts.QualifiedName>(SK.QualifiedName, {
 	type: 'TSQualifiedName',
 	slots: {
 		left: { tsField: 'left' },
 		right: { tsField: 'right' },
 	},
 });
-defineShape(SK.TypeAssertionExpression, {
+defineShape<ts.TypeAssertion>(SK.TypeAssertionExpression, {
 	type: 'TSTypeAssertion',
 	slots: {
 		expression: { tsField: 'expression' },
 		typeAnnotation: { tsField: 'type' },
 	},
 });
-defineShape(SK.SatisfiesExpression, {
+defineShape<ts.SatisfiesExpression>(SK.SatisfiesExpression, {
 	type: 'TSSatisfiesExpression',
 	slots: {
 		expression: { tsField: 'expression' },
 		typeAnnotation: { tsField: 'type' },
 	},
 });
-defineShape(SK.ConditionalType, {
+defineShape<ts.ConditionalTypeNode>(SK.ConditionalType, {
 	type: 'TSConditionalType',
 	slots: {
 		checkType: { tsField: 'checkType' },
@@ -1349,15 +1353,15 @@ defineShape(SK.ConditionalType, {
 		falseType: { tsField: 'falseType' },
 	},
 });
-defineShape(SK.InferType, {
+defineShape<ts.InferTypeNode>(SK.InferType, {
 	type: 'TSInferType',
 	slots: { typeParameter: { tsField: 'typeParameter' } },
 });
-defineShape(SK.ModuleBlock, {
+defineShape<ts.ModuleBlock>(SK.ModuleBlock, {
 	type: 'TSModuleBlock',
 	slots: { body: { tsField: 'statements', via: 'convertChildren' } },
 });
-defineShape(SK.Decorator, {
+defineShape<ts.Decorator>(SK.Decorator, {
 	type: 'Decorator',
 	slots: { expression: { tsField: 'expression' } },
 });
@@ -1366,11 +1370,11 @@ defineShape(SK.Decorator, {
 // Same for ArrayLiteralExpression. SHAPES table is a static dispatch
 // (TS kind → ESTree class); pattern-context dispatch stays in
 // convertChildInner's switch.
-defineShape(SK.ThrowStatement, {
+defineShape<ts.ThrowStatement>(SK.ThrowStatement, {
 	type: 'ThrowStatement',
 	slots: { argument: { tsField: 'expression' } },
 });
-defineShape(SK.TryStatement, {
+defineShape<ts.TryStatement>(SK.TryStatement, {
 	type: 'TryStatement',
 	slots: {
 		block: { tsField: 'tryBlock' },
@@ -1378,21 +1382,21 @@ defineShape(SK.TryStatement, {
 		finalizer: { tsField: 'finallyBlock' },
 	},
 });
-defineShape(SK.WhileStatement, {
+defineShape<ts.WhileStatement>(SK.WhileStatement, {
 	type: 'WhileStatement',
 	slots: {
 		test: { tsField: 'expression' },
 		body: { tsField: 'statement' },
 	},
 });
-defineShape(SK.DoStatement, {
+defineShape<ts.DoStatement>(SK.DoStatement, {
 	type: 'DoWhileStatement',
 	slots: {
 		test: { tsField: 'expression' },
 		body: { tsField: 'statement' },
 	},
 });
-defineShape(SK.ForStatement, {
+defineShape<ts.ForStatement>(SK.ForStatement, {
 	type: 'ForStatement',
 	slots: {
 		init: { tsField: 'initializer' },
@@ -1401,30 +1405,30 @@ defineShape(SK.ForStatement, {
 		body: { tsField: 'statement' },
 	},
 });
-defineShape(SK.LabeledStatement, {
+defineShape<ts.LabeledStatement>(SK.LabeledStatement, {
 	type: 'LabeledStatement',
 	slots: {
 		label: { tsField: 'label' },
 		body: { tsField: 'statement' },
 	},
 });
-defineShape(SK.AwaitExpression, {
+defineShape<ts.AwaitExpression>(SK.AwaitExpression, {
 	type: 'AwaitExpression',
 	slots: { argument: { tsField: 'expression' } },
 });
-defineShape(SK.TupleType, {
+defineShape<ts.TupleTypeNode>(SK.TupleType, {
 	type: 'TSTupleType',
 	slots: { elementTypes: { tsField: 'elements', via: 'convertChildren' } },
 });
-defineShape(SK.OptionalType, {
+defineShape<ts.OptionalTypeNode>(SK.OptionalType, {
 	type: 'TSOptionalType',
 	slots: { typeAnnotation: { tsField: 'type' } },
 });
-defineShape(SK.RestType, {
+defineShape<ts.RestTypeNode>(SK.RestType, {
 	type: 'TSRestType',
 	slots: { typeAnnotation: { tsField: 'type' } },
 });
-defineShape(SK.ConditionalExpression, {
+defineShape<ts.ConditionalExpression>(SK.ConditionalExpression, {
 	type: 'ConditionalExpression',
 	slots: {
 		test: { tsField: 'condition' },
@@ -1432,15 +1436,15 @@ defineShape(SK.ConditionalExpression, {
 		alternate: { tsField: 'whenFalse' },
 	},
 });
-defineShape(SK.NonNullExpression, {
+defineShape<ts.NonNullExpression>(SK.NonNullExpression, {
 	type: 'TSNonNullExpression',
 	slots: { expression: { tsField: 'expression' } },
 });
-defineShape(SK.ExternalModuleReference, {
+defineShape<ts.ExternalModuleReference>(SK.ExternalModuleReference, {
 	type: 'TSExternalModuleReference',
 	slots: { expression: { tsField: 'expression' } },
 });
-defineShape(SK.ImportAttribute, {
+defineShape<ts.ImportAttribute>(SK.ImportAttribute, {
 	type: 'ImportAttribute',
 	slots: {
 		key: { tsField: 'name' },
@@ -1448,9 +1452,9 @@ defineShape(SK.ImportAttribute, {
 	},
 });
 // Constructor-derived fields (`consts`):
-defineShape(SK.TypeParameter, {
+defineShape<ts.TypeParameterDeclaration>(SK.TypeParameter, {
 	type: 'TSTypeParameter',
-	consts: (tn: ts.TypeParameterDeclaration) => ({
+	consts: (tn) => ({
 		const: !!tn.modifiers?.some(m => m.kind === SK.ConstKeyword),
 		in: !!tn.modifiers?.some(m => m.kind === SK.InKeyword),
 		out: !!tn.modifiers?.some(m => m.kind === SK.OutKeyword),
@@ -1461,67 +1465,67 @@ defineShape(SK.TypeParameter, {
 		default: { tsField: 'default' },
 	},
 });
-defineShape(SK.YieldExpression, {
+defineShape<ts.YieldExpression>(SK.YieldExpression, {
 	type: 'YieldExpression',
-	consts: (tn: ts.YieldExpression) => ({ delegate: !!tn.asteriskToken }),
+	consts: (tn) => ({ delegate: !!tn.asteriskToken }),
 	slots: { argument: { tsField: 'expression' } },
 });
 // Pure mechanical with `defaults`:
-defineShape(SK.AsExpression, {
+defineShape<ts.AsExpression>(SK.AsExpression, {
 	type: 'TSAsExpression',
 	slots: {
 		expression: { tsField: 'expression' },
 		typeAnnotation: { tsField: 'type' },
 	},
 });
-defineShape(SK.ExpressionStatement, {
+defineShape<ts.ExpressionStatement>(SK.ExpressionStatement, {
 	type: 'ExpressionStatement',
 	defaults: { directive: undefined },
 	slots: { expression: { tsField: 'expression' } },
 });
-defineShape(SK.TypeQuery, {
+defineShape<ts.TypeQueryNode>(SK.TypeQuery, {
 	type: 'TSTypeQuery',
 	defaults: { typeArguments: undefined },
 	slots: { exprName: { tsField: 'exprName' } },
 });
-defineShape(SK.NamespaceImport, {
+defineShape<ts.NamespaceImport>(SK.NamespaceImport, {
 	type: 'ImportNamespaceSpecifier',
 	slots: { local: { tsField: 'name' } },
 });
-defineShape(SK.ObjectBindingPattern, {
+defineShape<ts.ObjectBindingPattern>(SK.ObjectBindingPattern, {
 	type: 'ObjectPattern',
 	defaults: { decorators: EMPTY_ARRAY, optional: false, typeAnnotation: undefined },
 	slots: { properties: { tsField: 'elements', via: 'convertChildren' } },
 });
 // Unary expressions — TS has separate kinds for void/typeof/delete; ESTree
 // folds them into UnaryExpression with the operator literal baked in.
-defineShape(SK.VoidExpression, {
+defineShape<ts.VoidExpression>(SK.VoidExpression, {
 	type: 'UnaryExpression',
 	defaults: { operator: 'void', prefix: true },
 	slots: { argument: { tsField: 'expression' } },
 });
-defineShape(SK.DeleteExpression, {
+defineShape<ts.DeleteExpression>(SK.DeleteExpression, {
 	type: 'UnaryExpression',
 	defaults: { operator: 'delete', prefix: true },
 	slots: { argument: { tsField: 'expression' } },
 });
-defineShape(SK.TypeOfExpression, {
+defineShape<ts.TypeOfExpression>(SK.TypeOfExpression, {
 	type: 'UnaryExpression',
 	defaults: { operator: 'typeof', prefix: true },
 	slots: { argument: { tsField: 'expression' } },
 });
 // Shapes that use custom converter funcs + whenAbsent='undefined' for
 // type-position slots:
-defineShape(SK.TypeReference, {
+defineShape<ts.TypeReferenceNode>(SK.TypeReference, {
 	type: 'TSTypeReference',
 	slots: {
 		typeName: { tsField: 'typeName' },
 		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
 	},
 });
-defineShape(SK.ConstructorType, {
+defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 	type: 'TSConstructorType',
-	consts: (tn: ts.ConstructorTypeNode) => ({
+	consts: (tn) => ({
 		abstract: !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword),
 	}),
 	slots: {
@@ -1530,9 +1534,9 @@ defineShape(SK.ConstructorType, {
 		returnType: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
 	},
 });
-defineShape(SK.ModuleDeclaration, {
+defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 	type: 'TSModuleDeclaration',
-	consts: (tn: ts.ModuleDeclaration) => ({
+	consts: (tn) => ({
 		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
 		global: !!(tn.flags & ts.NodeFlags.GlobalAugmentation),
 		kind: tn.flags & ts.NodeFlags.Namespace ? 'namespace' : 'module',
@@ -1542,9 +1546,9 @@ defineShape(SK.ModuleDeclaration, {
 		body: { tsField: 'body' },
 	},
 });
-defineShape(SK.EnumMember, {
+defineShape<ts.EnumMember>(SK.EnumMember, {
 	type: 'TSEnumMember',
-	consts: (tn: ts.EnumMember) => ({
+	consts: (tn) => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
 	}),
 	slots: {
@@ -1552,9 +1556,9 @@ defineShape(SK.EnumMember, {
 		initializer: { tsField: 'initializer' },
 	},
 });
-defineShape(SK.TypeAliasDeclaration, {
+defineShape<ts.TypeAliasDeclaration>(SK.TypeAliasDeclaration, {
 	type: 'TSTypeAliasDeclaration',
-	consts: (tn: ts.TypeAliasDeclaration) => ({
+	consts: (tn) => ({
 		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
 	}),
 	slots: {
@@ -1563,9 +1567,9 @@ defineShape(SK.TypeAliasDeclaration, {
 		typeAnnotation: { tsField: 'type' },
 	},
 });
-defineShape(SK.ImportEqualsDeclaration, {
+defineShape<ts.ImportEqualsDeclaration>(SK.ImportEqualsDeclaration, {
 	type: 'TSImportEqualsDeclaration',
-	consts: (tn: ts.ImportEqualsDeclaration) => ({
+	consts: (tn) => ({
 		importKind: tn.isTypeOnly ? 'type' : 'value',
 	}),
 	slots: {
@@ -1573,10 +1577,10 @@ defineShape(SK.ImportEqualsDeclaration, {
 		moduleReference: { tsField: 'moduleReference' },
 	},
 });
-defineShape(SK.IndexSignature, {
+defineShape<ts.IndexSignatureDeclaration>(SK.IndexSignature, {
 	type: 'TSIndexSignature',
 	defaults: { accessibility: undefined },
-	consts: (tn: ts.IndexSignatureDeclaration) => ({
+	consts: (tn) => ({
 		readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
 		static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
 	}),
@@ -1585,10 +1589,10 @@ defineShape(SK.IndexSignature, {
 		typeAnnotation: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
 	},
 });
-defineShape(SK.PropertyAssignment, {
+defineShape<ts.PropertyAssignment>(SK.PropertyAssignment, {
 	type: 'Property',
 	defaults: { kind: 'init', method: false, optional: false, shorthand: false },
-	consts: (tn: ts.PropertyAssignment) => ({
+	consts: (tn) => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
 	}),
 	slots: {
