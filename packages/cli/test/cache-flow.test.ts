@@ -498,7 +498,90 @@ function emptyFileCache(mtime = 0): FileCache {
 	check('warm replay drops the marked one', diags[0]?.messageText === 'plain');
 }
 
-// ── Test 17: NO_CACHE marker doesn't leak through serialisation ─────────
+// ── Test 17 (regression): mixed-mode rule, early-return file replays sound
+//
+// A rule that file-shape-filters before reading `program` will, for the
+// early-returning file, finish without touching the probe. Verify the
+// resulting cache entry replays correctly across sessions even after the
+// rule is globally classified type-aware (because some OTHER file did
+// touch program). The early-return path's output is a deterministic
+// function of file text alone — replaying it on a warm hit should match
+// what re-running the rule would produce.
+{
+	const ctx = makeContext({
+		'/skip.ts': 'const x = 1;',
+		'/check.ts': 'const y = 2;',
+	});
+	const config: Config = {
+		rules: {
+			'mixed-mode': ((rctx: RuleContext) => {
+				if (rctx.file.fileName === '/skip.ts') return;
+				void rctx.program;
+				rctx.report('typed', 0, 1);
+			}),
+		},
+	};
+
+	// ── Session 1: cold, both files lint — process the early-return file
+	// FIRST so the rule isn't yet type-aware when its entry gets written.
+	const linter1 = core.createLinter(ctx, '/', config, () => []);
+	const program1 = ctx.languageService.getProgram()!;
+	const cacheSkip: FileCache = emptyFileCache(1);
+	const cacheCheck: FileCache = emptyFileCache(1);
+	cacheFlow.lintWithCache(linter1, '/skip.ts', cacheSkip, 1, program1);
+	cacheFlow.lintWithCache(linter1, '/check.ts', cacheCheck, 1, program1);
+
+	check(
+		'session 1: rule classified type-aware after both files',
+		linter1.getTypeAwareRules().has('mixed-mode'),
+	);
+	check(
+		'session 1: early-return file got an entry (rule wasn\'t yet type-aware at write time)',
+		!!cacheSkip.rules['mixed-mode'],
+	);
+	check(
+		'session 1: early-return file\'s entry has 0 diagnostics (rule reported nothing)',
+		cacheSkip.rules['mixed-mode']?.diagnostics.length === 0,
+	);
+
+	// ── Session 2: rule pre-classified type-aware (from session 1).
+	// Both files unchanged. typeAwareUnaffected=true → both should
+	// cache-hit and replay cleanly.
+	const linter2 = core.createLinter(ctx, '/', config, () => [], ['mixed-mode']);
+	const program2 = ctx.languageService.getProgram()!;
+	let earlyReturnRanInSession2 = false;
+	const config2: Config = {
+		rules: {
+			'mixed-mode': ((rctx: RuleContext) => {
+				earlyReturnRanInSession2 = true;
+				if (rctx.file.fileName === '/skip.ts') return;
+				void rctx.program;
+				rctx.report('typed', 0, 1);
+			}),
+		},
+	};
+	const linterMonitored = core.createLinter(ctx, '/', config2, () => [], ['mixed-mode']);
+	const session2Skip = cacheFlow.lintWithCache(
+		linterMonitored,
+		'/skip.ts',
+		cacheSkip,
+		1,
+		program2,
+		{ incremental: true, typeAwareUnaffected: true },
+	);
+	check(
+		'session 2: warm hit on early-return file replays empty diagnostics',
+		session2Skip.length === 0,
+	);
+	check(
+		'session 2: rule body did NOT execute on early-return file (cache skipped it)',
+		!earlyReturnRanInSession2,
+		'cache-hit means we skip the rule entirely — body shouldn\'t run',
+	);
+	void linter2; // type-only ref; linterMonitored is the one we observe
+}
+
+// ── Test 18: NO_CACHE marker doesn't leak through serialisation ─────────
 //
 // Symbol-keyed property must stay invisible to JSON.stringify and to
 // `{...spread}` so the on-disk cache stays clean.

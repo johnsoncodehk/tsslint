@@ -137,7 +137,57 @@ function makeContext(files: Record<string, string>) {
 	);
 }
 
-// ── Test 5: getTypeAwareRules returns live set; mutations not allowed ────
+// ── Test 5 (regression): early-return-then-type-aware, reverse order ────
+//
+// User concern: a rule that file-shape-filters before reading
+// `program` will be classified syntactic for the early-returning
+// invocation. Verify that running the EARLY-RETURN file FIRST doesn't
+// permanently mis-classify the rule — the next file that does touch
+// program flips classification to type-aware mid-session, and it
+// stays sticky.
+{
+	const ctx = makeContext({
+		'/skip.ts': 'const x = 1;',
+		'/check.ts': 'const y = 2;',
+	});
+	const config: Config = {
+		rules: {
+			'mixed-mode': ((rctx: RuleContext) => {
+				// Cheap pre-filter — only files matching the predicate
+				// take the type-aware branch. /skip.ts early-returns.
+				if (rctx.file.fileName === '/skip.ts') return;
+				void rctx.program;
+				rctx.report('typed', 0, 1);
+			}),
+		},
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+
+	// Process the early-return file FIRST.
+	linter.lint('/skip.ts');
+	check(
+		'after early-return file: not yet classified',
+		!linter.getTypeAwareRules().has('mixed-mode'),
+		'sanity — probe correctly observed no program access on /skip.ts',
+	);
+
+	// Then the type-aware file. Classification flips mid-session.
+	linter.lint('/check.ts');
+	check(
+		'after type-aware file: classified type-aware',
+		linter.getTypeAwareRules().has('mixed-mode'),
+	);
+
+	// And it stays — re-linting the early-return file doesn't unclassify.
+	linter.lint('/skip.ts');
+	check(
+		'classification sticks even after a subsequent early-return invocation',
+		linter.getTypeAwareRules().has('mixed-mode'),
+		'sticky semantics: a rule that has ever been observed touching program stays type-aware',
+	);
+}
+
+// ── Test 6: getTypeAwareRules returns live set; mutations not allowed ────
 {
 	const ctx = makeContext({ '/a.ts': 'const x = 1;' });
 	const config: Config = {
