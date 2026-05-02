@@ -19,6 +19,16 @@ let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
 let linterLanguageService!: ts.LanguageService;
+// Layer 2 state. When `--incremental` is on, we wrap the LS's program in
+// a SemanticDiagnosticsBuilderProgram and walk affected files once at
+// setup. cache-flow consults this set to decide whether type-aware rules
+// can be cache-hit. `undefined` here = layer 1 only (cache-flow's default
+// safe behavior — type-aware rules always re-run).
+//
+// Without cross-session BP state (tsbuildinfo), the first session sees
+// every file as affected on cold start; the wiring lands here so the
+// state-persistence work can plug in without touching cache-flow.
+let affectedFiles: Set<string> | undefined;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -106,6 +116,7 @@ async function setup(
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
 	initialTypeAwareRules: readonly string[],
+	incremental: boolean,
 ): Promise<true | string> {
 	let config: config.Config | config.Config[];
 	try {
@@ -175,13 +186,49 @@ async function setup(
 		initialTypeAwareRules,
 	);
 
+	affectedFiles = incremental ? computeAffectedFiles() : undefined;
+
 	return true;
+}
+
+// Wrap LS's program in a SemanticDiagnosticsBuilderProgram and drain the
+// affected-file iterator. Without an `oldProgram` (cross-session state
+// not yet persisted), every file counts as affected on cold runs — so
+// the returned set is large but correctness is preserved. cache-flow
+// consults `!affectedFiles.has(fileName)` for `typeAwareUnaffected`.
+function computeAffectedFiles(): Set<string> {
+	const program = linterLanguageService.getProgram()!;
+	const builder = ts.createSemanticDiagnosticsBuilderProgram(
+		program,
+		{ createHash: ts.sys.createHash },
+	);
+	const set = new Set<string>();
+	while (true) {
+		const result = builder.getSemanticDiagnosticsOfNextAffectedFile();
+		if (!result) break;
+		const a = result.affected;
+		if ('fileName' in a) {
+			set.add(a.fileName);
+		}
+		else {
+			// Whole-program affected — config option flip, lib change, etc.
+			// Conservatively mark every source file affected.
+			for (const sf of a.getSourceFiles()) set.add(sf.fileName);
+		}
+	}
+	return set;
 }
 
 function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {
 	let newSnapshot: ts.IScriptSnapshot | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
+
+	// Layer 2 signal: file is unaffected if --incremental is on AND the
+	// BuilderProgram pass at setup didn't list this file. In `--fix` mode
+	// we conservatively force `false` — fixes mutate files mid-session,
+	// invalidating the setup-time affected snapshot for downstream files.
+	const typeAwareUnaffected = !!affectedFiles && !fix && !affectedFiles.has(fileName);
 
 	if (fix) {
 		// Drop cache entries for rules that registered a fix in any prior
@@ -194,7 +241,9 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 			}
 		}
 		const program = linterLanguageService.getProgram()!;
-		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program);
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+			typeAwareUnaffected,
+		});
 		shouldCheck = false;
 
 		let fixes = linter
@@ -233,7 +282,9 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 
 	if (shouldCheck) {
 		const program = linterLanguageService.getProgram()!;
-		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program);
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+			typeAwareUnaffected,
+		});
 	}
 
 	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
