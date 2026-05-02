@@ -126,12 +126,29 @@ export function emptyCache(): CacheData {
 	return { version: CACHE_FORMAT_VERSION, ruleModes: {}, files: {} };
 }
 
+// Deep shape check. A corrupt `files` entry (wrong `mtime` type, missing
+// `rules` map) would otherwise pass the gate and crash the lint loop
+// later with a confusing TypeError. Cost of a single full traversal at
+// load time is negligible against the cost of a mid-lint crash.
 function isCacheData(x: unknown): x is CacheData {
 	if (typeof x !== 'object' || x === null) return false;
 	const o = x as Record<string, unknown>;
-	return typeof o.version === 'string'
-		&& typeof o.ruleModes === 'object' && o.ruleModes !== null
-		&& typeof o.files === 'object' && o.files !== null;
+	if (typeof o.version !== 'string') return false;
+	if (typeof o.ruleModes !== 'object' || o.ruleModes === null) return false;
+	if (typeof o.files !== 'object' || o.files === null) return false;
+	for (const v of Object.values(o.files as Record<string, unknown>)) {
+		if (typeof v !== 'object' || v === null) return false;
+		const f = v as Record<string, unknown>;
+		if (typeof f.mtime !== 'number') return false;
+		if (typeof f.rules !== 'object' || f.rules === null) return false;
+	}
+	if (o.incrementalState !== undefined) {
+		if (typeof o.incrementalState !== 'object' || o.incrementalState === null) return false;
+		const inc = o.incrementalState as Record<string, unknown>;
+		if (typeof inc.version !== 'string') return false;
+		if (typeof inc.tsBuildInfoText !== 'string') return false;
+	}
+	return true;
 }
 
 function getCacheFilePath(

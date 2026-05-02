@@ -259,6 +259,112 @@ function configWithMarker(marker: string): string {
 	check('no .tmp leaked after successful save', !tmpLeaked);
 }
 
+// ── Test 9: inner shape mismatch (corrupt file entry) → empty cache ─────
+//
+// isCacheData now validates `files[*]` entries deeply: a bad inner shape
+// (mtime is a string, rules is null) must reject the whole cache instead
+// of letting the load succeed and crashing later in the lint loop.
+{
+	const tsconfig = tmpFile('tsconfig9.json', '{}');
+	const config = configWithMarker('t9-' + Date.now());
+	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
+	let target: string | null = null;
+	const stack = [cacheRoot];
+	while (stack.length) {
+		const dir = stack.pop()!;
+		let entries: fs.Dirent[];
+		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+		catch { continue; }
+		for (const e of entries) {
+			const full = path.join(dir, e.name);
+			if (e.isDirectory()) stack.push(full);
+			else if (e.isFile() && full.endsWith('.cache.json')) {
+				try {
+					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
+					if (o.version === 'v2' && Object.keys(o.files).length === 0) {
+						target = full;
+						break;
+					}
+				}
+				catch { /* ignore */ }
+			}
+		}
+		if (target) break;
+	}
+	if (target) {
+		// mtime is a string, not a number — must reject.
+		const corrupt = {
+			version: 'v2',
+			ruleModes: {},
+			files: { '/x': { mtime: 'not-a-number', rules: {} } },
+		};
+		fs.writeFileSync(target, JSON.stringify(corrupt));
+		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+		check('inner mtime mismatch → empty cache', Object.keys(loaded.files).length === 0);
+
+		// rules is null — must also reject.
+		const corrupt2 = {
+			version: 'v2',
+			ruleModes: {},
+			files: { '/x': { mtime: 1, rules: null } },
+		};
+		fs.writeFileSync(target, JSON.stringify(corrupt2));
+		const loaded2 = cache.loadCache(tsconfig, config, [], '6.0.0');
+		check('inner rules null → empty cache', Object.keys(loaded2.files).length === 0);
+	}
+}
+
+// ── Test 10: incrementalState shape gate ────────────────────────────────
+//
+// `incrementalState` is optional, but if present must be a
+// `{version, tsBuildInfoText}` object. A stray `incrementalState: 42`
+// would otherwise sneak past and crash later when reconstructOldBuilder
+// reads `.tsBuildInfoText`.
+{
+	const tsconfig = tmpFile('tsconfig10.json', '{}');
+	const config = configWithMarker('t10-' + Date.now());
+	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
+	let target: string | null = null;
+	const stack = [cacheRoot];
+	while (stack.length) {
+		const dir = stack.pop()!;
+		let entries: fs.Dirent[];
+		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+		catch { continue; }
+		for (const e of entries) {
+			const full = path.join(dir, e.name);
+			if (e.isDirectory()) stack.push(full);
+			else if (e.isFile() && full.endsWith('.cache.json')) {
+				try {
+					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
+					if (o.version === 'v2' && Object.keys(o.files).length === 0) {
+						target = full;
+						break;
+					}
+				}
+				catch { /* ignore */ }
+			}
+		}
+		if (target) break;
+	}
+	if (target) {
+		const corrupt = { version: 'v2', ruleModes: {}, files: {}, incrementalState: 42 };
+		fs.writeFileSync(target, JSON.stringify(corrupt));
+		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+		check('incrementalState wrong type → empty cache', loaded.incrementalState === undefined);
+
+		const corrupt2 = {
+			version: 'v2', ruleModes: {}, files: {},
+			incrementalState: { version: 'v3' /* tsBuildInfoText missing */ },
+		};
+		fs.writeFileSync(target, JSON.stringify(corrupt2));
+		const loaded2 = cache.loadCache(tsconfig, config, [], '6.0.0');
+		check('incrementalState missing field → empty cache', loaded2.incrementalState === undefined);
+	}
+}
+
 // ── Cleanup ─────────────────────────────────────────────────────────────
 fs.rmSync(tmp, { recursive: true, force: true });
 
