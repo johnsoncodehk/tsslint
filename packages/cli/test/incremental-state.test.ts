@@ -85,6 +85,20 @@ const hostShim = {
 	getCurrentDirectory: () => '/',
 };
 
+// stderr capture helper for warning-path tests below.
+function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
+	const orig = process.stderr.write.bind(process.stderr);
+	let buf = '';
+	(process.stderr.write as any) = (chunk: any) => { buf += String(chunk); return true; };
+	try {
+		const result = fn();
+		return { result, stderr: buf };
+	}
+	finally {
+		(process.stderr.write as any) = orig;
+	}
+}
+
 // ── Test 1: captureIncrementalState produces text on a fresh BP ─────────
 {
 	const program = buildProgram({ '/a.ts': 'export const x: number = 1;' });
@@ -93,7 +107,7 @@ const hostShim = {
 		{ createHash: ts.sys.createHash },
 	);
 	affectedFileNames(builder); // drain
-	const state = inc.captureIncrementalState(builder);
+	const state = inc.captureIncrementalState(ts.version, builder);
 	check('state captured', !!state);
 	check('state version is v3', state?.version === inc.INCREMENTAL_STATE_VERSION);
 	check('tsBuildInfoText is non-empty', !!state && state.tsBuildInfoText.length > 0);
@@ -110,7 +124,7 @@ const hostShim = {
 		{ createHash: ts.sys.createHash },
 	);
 	affectedFileNames(builder1);
-	const captured = inc.captureIncrementalState(builder1)!;
+	const captured = inc.captureIncrementalState(ts.version, builder1)!;
 
 	const program2 = buildProgram({
 		'/a.ts': 'export const x: number = 1;',
@@ -142,7 +156,7 @@ const hostShim = {
 		{ createHash: ts.sys.createHash },
 	);
 	affectedFileNames(builder1);
-	const captured = inc.captureIncrementalState(builder1)!;
+	const captured = inc.captureIncrementalState(ts.version, builder1)!;
 
 	// /a.ts changes its public type — should propagate to /b.ts.
 	const program2 = buildProgram({
@@ -180,9 +194,11 @@ const hostShim = {
 	check('corrupted text → undefined oldBP', oldBP === undefined);
 }
 
-// ── Test 7: TS missing internal load APIs → cold start ──────────────────
+// ── Test 7: TS missing internal load APIs → cold start + warn ──────────
 // Future TS could rename `getBuildInfo` /
-// `createBuilderProgramUsingIncrementalBuildInfo`. We must not throw.
+// `createBuilderProgramUsingIncrementalBuildInfo`. We must not throw,
+// AND we must surface a stderr warning so users know type-aware cache
+// is silently disabled.
 {
 	const tsStub = new Proxy(ts, {
 		get(target, prop) {
@@ -193,51 +209,86 @@ const hostShim = {
 		},
 	}) as typeof ts;
 	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'irrelevant' };
-	let threw = false;
-	let result: ts.BuilderProgram | undefined;
-	try {
-		result = inc.reconstructOldBuilder(tsStub, valid, hostShim);
-	}
-	catch {
-		threw = true;
-	}
-	check('missing load APIs → no throw', !threw);
+	const { result, stderr } = captureStderr(() => {
+		try { return inc.reconstructOldBuilder(tsStub, valid, hostShim); }
+		catch { return 'THREW' as const; }
+	});
+	check('missing load APIs → no throw', result !== 'THREW');
 	check('missing load APIs → undefined result', result === undefined);
+	check('missing load APIs → warning printed', /warn/.test(stderr));
+	check('missing load APIs → warning names the missing API', /getBuildInfo/.test(stderr));
+	check('missing load APIs → warning names TS version', stderr.includes(ts.version));
 }
 
-// ── Test 8: BuilderProgram missing emitBuildInfo → undefined, no throw ──
+// ── Test 8: BuilderProgram missing emitBuildInfo → undefined + warn ────
 // The save path must degrade gracefully if a future TS removes or
 // renames `BuilderProgram.emitBuildInfo`. Otherwise the CLI throws
-// after lint completes, losing all results.
+// after lint completes, losing all results. Must also warn the user.
 {
 	const fakeBuilder = {} as ts.BuilderProgram;
-	let threw = false;
-	let result: ReturnType<typeof inc.captureIncrementalState>;
-	try {
-		result = inc.captureIncrementalState(fakeBuilder);
-	}
-	catch {
-		threw = true;
-	}
-	check('missing emitBuildInfo → no throw', !threw);
+	const { result, stderr } = captureStderr(() => {
+		try { return inc.captureIncrementalState(ts.version, fakeBuilder); }
+		catch { return 'THREW' as const; }
+	});
+	check('missing emitBuildInfo → no throw', result !== 'THREW');
 	check('missing emitBuildInfo → undefined state', result === undefined);
+	check('missing emitBuildInfo → warning printed', /warn/.test(stderr));
+	check('missing emitBuildInfo → warning names emitBuildInfo', /emitBuildInfo/.test(stderr));
 }
 
-// ── Test 9: emitBuildInfo throws → undefined, no throw out ──────────────
+// ── Test 9: emitBuildInfo throws → undefined + warn, no throw out ──────
 {
 	const throwingBuilder = {
 		emitBuildInfo() { throw new Error('simulated TS internal failure'); },
 	} as unknown as ts.BuilderProgram;
-	let threw = false;
-	let result: ReturnType<typeof inc.captureIncrementalState>;
-	try {
-		result = inc.captureIncrementalState(throwingBuilder);
-	}
-	catch {
-		threw = true;
-	}
-	check('throwing emitBuildInfo → no throw', !threw);
+	const { result, stderr } = captureStderr(() => {
+		try { return inc.captureIncrementalState(ts.version, throwingBuilder); }
+		catch { return 'THREW' as const; }
+	});
+	check('throwing emitBuildInfo → no throw', result !== 'THREW');
 	check('throwing emitBuildInfo → undefined state', result === undefined);
+	check('throwing emitBuildInfo → warning printed', /warn/.test(stderr));
+	check(
+		'throwing emitBuildInfo → warning includes underlying error',
+		/simulated TS internal failure/.test(stderr),
+	);
+}
+
+// ── Test 10: corrupted buildInfo on load throws inside getBuildInfo →
+// warn, return undefined. Distinct from Test 6 — TS itself may throw on
+// some corrupt inputs (vs returning undefined for others).
+{
+	const throwingTs = new Proxy(ts, {
+		get(target, prop) {
+			if (prop === 'getBuildInfo') {
+				return () => { throw new Error('synthetic parse failure'); };
+			}
+			return (target as any)[prop];
+		},
+	}) as typeof ts;
+	const valid = { version: inc.INCREMENTAL_STATE_VERSION, tsBuildInfoText: 'whatever' };
+	const { result, stderr } = captureStderr(() => {
+		try { return inc.reconstructOldBuilder(throwingTs, valid, hostShim); }
+		catch { return 'THREW' as const; }
+	});
+	check('throwing getBuildInfo → no throw', result !== 'THREW');
+	check('throwing getBuildInfo → undefined result', result === undefined);
+	check('throwing getBuildInfo → warning printed', /warn/.test(stderr));
+	check(
+		'throwing getBuildInfo → warning includes underlying error',
+		/synthetic parse failure/.test(stderr),
+	);
+}
+
+// ── Test 11: silent paths stay silent ──────────────────────────────────
+// Cold start (no prev) and version mismatch are normal, not an error
+// — must NOT print a warning.
+{
+	const { stderr: s1 } = captureStderr(() => inc.reconstructOldBuilder(ts, undefined, hostShim));
+	check('undefined prev → no warning', s1 === '');
+	const stale = { version: 'v0', tsBuildInfoText: '' };
+	const { stderr: s2 } = captureStderr(() => inc.reconstructOldBuilder(ts, stale as any, hostShim));
+	check('version mismatch → no warning', s2 === '');
 }
 
 // ── Done ────────────────────────────────────────────────────────────────

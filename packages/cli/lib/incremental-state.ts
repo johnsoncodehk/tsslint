@@ -63,6 +63,20 @@ export function asIncremental(ts: typeof import('typescript')): IncrementalAcces
 	return ts as unknown as IncrementalAccess;
 }
 
+// Warn the user that layer 2 cache is unavailable this session.
+// Goes to stderr (yellow) so it doesn't interleave with the
+// renderer's stdout output but stays visible by default. CI logs
+// stderr by default; users who pipe stderr to /dev/null know what
+// they signed up for.
+//
+// Each call site phrases its own reason — these are rare enough
+// that we don't need rate-limiting. A single CLI invocation can
+// emit at most one of each (load fails once at setup, save fails
+// once at end-of-project).
+function warn(msg: string): void {
+	process.stderr.write('\x1b[93mwarn\x1b[0m  ' + msg + '\n');
+}
+
 // Reconstruct an old BuilderProgram from a previously captured
 // `tsBuildInfoText`. Used as the `oldProgram` argument when creating
 // the current session's BP. Returns undefined on any deserialization
@@ -72,9 +86,23 @@ export function reconstructOldBuilder(
 	prev: IncrementalState | undefined,
 	host: { useCaseSensitiveFileNames(): boolean; getCurrentDirectory(): string },
 ): ts.BuilderProgram | undefined {
+	// Schema-version mismatch and "no prev cache" are normal cold-start
+	// paths (e.g. cache invalidated by config change, or first run);
+	// don't warn about either.
 	if (!prev || prev.version !== INCREMENTAL_STATE_VERSION) return undefined;
+	const api = asIncremental(ts);
+	if (
+		typeof api.getBuildInfo !== 'function'
+		|| typeof api.createBuilderProgramUsingIncrementalBuildInfo !== 'function'
+	) {
+		warn(
+			`TypeScript ${ts.version} is missing internal APIs `
+				+ `(getBuildInfo / createBuilderProgramUsingIncrementalBuildInfo). `
+				+ `Type-aware cache disabled — every type-aware rule will re-run from cold start.`,
+		);
+		return undefined;
+	}
 	try {
-		const api = asIncremental(ts);
 		const buildInfo = api.getBuildInfo(SYNTHETIC_BUILD_INFO_PATH, prev.tsBuildInfoText);
 		if (!buildInfo) return undefined;
 		return api.createBuilderProgramUsingIncrementalBuildInfo(
@@ -83,7 +111,11 @@ export function reconstructOldBuilder(
 			host,
 		);
 	}
-	catch {
+	catch (e) {
+		warn(
+			`Could not load previous incremental state on TypeScript ${ts.version}: `
+				+ `${(e as Error).message}. Type-aware cache will rebuild from cold start.`,
+		);
 		return undefined;
 	}
 }
@@ -97,24 +129,35 @@ export function reconstructOldBuilder(
 // that wraps it). Cast through `unknown` to silence the type error;
 // runtime is stable across TS 5.x → 6.x.
 //
-// On any failure (method missing on a future TS, or it threw), return
-// undefined. Caller persists no `incrementalState` for this session,
-// which means next session starts cold for layer 2 — the layer-1
-// mtime cache still works. Wrong miss > wrong hit.
+// On any failure (method missing on a future TS, or it threw), warn +
+// return undefined. Caller persists no `incrementalState` for this
+// session, which means next session starts cold for layer 2 — the
+// layer-1 mtime cache still works. Wrong miss > wrong hit.
 export function captureIncrementalState(
+	tsVersion: string,
 	builder: ts.BuilderProgram,
 ): IncrementalState | undefined {
 	const builderAny = builder as unknown as {
 		emitBuildInfo?(writeFile: (path: string, content: string) => void): void;
 	};
-	if (typeof builderAny.emitBuildInfo !== 'function') return undefined;
+	if (typeof builderAny.emitBuildInfo !== 'function') {
+		warn(
+			`TypeScript ${tsVersion} BuilderProgram is missing emitBuildInfo. `
+				+ `Type-aware cache cannot be persisted — next run will start cold.`,
+		);
+		return undefined;
+	}
 	let captured: string | undefined;
 	try {
 		builderAny.emitBuildInfo((_path, content) => {
 			captured = content;
 		});
 	}
-	catch {
+	catch (e) {
+		warn(
+			`Could not persist incremental state on TypeScript ${tsVersion}: `
+				+ `${(e as Error).message}. Type-aware cache cannot be persisted — next run will start cold.`,
+		);
 		return undefined;
 	}
 	if (!captured) return undefined;

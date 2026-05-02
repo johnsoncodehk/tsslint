@@ -265,7 +265,7 @@ async function setup(
 // mode or when capture fails.
 function buildIncrementalState(): IncrementalState | undefined {
 	if (!currentBuilder) return undefined;
-	return incrementalState.captureIncrementalState(currentBuilder);
+	return incrementalState.captureIncrementalState(ts.version, currentBuilder);
 }
 
 function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {
