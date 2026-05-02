@@ -78,3 +78,7 @@ jobs:
       # CLI: cache-flow — layer 1 cache integration with the linter.
       - name: CLI cache-flow
         run: node packages/cli/test/cache-flow.test.js
+
+      # CLI: end-to-end integration via subprocess on a temp fixture.
+      - name: CLI integration
+        run: node packages/cli/test/integration.test.js
