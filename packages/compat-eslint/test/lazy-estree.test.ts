@@ -153,6 +153,43 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 
 // --- Lazy invariants ----------------------------------------------------
 
+// Factory's whenAbsent semantics: a slot configured with whenAbsent:
+// 'undefined' returns undefined when the TS field is absent (vs the
+// default 'null'). Pinned via a real fixture so the contract is
+// exercised end-to-end + the SHAPE_UNSET sentinel does its job
+// distinguishing "not yet computed" from "computed → null/undefined".
+{
+	// `let _: typeof x;` — TSTypeQuery has typeArguments slot with
+	// whenAbsent: 'undefined'. The TS node has no typeArguments here.
+	const sf = parseTs('let _: typeof x;');
+	const { estree } = lazy.convertLazy(sf);
+	const tq = (estree.body as any)[0].declarations[0].id.typeAnnotation.typeAnnotation;
+	check('TSTypeQuery materialised', tq.type === 'TSTypeQuery');
+	check(
+		'TSTypeQuery.typeArguments is undefined (not null) when absent',
+		tq.typeArguments === undefined && 'typeArguments' in tq,
+		`got ${JSON.stringify(tq.typeArguments)}, hasOwn=${'typeArguments' in tq}`,
+	);
+	// Read twice — verify cache returns the same undefined (not re-computing).
+	check(
+		'whenAbsent: undefined memoises (no recompute on second read)',
+		tq.typeArguments === tq.typeArguments,
+	);
+}
+{
+	// `return;` — ReturnStatement.argument has default whenAbsent
+	// (i.e. null, matching value-slot convention).
+	const sf = parseTs('function f() { return; }');
+	const { estree } = lazy.convertLazy(sf);
+	const ret = (estree.body as any)[0].body.body[0];
+	check('ReturnStatement materialised', ret.type === 'ReturnStatement');
+	check(
+		'ReturnStatement.argument is null (not undefined) when bare',
+		ret.argument === null,
+		`got ${JSON.stringify(ret.argument)}`,
+	);
+}
+
 // Property memoisation: reading a child slot twice returns the SAME instance
 // (not a fresh conversion each time). Rules store nodes between enter/exit
 // in WeakSets — losing identity would silently break those.
