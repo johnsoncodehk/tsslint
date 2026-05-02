@@ -58,6 +58,31 @@ jobs:
       - name: TS-AST scan
         run: node packages/compat-eslint/test/ts-ast-scan.test.js
 
-      # Core: type-aware rule cache classification (probe + sticky).
-      - name: Core cache type-aware classification
-        run: node packages/core/test/cache-typeaware.test.js
+      # Core: type-aware rule probe (foundation for layer 1 cache).
+      - name: Core probe
+        run: node packages/core/test/probe.test.js
+
+      # Core: BuilderProgram POC for layer 2 cache invalidation.
+      - name: Core BuilderProgram POC
+        run: node packages/core/test/builder-program-poc.test.js
+
+      # Core: skip-rules option + hasFixForDiagnostic API (the surface
+      # the CLI cache layer uses).
+      - name: Core skip-rules
+        run: node packages/core/test/skip-rules.test.js
+
+      # CLI: cache file load / save / atomic write / version key.
+      - name: CLI cache module
+        run: node packages/cli/test/cache.test.js
+
+      # CLI: cache-flow — layer 1 cache integration with the linter.
+      - name: CLI cache-flow
+        run: node packages/cli/test/cache-flow.test.js
+
+      # CLI: end-to-end integration via subprocess on a temp fixture.
+      - name: CLI integration
+        run: node packages/cli/test/integration.test.js
+
+      # CLI: layer 2 cross-session affected-file diff.
+      - name: CLI incremental state
+        run: node packages/cli/test/incremental-state.test.js

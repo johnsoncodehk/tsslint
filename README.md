@@ -163,11 +163,16 @@ defineConfig({
 
 ### Caching
 
-Diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/`, keyed by file mtime. The cache is shared across rules and survives between editor sessions.
+Diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/` in two layers, picked per rule:
 
-A diagnostic whose correctness depends on more than one file's mtime (e.g. anything that reads `ctx.program` for cross-file resolution and reports on the cached side) should opt out per-diagnostic via `.withoutCache()` on the reporter — the cached entry would otherwise go stale when an unrelated dependency file changes without invalidating its consumers' mtime.
+- **Layer 1** — invalidated by the linted file's mtime. Used for rules that don't read `ctx.program` (purely syntactic).
+- **Layer 2** — invalidated by TypeScript's `BuilderProgram` affected-file diff (transitive, includes ambient `.d.ts`). Used for rules that touch `ctx.program`. The first time a rule reads `ctx.program` it's classified type-aware and stays type-aware across sessions.
 
-Pass `--force` to the CLI to ignore the cache.
+A diagnostic whose correctness depends on inputs neither layer tracks — external resources, env vars, sibling files the rule reads directly via `fs` — should opt out per-diagnostic via `.withoutCache()` on the reporter. The diagnostic still surfaces on the current run; it just isn't written to disk, so the next warm hit on this file won't replay it (the rule has to re-run to surface it again).
+
+For diagnostics that depend on cross-file types, prefer reading `ctx.program` once instead — that re-classifies the rule type-aware and layer 2 handles invalidation properly.
+
+Pass `--force` to the CLI to ignore the cache. `--list-rules` prints each rule's classification (type-aware vs syntactic) after the run.
 
 ### Debugging
 

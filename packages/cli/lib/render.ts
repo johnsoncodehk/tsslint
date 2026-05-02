@@ -46,6 +46,11 @@ export function createRenderer(): Renderer {
 			for (const line of lines) {
 				process.stdout.write(line + '\n');
 			}
+			// Mark as content so any follow-up `info()` (e.g. --list-rules)
+			// gets a blank-line separator in TTY mode. Without this, the
+			// separator only appears when diagnostics happened to print
+			// before summary, making the gap inconsistent across runs.
+			lastWasContent = true;
 		},
 		dispose() {},
 	};

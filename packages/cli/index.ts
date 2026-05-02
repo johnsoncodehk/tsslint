@@ -4,8 +4,8 @@ require('./lib/fs-cache.js');
 
 import ts = require('typescript');
 import path = require('path');
-import cache = require('./lib/cache.js');
 import worker = require('./lib/worker.js');
+import cache = require('./lib/cache.js');
 import fs = require('fs');
 import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
@@ -26,8 +26,9 @@ Options:
   --ts-macro-project <glob...>  Lint TS Macro projects
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
-  --force                       Ignore cache
+  --force                       Ignore cache (re-lint every file)
   --failures-only               Only print errors and messages (skip warnings and suggestions)
+  --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
   -h, --help                    Show this help message
 
 Examples:
@@ -82,7 +83,7 @@ class Project {
 	options: ts.CompilerOptions = {};
 	configFile: string | undefined;
 	currentFileIndex = 0;
-	cache: cache.CacheData = {};
+	cacheData: cache.CacheData = cache.emptyCache();
 	pendingHeader: string | undefined;
 
 	constructor(
@@ -149,8 +150,18 @@ class Project {
 			colors.gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
 		}`;
 
+		// Load layer-1 cache unless --force was passed. The cache file path
+		// key includes tsslint version, TS version, tsconfig, languages,
+		// and configFile mtime+size — anything that changes the rule set or
+		// the toolchain mints a fresh file. See packages/cli/lib/cache.ts.
 		if (!process.argv.includes('--force')) {
-			this.cache = cache.loadCache(this.tsconfig, this.configFile, this.languages, ts.sys.createHash);
+			this.cacheData = cache.loadCache(
+				this.tsconfig,
+				this.configFile,
+				this.languages,
+				ts.version,
+				ts.sys.createHash,
+			);
 		}
 
 		return this;
@@ -177,12 +188,12 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	let hasFix = false;
 	let allFilesNum = 0;
 	let processed = 0;
+	let cached = 0;
 	let passed = 0;
 	let errors = 0;
 	let warnings = 0;
 	let messages = 0;
 	let suggestions = 0;
-	let cached = 0;
 	let configErrors = 0;
 	const failuresOnly = process.argv.includes('--failures-only');
 
@@ -316,6 +327,41 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	}
 
 	renderer.summary(summaryLines);
+
+	if (process.argv.includes('--list-rules')) {
+		// Derive from the per-project cacheData: any rule with an entry
+		// in `ruleModes` is type-aware; the rest came up as cached
+		// entries on per-file maps without being classified, so they
+		// ran as syntactic. Output is grouped + alphabetised so it's
+		// stable across runs and easy to diff.
+		const typeAware = new Set<string>();
+		const syntactic = new Set<string>();
+		for (const project of projects) {
+			for (const ruleId of Object.keys(project.cacheData.ruleModes)) {
+				typeAware.add(ruleId);
+			}
+			for (const file of Object.values(project.cacheData.files)) {
+				for (const ruleId of Object.keys(file.rules)) {
+					if (!project.cacheData.ruleModes[ruleId]) syntactic.add(ruleId);
+				}
+			}
+		}
+		// A rule classified type-aware in any project is type-aware
+		// everywhere — drop it from the syntactic side to avoid
+		// double-listing the same id across multi-project runs.
+		for (const id of typeAware) syntactic.delete(id);
+
+		// Always emit both headers — even with count 0 — so the format
+		// stays consistent across runs (otherwise a project with only
+		// type-aware rules looks visually different from one with both).
+		const lines: string[] = [];
+		lines.push(colors.cyan('type-aware') + colors.gray(` (${typeAware.size})`));
+		for (const id of [...typeAware].sort()) lines.push('  ' + id);
+		lines.push(colors.cyan('syntactic') + colors.gray(` (${syntactic.size})`));
+		for (const id of [...syntactic].sort()) lines.push('  ' + id);
+		for (const l of lines) renderer.info(l);
+	}
+
 	renderer.dispose();
 
 	process.exit((errors || messages || configErrors) ? 1 : 0);
@@ -342,6 +388,8 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			project.configFile!,
 			project.rawFileNames,
 			project.options,
+			Object.keys(project.cacheData.ruleModes),
+			project.cacheData.incrementalState,
 		);
 		if (setupResult !== true) {
 			renderer.diagnostic(formatConfigError(project.configFile!, setupResult));
@@ -359,32 +407,37 @@ const formatHost: ts.FormatDiagnosticsHost = {
 				continue;
 			}
 
-			let fileCache = project.cache[fileName];
-			if (fileCache) {
-				if (fileCache[0] !== fileStat.mtimeMs) {
-					fileCache[0] = fileStat.mtimeMs;
-					fileCache[1] = {};
-					fileCache[2] = {};
-				}
-				else {
-					cached++;
-				}
+			let fileCache = project.cacheData.files[fileName];
+			if (!fileCache) {
+				fileCache = { mtime: fileStat.mtimeMs, rules: {} };
+				project.cacheData.files[fileName] = fileCache;
 			}
-			else {
-				project.cache[fileName] = fileCache = [fileStat.mtimeMs, {}, {}];
+			else if (fileCache.mtime === fileStat.mtimeMs && Object.keys(fileCache.rules).length) {
+				// File text untouched since the prev session AND we have at
+				// least one rule's diagnostics cached for it — treat as a
+				// warm hit for the `--force` summary hint. Layer 2's BP
+				// might still re-run type-aware rules if their deps moved,
+				// but the user-visible signal here is just "cache had
+				// something for this file."
+				cached++;
 			}
 
 			const diagnostics = await linterWorker.lint(
 				fileName,
 				process.argv.includes('--fix'),
 				fileCache,
+				fileStat.mtimeMs,
 			);
 
 			if (diagnostics.length) {
 				hasFix ||= await linterWorker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
-					hasFix ||= !!fileCache[1][diagnostic.code]?.[0];
+					// Cache-hit diagnostics come back without their rule
+					// having registered a fix this session — `hasCodeFixes`
+					// only sees fresh runs. Fall back to the cached
+					// per-rule `hasFix` flag for the diagnostic's rule.
+					hasFix ||= !!fileCache.rules[String(diagnostic.code)]?.hasFix;
 
 					let output: string;
 
@@ -428,13 +481,35 @@ const formatHost: ts.FormatDiagnosticsHost = {
 					}
 				}
 			}
-			else if (await linterWorker.hasRules(fileName, fileCache[2])) {
+			else if (await linterWorker.hasRules(fileName)) {
 				passed++;
 			}
 			processed++;
 		}
 
-		cache.saveCache(project.tsconfig, project.configFile!, project.languages, project.cache, ts.sys.createHash);
+		// Snapshot the linter's runtime classification back into the cache
+		// file's `ruleModes`. Next session reads this and seeds the linter
+		// via `initialTypeAwareRules` so rules are classified correctly
+		// from the first invocation, before the runtime probe re-runs.
+		const typeAware = await linterWorker.getTypeAwareRules();
+		project.cacheData.ruleModes = {};
+		for (const ruleId of typeAware) {
+			project.cacheData.ruleModes[ruleId] = 'type-aware';
+		}
+		// Layer 2: harvest content hashes + transitive deps from a fresh
+		// BuilderProgram pass over the LS program. Persists alongside the
+		// per-rule cache so the next `--incremental` session can compute
+		// affected files. Falls through to `undefined` on layer-1-only
+		// runs, matching the schema contract.
+		project.cacheData.incrementalState = await linterWorker.buildIncrementalState();
+		cache.saveCache(
+			project.tsconfig,
+			project.configFile!,
+			project.languages,
+			ts.version,
+			project.cacheData,
+			ts.sys.createHash,
+		);
 
 		await startWorker(linterWorker);
 	}
