@@ -1653,95 +1653,17 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 // such type appearing in our reachable output is automatically wrong.
 //
 // Walk a comprehensive fixture via visitor-keys (forces all getters),
-// also bottom-up materialise every TS node, then assert no type starts
-// with 'TS' AND isn't in the typescript-estree spec list. Catches new
-// missing-skip cases as soon as they appear.
+// also bottom-up materialise every TS node, then assert no type appears
+// that isn't in upstream typescript-estree's `AST_NODE_TYPES` enum. Pulls
+// the truth list directly from the upstream package — when typescript-
+// estree adds a new type, we get it for free; we don't have to remember
+// to update a hand-coded list.
 {
 	const visitorKeys = require('../lib/visitor-keys.js') as { visitorKeys: Record<string, string[]> };
-
-	// typescript-estree's published TS-* node types. Anything starting
-	// with 'TS' that ISN'T here is a phantom GenericTSNode.
-	const TYPESCRIPT_ESTREE_TS_TYPES = new Set([
-		'TSAbstractAccessorProperty',
-		'TSAbstractKeyword',
-		'TSAbstractMethodDefinition',
-		'TSAbstractPropertyDefinition',
-		'TSAnyKeyword',
-		'TSArrayType',
-		'TSAsExpression',
-		'TSAsyncKeyword',
-		'TSBigIntKeyword',
-		'TSBooleanKeyword',
-		'TSCallSignatureDeclaration',
-		'TSClassImplements',
-		'TSConditionalType',
-		'TSConstructSignatureDeclaration',
-		'TSConstructorType',
-		'TSDeclareFunction',
-		'TSDeclareKeyword',
-		'TSEmptyBodyFunctionExpression',
-		'TSEnumBody',
-		'TSEnumDeclaration',
-		'TSEnumMember',
-		'TSExportAssignment',
-		'TSExportKeyword',
-		'TSExternalModuleReference',
-		'TSFunctionType',
-		'TSImportEqualsDeclaration',
-		'TSImportType',
-		'TSIndexSignature',
-		'TSIndexedAccessType',
-		'TSInferType',
-		'TSInstantiationExpression',
-		'TSInterfaceBody',
-		'TSInterfaceDeclaration',
-		'TSInterfaceHeritage',
-		'TSIntersectionType',
-		'TSIntrinsicKeyword',
-		'TSLiteralType',
-		'TSMappedType',
-		'TSMethodSignature',
-		'TSModuleBlock',
-		'TSModuleDeclaration',
-		'TSNamedTupleMember',
-		'TSNamespaceExportDeclaration',
-		'TSNeverKeyword',
-		'TSNonNullExpression',
-		'TSNullKeyword',
-		'TSNumberKeyword',
-		'TSObjectKeyword',
-		'TSOptionalType',
-		'TSParameterProperty',
-		'TSPrivateKeyword',
-		'TSPropertySignature',
-		'TSProtectedKeyword',
-		'TSPublicKeyword',
-		'TSQualifiedName',
-		'TSReadonlyKeyword',
-		'TSRestType',
-		'TSSatisfiesExpression',
-		'TSStaticKeyword',
-		'TSStringKeyword',
-		'TSSymbolKeyword',
-		'TSTemplateLiteralType',
-		'TSThisType',
-		'TSTupleType',
-		'TSTypeAliasDeclaration',
-		'TSTypeAnnotation',
-		'TSTypeAssertion',
-		'TSTypeLiteral',
-		'TSTypeOperator',
-		'TSTypeParameter',
-		'TSTypeParameterDeclaration',
-		'TSTypeParameterInstantiation',
-		'TSTypePredicate',
-		'TSTypeQuery',
-		'TSTypeReference',
-		'TSUndefinedKeyword',
-		'TSUnionType',
-		'TSUnknownKeyword',
-		'TSVoidKeyword',
-	]);
+	const { AST_NODE_TYPES } = require('@typescript-eslint/typescript-estree') as {
+		AST_NODE_TYPES: Record<string, string>;
+	};
+	const TYPESCRIPT_ESTREE_TS_TYPES = new Set(Object.values(AST_NODE_TYPES));
 
 	const fixtures: Array<{ name: string; code: string; tsx?: boolean }> = [
 		{

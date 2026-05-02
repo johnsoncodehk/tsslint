@@ -111,6 +111,185 @@ export interface ConvertContext {
 // Frozen so callers can't mutate the shared instance.
 const EMPTY_ARRAY: never[] = Object.freeze([]) as never[];
 
+// Architectural gate: every ESTree type lazy-estree can produce must be
+// listed here. Both `LazyNode.type` (hand-written subclasses) and
+// `defineShape.type` (factory-built shapes) are constrained to this
+// union — adding a new ESTree shape requires editing this list first.
+//
+// Why: prevents phantom types like 'TSJsxAttributes' (the bug class
+// that started this refactor) from being introduced. Any subclass
+// declaring `readonly type = 'X' as const` for an X not in this
+// union fails at compile time.
+//
+// The union mirrors typescript-estree's published TS- and ES-prefixed
+// node types. 13 TS keyword types (TSAnyKeyword, TSStringKeyword, …)
+// are dynamic via TypeKeywordNode, so they go in here too.
+type KnownEstreeType =
+	// Core ESTree
+	| 'AccessorProperty'
+	| 'ArrayExpression'
+	| 'ArrayPattern'
+	| 'ArrowFunctionExpression'
+	| 'AssignmentExpression'
+	| 'AssignmentPattern'
+	| 'AwaitExpression'
+	| 'BinaryExpression'
+	| 'BlockStatement'
+	| 'BreakStatement'
+	| 'CallExpression'
+	| 'CatchClause'
+	| 'ChainExpression'
+	| 'ClassBody'
+	| 'ClassDeclaration'
+	| 'ClassExpression'
+	| 'ConditionalExpression'
+	| 'ContinueStatement'
+	| 'DebuggerStatement'
+	| 'Decorator'
+	| 'DoWhileStatement'
+	| 'EmptyStatement'
+	| 'ExportAllDeclaration'
+	| 'ExportDefaultDeclaration'
+	| 'ExportNamedDeclaration'
+	| 'ExportSpecifier'
+	| 'ExpressionStatement'
+	| 'ForInStatement'
+	| 'ForOfStatement'
+	| 'ForStatement'
+	| 'FunctionDeclaration'
+	| 'FunctionExpression'
+	| 'Identifier'
+	| 'IfStatement'
+	| 'ImportAttribute'
+	| 'ImportDeclaration'
+	| 'ImportDefaultSpecifier'
+	| 'ImportExpression'
+	| 'ImportNamespaceSpecifier'
+	| 'ImportSpecifier'
+	| 'LabeledStatement'
+	| 'Literal'
+	| 'LogicalExpression'
+	| 'MemberExpression'
+	| 'MetaProperty'
+	| 'MethodDefinition'
+	| 'NewExpression'
+	| 'ObjectExpression'
+	| 'ObjectPattern'
+	| 'PrivateIdentifier'
+	| 'Program'
+	| 'Property'
+	| 'PropertyDefinition'
+	| 'RestElement'
+	| 'ReturnStatement'
+	| 'SequenceExpression'
+	| 'SpreadElement'
+	| 'StaticBlock'
+	| 'Super'
+	| 'SwitchCase'
+	| 'SwitchStatement'
+	| 'TaggedTemplateExpression'
+	| 'TemplateElement'
+	| 'TemplateLiteral'
+	| 'ThisExpression'
+	| 'ThrowStatement'
+	| 'TryStatement'
+	| 'UnaryExpression'
+	| 'UpdateExpression'
+	| 'VariableDeclaration'
+	| 'VariableDeclarator'
+	| 'WhileStatement'
+	| 'WithStatement'
+	| 'YieldExpression'
+	// JSX
+	| 'JSXAttribute'
+	| 'JSXClosingElement'
+	| 'JSXClosingFragment'
+	| 'JSXElement'
+	| 'JSXEmptyExpression'
+	| 'JSXExpressionContainer'
+	| 'JSXFragment'
+	| 'JSXIdentifier'
+	| 'JSXMemberExpression'
+	| 'JSXNamespacedName'
+	| 'JSXOpeningElement'
+	| 'JSXOpeningFragment'
+	| 'JSXSpreadAttribute'
+	| 'JSXSpreadChild'
+	| 'JSXText'
+	// TS-specific (composite types)
+	| 'TSAbstractAccessorProperty'
+	| 'TSAbstractKeyword'
+	| 'TSAbstractMethodDefinition'
+	| 'TSAbstractPropertyDefinition'
+	| 'TSArrayType'
+	| 'TSAsExpression'
+	| 'TSCallSignatureDeclaration'
+	| 'TSClassImplements'
+	| 'TSConditionalType'
+	| 'TSConstructSignatureDeclaration'
+	| 'TSConstructorType'
+	| 'TSDeclareFunction'
+	| 'TSEmptyBodyFunctionExpression'
+	| 'TSEnumBody'
+	| 'TSEnumDeclaration'
+	| 'TSEnumMember'
+	| 'TSExportAssignment'
+	| 'TSExternalModuleReference'
+	| 'TSFunctionType'
+	| 'TSImportEqualsDeclaration'
+	| 'TSImportType'
+	| 'TSIndexSignature'
+	| 'TSIndexedAccessType'
+	| 'TSInferType'
+	| 'TSInstantiationExpression'
+	| 'TSInterfaceBody'
+	| 'TSInterfaceDeclaration'
+	| 'TSInterfaceHeritage'
+	| 'TSIntersectionType'
+	| 'TSLiteralType'
+	| 'TSMappedType'
+	| 'TSMethodSignature'
+	| 'TSModuleBlock'
+	| 'TSModuleDeclaration'
+	| 'TSNamedTupleMember'
+	| 'TSNamespaceExportDeclaration'
+	| 'TSNonNullExpression'
+	| 'TSOptionalType'
+	| 'TSParameterProperty'
+	| 'TSPropertySignature'
+	| 'TSQualifiedName'
+	| 'TSRestType'
+	| 'TSSatisfiesExpression'
+	| 'TSTemplateLiteralType'
+	| 'TSThisType'
+	| 'TSTupleType'
+	| 'TSTypeAliasDeclaration'
+	| 'TSTypeAnnotation'
+	| 'TSTypeAssertion'
+	| 'TSTypeLiteral'
+	| 'TSTypeOperator'
+	| 'TSTypeParameter'
+	| 'TSTypeParameterDeclaration'
+	| 'TSTypeParameterInstantiation'
+	| 'TSTypePredicate'
+	| 'TSTypeQuery'
+	| 'TSTypeReference'
+	| 'TSUnionType'
+	// TS keyword types (TypeKeywordNode dynamic dispatch)
+	| 'TSAnyKeyword'
+	| 'TSBigIntKeyword'
+	| 'TSBooleanKeyword'
+	| 'TSIntrinsicKeyword'
+	| 'TSNeverKeyword'
+	| 'TSNullKeyword'
+	| 'TSNumberKeyword'
+	| 'TSObjectKeyword'
+	| 'TSStringKeyword'
+	| 'TSSymbolKeyword'
+	| 'TSUndefinedKeyword'
+	| 'TSUnknownKeyword'
+	| 'TSVoidKeyword';
+
 function getLocFor(ast: ts.SourceFile, start: number, end: number) {
 	const startLC = ast.getLineAndCharacterOfPosition(start);
 	const endLC = ast.getLineAndCharacterOfPosition(end);
@@ -121,7 +300,11 @@ function getLocFor(ast: ts.SourceFile, start: number, end: number) {
 }
 
 abstract class LazyNode {
-	abstract readonly type: string;
+	// Architectural gate: every concrete LazyNode subclass's `type` must
+	// be a member of KnownEstreeType. Prevents introducing phantom types
+	// like 'TSJsxAttributes' that don't exist in typescript-estree's
+	// shape. New ESTree shape = add to KnownEstreeType first.
+	abstract readonly type: KnownEstreeType;
 	parent: LazyNode | null;
 	_ts: ts.Node;
 	// Conversion context shared with descendants. Children created via getter
@@ -1237,7 +1420,7 @@ interface ShapeSlotDef<TsParent, TsT = any> {
 // annotations are undefined when absent).
 const SHAPE_UNSET = Symbol('shape-unset');
 interface ShapeDef<TsT extends ts.Node = ts.Node> {
-	type: string;
+	type: KnownEstreeType;
 	slots: Record<string, ShapeSlotDef<TsT>>;
 	// Static field defaults — values that don't depend on the TS node
 	// (e.g. UnaryExpression's `operator: 'void'`, ObjectPattern's
@@ -1941,7 +2124,17 @@ function convertChildren(children: ReadonlyArray<ts.Node>, parent: LazyNode): (L
 // skip dispatching enter/leave on it.
 export const GENERIC_TS_NODE_MARKER: unique symbol = Symbol('GenericTSNode');
 class GenericTSNode extends LazyNode {
-	readonly type: string;
+	// Type is dynamic: 'TS' + ts.SyntaxKind[kind]. Most produced types
+	// (e.g. 'TSEnumDeclaration', 'TSImportType') are valid KnownEstreeType
+	// members; some are NOT (e.g. 'TSJsxAttributes', 'TSEndOfFileToken')
+	// and represent the "synthetic fallback" for kinds that don't have
+	// a real ESTree counterpart. The phantom-types invariant test in
+	// lazy-estree.test asserts these never reach a position rules can
+	// observe — they exist only as transient objects on the bottom-up
+	// walk before being shadowed by a real subclass. Cast the field
+	// type to KnownEstreeType to satisfy the LazyNode constraint; the
+	// runtime invariant is the actual gate.
+	readonly type: KnownEstreeType;
 	readonly [GENERIC_TS_NODE_MARKER] = true;
 	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
 		// Synthetic — don't claim the TS node's slot in the maps if a
@@ -1955,7 +2148,7 @@ class GenericTSNode extends LazyNode {
 		// _ctx from) — happens when materialize() bottom-up exhausts the TS
 		// parent chain without hitting a cached ancestor.
 		super(tsNode, parent, context);
-		this.type = 'TS' + ts.SyntaxKind[tsNode.kind];
+		this.type = ('TS' + ts.SyntaxKind[tsNode.kind]) as KnownEstreeType;
 	}
 }
 
@@ -2264,10 +2457,27 @@ class TSTypeAnnotationNode extends LazyNode {
 
 // Type-position keywords (`any`, `number`, `string`, …). All have the same
 // shape — just `type: 'TSXxxKeyword'`. Group them under one class to avoid
-// 14 near-identical declarations.
+// 13 near-identical declarations.
+// Type-keyword union — narrowed from KnownEstreeType to the keyword
+// subset so the constructor's `type` parameter can't accept a
+// non-keyword name by mistake.
+type TypeKeyword =
+	| 'TSAnyKeyword'
+	| 'TSBigIntKeyword'
+	| 'TSBooleanKeyword'
+	| 'TSIntrinsicKeyword'
+	| 'TSNeverKeyword'
+	| 'TSNullKeyword'
+	| 'TSNumberKeyword'
+	| 'TSObjectKeyword'
+	| 'TSStringKeyword'
+	| 'TSSymbolKeyword'
+	| 'TSUndefinedKeyword'
+	| 'TSUnknownKeyword'
+	| 'TSVoidKeyword';
 class TypeKeywordNode extends LazyNode {
-	readonly type: string;
-	constructor(type: string, tsNode: ts.Node, parent: LazyNode) {
+	readonly type: TypeKeyword;
+	constructor(type: TypeKeyword, tsNode: ts.Node, parent: LazyNode) {
 		super(tsNode, parent);
 		this.type = type;
 	}
