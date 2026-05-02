@@ -1454,7 +1454,7 @@ defineShape<ts.ImportAttribute>(SK.ImportAttribute, {
 // Constructor-derived fields (`consts`):
 defineShape<ts.TypeParameterDeclaration>(SK.TypeParameter, {
 	type: 'TSTypeParameter',
-	consts: (tn) => ({
+	consts: tn => ({
 		const: !!tn.modifiers?.some(m => m.kind === SK.ConstKeyword),
 		in: !!tn.modifiers?.some(m => m.kind === SK.InKeyword),
 		out: !!tn.modifiers?.some(m => m.kind === SK.OutKeyword),
@@ -1467,7 +1467,7 @@ defineShape<ts.TypeParameterDeclaration>(SK.TypeParameter, {
 });
 defineShape<ts.YieldExpression>(SK.YieldExpression, {
 	type: 'YieldExpression',
-	consts: (tn) => ({ delegate: !!tn.asteriskToken }),
+	consts: tn => ({ delegate: !!tn.asteriskToken }),
 	slots: { argument: { tsField: 'expression' } },
 });
 // Pure mechanical with `defaults`:
@@ -1525,7 +1525,7 @@ defineShape<ts.TypeReferenceNode>(SK.TypeReference, {
 });
 defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 	type: 'TSConstructorType',
-	consts: (tn) => ({
+	consts: tn => ({
 		abstract: !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword),
 	}),
 	slots: {
@@ -1536,7 +1536,7 @@ defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 });
 defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 	type: 'TSModuleDeclaration',
-	consts: (tn) => ({
+	consts: tn => ({
 		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
 		global: !!(tn.flags & ts.NodeFlags.GlobalAugmentation),
 		kind: tn.flags & ts.NodeFlags.Namespace ? 'namespace' : 'module',
@@ -1548,7 +1548,7 @@ defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 });
 defineShape<ts.EnumMember>(SK.EnumMember, {
 	type: 'TSEnumMember',
-	consts: (tn) => ({
+	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
 	}),
 	slots: {
@@ -1558,7 +1558,7 @@ defineShape<ts.EnumMember>(SK.EnumMember, {
 });
 defineShape<ts.TypeAliasDeclaration>(SK.TypeAliasDeclaration, {
 	type: 'TSTypeAliasDeclaration',
-	consts: (tn) => ({
+	consts: tn => ({
 		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
 	}),
 	slots: {
@@ -1569,7 +1569,7 @@ defineShape<ts.TypeAliasDeclaration>(SK.TypeAliasDeclaration, {
 });
 defineShape<ts.ImportEqualsDeclaration>(SK.ImportEqualsDeclaration, {
 	type: 'TSImportEqualsDeclaration',
-	consts: (tn) => ({
+	consts: tn => ({
 		importKind: tn.isTypeOnly ? 'type' : 'value',
 	}),
 	slots: {
@@ -1580,7 +1580,7 @@ defineShape<ts.ImportEqualsDeclaration>(SK.ImportEqualsDeclaration, {
 defineShape<ts.IndexSignatureDeclaration>(SK.IndexSignature, {
 	type: 'TSIndexSignature',
 	defaults: { accessibility: undefined },
-	consts: (tn) => ({
+	consts: tn => ({
 		readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
 		static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
 	}),
@@ -1592,7 +1592,7 @@ defineShape<ts.IndexSignatureDeclaration>(SK.IndexSignature, {
 defineShape<ts.PropertyAssignment>(SK.PropertyAssignment, {
 	type: 'Property',
 	defaults: { kind: 'init', method: false, optional: false, shorthand: false },
-	consts: (tn) => ({
+	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
 	}),
 	slots: {
