@@ -1981,10 +1981,36 @@ type D = Awaited<Promise<number>>;
 		'JSX: JSXAttribute listener fires on `id="root"`',
 		calls.some(c => c.selector === 'JSXAttribute'),
 	);
+	// Parent chain via bottom-up materialise: the master regression had
+	// JSXAttribute.parent = 'TSJsxAttributes' for the non-self-closing case
+	// and = 'JSXElement' for self-closing. The contract is that the parent
+	// is JSXOpeningElement (synthetic for self-closing) — typescript-estree
+	// shape that JSX rules rely on. Pin it from inside the listener path
+	// so any future regression to the parent chain fires here too.
+	{
+		// Fixture has exactly one JSXAttribute (`id="root"`), so first hit.
+		const attrCall = calls.find(c => c.selector === 'JSXAttribute');
+		check(
+			'JSX: JSXAttribute.parent === JSXOpeningElement (bottom-up via listener)',
+			attrCall?.parents[0] === 'JSXOpeningElement',
+			`got parents: ${JSON.stringify(attrCall?.parents.slice(0, 3))}`,
+		);
+	}
 	check(
 		'JSX: JSXSpreadAttribute listener fires on `{...rest}`',
 		calls.filter(c => c.selector === 'JSXSpreadAttribute').length === 1,
 	);
+	// Same parent-chain pin for spread-attribute — different lazy-estree
+	// path (JsxSpreadAttribute is a TS kind, not a wrapped expression),
+	// so verify independently.
+	{
+		const spread = calls.find(c => c.selector === 'JSXSpreadAttribute');
+		check(
+			'JSX: JSXSpreadAttribute.parent === JSXOpeningElement',
+			spread?.parents[0] === 'JSXOpeningElement',
+			`got: ${JSON.stringify(spread?.parents.slice(0, 3))}`,
+		);
+	}
 	check(
 		'JSX: JSXExpressionContainer listener fires on `{count && ...}`',
 		calls.some(c => c.selector === 'JSXExpressionContainer'),
@@ -2052,7 +2078,13 @@ type D = Awaited<Promise<number>>;
 					events.push(`open:${n.name?.name ?? '?'}`);
 				},
 				JSXAttribute(n: any) {
-					events.push(`attr:${n.name?.name ?? '?'}`);
+					// Read parent.type — the field that the TSJsxAttributes
+					// regression silently corrupted. Real ESLint plugins
+					// (jsx-a11y, react/jsx-*) read this constantly to scope
+					// rules to the enclosing tag. Asserting it here exercises
+					// the bottom-up materialise path with parent semantics
+					// from inside the actual ESLint API surface.
+					events.push(`attr:${n.name?.name ?? '?'}:parent=${n.parent?.type ?? 'NONE'}`);
 				},
 			};
 		},
@@ -2071,7 +2103,11 @@ type D = Awaited<Promise<number>>;
 		events.includes('open:div') && events.includes('open:span'),
 		`events: ${events.filter(e => e.startsWith('open:')).join(',')}`,
 	);
-	check('JSX+CPA: JSXAttribute fires on `id="x"`', events.includes('attr:id'));
+	check(
+		'JSX+CPA: JSXAttribute fires on `id="x"` with parent=JSXOpeningElement',
+		events.includes('attr:id:parent=JSXOpeningElement'),
+		`events: ${events.filter(e => e.startsWith('attr:')).join(',')}`,
+	);
 }
 
 // 9. JSX rule with real esquery selector + report mechanism — mirrors

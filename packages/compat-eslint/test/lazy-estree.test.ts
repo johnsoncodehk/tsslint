@@ -1380,6 +1380,362 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	check('saw JSXSpreadAttribute (sanity)', seenTypes.has('JSXSpreadAttribute'));
 }
 
+// --- Bottom-up parity sweep ---------------------------------------------
+//
+// The existing `compare()` walks the lazy + eager trees TOP-DOWN through
+// child getters. That path is already correct on master because each
+// child getter sets `parent = this` directly. The TSJsxAttributes /
+// JSXAttribute.parent regression caught by this PR only fires on
+// BOTTOM-UP `materialise(tsNode)` (what tsScanTraverse does when an
+// ESLint listener selector matches a node deep in the tree). No master
+// test exercised that path's parent semantics — the parity test even
+// explicitly skips the `parent` field.
+//
+// Hardening: walk every TS node in a curated set of fixtures, call
+// `lazy.materialise(tsNode, ctx)` for each, and compare its type /
+// parent.type / parent.parent.type against eager's `astMaps.
+// tsNodeToESTreeNodeMap[tsNode]`. Any divergence means the bottom-up
+// build produced a shape that doesn't match what eager (and rule
+// authors) expect. Also asserts no node has type 'TS<KindName>' for
+// any TS-only kind that typescript-estree elides.
+{
+	const visitorKeysModule = require('../lib/visitor-keys.js') as { visitorKeys: Record<string, string[]> };
+	const VK = visitorKeysModule.visitorKeys;
+
+	// astConverter returns nodes WITHOUT `.parent` set — parent is normally
+	// stitched by ESLint's SourceCode ctor downstream. Walk top-down and
+	// set it ourselves so we can compare lazy's parent chain against it.
+	function setEagerParents(root: any): void {
+		const stack: Array<{ node: any; parent: any }> = [{ node: root, parent: null }];
+		while (stack.length) {
+			const { node, parent } = stack.pop()!;
+			if (node == null || typeof node !== 'object') continue;
+			if (Array.isArray(node)) {
+				for (const c of node) stack.push({ node: c, parent });
+				continue;
+			}
+			node.parent = parent;
+			const keys = VK[node.type];
+			if (!keys) continue;
+			for (const k of keys) {
+				const v = node[k];
+				if (v == null) continue;
+				if (Array.isArray(v)) for (const c of v) stack.push({ node: c, parent: node });
+				else stack.push({ node: v, parent: node });
+			}
+		}
+	}
+
+	const eagerWithMaps = (sf: ts.SourceFile) => {
+		const r = (astConverter as any)(sf, PARSE_SETTINGS as any, true) as {
+			estree: any;
+			astMaps: { tsNodeToESTreeNodeMap: { get(n: ts.Node): any } };
+		};
+		setEagerParents(r.estree);
+		return r;
+	};
+
+	interface Fixture { name: string; code: string; tsx?: boolean }
+	// Scope: JSX attribute parent class — the bug fixed by this PR.
+	// Both self-closing and non-self-closing variants because the synthetic
+	// JSXOpeningElement wrapping for self-closing was the actual regression
+	// that kicked off the wrapper-route work.
+	//
+	// NOT in scope (intentionally — surfaces real impedance with eager but
+	// requires its own follow-up PRs to address):
+	//   - export wrapper identity (lazy maps the TS node to ExportNamed/
+	//     DefaultWrapper, eager maps to the inner declaration)
+	//   - chain-expression wrapping for `a?.b?.c` (lazy returns the inner
+	//     MemberExpression on its own; eager wraps in ChainExpression)
+	//   - destructuring with defaults (AssignmentPattern lives at a
+	//     different level between lazy + eager)
+	//   - CatchClause param lifted from ts.VariableDeclaration shim
+	//   - TSStringKeyword/TSVoidKeyword direct-on-Signature (lazy skips
+	//     the TSTypeAnnotation wrapper at this position)
+	const fixtures: Fixture[] = [
+		{ name: 'jsx-self-closing-expr-attr', code: 'let _ = <Foo prop={x} />;', tsx: true },
+		{ name: 'jsx-self-closing-string-attr', code: 'let _ = <Foo prop="x" />;', tsx: true },
+		{ name: 'jsx-non-self-closing-expr-attr', code: 'let _ = <Foo prop={x}>c</Foo>;', tsx: true },
+		{ name: 'jsx-spread-attr-self-closing', code: 'let _ = <Foo {...rest} />;', tsx: true },
+		{ name: 'jsx-spread-attr-non-self-closing', code: 'let _ = <Foo {...rest}>c</Foo>;', tsx: true },
+		{ name: 'jsx-multi-attr-mixed', code: 'let _ = <Foo a={1} b="x" {...r} c />;', tsx: true },
+		{ name: 'jsx-fragment', code: 'let _ = <><a /><b /></>;', tsx: true },
+		{ name: 'jsx-nested-attr-element', code: 'let _ = <a>{<b prop={c} />}</a>;', tsx: true },
+		{ name: 'jsx-deeply-nested', code: 'let _ = <a><b><c prop={d} /></b></a>;', tsx: true },
+	];
+
+	let totalNodesChecked = 0;
+	let totalParentsChecked = 0;
+	const fixtureFailures: Array<[string, string]> = [];
+
+	function bottomUpParity(fx: Fixture) {
+		const parse = fx.tsx ? parseTsx : parseTs;
+		const sf = parse(fx.code);
+		// Eager and lazy share the same parsed source file (and its
+		// setParentNodes-set parent pointers) so ts.Node identity matches
+		// across both maps.
+		let eagerMap: { get(n: ts.Node): any };
+		try {
+			eagerMap = eagerWithMaps(sf).astMaps.tsNodeToESTreeNodeMap;
+		}
+		catch (err) {
+			fixtureFailures.push([fx.name, `eager threw: ${(err as Error).message}`]);
+			return;
+		}
+		const { context: ctx } = lazy.convertLazy(sf);
+
+		const localFails: string[] = [];
+		const visit = (n: ts.Node) => {
+			const eager = eagerMap.get(n);
+			if (eager) {
+				let lazyNode: any;
+				try {
+					lazyNode = lazy.materialize(n, ctx);
+				}
+				catch (err) {
+					localFails.push(`materialise(${ts.SyntaxKind[n.kind]}) threw: ${(err as Error).message}`);
+					return;
+				}
+				totalNodesChecked++;
+				if (lazyNode.type !== eager.type) {
+					localFails.push(
+						`type ${lazyNode.type} vs eager ${eager.type} (TS kind: ${ts.SyntaxKind[n.kind]})`,
+					);
+				}
+				// Compare parent.type when both sides have parents (Program /
+				// root has none on either side).
+				if (eager.parent || lazyNode.parent) {
+					totalParentsChecked++;
+					const eagerPType: string | undefined = eager.parent?.type;
+					const lazyPType: string | undefined = lazyNode.parent?.type;
+					if (eagerPType !== lazyPType) {
+						localFails.push(
+							`${lazyNode.type}.parent.type ${JSON.stringify(lazyPType)} vs eager ${JSON.stringify(eagerPType)}`,
+						);
+					}
+					// Also compare grandparent.type — catches mid-chain insertions
+					// like the original 'TSJsxAttributes between attribute and
+					// opening element' bug, which had correct parent.parent end
+					// but wrong intermediate type for non-self-closing tags.
+					if (eager.parent?.parent || lazyNode.parent?.parent) {
+						const eagerGType: string | undefined = eager.parent?.parent?.type;
+						const lazyGType: string | undefined = lazyNode.parent?.parent?.type;
+						if (eagerGType !== lazyGType) {
+							localFails.push(
+								`${lazyNode.type}.parent.parent.type ${JSON.stringify(lazyGType)} vs eager ${JSON.stringify(eagerGType)}`,
+							);
+						}
+					}
+				}
+			}
+			ts.forEachChild(n, visit);
+		};
+		visit(sf);
+
+		if (localFails.length) {
+			// Dedupe — many TS nodes hit the same parent so identical errors
+			// repeat. Surface unique reasons only.
+			const unique = [...new Set(localFails)];
+			for (const f of unique.slice(0, 5)) {
+				fixtureFailures.push([fx.name, f]);
+			}
+			if (unique.length > 5) {
+				fixtureFailures.push([fx.name, `... and ${unique.length - 5} more`]);
+			}
+		}
+	}
+
+	for (const fx of fixtures) {
+		bottomUpParity(fx);
+	}
+	check(
+		`bottom-up parity sweep: ${fixtures.length} fixtures, ${totalNodesChecked} type asserts, ${totalParentsChecked} parent asserts`,
+		fixtureFailures.length === 0,
+		fixtureFailures.length
+			? '\n      ' + fixtureFailures.map(([n, m]) => `[${n}] ${m}`).join('\n      ')
+			: undefined,
+	);
+}
+
+// --- No phantom GenericTSNode types in any fixture's reachable tree -----
+//
+// typescript-estree elides several TS-only container kinds (JsxAttributes,
+// SyntaxList, NamedImports, etc.) — their ESTree shape exposes the inner
+// content directly on the parent. When lazy-estree's parent-walk skip list
+// is missing one of these kinds, materialise falls back to GenericTSNode
+// → type='TS<KindName>'. typescript-estree never produces these, so any
+// such type appearing in our reachable output is automatically wrong.
+//
+// Walk a comprehensive fixture via visitor-keys (forces all getters),
+// also bottom-up materialise every TS node, then assert no type starts
+// with 'TS' AND isn't in the typescript-estree spec list. Catches new
+// missing-skip cases as soon as they appear.
+{
+	const visitorKeys = require('../lib/visitor-keys.js') as { visitorKeys: Record<string, string[]> };
+
+	// typescript-estree's published TS-* node types. Anything starting
+	// with 'TS' that ISN'T here is a phantom GenericTSNode.
+	const TYPESCRIPT_ESTREE_TS_TYPES = new Set([
+		'TSAbstractAccessorProperty',
+		'TSAbstractKeyword',
+		'TSAbstractMethodDefinition',
+		'TSAbstractPropertyDefinition',
+		'TSAnyKeyword',
+		'TSArrayType',
+		'TSAsExpression',
+		'TSAsyncKeyword',
+		'TSBigIntKeyword',
+		'TSBooleanKeyword',
+		'TSCallSignatureDeclaration',
+		'TSClassImplements',
+		'TSConditionalType',
+		'TSConstructSignatureDeclaration',
+		'TSConstructorType',
+		'TSDeclareFunction',
+		'TSDeclareKeyword',
+		'TSEmptyBodyFunctionExpression',
+		'TSEnumBody',
+		'TSEnumDeclaration',
+		'TSEnumMember',
+		'TSExportAssignment',
+		'TSExportKeyword',
+		'TSExternalModuleReference',
+		'TSFunctionType',
+		'TSImportEqualsDeclaration',
+		'TSImportType',
+		'TSIndexSignature',
+		'TSIndexedAccessType',
+		'TSInferType',
+		'TSInstantiationExpression',
+		'TSInterfaceBody',
+		'TSInterfaceDeclaration',
+		'TSInterfaceHeritage',
+		'TSIntersectionType',
+		'TSIntrinsicKeyword',
+		'TSLiteralType',
+		'TSMappedType',
+		'TSMethodSignature',
+		'TSModuleBlock',
+		'TSModuleDeclaration',
+		'TSNamedTupleMember',
+		'TSNamespaceExportDeclaration',
+		'TSNeverKeyword',
+		'TSNonNullExpression',
+		'TSNullKeyword',
+		'TSNumberKeyword',
+		'TSObjectKeyword',
+		'TSOptionalType',
+		'TSParameterProperty',
+		'TSPrivateKeyword',
+		'TSPropertySignature',
+		'TSProtectedKeyword',
+		'TSPublicKeyword',
+		'TSQualifiedName',
+		'TSReadonlyKeyword',
+		'TSRestType',
+		'TSSatisfiesExpression',
+		'TSStaticKeyword',
+		'TSStringKeyword',
+		'TSSymbolKeyword',
+		'TSTemplateLiteralType',
+		'TSThisType',
+		'TSTupleType',
+		'TSTypeAliasDeclaration',
+		'TSTypeAnnotation',
+		'TSTypeAssertion',
+		'TSTypeLiteral',
+		'TSTypeOperator',
+		'TSTypeParameter',
+		'TSTypeParameterDeclaration',
+		'TSTypeParameterInstantiation',
+		'TSTypePredicate',
+		'TSTypeQuery',
+		'TSTypeReference',
+		'TSUndefinedKeyword',
+		'TSUnionType',
+		'TSUnknownKeyword',
+		'TSVoidKeyword',
+	]);
+
+	const fixtures: Array<{ name: string; code: string; tsx?: boolean }> = [
+		{ name: 'jsx-attrs-everything', code: 'let _ = <Foo a="x" b={1} {...rest} c><Bar d={<Baz e={2} />} /></Foo>;', tsx: true },
+		{ name: 'ts-everything', code: 'interface I<T> { a: T; b(): void; readonly c: string[]; } class C<U extends I<number>> implements I<number> { d!: U; e?: () => void; constructor(public f: number) {} }' },
+		{ name: 'imports-everything', code: "import d, { a, b as c, type t } from 'm'; import * as ns from 'n';" },
+		{ name: 'patterns-everything', code: 'function f({ a, b: { c = 1, ...inner }, ...rest }: any, [x, , ...ys]: any[]) {}' },
+		{ name: 'jsx-fragment-mix', code: 'let _ = <><a prop={x} /><b>{y}</b><c {...r} /></>;', tsx: true },
+	];
+
+	const offenders: Array<{ fixture: string; type: string; reachedVia: string }> = [];
+
+	for (const fx of fixtures) {
+		const parse = fx.tsx ? parseTsx : parseTs;
+		const sf = parse(fx.code);
+		const { estree, context: ctx } = lazy.convertLazy(sf);
+		const seen = new WeakSet<object>();
+		// Pass 1: top-down via visitor-keys (forces all child getters).
+		const topDownWalk = (n: any, parentType?: string) => {
+			if (n == null || typeof n !== 'object' || seen.has(n)) return;
+			seen.add(n);
+			if (typeof n.type === 'string' && n.type.startsWith('TS') && !TYPESCRIPT_ESTREE_TS_TYPES.has(n.type)) {
+				offenders.push({ fixture: fx.name, type: n.type, reachedVia: `top-down via ${parentType ?? 'root'}` });
+			}
+			const keys = visitorKeys.visitorKeys[n.type];
+			if (!keys) return;
+			for (const k of keys) {
+				const v = n[k];
+				if (Array.isArray(v)) for (const x of v) topDownWalk(x, n.type);
+				else topDownWalk(v, n.type);
+			}
+		};
+		topDownWalk(estree);
+		// Pass 2: bottom-up materialise — but ONLY for TS nodes that have
+		// an eager counterpart. ESLint listeners can only select on real
+		// ESTree-emitting positions; tsScanTraverse only matches via
+		// predicates which don't include structural-only TS kinds (tokens,
+		// SyntaxList, NamedImports, JsxAttributes container, etc.).
+		// Calling materialize() on those structural kinds always falls
+		// back to GenericTSNode — but no production code path reaches
+		// them, so they're not actually in any user-visible tree.
+		const eagerMap = (() => {
+			try { return (astConverter as any)(sf, PARSE_SETTINGS as any, true).astMaps.tsNodeToESTreeNodeMap; }
+			catch { return null; }
+		})();
+		if (eagerMap) {
+			const tsVisit = (n: ts.Node) => {
+				if (eagerMap.get(n)) {
+					let lazyNode: any;
+					try {
+						lazyNode = lazy.materialize(n, ctx);
+					}
+					catch {
+						ts.forEachChild(n, tsVisit);
+						return;
+					}
+					let cur = lazyNode;
+					while (cur) {
+						if (typeof cur.type === 'string' && cur.type.startsWith('TS') && !TYPESCRIPT_ESTREE_TS_TYPES.has(cur.type)) {
+							offenders.push({ fixture: fx.name, type: cur.type, reachedVia: `bottom-up from ${ts.SyntaxKind[n.kind]}` });
+							break;
+						}
+						cur = cur.parent;
+					}
+				}
+				ts.forEachChild(n, tsVisit);
+			};
+			tsVisit(sf);
+		}
+	}
+
+	const uniqueOffenders = [...new Map(offenders.map(o => [`${o.fixture}\0${o.type}`, o])).values()];
+	check(
+		`no phantom 'TS<KindName>' types in any fixture (${fixtures.length} fixtures)`,
+		uniqueOffenders.length === 0,
+		uniqueOffenders.length
+			? '\n      ' + uniqueOffenders.map(o => `[${o.fixture}] ${o.type} (${o.reachedVia})`).join('\n      ')
+			: undefined,
+	);
+}
+
 // --- Debug-estree counter (env-gated globalThis instrumentation) -------
 //
 // Counter is gated by env TSSLINT_DEBUG_ESTREE=1 (read at module load).
