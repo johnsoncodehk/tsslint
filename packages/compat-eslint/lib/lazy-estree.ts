@@ -355,6 +355,14 @@ abstract class LazyNode {
 	set parent(p: LazyNode | null) {
 		this._parent = p;
 	}
+	// Localised access for `convertChild`'s cache-hit path: a child built
+	// earlier with `parent: undefined` has `_parent === PARENT_UNSET`. The
+	// slot owner who's calling us is the canonical ESTree parent (each TS
+	// node has exactly one), so fill it in. Encapsulated so the sentinel
+	// stays an implementation detail rather than reached into via a cast.
+	_setParentIfUnset(p: LazyNode | null): void {
+		if (this._parent === PARENT_UNSET) this._parent = p;
+	}
 	_ts: ts.Node;
 	// Conversion context shared with descendants. Children created via getter
 	// inherit this from the parent — the root sets it from `convertLazy`.
@@ -1410,13 +1418,10 @@ function convertChild(
 	const cached = ctx.maps.tsNodeToESTreeNodeMap.get(child);
 	if (cached) {
 		// Lazy-leaf path: a cached child built earlier with `parent: undefined`
-		// has `_parent === PARENT_UNSET`. Each TS node has one ESTree parent,
-		// so the slot owner who's calling us IS that parent — fill it in now
-		// so subsequent `.parent` reads don't trigger `resolveParent` (and
-		// don't drill into the wrong wrapper).
-		if (parent !== undefined && (cached as { _parent?: unknown })._parent === PARENT_UNSET) {
-			(cached as LazyNode).parent = parent;
-		}
+		// has `_parent === PARENT_UNSET`. Fill it in now so subsequent
+		// `.parent` reads don't trigger `resolveParent` (and don't drill into
+		// the wrong wrapper — see ChainExpression note on the parent getter).
+		if (parent !== undefined) (cached as LazyNode)._setParentIfUnset(parent);
 		return cached as LazyNode;
 	}
 	const inner = convertChildInner(child, parent);
