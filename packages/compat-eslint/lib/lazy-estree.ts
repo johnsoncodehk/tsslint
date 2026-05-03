@@ -3223,6 +3223,35 @@ defineShapeRouter(SK.SetAccessor, (tsNode, parent) => {
 defineShapeRouter(SK.Constructor, (tsNode, parent) =>
 	new methodDefinitionShape(tsNode as ts.ConstructorDeclaration, parent));
 
+// --- Round 9 migrations -----------------------------------------------
+// JSXElement wraps both ts.JsxElement and ts.JsxSelfClosingElement. The
+// self-closing variant builds its own JSXOpeningElement (synthetic — the
+// outer JSXElement owns the TS slot) and has no closingElement / children.
+const jsxElementShape = makeShapeClass<ts.JsxElement | ts.JsxSelfClosingElement>({
+	type: 'JSXElement',
+	slots: {
+		openingElement: { tsField: 'kind', via: (_k, parent) => {
+			const t = (parent as unknown as { _ts: ts.Node })._ts;
+			if (t.kind === SK.JsxSelfClosingElement) {
+				return new JSXOpeningElementNode(t as ts.JsxSelfClosingElement, parent);
+			}
+			return convertChild((t as ts.JsxElement).openingElement, parent);
+		} },
+		closingElement: { tsField: 'kind', via: (_k, parent) => {
+			const t = (parent as unknown as { _ts: ts.Node })._ts;
+			if (t.kind === SK.JsxSelfClosingElement) return null;
+			return convertChild((t as ts.JsxElement).closingElement, parent);
+		} },
+		children: { tsField: 'kind', via: (_k, parent) => {
+			const t = (parent as unknown as { _ts: ts.Node })._ts;
+			if (t.kind === SK.JsxSelfClosingElement) return EMPTY_ARRAY;
+			return convertChildren((t as ts.JsxElement).children, parent);
+		} },
+	},
+});
+defineShapeRouter(SK.JsxElement, (tsNode, parent) => new jsxElementShape(tsNode as ts.JsxElement, parent));
+defineShapeRouter(SK.JsxSelfClosingElement, (tsNode, parent) => new jsxElementShape(tsNode as ts.JsxSelfClosingElement, parent));
+
 defineShape<ts.ImportDeclaration>(SK.ImportDeclaration, {
 	type: 'ImportDeclaration',
 	consts: tn => ({ importKind: tn.importClause?.isTypeOnly ? 'type' : 'value' }),
@@ -3296,9 +3325,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return null;
 		case SK.HeritageClause:
 			return null; // handled inline by ClassNode
-		case SK.JsxElement:
-		case SK.JsxSelfClosingElement:
-			return new JSXElementNode(child, parent);
 		case SK.JsxOpeningElement:
 			return new JSXOpeningElementNode(child as ts.JsxOpeningElement, parent);
 		case SK.AnyKeyword:
@@ -4142,36 +4168,6 @@ const ASSIGN_OP_KINDS = new Set<ts.SyntaxKind>([
 //
 // Attribute name conversion (`<Foo x="1" />` vs `<Foo svg:rect="1" />`):
 // handled by `convertJSXNamespaceOrIdentifier`.
-
-class JSXElementNode extends LazyNode {
-	readonly type = 'JSXElement' as const;
-	private _openingElement?: LazyNode;
-	private _closingElement?: LazyNode | null;
-	private _children?: (LazyNode | null)[];
-
-	get openingElement(): LazyNode {
-		if (this._openingElement) return this._openingElement;
-		const t = this._ts;
-		if (t.kind === SK.JsxSelfClosingElement) {
-			return this._openingElement = new JSXOpeningElementNode(t as ts.JsxSelfClosingElement, this);
-		}
-		return this._openingElement = convertChild((t as ts.JsxElement).openingElement, this) as LazyNode;
-	}
-
-	get closingElement(): LazyNode | null {
-		if (this._closingElement !== undefined) return this._closingElement;
-		const t = this._ts;
-		if (t.kind === SK.JsxSelfClosingElement) return this._closingElement = null;
-		return this._closingElement = convertChild((t as ts.JsxElement).closingElement, this);
-	}
-
-	get children(): (LazyNode | null)[] {
-		if (this._children) return this._children;
-		const t = this._ts;
-		if (t.kind === SK.JsxSelfClosingElement) return this._children = EMPTY_ARRAY;
-		return this._children = convertChildren((t as ts.JsxElement).children, this);
-	}
-}
 
 // Hybrid: a real ESTree node when wrapping a ts.JsxOpeningElement, but
 // synthetic when wrapping a ts.JsxSelfClosingElement (the outer JSXElement
