@@ -2904,6 +2904,122 @@ defineShapeRouter(SK.JsxExpression, (tsNode, parent) => {
 	return new (je.dotDotDotToken ? jsxSpreadChildShape : jsxExpressionContainerShape)(je, parent);
 });
 
+// --- Round 7 migrations -----------------------------------------------
+defineShape<ts.ImportClause>(SK.ImportClause, {
+	type: 'ImportDefaultSpecifier',
+	range: (tn, ctx) => {
+		// Eager narrows the range to the local name's range.
+		if (tn.name) return [tn.name.getStart(ctx.ast), tn.name.getEnd()];
+		return [tn.getStart(ctx.ast), tn.end];
+	},
+	slots: { local: { tsField: 'name' } },
+});
+
+// Function-likes — mechanical except for the type discriminator on
+// FunctionDeclaration (FunctionDeclaration vs TSDeclareFunction when
+// body is absent) and the `expression` flag on ArrowFunction (`() => x`
+// vs `() => { x }`).
+defineShape<ts.FunctionDeclaration>(SK.FunctionDeclaration, {
+	type: tn => tn.body ? 'FunctionDeclaration' : 'TSDeclareFunction',
+	defaults: { expression: false },
+	consts: tn => ({
+		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		generator: !!tn.asteriskToken,
+	}),
+	slots: {
+		id: { tsField: 'name' },
+		typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
+		params: { tsField: 'parameters', via: 'convertChildren' },
+		body: { tsField: 'body', whenAbsent: 'undefined' },
+		returnType: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
+	},
+});
+defineShape<ts.FunctionExpression>(SK.FunctionExpression, {
+	type: 'FunctionExpression',
+	defaults: { declare: false, expression: false },
+	consts: tn => ({
+		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		generator: !!tn.asteriskToken,
+	}),
+	slots: {
+		id: { tsField: 'name' },
+		typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
+		params: { tsField: 'parameters', via: 'convertChildren' },
+		body: { tsField: 'body' },
+		returnType: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
+	},
+});
+defineShape<ts.ArrowFunction>(SK.ArrowFunction, {
+	type: 'ArrowFunctionExpression',
+	defaults: { generator: false, id: null },
+	consts: tn => ({
+		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		// `() => x` is expression-bodied; `() => { x }` is not.
+		expression: tn.body.kind !== SK.Block,
+	}),
+	slots: {
+		typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
+		params: { tsField: 'parameters', via: 'convertChildren' },
+		body: { tsField: 'body' },
+		returnType: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
+	},
+});
+
+// Class declarations / expressions share a shape; type discriminator
+// picks Declaration vs Expression at dispatch.
+const classImplementsShape = makeShapeClass<ts.ExpressionWithTypeArguments>({
+	type: 'TSClassImplements',
+	slots: {
+		expression: { tsField: 'expression' },
+		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
+	},
+});
+const classShape = (type: 'ClassDeclaration' | 'ClassExpression') =>
+	makeShapeClass<ts.ClassDeclaration | ts.ClassExpression>({
+		type,
+		defaults: { superTypeParameters: undefined },
+		consts: tn => ({
+			abstract: !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword),
+			declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		}),
+		// Use `members` (always defined as a NodeArray) for slots that
+		// derive from heritageClauses / modifiers, so the factory's
+		// null-short-circuit doesn't bypass the via callback when those
+		// fields are absent.
+		slots: {
+			id: { tsField: 'name' },
+			typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
+			superClass: { tsField: 'members', via: (_m, parent) => {
+				const tn = (parent as unknown as { _ts: ts.ClassDeclaration | ts.ClassExpression })._ts;
+				const ext = tn.heritageClauses?.find(c => c.token === SK.ExtendsKeyword);
+				return ext ? convertChild(ext.types[0]?.expression, parent) : null;
+			} },
+			superTypeArguments: { tsField: 'members', via: (_m, parent) => {
+				const tn = (parent as unknown as { _ts: ts.ClassDeclaration | ts.ClassExpression })._ts;
+				const ext = tn.heritageClauses?.find(c => c.token === SK.ExtendsKeyword);
+				const args = ext?.types[0]?.typeArguments;
+				return args ? convertTypeArguments(args, parent) : undefined;
+			} },
+			implements: { tsField: 'members', via: (_m, parent) => {
+				const tn = (parent as unknown as { _ts: ts.ClassDeclaration | ts.ClassExpression })._ts;
+				const impl = tn.heritageClauses?.find(c => c.token === SK.ImplementsKeyword);
+				if (!impl) return [];
+				return impl.types.map(t => new classImplementsShape(t, parent));
+			} },
+			decorators: { tsField: 'members', via: (_m, parent) =>
+				convertDecorators((parent as unknown as { _ts: ts.Node })._ts, parent) },
+			body: { tsField: 'members', via: (_m, parent) => {
+				const tn = (parent as unknown as { _ts: ts.ClassDeclaration | ts.ClassExpression })._ts;
+				return new ClassBodyNode(tn, parent, [tn.members.pos - 1, tn.end]);
+			} },
+		},
+	});
+const classDeclarationShape = classShape('ClassDeclaration');
+const classExpressionShape = classShape('ClassExpression');
+defineShapeRouter(SK.ClassDeclaration, (tsNode, parent) => new classDeclarationShape(tsNode, parent));
+defineShapeRouter(SK.ClassExpression, (tsNode, parent) => new classExpressionShape(tsNode, parent));
+
 defineShape<ts.ImportDeclaration>(SK.ImportDeclaration, {
 	type: 'ImportDeclaration',
 	consts: tn => ({ importKind: tn.importClause?.isTypeOnly ? 'type' : 'value' }),
@@ -2965,26 +3081,14 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 	switch (child.kind) {
 		case SK.SourceFile:
 			return new ProgramNode(child as ts.SourceFile, parent);
-		case SK.FunctionDeclaration:
-			return new FunctionDeclarationNode(child as ts.FunctionDeclaration, parent);
-		case SK.FunctionExpression:
-			return new FunctionExpressionNode(child as ts.FunctionExpression, parent);
-		case SK.ArrowFunction:
-			return new ArrowFunctionExpressionNode(child as ts.ArrowFunction, parent);
 		case SK.Parameter:
 			return convertParameter(child as ts.ParameterDeclaration, parent);
-		case SK.ImportClause:
-			return new ImportDefaultSpecifierNode(child as ts.ImportClause, parent);
 		case SK.ParenthesizedType:
 			return convertChild((child as ts.ParenthesizedTypeNode).type, parent);
 		case SK.ParenthesizedExpression:
 			return convertChild((child as ts.ParenthesizedExpression).expression, parent);
 		case SK.ComputedPropertyName:
 			return convertChild((child as ts.ComputedPropertyName).expression, parent);
-		case SK.ClassDeclaration:
-			return new ClassNode('ClassDeclaration', child as ts.ClassDeclaration, parent);
-		case SK.ClassExpression:
-			return new ClassNode('ClassExpression', child as ts.ClassExpression, parent);
 		case SK.MethodDeclaration: {
 			// In an ObjectLiteralExpression, a MethodDeclaration becomes a
 			// Property with `method: true` and a FunctionExpression value
@@ -3419,60 +3523,6 @@ class TSTypeQueryWrappingNode extends SyntheticLazyNode {
 // Classes — typescript-estree assembles `body` from the class members
 // filtered through `isESTreeClassMember`. MVP just passes them through;
 // HeritageClause folded into superClass / implements via inline scan.
-
-class ClassNode extends LazyNode {
-	readonly type: 'ClassDeclaration' | 'ClassExpression';
-	readonly abstract: boolean;
-	readonly declare: boolean;
-	readonly superTypeArguments = undefined;
-	readonly superTypeParameters = undefined;
-	private _typeParameters?: LazyNode | undefined;
-	private _id?: LazyNode | null;
-	private _body?: ClassBodyNode;
-	private _superClass?: LazyNode | null;
-	private _implements?: (LazyNode | null)[];
-	private _decorators?: (LazyNode | null)[];
-	get decorators() {
-		return this._decorators ??= convertDecorators(this._ts, this);
-	}
-
-	constructor(
-		type: 'ClassDeclaration' | 'ClassExpression',
-		tsNode: ts.ClassDeclaration | ts.ClassExpression,
-		parent: LazyNode,
-	) {
-		super(tsNode, parent);
-		this.type = type;
-		this.abstract = !!tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword);
-		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
-	}
-	get id() {
-		return this._id ??= convertChild((this._ts as ts.ClassDeclaration).name, this);
-	}
-	get typeParameters() {
-		if (this._typeParameters !== undefined) return this._typeParameters;
-		return this._typeParameters = convertTypeParameters((this._ts as ts.ClassDeclaration).typeParameters, this);
-	}
-	get body() {
-		if (this._body) return this._body;
-		const ts_ = this._ts as ts.ClassDeclaration;
-		const range: [number, number] = [ts_.members.pos - 1, ts_.end];
-		return this._body = new ClassBodyNode(ts_, this, range);
-	}
-	get superClass() {
-		if (this._superClass !== undefined) return this._superClass;
-		const ext = (this._ts as ts.ClassDeclaration).heritageClauses
-			?.find(h => h.token === SK.ExtendsKeyword);
-		const t = ext?.types[0]?.expression;
-		return this._superClass = t ? convertChild(t, this) : null;
-	}
-	get implements() {
-		if (this._implements) return this._implements;
-		const impl = (this._ts as ts.ClassDeclaration).heritageClauses
-			?.find(h => h.token === SK.ImplementsKeyword);
-		return this._implements = impl ? convertChildren(impl.types, this) : [];
-	}
-}
 
 class ClassBodyNode extends SyntheticLazyNode {
 	readonly type = 'ClassBody' as const;
@@ -3966,143 +4016,10 @@ class TSInterfaceBodyNode extends SyntheticLazyNode {
 // Imports — typescript-estree assembles ImportDeclaration.specifiers from
 // the import clause / named bindings / namespace import; we replicate.
 // ImportClause maps to ImportDefaultSpecifier in ESTree (when it has a name).
-class ImportDefaultSpecifierNode extends LazyNode {
-	readonly type = 'ImportDefaultSpecifier' as const;
-	private _local?: LazyNode | null;
-
-	constructor(tsNode: ts.ImportClause, parent: LazyNode) {
-		super(tsNode, parent);
-		// typescript-estree narrows the range to the local name's range.
-		if (tsNode.name) {
-			const local = convertChild(tsNode.name, this);
-			if (local) {
-				this._local = local;
-				this.range = [...local.range] as [number, number];
-			}
-		}
-	}
-
-	get local() {
-		return this._local ??= convertChild((this._ts as ts.ImportClause).name, this);
-	}
-}
-
 // Function-like declarations share a shape — id (sometimes), params,
 // body, returnType, generator/async/declare modifiers. typescript-estree
 // flattens this into per-kind cases (FunctionDeclaration, FunctionExpression,
 // ArrowFunction); we do the same to keep `this.type` literal.
-
-class FunctionDeclarationNode extends LazyNode {
-	readonly type: 'FunctionDeclaration' | 'TSDeclareFunction';
-	readonly async: boolean;
-	readonly declare: boolean;
-	readonly generator: boolean;
-	readonly expression = false;
-	private _typeParameters?: LazyNode | undefined;
-	private _id?: LazyNode | null;
-	private _params?: (LazyNode | null)[];
-	private _body?: LazyNode | null | undefined;
-	private _returnType?: LazyNode | null | undefined;
-
-	constructor(tsNode: ts.FunctionDeclaration, parent: LazyNode) {
-		super(tsNode, parent);
-		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
-		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
-		this.generator = !!tsNode.asteriskToken;
-		this.type = tsNode.body ? 'FunctionDeclaration' : 'TSDeclareFunction';
-	}
-	get id() {
-		return this._id ??= convertChild((this._ts as ts.FunctionDeclaration).name, this);
-	}
-	get typeParameters() {
-		if (this._typeParameters !== undefined) return this._typeParameters;
-		return this._typeParameters = convertTypeParameters((this._ts as ts.FunctionDeclaration).typeParameters, this);
-	}
-	get params() {
-		return this._params ??= convertChildren((this._ts as ts.FunctionDeclaration).parameters, this);
-	}
-	get body() {
-		if (this._body !== undefined) return this._body;
-		const b = (this._ts as ts.FunctionDeclaration).body;
-		return this._body = b ? convertChild(b, this) : undefined;
-	}
-	get returnType() {
-		if (this._returnType !== undefined) return this._returnType;
-		const t = (this._ts as ts.FunctionDeclaration).type;
-		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
-	}
-}
-
-class FunctionExpressionNode extends LazyNode {
-	readonly type = 'FunctionExpression' as const;
-	readonly async: boolean;
-	readonly declare = false;
-	readonly generator: boolean;
-	readonly expression = false;
-	private _typeParameters?: LazyNode | undefined;
-	private _id?: LazyNode | null;
-	private _params?: (LazyNode | null)[];
-	private _body?: LazyNode | null;
-	private _returnType?: LazyNode | null | undefined;
-
-	constructor(tsNode: ts.FunctionExpression, parent: LazyNode) {
-		super(tsNode, parent);
-		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
-		this.generator = !!tsNode.asteriskToken;
-	}
-	get id() {
-		return this._id ??= convertChild((this._ts as ts.FunctionExpression).name, this);
-	}
-	get typeParameters() {
-		if (this._typeParameters !== undefined) return this._typeParameters;
-		return this._typeParameters = convertTypeParameters((this._ts as ts.FunctionExpression).typeParameters, this);
-	}
-	get params() {
-		return this._params ??= convertChildren((this._ts as ts.FunctionExpression).parameters, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.FunctionExpression).body, this);
-	}
-	get returnType() {
-		if (this._returnType !== undefined) return this._returnType;
-		const t = (this._ts as ts.FunctionExpression).type;
-		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
-	}
-}
-
-class ArrowFunctionExpressionNode extends LazyNode {
-	readonly type = 'ArrowFunctionExpression' as const;
-	readonly async: boolean;
-	readonly generator = false;
-	readonly id = null;
-	readonly expression: boolean;
-	private _typeParameters?: LazyNode | undefined;
-	private _params?: (LazyNode | null)[];
-	private _body?: LazyNode | null;
-	private _returnType?: LazyNode | null | undefined;
-
-	constructor(tsNode: ts.ArrowFunction, parent: LazyNode) {
-		super(tsNode, parent);
-		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
-		// `expression: true` for `() => x`, `false` for `() => { x }`.
-		this.expression = tsNode.body.kind !== SK.Block;
-	}
-	get params() {
-		return this._params ??= convertChildren((this._ts as ts.ArrowFunction).parameters, this);
-	}
-	get typeParameters() {
-		if (this._typeParameters !== undefined) return this._typeParameters;
-		return this._typeParameters = convertTypeParameters((this._ts as ts.ArrowFunction).typeParameters, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.ArrowFunction).body, this);
-	}
-	get returnType() {
-		if (this._returnType !== undefined) return this._returnType;
-		const t = (this._ts as ts.ArrowFunction).type;
-		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
-	}
-}
 
 // Parameter — typescript-estree (line 1156) builds it in steps:
 //   1. Pick the inner shape (RestElement / AssignmentPattern / plain Identifier).
