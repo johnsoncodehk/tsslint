@@ -317,13 +317,44 @@ function getLocFor(ast: ts.SourceFile, start: number, end: number) {
 	};
 }
 
+// `parent` is a lazy field — computed on first access via `resolveParent`
+// (walks the TS parent chain to find the canonical ESTree parent, applying
+// SKIP_AS_PARENT / WRAPPER_DRILLS / ExportWrapper unwrap). Sentinel marks
+// "not yet computed" so we can distinguish from `null` (root, no parent).
+//
+// This avoids the cost of eagerly building the parent chain for leaves
+// produced by bottom-up materialise. Rules that read `node.parent` pay
+// the resolve cost on first access (memoised); rules that don't read it
+// pay zero. Wrappers that re-parent inner nodes (AssignmentPattern,
+// ChainExpressionWrapping, ExportNamed/Default, TSParameterProperty,
+// TSTypeQueryWrapping) write through the setter — `_parent` is set
+// directly, getter short-circuits.
+const PARENT_UNSET: unique symbol = Symbol('parent-unset');
+
 abstract class LazyNode {
 	// Architectural gate: every concrete LazyNode subclass's `type` must
 	// be a member of KnownEstreeType. Prevents introducing phantom types
 	// like 'TSJsxAttributes' that don't exist in typescript-estree's
 	// shape. New ESTree shape = add to KnownEstreeType first.
 	abstract readonly type: KnownEstreeType;
-	parent: LazyNode | null;
+	private _parent: LazyNode | null | typeof PARENT_UNSET = PARENT_UNSET;
+	get parent(): LazyNode | null {
+		if (this._parent !== PARENT_UNSET) return this._parent;
+		const resolved = resolveParent(this._ts, this._ctx);
+		// `resolveParent` materialises ancestors as a side effect, and
+		// some wrapper constructors (ChainExpression, MemberExpression's
+		// `object` slot, etc.) re-point THIS node's parent via the
+		// setter. If that happened, prefer the side-effect value over
+		// `resolved` — wrappers like ChainExpression occupy the same TS
+		// slot as their inner expression, so resolveParent returns the
+		// outer wrapper, but the inner slot's `convertChild` already
+		// pointed us at the correct intermediate parent.
+		if (this._parent !== PARENT_UNSET) return this._parent;
+		return this._parent = resolved;
+	}
+	set parent(p: LazyNode | null) {
+		this._parent = p;
+	}
 	_ts: ts.Node;
 	// Conversion context shared with descendants. Children created via getter
 	// inherit this from the parent — the root sets it from `convertLazy`.
@@ -354,7 +385,7 @@ abstract class LazyNode {
 		this._loc = v;
 	}
 
-	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
+	constructor(tsNode: ts.Node, parent: LazyNode | null | undefined, context?: ConvertContext) {
 		// `_ts` MUST be set first — the `_registersInMaps()` call below
 		// dispatches through the prototype to a subclass override (see
 		// SyntheticLazyNode and the factory's `registersInMaps` option),
@@ -362,8 +393,14 @@ abstract class LazyNode {
 		// (e.g. JSXOpeningElement: real for JsxOpeningElement, synthetic
 		// for JsxSelfClosingElement). Reordering breaks that contract.
 		this._ts = tsNode;
-		this.parent = parent;
-		this._ctx = context ?? parent!._ctx;
+		// `parent === undefined` is the lazy-parent path: caller doesn't
+		// know the ESTree parent yet. Skip the assignment so `_parent`
+		// stays at PARENT_UNSET — first read of `.parent` triggers
+		// `resolveParent`. ctx falls back to `currentCtx` (set by
+		// `materialize` for the lazy-leaf path) when no parent is
+		// available to inherit from.
+		if (parent !== undefined) this._parent = parent;
+		this._ctx = context ?? parent?._ctx ?? currentCtx!;
 		if (this._registersInMaps()) {
 			this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
 			// esTreeNodeToTSNodeMap is a facade reading _ts — no .set needed.
@@ -1184,8 +1221,11 @@ function findWrapperRoute(tsNode: ts.Node):
 //     this)` per slot, which builds the child and registers it in
 //     `tsNodeToESTreeNodeMap`.
 //   - Bottom-up: scope-manager's `tsToEstreeOrStub(tsNode)` calls
-//     `materialize(tsNode, ctx)` to walk UP the parent chain looking
-//     for a cached ancestor, then builds DOWN to the requested node.
+//     `materialize(tsNode, ctx)` to construct ONLY the requested node
+//     with `parent: undefined`. The first read of `.parent` on that
+//     node triggers `resolveParent`, which walks the TS chain
+//     incrementally — one ancestor per `.parent` step — so rules that
+//     never read `.parent` never pay for the chain.
 //
 // The cache keyed on TS node identity is what makes the two flows
 // converge: child_b walking up hits the same tsParent in the cache
@@ -1217,189 +1257,87 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 		}
 		return result as LazyNode;
 	}
-	// Walk up the TS parent chain iteratively, collecting nodes that need
-	// building. Stops at the first cached ancestor (e.g. SourceFile, which
-	// convertLazy always pre-registers) — or at any ancestor that itself
-	// requires a wrapper route, in which case we fall back to the recursive
-	// path for that one node.
-	//
-	// One walk + one downward build replaces N recursive `materialize()`
-	// calls. Saves N-1 frame setups, N-1 redundant per-call cache lookups,
-	// and the parameter-passing overhead between layers.
-	const toBuild: ts.Node[] = [tsNode];
+	// Lazy-leaf path: construct ONLY this node, with `parent: undefined` so
+	// `_parent` stays at PARENT_UNSET. The first read of `.parent` triggers
+	// `resolveParent`, which walks the TS parent chain on demand — so rules
+	// that never read `.parent` (e.g. JSX-attribute counters that only use
+	// the materialised leaf) avoid building the entire ancestor chain.
+	const prevCtx = currentCtx;
+	currentCtx = ctx;
+	let node: LazyNode | undefined;
+	try {
+		node = convertChildInner(tsNode, undefined) ?? undefined;
+		if (node && EXPORTABLE_KINDS.has(tsNode.kind)) {
+			node = maybeFixExports(tsNode, node, undefined) ?? undefined;
+		}
+	}
+	finally {
+		currentCtx = prevCtx;
+	}
+	if (!node) {
+		// convertChild returns null for kinds with no ESTree counterpart
+		// (HeritageClause, OmittedExpression, JsxText). Bottom-up
+		// materialise wants SOMETHING rather than nothing.
+		return new GenericTSNode(tsNode, null, ctx);
+	}
+	return node;
+}
+
+// Resolve a node's ESTree parent on demand. Walks the TS parent chain
+// applying SKIP_AS_PARENT, materialises the first real ancestor, then
+// applies Export-wrapper unwrap + WRAPPER_DRILLS so the resolved parent
+// matches what the eager downward build used to produce.
+//
+// Called from the lazy `parent` getter on LazyNode. Returns null only for
+// the SourceFile itself (whose ESTree counterpart, ProgramShape, is
+// pre-registered with parent=null by `convertLazy`).
+function resolveParent(tsNode: ts.Node, ctx: ConvertContext): LazyNode | null {
 	let walker: ts.Node | undefined = tsNode.parent;
-	let parent: LazyNode | null = null;
-	const tsCache = ctx.maps.tsNodeToESTreeNodeMap;
 	while (walker) {
-		// Structural-only TS kinds (no ESTree counterpart in their usual
-		// position) are declared in SKIP_AS_PARENT. The walker skips past
-		// them so the child's parent resolves to the next-level real
-		// ESTree ancestor.
 		if (shouldSkipAsParent(walker)) {
 			walker = walker.parent;
 			continue;
 		}
-		const cachedAnc = tsCache.get(walker);
-		if (cachedAnc) {
-			parent = cachedAnc as LazyNode;
-			// Step 1: unwrap Export wrappers. For `export class Foo {}` the
-			// cache holds ExportNamedDeclaration { declaration: ClassDecl };
-			// the actual parent of class members is the inner declaration,
-			// not the wrapper. Default to the inner; specific drills below
-			// can override (class body, function value, etc.).
-			let drillFrom: LazyNode = parent;
-			let drillType = (drillFrom as { type?: string }).type;
-			while (drillType === 'ExportNamedDeclaration' || drillType === 'ExportDefaultDeclaration') {
-				const decl = (drillFrom as unknown as { declaration?: LazyNode }).declaration;
-				if (!decl) break;
-				drillFrom = decl;
-				drillType = (drillFrom as { type?: string }).type;
-			}
-			if (drillFrom !== parent) parent = drillFrom;
-			// Step 2: apply the first matching wrapper drill (synthetic
-			// intermediate slot like ClassBody / FunctionExpression.value /
-			// AssignmentPattern). See WRAPPER_DRILLS for the table.
-			const innermostChild = toBuild.length > 0 ? toBuild[toBuild.length - 1] : tsNode;
-			for (const d of WRAPPER_DRILLS) {
-				if (d.match(walker, drillType, innermostChild)) {
-					const drilled = d.drill(drillFrom as any, walker);
-					if (drilled) parent = drilled;
-					break;
-				}
-			}
-			break;
+		// Materialise the walker — cache hit, wrapper-route trigger, or
+		// fresh leaf with its own deferred parent. Recursive resolution
+		// happens incrementally as ancestors' `.parent` is read.
+		const parent = materialize(walker, ctx);
+		// Collapse detection: some routers (BindingElement → Identifier,
+		// ParenthesizedExpression → inner expression, etc.) return a
+		// LazyNode whose `_ts` is NOT the walker — the walker has no
+		// ESTree counterpart of its own and is "collapsed" into the
+		// inner. We must keep walking up so we don't return ourselves
+		// as our own parent (or wrap the wrong slot below).
+		if (parent._ts !== walker) {
+			walker = walker.parent;
+			continue;
 		}
-		// Wrapper-routed ancestors need the slow recursive path so the
-		// trigger fires and registers the right wrapper. Hand off there.
-		if (findWrapperRoute(walker)) {
-			parent = materialize(walker, ctx);
-			break;
+		// Step 1: unwrap Export wrappers. For `export class Foo {}` the
+		// cache holds ExportNamedDeclaration { declaration: ClassDecl };
+		// the actual parent of class members is the inner declaration,
+		// not the wrapper. Default to the inner; specific drills below
+		// can override (class body, function value, etc.).
+		let drillFrom: LazyNode = parent;
+		let drillType = (drillFrom as { type?: string }).type;
+		while (drillType === 'ExportNamedDeclaration' || drillType === 'ExportDefaultDeclaration') {
+			const decl = (drillFrom as unknown as { declaration?: LazyNode }).declaration;
+			if (!decl) break;
+			drillFrom = decl;
+			drillType = (drillFrom as { type?: string }).type;
 		}
-		toBuild.push(walker);
-		walker = walker.parent;
+		// Step 2: apply the first matching wrapper drill (synthetic
+		// intermediate slot like ClassBody / FunctionExpression.value /
+		// AssignmentPattern). See WRAPPER_DRILLS for the table.
+		for (const d of WRAPPER_DRILLS) {
+			if (d.match(walker, drillType, tsNode)) {
+				const drilled = d.drill(drillFrom as any, walker);
+				if (drilled) return drilled;
+				break;
+			}
+		}
+		return drillFrom;
 	}
-	if (!parent) {
-		// No ESTree ancestor — should only happen for the SourceFile itself,
-		// which convertLazy() always pre-registers. As a last resort, hand
-		// back a generic node anchored to nothing. ctx is required because
-		// the null parent gives the LazyNode constructor nothing to inherit
-		// _ctx from.
-		return new GenericTSNode(tsNode, null, ctx);
-	}
-	// Build downward: innermost element of `toBuild` is the original
-	// tsNode, outermost is the closest ts.Node to the cached ancestor.
-	// Iterate from the outer end inward, threading `parent` through.
-	//
-	// Cache check between iterations: convertChildInner can collapse a
-	// wrapper kind into its inner (e.g. ArrayBindingPattern's
-	// `BindingElement` returns `convertChild(be.name, parent)`, which
-	// registers the inner Identifier in `tsNodeToESTreeNodeMap`). The
-	// next iteration's child IS that inner Identifier — without the
-	// cache check, we'd build a SECOND Identifier wrapping the first,
-	// breaking `ref.identifier.parent.type` (parent reads as 'Identifier'
-	// instead of 'ArrayPattern' / 'ObjectPattern'). prefer-const's
-	// `getDestructuringHost` walks `id.parent` looking for a Pattern
-	// type; the duplicate Identifier broke that walk and silently
-	// dropped every destructure-binding report.
-	const tsCache2 = ctx.maps.tsNodeToESTreeNodeMap;
-	for (let i = toBuild.length - 1; i >= 0; i--) {
-		const child = toBuild[i];
-		let node = tsCache2.get(child) as LazyNode | undefined;
-		if (!node) {
-			node = convertChildInner(child, parent) ?? undefined;
-			if (node && EXPORTABLE_KINDS.has(child.kind)) {
-				node = maybeFixExports(child, node, parent) ?? undefined;
-			}
-		}
-		if (!node) {
-			// convertChild returns null for kinds with no ESTree counterpart
-			// (HeritageClause, OmittedExpression, JsxText). Bottom-up
-			// materialise wants SOMETHING rather than nothing.
-			return new GenericTSNode(child, parent);
-		}
-		// Wrapper drill (downward variant): mirror the cache-hit drill above
-		// so the next iteration's `convertChildInner(nextChild, parent)`
-		// receives the synthetic body container as its parent. Hits when a
-		// rule listens only on a class member kind and the enclosing
-		// ts.ClassDeclaration was never materialised first — the member's
-		// parent walk pushes both onto toBuild, and without this drill the
-		// member's `parent` reads as ClassDeclaration, skipping ClassBody.
-		// Same fix needed for TSInterfaceBody / TSEnumBody / and the
-		// TSParameterProperty → AssignmentPattern case.
-		let next: LazyNode = node;
-		if (i > 0) {
-			const nextChild = toBuild[i - 1];
-			const nextChildKind = nextChild.kind;
-			// Unwrap Export wrappers first — for `export class Foo {}` the
-			// cache holds ExportNamedDeclaration { declaration: ClassDecl },
-			// and class members live inside the inner declaration's body.
-			let inner: LazyNode = node;
-			let innerType = (inner as { type?: string }).type;
-			while (innerType === 'ExportNamedDeclaration' || innerType === 'ExportDefaultDeclaration') {
-				const decl = (inner as unknown as { declaration?: LazyNode }).declaration;
-				if (!decl) break;
-				inner = decl;
-				innerType = (inner as { type?: string }).type;
-			}
-			// Default after Export-unwrap: child's parent is the inner
-			// declaration, not the wrapper. Mirrors the cache-hit drill.
-			if (inner !== node) next = inner;
-			if (
-				(innerType === 'ClassDeclaration' || innerType === 'ClassExpression')
-				&& CLASS_MEMBER_KINDS_SET[nextChildKind] === 1
-			) {
-				const body = (inner as unknown as { body?: LazyNode }).body;
-				if (body) next = body;
-			}
-			else if (
-				innerType === 'TSInterfaceDeclaration'
-				&& INTERFACE_MEMBER_KINDS_SET[nextChildKind] === 1
-			) {
-				const body = (inner as unknown as { body?: LazyNode }).body;
-				if (body) next = body;
-			}
-			else if (
-				innerType === 'TSEnumDeclaration'
-				&& nextChildKind === SK.EnumMember
-			) {
-				const body = (inner as unknown as { body?: LazyNode }).body;
-				if (body) next = body;
-			}
-			else if (
-				innerType === 'TSParameterProperty'
-				&& child.kind === SK.Parameter
-				&& nextChild === (child as ts.ParameterDeclaration).initializer
-			) {
-				const ap = (inner as unknown as { parameter?: LazyNode }).parameter;
-				if (ap && (ap as { type?: string }).type === 'AssignmentPattern') {
-					next = ap;
-				}
-			}
-			else if (
-				(innerType === 'MethodDefinition' || innerType === 'TSAbstractMethodDefinition' || innerType === 'Property')
-				&& (child.kind === SK.MethodDeclaration || child.kind === SK.Constructor
-					|| child.kind === SK.GetAccessor || child.kind === SK.SetAccessor
-					|| child.kind === SK.PropertyAssignment || child.kind === SK.ShorthandPropertyAssignment)
-			) {
-				// Children of ts method/constructor/accessor map onto
-				// FunctionExpression slots EXCEPT for `name` (the key).
-				const namedChild =
-					(child.kind === SK.MethodDeclaration || child.kind === SK.GetAccessor || child.kind === SK.SetAccessor)
-						? (child as ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name
-						: child.kind === SK.PropertyAssignment
-						? (child as ts.PropertyAssignment).name
-						: child.kind === SK.ShorthandPropertyAssignment
-						? (child as ts.ShorthandPropertyAssignment).name
-						: undefined;
-				if (nextChild !== namedChild) {
-					const value = (inner as unknown as { value?: LazyNode }).value;
-					if (value) next = value;
-				}
-			}
-		}
-		parent = next;
-	}
-	return parent;
+	return null;
 }
 
 // Kinds whose top-level form (`export function f` etc.) gets wrapped in
@@ -1419,7 +1357,11 @@ const EXPORTABLE_KINDS = new Set<ts.SyntaxKind>([
 // carries an `export` keyword, wrap the result in
 // ExportNamedDeclaration / ExportDefaultDeclaration and shrink the inner
 // declaration's range so it starts AFTER the keyword.
-function maybeFixExports(tsNode: ts.Node, inner: LazyNode, parent: LazyNode): LazyNode {
+function maybeFixExports(
+	tsNode: ts.Node,
+	inner: LazyNode,
+	parent: LazyNode | null | undefined,
+): LazyNode {
 	const modifiers = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
 	if (!modifiers?.length || modifiers[0].kind !== SK.ExportKeyword) return inner;
 	const exportKeyword = modifiers[0];
@@ -1429,11 +1371,11 @@ function maybeFixExports(tsNode: ts.Node, inner: LazyNode, parent: LazyNode): La
 	// Adjust inner's range to start after `export` (or `export default`).
 	const declStart = (isDefault ? next : exportKeyword).getEnd();
 	let cursor = declStart;
-	const text = parent._ctx.ast.text;
+	const text = inner._ctx.ast.text;
 	while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
 	(inner as unknown as { range: [number, number] }).range = [cursor, inner.range[1]];
 
-	const wrapperRange: [number, number] = [exportKeyword.getStart(parent._ctx.ast), inner.range[1]];
+	const wrapperRange: [number, number] = [exportKeyword.getStart(inner._ctx.ast), inner.range[1]];
 	if (isDefault) {
 		return new ExportDefaultWrappingNode(tsNode, parent, inner, wrapperRange);
 	}
@@ -1447,14 +1389,36 @@ function maybeFixExports(tsNode: ts.Node, inner: LazyNode, parent: LazyNode): La
 // ObjectLiteralExpression dispatch as ArrayPattern / ObjectPattern.
 let allowPattern = false;
 
+// Module-level ctx for the lazy-leaf path: when `materialize` constructs a
+// leaf with `parent: undefined`, downstream routers that fall through to
+// `convertChild(child, parent)` need ctx to do the cache check. Set on
+// entry to materialize, restored on exit. JS is single-threaded so this
+// is safe; a re-entrant materialize call uses the same ctx anyway (one
+// ctx per source file).
+let currentCtx: ConvertContext | undefined;
+
 // Dispatch: TS SyntaxKind → lazy ESTree class. Returns null for null/undefined
 // (matching typescript-estree's `converter()` early-exit on falsy input).
 // Cached: if the same TS node has been converted before (e.g. via a parent's
 // child slot then later via getDeclaredVariables), return the same instance.
-function convertChild(child: ts.Node | undefined | null, parent: LazyNode): LazyNode | null {
+function convertChild(
+	child: ts.Node | undefined | null,
+	parent: LazyNode | null | undefined,
+): LazyNode | null {
 	if (!child) return null;
-	const cached = parent._ctx.maps.tsNodeToESTreeNodeMap.get(child);
-	if (cached) return cached as LazyNode;
+	const ctx = parent?._ctx ?? currentCtx!;
+	const cached = ctx.maps.tsNodeToESTreeNodeMap.get(child);
+	if (cached) {
+		// Lazy-leaf path: a cached child built earlier with `parent: undefined`
+		// has `_parent === PARENT_UNSET`. Each TS node has one ESTree parent,
+		// so the slot owner who's calling us IS that parent — fill it in now
+		// so subsequent `.parent` reads don't trigger `resolveParent` (and
+		// don't drill into the wrong wrapper).
+		if (parent !== undefined && (cached as { _parent?: unknown })._parent === PARENT_UNSET) {
+			(cached as LazyNode).parent = parent;
+		}
+		return cached as LazyNode;
+	}
 	const inner = convertChildInner(child, parent);
 	if (inner && EXPORTABLE_KINDS.has(child.kind)) {
 		return maybeFixExports(child, inner, parent);
@@ -1462,7 +1426,10 @@ function convertChild(child: ts.Node | undefined | null, parent: LazyNode): Lazy
 	return inner;
 }
 
-function convertChildAsPattern(child: ts.Node | undefined | null, parent: LazyNode): LazyNode | null {
+function convertChildAsPattern(
+	child: ts.Node | undefined | null,
+	parent: LazyNode | null | undefined,
+): LazyNode | null {
 	const prev = allowPattern;
 	allowPattern = true;
 	try {
@@ -1573,13 +1540,13 @@ interface ShapeDef<TsT extends ts.Node = ts.Node> {
 // becomes MethodDefinition vs Property based on whether parent is a
 // class or object literal).
 type ShapeDispatch =
-	| { def: ShapeDef<any>; cls: new(tsNode: ts.Node, parent: LazyNode | null) => LazyNode }
-	| { route: (tsNode: ts.Node, parent: LazyNode | null) => LazyNode | null };
+	| { def: ShapeDef<any>; cls: new(tsNode: ts.Node, parent: LazyNode | null | undefined) => LazyNode }
+	| { route: (tsNode: ts.Node, parent: LazyNode | null | undefined) => LazyNode | null };
 const SHAPE_CLASSES = new Map<ts.SyntaxKind, ShapeDispatch>();
 
 function makeShapeClass<TsT extends ts.Node>(
 	def: ShapeDef<TsT>,
-): new(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) => LazyNode {
+): new(tsNode: ts.Node, parent: LazyNode | null | undefined, context?: ConvertContext) => LazyNode {
 	// `defaults` writes own-properties; slot getters live on the prototype.
 	// A collision lets the default silently shadow the slot — the slot
 	// becomes unreachable. Catch at module load before any conversion runs.
@@ -1603,10 +1570,11 @@ function makeShapeClass<TsT extends ts.Node>(
 		// Subclass overrides — assigned in constructor body. The base
 		// class's `abstract readonly type` is satisfied by the assignment.
 		readonly type!: KnownEstreeType;
-		// `context` is only needed when `parent` is null — happens for the
-		// root Program (convertLazy passes ctx) and for materialise's
-		// fallback GenericTSNode when the TS parent chain is exhausted.
-		constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
+		// `context` is only needed when `parent` is nullish (null = root,
+		// undefined = lazy-parent leaf): for the root Program (convertLazy
+		// passes ctx), the GenericTSNode fallback, and `materialize()`'s
+		// lazy-leaf path.
+		constructor(tsNode: ts.Node, parent: LazyNode | null | undefined, context?: ConvertContext) {
 			super(tsNode, parent, context);
 			(this as { type: KnownEstreeType }).type = typeof def.type === 'function'
 				? def.type(tsNode as TsT)
@@ -1662,7 +1630,7 @@ function defineShape<TsT extends ts.Node>(tsKind: ts.SyntaxKind, def: ShapeDef<T
 // defineShape entries.
 function defineShapeRouter(
 	tsKind: ts.SyntaxKind,
-	route: (tsNode: ts.Node, parent: LazyNode | null) => LazyNode | null,
+	route: (tsNode: ts.Node, parent: LazyNode | null | undefined) => LazyNode | null,
 ): void {
 	SHAPE_CLASSES.set(tsKind, { route });
 }
@@ -2493,13 +2461,12 @@ defineShape<ts.NumericLiteral>(SK.NumericLiteral, {
 });
 defineShape<ts.StringLiteral>(SK.StringLiteral, {
 	type: 'Literal',
-	consts: (tn, instance) => {
+	consts: tn => {
 		// JSX attribute string values get HTML entity decoding (eager
 		// runs `unescapeStringLiteralText`); other contexts use the raw
-		// text. Parent's _ts is set in super() before consts runs, so
-		// the kind check is reliable.
-		const parentKind = (instance.parent as { _ts: ts.Node } | null)?._ts.kind;
-		const value = parentKind === SK.JsxAttribute
+		// text. Read the TS parent directly so we don't trigger lazy
+		// parent resolution from inside the constructor.
+		const value = tn.parent.kind === SK.JsxAttribute
 			? unescapeJsxText(tn.text)
 			: tn.text;
 		return { value };
@@ -2713,12 +2680,13 @@ const tsLiteralTypeShape = makeShapeClass<ts.LiteralTypeNode>({
 defineShapeRouter(SK.LiteralType, (tsNode, parent) => {
 	const lit = tsNode as ts.LiteralTypeNode;
 	if (lit.literal.kind === SK.NullKeyword) {
-		const node = new TypeKeywordNode('TSNullKeyword', lit.literal, parent!);
+		const node = new TypeKeywordNode('TSNullKeyword', lit.literal, parent);
 		// Eager registers BOTH the inner NullKeyword AND the outer
 		// LiteralType under the same ESTree node — without the outer
 		// entry, Parameter.type's wrapper-route post-check throws on
-		// `function f(x: null = null)`.
-		parent!._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, node);
+		// `function f(x: null = null)`. Read ctx off the just-built
+		// `node` so this works under the lazy-leaf path (parent === undefined).
+		node._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, node);
 		return node;
 	}
 	return new tsLiteralTypeShape(tsNode, parent);
@@ -3250,7 +3218,10 @@ const objectBindingElementShape = makeShapeClass<ts.BindingElement>({
 });
 defineShapeRouter(SK.BindingElement, (tsNode, parent) => {
 	const be = tsNode as ts.BindingElement;
-	if (parent && parent._ts.kind === SK.ArrayBindingPattern) {
+	// Read the TS parent kind directly — we no longer rely on the resolved
+	// LazyNode parent here (the parent argument may be undefined under the
+	// lazy-parent path; routers must work without it).
+	if (be.parent.kind === SK.ArrayBindingPattern) {
 		if (be.dotDotDotToken) {
 			return new RestElementNode(be, parent);
 		}
@@ -3346,19 +3317,19 @@ const methodDefinitionShape = makeShapeClass<
 });
 
 defineShapeRouter(SK.MethodDeclaration, (tsNode, parent) => {
-	if (parent && parent._ts.kind === SK.ObjectLiteralExpression) {
+	if (tsNode.parent.kind === SK.ObjectLiteralExpression) {
 		return new objectMethodShape(tsNode, parent);
 	}
 	return new methodDefinitionShape(tsNode, parent);
 });
 defineShapeRouter(SK.GetAccessor, (tsNode, parent) => {
-	if (parent && parent._ts.kind === SK.ObjectLiteralExpression) {
+	if (tsNode.parent.kind === SK.ObjectLiteralExpression) {
 		return new objectGetAccessorShape(tsNode, parent);
 	}
 	return new methodDefinitionShape(tsNode, parent);
 });
 defineShapeRouter(SK.SetAccessor, (tsNode, parent) => {
-	if (parent && parent._ts.kind === SK.ObjectLiteralExpression) {
+	if (tsNode.parent.kind === SK.ObjectLiteralExpression) {
 		return new objectSetAccessorShape(tsNode, parent);
 	}
 	return new methodDefinitionShape(tsNode, parent);
@@ -3448,7 +3419,7 @@ defineShape<ts.ImportDeclaration>(SK.ImportDeclaration, {
 	},
 });
 
-function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
+function convertChildInner(child: ts.Node, parent: LazyNode | null | undefined): LazyNode | null {
 	const dispatch = SHAPE_CLASSES.get(child.kind);
 	if (dispatch) {
 		if ('route' in dispatch) {
@@ -3571,7 +3542,7 @@ function convertTypeAnnotation(child: ts.Node, parent: LazyNode): LazyNode {
 function wrapChainIfNeeded(
 	result: LazyNode,
 	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
-	parent: LazyNode | null,
+	parent: LazyNode | null | undefined,
 ): LazyNode {
 	const r = result as unknown as {
 		type: string;
@@ -3612,8 +3583,8 @@ function wrapChainIfNeeded(
 class ChainExpressionWrappingNode extends SyntheticLazyNode {
 	readonly type = 'ChainExpression' as const;
 	readonly expression: LazyNode;
-	constructor(tsNode: ts.Node, parent: LazyNode | null, expression: LazyNode) {
-		super(tsNode, parent);
+	constructor(tsNode: ts.Node, parent: LazyNode | null | undefined, expression: LazyNode) {
+		super(tsNode, parent, expression._ctx);
 		// Take the wrapped node's range — eager createNode passes the same TS
 		// node, so loc is identical and the lazy getter recomputes when needed.
 		this.range = expression.range.slice() as [number, number];
@@ -3788,11 +3759,19 @@ const _TypeKeywordShape = makeShapeClass<ts.Node>({
 	type: tn => ('TS' + ts.SyntaxKind[tn.kind]) as TypeKeyword,
 	slots: {},
 });
-const TypeKeywordNode = function(type: TypeKeyword, tsNode: ts.Node, parent: LazyNode): LazyNode {
+const TypeKeywordNode = function(
+	type: TypeKeyword,
+	tsNode: ts.Node,
+	parent: LazyNode | null | undefined,
+): LazyNode {
 	const node = new _TypeKeywordShape(tsNode, parent);
 	(node as { type: KnownEstreeType }).type = type;
 	return node;
-} as unknown as new(type: TypeKeyword, tsNode: ts.Node, parent: LazyNode) => LazyNode;
+} as unknown as new(
+	type: TypeKeyword,
+	tsNode: ts.Node,
+	parent: LazyNode | null | undefined,
+) => LazyNode;
 
 // Type-position nodes — direct 1:1 with typescript-estree's cases.
 
@@ -3975,8 +3954,15 @@ class ExportNamedWrappingNode extends SyntheticLazyNode {
 	readonly specifiers: never[] = EMPTY_ARRAY;
 	readonly exportKind: 'value' | 'type';
 	readonly declaration: LazyNode;
-	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
-		super(tsNode, parent);
+	constructor(
+		tsNode: ts.Node,
+		parent: LazyNode | null | undefined,
+		declaration: LazyNode,
+		range: [number, number],
+	) {
+		// Inherit ctx from `declaration` so we can be constructed under
+		// the lazy-leaf path with parent === undefined.
+		super(tsNode, parent, declaration._ctx);
 		this.range = range;
 		// Inner gets re-pointed to us in the maps (eager registers the
 		// wrapper as the canonical mapping for the original TS node) AND
@@ -4001,8 +3987,13 @@ class ExportDefaultWrappingNode extends SyntheticLazyNode {
 	readonly type = 'ExportDefaultDeclaration' as const;
 	readonly exportKind: 'value' = 'value';
 	readonly declaration: LazyNode;
-	constructor(tsNode: ts.Node, parent: LazyNode, declaration: LazyNode, range: [number, number]) {
-		super(tsNode, parent);
+	constructor(
+		tsNode: ts.Node,
+		parent: LazyNode | null | undefined,
+		declaration: LazyNode,
+		range: [number, number],
+	) {
+		super(tsNode, parent, declaration._ctx);
 		this.range = range;
 		(declaration as { parent: LazyNode }).parent = this;
 		this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
@@ -4035,7 +4026,10 @@ const TSInterfaceBodyNode = makeShapeClass<ts.InterfaceDeclaration>({
 //   3. Extend range for `?`, set `optional`.
 //   4. Wrap in TSParameterProperty if there are class-constructor modifiers.
 // We mirror that structure.
-function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): LazyNode | null {
+function convertParameter(
+	tsNode: ts.ParameterDeclaration,
+	parent: LazyNode | null | undefined,
+): LazyNode | null {
 	const isClassPropertyModifier = (m: ts.ModifierLike) =>
 		m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
 		|| m.kind === SK.ReadonlyKeyword || m.kind === SK.OverrideKeyword;
@@ -4087,12 +4081,12 @@ function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): La
 
 	if (hasPropertyModifiers && result) {
 		const wrapper = new TSParameterPropertyNode(tsNode, parent, result, propertyModifiers);
-		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, wrapper);
+		wrapper._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, wrapper);
 		return wrapper;
 	}
 
 	if (result) {
-		parent._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, result);
+		result._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, result);
 	}
 	return result;
 }
@@ -4144,11 +4138,14 @@ class TSParameterPropertyNode extends LazyNode {
 	readonly parameter: LazyNode;
 	constructor(
 		tsNode: ts.ParameterDeclaration,
-		parent: LazyNode,
+		parent: LazyNode | null | undefined,
 		parameter: LazyNode,
 		mods: ReadonlyArray<ts.ModifierLike>,
 	) {
-		super(tsNode, parent);
+		// Inherit ctx from the inner `parameter` so we can be constructed
+		// with a lazy (undefined) parent. The lazy-leaf path in materialize
+		// has no resolved parent to inherit from.
+		super(tsNode, parent, parameter._ctx);
 		const accMod = mods.find(m =>
 			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
 		);
