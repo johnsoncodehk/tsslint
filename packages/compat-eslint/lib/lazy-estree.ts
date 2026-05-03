@@ -1519,6 +1519,13 @@ interface ShapeDef<TsT extends ts.Node = ts.Node> {
 	// re-parenting an inner node, registering an extra cache entry, or
 	// extending range from a not-yet-built child.
 	init?: (instance: any, tsNode: TsT) => void;
+	// Override the LazyNode `_registersInMaps()` predicate. Hybrid
+	// classes like JSXOpeningElement need this — synthetic when wrapping
+	// a JsxSelfClosingElement (the outer JSXElement owns the TS slot)
+	// and real otherwise. Called from the base constructor during super(),
+	// so it can only read fields set before the call (this._ts is the
+	// first thing assigned).
+	registersInMaps?: (tsNode: TsT) => boolean;
 }
 // Dispatch entry type — either a fixed ShapeDef (single class per kind)
 // or a router function that selects among multiple defs based on
@@ -1548,6 +1555,9 @@ function makeShapeClass<TsT extends ts.Node>(def: ShapeDef<TsT>): new(tsNode: ts
 			if (def.consts) Object.assign(this, def.consts(tsNode as TsT, this));
 			if (def.range) this.range = def.range(tsNode as TsT, this._ctx);
 			if (def.init) def.init(this, tsNode as TsT);
+		}
+		protected override _registersInMaps(): boolean {
+			return def.registersInMaps ? def.registersInMaps(this._ts as TsT) : true;
 		}
 	};
 	for (const [getter, slot] of Object.entries(def.slots)) {
@@ -2023,13 +2033,6 @@ defineShape<ts.JsxFragment>(SK.JsxFragment, {
 		children: { tsField: 'children', via: 'convertChildren' },
 	},
 });
-defineShape<ts.JsxNamespacedName>(SK.JsxNamespacedName, {
-	type: 'JSXNamespacedName',
-	slots: {
-		namespace: { tsField: 'namespace', via: (ns, parent) => new JSXIdentifierNode(ns, parent, (ns as ts.Identifier).text) },
-		name: { tsField: 'name', via: (nm, parent) => new JSXIdentifierNode(nm, parent, (nm as ts.Identifier).text) },
-	},
-});
 defineShape<ts.ImportSpecifier>(SK.ImportSpecifier, {
 	type: 'ImportSpecifier',
 	consts: tn => ({ importKind: tn.isTypeOnly ? 'type' : 'value' }),
@@ -2194,7 +2197,7 @@ defineShape<ts.TypePredicateNode>(SK.TypePredicate, {
 			const wrapper = convertTypeAnnotation(t, parent);
 			// Eager line 1908 strips the colon-prefixed range — predicate's
 			// typeAnnotation range matches the inner type, not the wrapper.
-			const inner = wrapper.typeAnnotation as { range: [number, number] } | null;
+			const inner = (wrapper as unknown as { typeAnnotation: { range: [number, number] } | null }).typeAnnotation;
 			if (inner) {
 				(wrapper as unknown as { range: [number, number] }).range = inner.range;
 			}
@@ -2320,7 +2323,7 @@ defineShape<ts.EnumDeclaration>(SK.EnumDeclaration, {
 		id: { tsField: 'name' },
 		body: { tsField: 'members', via: (_members, parent) => {
 			const tn = (parent as unknown as { _ts: ts.EnumDeclaration })._ts;
-			return new TSEnumBodyNode(tn, parent, [tn.members.pos - 1, tn.end]);
+			return new TSEnumBodyNode(tn, parent);
 		} },
 		members: { tsField: 'members', via: 'convertChildren' },
 	},
@@ -2348,7 +2351,7 @@ defineShape<ts.InterfaceDeclaration>(SK.InterfaceDeclaration, {
 		typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
 		body: { tsField: 'name', via: (_n, parent) => {
 			const tn = (parent as unknown as { _ts: ts.InterfaceDeclaration })._ts;
-			return new TSInterfaceBodyNode(tn, parent, [tn.members.pos - 1, tn.end]);
+			return new TSInterfaceBodyNode(tn, parent);
 		} },
 	},
 });
@@ -3011,7 +3014,7 @@ const classShape = (type: 'ClassDeclaration' | 'ClassExpression') =>
 				convertDecorators((parent as unknown as { _ts: ts.Node })._ts, parent) },
 			body: { tsField: 'members', via: (_m, parent) => {
 				const tn = (parent as unknown as { _ts: ts.ClassDeclaration | ts.ClassExpression })._ts;
-				return new ClassBodyNode(tn, parent, [tn.members.pos - 1, tn.end]);
+				return new ClassBodyNode(tn, parent);
 			} },
 		},
 	});
@@ -3096,11 +3099,13 @@ const objectBindingElementShape = makeShapeClass<ts.BindingElement>({
 		value: { tsField: 'name', via: (name, parent) => {
 			const tn = (parent as unknown as { _ts: ts.BindingElement })._ts;
 			if (tn.dotDotDotToken) return undefined;
-			const inner = convertChildAsPattern(name, parent);
 			if (tn.initializer) {
-				return new BindingAssignmentPatternNode(tn, parent, inner!);
+				// BindingAssignmentPattern's `left` slot uses
+				// `convertChildAsPattern` on tn.name, sharing instances via
+				// convertChild's cache.
+				return new BindingAssignmentPatternNode(tn, parent);
 			}
-			return inner;
+			return convertChildAsPattern(name, parent);
 		} },
 		argument: { tsField: 'name' },
 	},
@@ -3112,9 +3117,7 @@ defineShapeRouter(SK.BindingElement, (tsNode, parent) => {
 			return new RestElementNode(be, parent);
 		}
 		if (be.initializer) {
-			const inner = convertChild(be.name, parent);
-			if (!inner) return null;
-			return new BindingAssignmentPatternNode(be, parent, inner);
+			return new BindingAssignmentPatternNode(be, parent);
 		}
 		return convertChild(be.name, parent);
 	}
@@ -3233,7 +3236,7 @@ const jsxElementShape = makeShapeClass<ts.JsxElement | ts.JsxSelfClosingElement>
 		openingElement: { tsField: 'kind', via: (_k, parent) => {
 			const t = (parent as unknown as { _ts: ts.Node })._ts;
 			if (t.kind === SK.JsxSelfClosingElement) {
-				return new JSXOpeningElementNode(t as ts.JsxSelfClosingElement, parent);
+				return new jsxOpeningElementShape(t as ts.JsxSelfClosingElement, parent);
 			}
 			return convertChild((t as ts.JsxElement).openingElement, parent);
 		} },
@@ -3325,8 +3328,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return null;
 		case SK.HeritageClause:
 			return null; // handled inline by ClassNode
-		case SK.JsxOpeningElement:
-			return new JSXOpeningElementNode(child as ts.JsxOpeningElement, parent);
 		case SK.AnyKeyword:
 			return new TypeKeywordNode('TSAnyKeyword', child, parent);
 		case SK.UnknownKeyword:
@@ -3415,11 +3416,11 @@ class GenericTSNode extends LazyNode {
 // Wraps a type node in an extra TSTypeAnnotation that adds the leading colon
 // (or `=>` for FunctionType / ConstructorType) to its range — matches Flow
 // shape that typescript-estree replicates.
-function convertTypeAnnotation(child: ts.Node, parent: LazyNode): TSTypeAnnotationNode {
+function convertTypeAnnotation(child: ts.Node, parent: LazyNode): LazyNode {
 	const offset = parent['_ts'].kind === SK.FunctionType || parent['_ts'].kind === SK.ConstructorType ? 2 : 1;
-	const start = child.getFullStart() - offset;
-	const end = child.getEnd();
-	return new TSTypeAnnotationNode(child, parent, [start, end]);
+	const wrapper = new TSTypeAnnotationNode(child, parent);
+	(wrapper as unknown as { range: [number, number] }).range = [child.getFullStart() - offset, child.getEnd()];
+	return wrapper;
 }
 
 // Optional-chain wrapping (mirrors typescript-estree's `convertChainExpression`,
@@ -3618,19 +3619,23 @@ function convertBodyWithDirectives(
 	return out;
 }
 
-class TSTypeAnnotationNode extends SyntheticLazyNode {
-	readonly type = 'TSTypeAnnotation' as const;
-	private _typeAnnotation?: LazyNode | null;
-
-	constructor(tsTypeNode: ts.Node, parent: LazyNode, range: [number, number]) {
-		super(tsTypeNode, parent);
-		this.range = range;
-	}
-
-	get typeAnnotation() {
-		return this._typeAnnotation ??= convertChild(this._ts, this);
-	}
-}
+// `: T` annotations — typescript-estree wraps the inner type in this
+// synthetic with no separate TS node. The wrapper's TS slot IS the type
+// itself; bottom-up materialise of the inner type goes through the
+// wrapper-route table.
+const TSTypeAnnotationNode = makeShapeClass<ts.Node>({
+	type: 'TSTypeAnnotation',
+	registersInMaps: () => false,
+	slots: {
+		// `_self_` — convert the same TS node (the inner type) through
+		// the SHAPES dispatch. tsField uses `kind` (always defined) so
+		// the via callback always runs.
+		typeAnnotation: { tsField: 'kind', via: (_k, parent) => {
+			const tn = (parent as unknown as { _ts: ts.Node })._ts;
+			return convertChild(tn, parent);
+		} },
+	},
+});
 
 // Type-position keywords (`any`, `number`, `string`, …). All have the same
 // shape — just `type: 'TSXxxKeyword'`. Group them under one class to avoid
@@ -3652,13 +3657,20 @@ type TypeKeyword =
 	| 'TSUndefinedKeyword'
 	| 'TSUnknownKeyword'
 	| 'TSVoidKeyword';
-class TypeKeywordNode extends LazyNode {
-	readonly type: TypeKeyword;
-	constructor(type: TypeKeyword, tsNode: ts.Node, parent: LazyNode) {
-		super(tsNode, parent);
-		this.type = type;
-	}
-}
+// Factory-built — type derived from the keyword kind (`SK.AnyKeyword`
+// → `'TSAnyKeyword'`). Callers pass the resolved type as the first arg
+// for legacy reasons; TypeKeywordNode is the constructor function that
+// installs that type after factory init runs (the NullKeyword
+// edge case from convertLiteralType still needs this explicit override).
+const _TypeKeywordShape = makeShapeClass<ts.Node>({
+	type: tn => ('TS' + ts.SyntaxKind[tn.kind]) as TypeKeyword,
+	slots: {},
+});
+const TypeKeywordNode = function (type: TypeKeyword, tsNode: ts.Node, parent: LazyNode): LazyNode {
+	const node = new _TypeKeywordShape(tsNode, parent);
+	(node as { type: KnownEstreeType }).type = type;
+	return node;
+} as unknown as new(type: TypeKeyword, tsNode: ts.Node, parent: LazyNode) => LazyNode;
 
 // Type-position nodes — direct 1:1 with typescript-estree's cases.
 
@@ -3686,74 +3698,46 @@ class TSTypeQueryWrappingNode extends SyntheticLazyNode {
 // filtered through `isESTreeClassMember`. MVP just passes them through;
 // HeritageClause folded into superClass / implements via inline scan.
 
-class ClassBodyNode extends SyntheticLazyNode {
-	readonly type = 'ClassBody' as const;
-	private _body?: (LazyNode | null)[];
-	constructor(classTsNode: ts.ClassDeclaration | ts.ClassExpression, parent: LazyNode, range: [number, number]) {
-		super(classTsNode, parent);
-		this.range = range;
-	}
-	get body() {
-		if (this._body) return this._body;
-		const members = (this._ts as ts.ClassDeclaration).members.filter(m => m.kind !== SK.SemicolonClassElement);
-		return this._body = convertChildren(members, this);
-	}
-}
+const ClassBodyNode = makeShapeClass<ts.ClassDeclaration | ts.ClassExpression>({
+	type: 'ClassBody',
+	registersInMaps: () => false,
+	range: tn => [tn.members.pos - 1, tn.end],
+	slots: {
+		body: { tsField: 'members', via: (members, parent) =>
+			convertChildren((members as ts.NodeArray<ts.ClassElement>).filter(m => m.kind !== SK.SemicolonClassElement), parent) },
+	},
+});
 
 // Method-as-FunctionExpression — eager (line 826) builds the FunctionExpression
 // with `id: null`, `range: [parameters.pos - 1, end]`, and per-context kind.
 // Used as `value` for both class MethodDefinition and object Property.
-class MethodFunctionExpressionNode extends SyntheticLazyNode {
-	// Body-less methods (abstract or interface-style) emit
-	// TSEmptyBodyFunctionExpression instead of FunctionExpression.
-	readonly type: 'FunctionExpression' | 'TSEmptyBodyFunctionExpression';
-	readonly id = null;
-	readonly async: boolean;
-	readonly declare = false;
-	readonly generator: boolean;
-	readonly expression = false;
-	private _typeParameters?: LazyNode | undefined;
-	private _params?: (LazyNode | null)[];
-	private _body?: LazyNode | null;
-	private _returnType?: LazyNode | null | undefined;
-
-	constructor(
-		tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
-		parent: LazyNode,
-	) {
-		super(tsNode, parent);
-		// Eager method range starts one before parameters' first paren.
-		let start = tsNode.parameters.pos - 1;
-		const end = tsNode.end;
+// Method-as-FunctionExpression — eager (line 826) builds the FunctionExpression
+// with `id: null`, `range: [parameters.pos - 1, end]`, and per-context kind.
+// Used as `value` for both class MethodDefinition and object Property.
+const MethodFunctionExpressionNode = makeShapeClass<ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration>({
+	type: tn => (tn as ts.MethodDeclaration).body ? 'FunctionExpression' : 'TSEmptyBodyFunctionExpression',
+	defaults: { id: null, declare: false, expression: false },
+	registersInMaps: () => false,
+	consts: tn => ({
+		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		generator: !!(tn as ts.MethodDeclaration).asteriskToken,
+	}),
+	range: tn => {
+		let start = tn.parameters.pos - 1;
+		const end = tn.end;
 		// If there are typeParameters (`foo<T>(x: T)`), eager extends the
 		// method range to include them via fixParentLocation (line 841).
-		const tps = (tsNode as ts.MethodDeclaration).typeParameters;
-		if (tps && tps.length > 0) {
-			start = Math.min(start, tps.pos - 1);
-		}
-		this.range = [start, end];
-		this.async = !!tsNode.modifiers?.some(m => m.kind === SK.AsyncKeyword);
-		this.generator = !!(tsNode as ts.MethodDeclaration).asteriskToken;
-		this.type = (tsNode as ts.MethodDeclaration).body
-			? 'FunctionExpression'
-			: 'TSEmptyBodyFunctionExpression';
-	}
-	get params() {
-		return this._params ??= convertChildren((this._ts as ts.MethodDeclaration).parameters, this);
-	}
-	get body() {
-		return this._body ??= convertChild((this._ts as ts.MethodDeclaration).body, this);
-	}
-	get typeParameters() {
-		if (this._typeParameters !== undefined) return this._typeParameters;
-		return this._typeParameters = convertTypeParameters((this._ts as ts.MethodDeclaration).typeParameters, this);
-	}
-	get returnType() {
-		if (this._returnType !== undefined) return this._returnType;
-		const t = (this._ts as ts.MethodDeclaration).type;
-		return this._returnType = t ? convertTypeAnnotation(t, this) : undefined;
-	}
-}
+		const tps = (tn as ts.MethodDeclaration).typeParameters;
+		if (tps && tps.length > 0) start = Math.min(start, tps.pos - 1);
+		return [start, end];
+	},
+	slots: {
+		typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
+		params: { tsField: 'parameters', via: 'convertChildren' },
+		body: { tsField: 'body' },
+		returnType: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
+	},
+});
 
 // Object-literal accessor: `{ get foo() {} }` / `{ set foo(v) {} }` becomes
 // Property with kind:'get'/'set' (eager applies the same MethodDefinition
@@ -3763,53 +3747,44 @@ class MethodFunctionExpressionNode extends SyntheticLazyNode {
 // Synthetic Identifier for `constructor` — eager line 905 builds an
 // Identifier node spanning just the keyword. We replicate the range
 // (start of method, length of "constructor").
-class ConstructorKeyIdentifierNode extends SyntheticLazyNode {
-	readonly type = 'Identifier' as const;
-	readonly name = 'constructor' as const;
-	readonly decorators: never[] = EMPTY_ARRAY;
-	readonly optional = false;
-	readonly typeAnnotation = undefined;
-	constructor(tsNode: ts.ConstructorDeclaration, parent: LazyNode) {
-		super(tsNode, parent);
-		// Find the `constructor` keyword: it's the first token after any
-		// modifiers and before the `(`. Easiest: it ends one before the
-		// parameter list start.
-		const end = tsNode.parameters.pos - 1;
-		const start = end - 'constructor'.length;
-		this.range = [start, end];
-	}
-}
+const ConstructorKeyIdentifierNode = makeShapeClass<ts.ConstructorDeclaration>({
+	type: 'Identifier',
+	defaults: { name: 'constructor', decorators: EMPTY_ARRAY, optional: false, typeAnnotation: undefined },
+	registersInMaps: () => false,
+	range: tn => {
+		const end = tn.parameters.pos - 1;
+		return [end - 'constructor'.length, end];
+	},
+	slots: {},
+});
 
 // Used when `[a = 1] = ...` and `{ b: c = 2 } = ...` — wraps the inner
 // pattern with a default value. typescript-estree's range covers from
 // the binding NAME (not the BindingElement's outer start, which would
 // include the property key in the object case) through the initializer.
-class BindingAssignmentPatternNode extends SyntheticLazyNode {
-	readonly type = 'AssignmentPattern' as const;
-	readonly decorators: never[] = EMPTY_ARRAY;
-	readonly optional = false;
-	readonly typeAnnotation = undefined;
-	readonly left: LazyNode;
-	private _right?: LazyNode | null;
-	constructor(tsNode: ts.BindingElement, parent: LazyNode, left: LazyNode) {
-		super(tsNode, parent);
-		const start = tsNode.name.getStart(this._ctx.ast);
-		const end = tsNode.initializer!.end;
-		this.range = [start, end];
-		this.left = left;
-		// Re-point the inner's parent to us — without this, the bound name
-		// keeps the parent the value getter passed to `convertChildAsPattern`
-		// (the surrounding BindingElement / ArrayPattern), and rules reading
-		// `parent.type === 'AssignmentPattern'` (id-length, no-shadow-
-		// restricted-names, …) for default-value destructure bindings see
-		// the wrapper layer skipped. Same pattern as TSParameterPropertyNode
-		// re-points its `parameter` slot.
-		(left as { parent: LazyNode }).parent = this;
-	}
-	get right() {
-		return this._right ??= convertChild((this._ts as ts.BindingElement).initializer, this);
-	}
-}
+// `[a = 1] = …` and `{ b: c = 2 } = …` — wraps an inner pattern with a
+// default value. Range covers from the binding NAME (eager strips the
+// outer BindingElement start, which would include the property key in
+// the object case) through the initializer.
+const BindingAssignmentPatternNode = makeShapeClass<ts.BindingElement>({
+	type: 'AssignmentPattern',
+	defaults: { decorators: EMPTY_ARRAY, optional: false, typeAnnotation: undefined },
+	registersInMaps: () => false,
+	range: (tn, ctx) => [tn.name.getStart(ctx.ast), tn.initializer!.end],
+	slots: {
+		left: { tsField: 'name', via: 'convertChildAsPattern' },
+		right: { tsField: 'initializer' },
+	},
+	init: (instance) => {
+		// Re-point the inner's parent to us — without this, the bound
+		// name keeps the parent the value getter passed to
+		// `convertChildAsPattern` (BindingElement / ArrayPattern), and
+		// rules reading `parent.type === 'AssignmentPattern'` for
+		// default-value destructure bindings see the wrapper skipped.
+		const left = (instance as { left: LazyNode | null }).left;
+		if (left) (left as { parent: LazyNode }).parent = instance;
+	},
+});
 
 // upstream: typescript-estree's `convertBindingElement` for
 // ObjectBindingPattern children. Maps to ESTree `Property` (with
@@ -3817,17 +3792,12 @@ class BindingAssignmentPatternNode extends SyntheticLazyNode {
 // bindings, and `RestElement` for `...rest`. ArrayBindingPattern's
 // BindingElement is handled separately at the convertChildInner
 // dispatch (it collapses to the inner Identifier directly).
-class TSEnumBodyNode extends SyntheticLazyNode {
-	readonly type = 'TSEnumBody' as const;
-	private _members?: (LazyNode | null)[];
-	constructor(enumTsNode: ts.EnumDeclaration, parent: LazyNode, range: [number, number]) {
-		super(enumTsNode, parent);
-		this.range = range;
-	}
-	get members() {
-		return this._members ??= convertChildren((this._ts as ts.EnumDeclaration).members, this);
-	}
-}
+const TSEnumBodyNode = makeShapeClass<ts.EnumDeclaration>({
+	type: 'TSEnumBody',
+	registersInMaps: () => false,
+	range: tn => [tn.members.pos - 1, tn.end],
+	slots: { members: { tsField: 'members', via: 'convertChildren' } },
+});
 
 // Pull `@dec` decorators out of a node's `modifiers` array. TS folds
 // decorators and modifiers into one list since 4.8; typescript-estree
@@ -3922,20 +3892,12 @@ class ExportDefaultWrappingNode extends SyntheticLazyNode {
 // Interface — `body` is wrapped in a synthetic TSInterfaceBody whose range
 // starts one char before the first member (the `{`). MVP skips
 // heritageClauses + typeParameters (the `extends` and generics array).
-class TSInterfaceBodyNode extends SyntheticLazyNode {
-	readonly type = 'TSInterfaceBody' as const;
-	private _body?: (LazyNode | null)[];
-
-	constructor(interfaceTsNode: ts.InterfaceDeclaration, parent: LazyNode, range: [number, number]) {
-		// Synthetic — body is the same `{` block as the interface, no
-		// independent TS node, so don't pollute the maps.
-		super(interfaceTsNode, parent);
-		this.range = range;
-	}
-	get body() {
-		return this._body ??= convertChildren((this._ts as ts.InterfaceDeclaration).members, this);
-	}
-}
+const TSInterfaceBodyNode = makeShapeClass<ts.InterfaceDeclaration>({
+	type: 'TSInterfaceBody',
+	registersInMaps: () => false,
+	range: tn => [tn.members.pos - 1, tn.end],
+	slots: { body: { tsField: 'members', via: 'convertChildren' } },
+});
 // Imports — typescript-estree assembles ImportDeclaration.specifiers from
 // the import clause / named bindings / namespace import; we replicate.
 // ImportClause maps to ImportDefaultSpecifier in ESTree (when it has a name).
@@ -3966,9 +3928,12 @@ function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): La
 		result = rest;
 	}
 	else if (tsNode.initializer) {
-		const inner = convertChild(tsNode.name, parent);
+		// AssignmentPattern builds & caches its own `left` (via the
+		// factory's slot getter, which routes through convertChild's
+		// cache, so subsequent calls share the same instance).
+		const assign = new AssignmentPatternNode(tsNode, parent);
+		const inner = (assign as unknown as { left: LazyNode | null }).left;
 		if (!inner) return null;
-		const assign = new AssignmentPatternNode(tsNode, parent, inner);
 		parameter = inner;
 		result = assign;
 	}
@@ -4009,46 +3974,38 @@ function convertParameter(tsNode: ts.ParameterDeclaration, parent: LazyNode): La
 	return result;
 }
 
-class RestElementNode extends LazyNode {
-	readonly type = 'RestElement' as const;
-	readonly decorators: never[] = EMPTY_ARRAY;
-	readonly optional = false;
-	readonly value = undefined;
-	typeAnnotation: LazyNode | null | undefined = undefined;
-	private _argument?: LazyNode | null;
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.ParameterDeclaration).name, this);
-	}
-}
+const RestElementNode = makeShapeClass<ts.ParameterDeclaration>({
+	type: 'RestElement',
+	defaults: { decorators: EMPTY_ARRAY, optional: false, value: undefined, typeAnnotation: undefined },
+	slots: { argument: { tsField: 'name' } },
+});
 
-class AssignmentPatternNode extends LazyNode {
-	readonly type = 'AssignmentPattern' as const;
-	readonly decorators: never[] = EMPTY_ARRAY;
-	readonly optional = false;
-	typeAnnotation: LazyNode | null | undefined = undefined;
-	readonly left: LazyNode;
-	private _right?: LazyNode | null;
-
-	constructor(tsNode: ts.ParameterDeclaration, parent: LazyNode, left: LazyNode) {
-		super(tsNode, parent);
-		this.left = left;
-		// Re-point the wrapped binding name — without this, the inner's
-		// parent stays as the function passed to convertParameter, so
-		// bottom-up materialise of the binding identifier sees
-		// `parent.type === 'FunctionDeclaration'` instead of the
-		// AssignmentPattern wrapper. Same pattern as
-		// BindingAssignmentPatternNode.
-		(left as { parent: LazyNode }).parent = this;
-		// AssignmentPattern range starts at the param name (eager strips
-		// modifiers from the range — line 1182).
-		const start = (tsNode.name as ts.Node).getStart(this._ctx.ast);
-		const end = tsNode.initializer!.end;
-		this.range = [start, end];
-	}
-	get right() {
-		return this._right ??= convertChild((this._ts as ts.ParameterDeclaration).initializer, this);
-	}
-}
+// Built by convertParameter when a parameter has a default value
+// (`function f(x = 1)`). The inner binding name is constructed by the
+// caller (so they can use convertChild's cache) and passed in the
+// `left` constructor arg — but we instead re-derive it from tsNode.name
+// + re-parent in the init hook, so the factory's (tsNode, parent)
+// signature works.
+const AssignmentPatternNode = makeShapeClass<ts.ParameterDeclaration>({
+	type: 'AssignmentPattern',
+	defaults: { decorators: EMPTY_ARRAY, optional: false, typeAnnotation: undefined },
+	range: (tn, ctx) => [(tn.name as ts.Node).getStart(ctx.ast), tn.initializer!.end],
+	slots: {
+		// `left` is the binding name; convertChild's cache shares it with
+		// any earlier convertParameter call that built the inner.
+		left: { tsField: 'name' },
+		right: { tsField: 'initializer' },
+	},
+	init: (instance) => {
+		// Force `left` evaluation now and re-point its parent to us.
+		// Without this, the inner's parent stays as whatever was passed
+		// to convertParameter (the function), so bottom-up materialise
+		// of the binding identifier sees `parent.type === 'FunctionDeclaration'`
+		// instead of the AssignmentPattern wrapper.
+		const left = instance.left;
+		if (left) (left as { parent: LazyNode }).parent = instance;
+	},
+});
 
 // upstream: typescript-estree wraps a class-constructor parameter
 // property (`constructor(public x)`) in `TSParameterProperty { parameter:
@@ -4169,146 +4126,86 @@ const ASSIGN_OP_KINDS = new Set<ts.SyntaxKind>([
 // Attribute name conversion (`<Foo x="1" />` vs `<Foo svg:rect="1" />`):
 // handled by `convertJSXNamespaceOrIdentifier`.
 
-// Hybrid: a real ESTree node when wrapping a ts.JsxOpeningElement, but
-// synthetic when wrapping a ts.JsxSelfClosingElement (the outer JSXElement
-// owns that TS slot). The `_registersInMaps` override below picks the
-// right behavior from the wrapped TS kind, so both call sites use the
-// same constructor.
-class JSXOpeningElementNode extends LazyNode {
-	readonly type = 'JSXOpeningElement' as const;
-	readonly selfClosing: boolean;
-	private _name?: LazyNode;
-	private _attributes?: (LazyNode | null)[];
-	private _typeArguments?: TSTypeParameterInstantiationNode | undefined;
-	private _typeArgsResolved = false;
+// JSXOpeningElement is hybrid: real when wrapping a ts.JsxOpeningElement
+// (claims its own cache slot), synthetic when wrapping a
+// ts.JsxSelfClosingElement (the outer JSXElement owns the TS slot).
+// `registersInMaps` picks the right behavior from the wrapped TS kind.
+const jsxOpeningElementShape = makeShapeClass<ts.JsxOpeningElement | ts.JsxSelfClosingElement>({
+	type: 'JSXOpeningElement',
+	consts: tn => ({ selfClosing: tn.kind === SK.JsxSelfClosingElement }),
+	registersInMaps: tn => tn.kind !== SK.JsxSelfClosingElement,
+	slots: {
+		name: { tsField: 'tagName', via: convertJSXTagName },
+		attributes: { tsField: 'attributes', via: (attrs, parent) =>
+			convertChildren((attrs as ts.JsxAttributes).properties, parent) },
+		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
+	},
+});
+defineShapeRouter(SK.JsxOpeningElement, (tsNode, parent) =>
+	new jsxOpeningElementShape(tsNode as ts.JsxOpeningElement, parent));
+const JSXEmptyExpressionNode = makeShapeClass<ts.JsxExpression>({
+	type: 'JSXEmptyExpression',
+	registersInMaps: () => false,
+	// Range excludes the surrounding `{` `}`.
+	range: (tn, ctx) => [tn.getStart(ctx.ast) + 1, tn.getEnd() - 1],
+	slots: {},
+});
 
-	constructor(
-		tsNode: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
-		parent: LazyNode | null,
-	) {
-		super(tsNode, parent);
-		this.selfClosing = tsNode.kind === SK.JsxSelfClosingElement;
-	}
-
-	protected override _registersInMaps(): boolean {
-		return this._ts.kind !== SK.JsxSelfClosingElement;
-	}
-
-	get name(): LazyNode {
-		if (this._name) return this._name;
-		const t = this._ts as ts.JsxOpeningElement | ts.JsxSelfClosingElement;
-		return this._name = convertJSXTagName(t.tagName, this);
-	}
-
-	get attributes(): (LazyNode | null)[] {
-		if (this._attributes) return this._attributes;
-		const t = this._ts as ts.JsxOpeningElement | ts.JsxSelfClosingElement;
-		return this._attributes = convertChildren(t.attributes.properties, this);
-	}
-
-	get typeArguments(): TSTypeParameterInstantiationNode | undefined {
-		if (this._typeArgsResolved) return this._typeArguments;
-		this._typeArgsResolved = true;
-		const t = this._ts as ts.JsxOpeningElement | ts.JsxSelfClosingElement;
-		return this._typeArguments = convertTypeArguments(t.typeArguments, this);
-	}
-}
-class JSXEmptyExpressionNode extends SyntheticLazyNode {
-	readonly type = 'JSXEmptyExpression' as const;
-	constructor(tsNode: ts.JsxExpression, parent: LazyNode) {
-		// Synthetic — the JsxExpression TS slot is owned by JSXExpressionContainerNode.
-		super(tsNode, parent);
-		// Range matches eager: `[start+1, end-1]` to exclude the `{` `}`.
-		this.range = [tsNode.getStart(this._ctx.ast) + 1, tsNode.getEnd() - 1];
-	}
-}
-
-// JSXIdentifier — wraps an Identifier or sub-piece of a JsxNamespacedName.
-// Each instance owns its inner ts.Identifier slot (distinct from the
-// outer JsxNamespacedName / tag-name owner), so registration is always
-// safe.
-class JSXIdentifierNode extends LazyNode {
-	readonly type = 'JSXIdentifier' as const;
-	readonly name: string;
-	constructor(
-		tsNode: ts.Node,
-		parent: LazyNode | null,
-		name: string,
-		range?: [number, number],
-	) {
-		super(tsNode, parent);
-		this.name = name;
-		if (range) this.range = range;
-	}
-}
-
-class JSXMemberExpressionNode extends LazyNode {
-	readonly type = 'JSXMemberExpression' as const;
-	private _object?: LazyNode;
-	private _property?: JSXIdentifierNode;
-	get object(): LazyNode {
-		if (this._object) return this._object;
-		const t = this._ts as ts.PropertyAccessExpression;
-		return this._object = convertJSXTagName(t.expression, this);
-	}
-	get property(): JSXIdentifierNode {
-		if (this._property) return this._property;
-		const name = (this._ts as ts.PropertyAccessExpression).name as ts.Identifier;
-		// Inner identifier of a member-expression chain — slot is owned by
-		// the property's own ts.Identifier, so we DO register here (matches
-		// typescript-estree's convertJSXIdentifier behavior).
-		return this._property = new JSXIdentifierNode(name, this, name.text);
-	}
-}
-
-class JSXNamespacedNameNode extends LazyNode {
-	readonly type = 'JSXNamespacedName' as const;
-	private _namespace?: JSXIdentifierNode;
-	private _name?: JSXIdentifierNode;
-	get namespace(): JSXIdentifierNode {
-		if (this._namespace) return this._namespace;
-		const ns = (this._ts as ts.JsxNamespacedName).namespace;
-		// Inner — JSXNamespacedName owns the JsxNamespacedName slot, so the
-		// namespace JSXIdentifier doesn't register against namespace.parent
-		// (which would conflict). The namespace ts.Identifier itself has a
-		// distinct TS node, so we register that.
-		return this._namespace = new JSXIdentifierNode(ns, this, ns.text);
-	}
-	get name(): JSXIdentifierNode {
-		if (this._name) return this._name;
-		const nm = (this._ts as ts.JsxNamespacedName).name;
-		return this._name = new JSXIdentifierNode(nm, this, nm.text);
-	}
-}
+// JSX leaf shapes — built via the factory but not dispatched by SK
+// (helpers below construct them directly since the same SK value
+// (Identifier, PropertyAccessExpression, ThisKeyword) maps to different
+// ESTree types in JSX vs non-JSX contexts).
+const jsxIdentifierShape = makeShapeClass<ts.Identifier | ts.ThisExpression>({
+	type: 'JSXIdentifier',
+	consts: tn => ({
+		// `<this />` — eager treats it as a JSXIdentifier with name='this'.
+		name: tn.kind === SK.ThisKeyword ? 'this' : (tn as unknown as ts.Identifier).text,
+	}),
+	slots: {},
+});
+const jsxMemberExpressionShape = makeShapeClass<ts.PropertyAccessExpression>({
+	type: 'JSXMemberExpression',
+	slots: {
+		object: { tsField: 'expression', via: (expr, parent) => convertJSXTagName(expr, parent) },
+		property: { tsField: 'name', via: (name, parent) =>
+			new jsxIdentifierShape(name as ts.Identifier, parent) },
+	},
+});
+const jsxNamespacedNameShape = makeShapeClass<ts.JsxNamespacedName>({
+	type: 'JSXNamespacedName',
+	slots: {
+		namespace: { tsField: 'namespace', via: (ns, parent) =>
+			new jsxIdentifierShape(ns as ts.Identifier, parent) },
+		name: { tsField: 'name', via: (nm, parent) =>
+			new jsxIdentifierShape(nm as ts.Identifier, parent) },
+	},
+});
+// Bottom-up materialise of a TS JsxNamespacedName flows through the
+// SHAPES dispatch table — register the same shape so it converges with
+// the helper-driven path.
+defineShapeRouter(SK.JsxNamespacedName, (tsNode, parent) =>
+	new jsxNamespacedNameShape(tsNode as ts.JsxNamespacedName, parent));
 
 // JSX tag-name dispatch: translate the TS node that lives in `tagName`
 // (Identifier, PropertyAccessExpression, JsxNamespacedName, ThisKeyword)
 // into the right JSX-flavored ESTree node.
 function convertJSXTagName(node: ts.Node, parent: LazyNode): LazyNode {
 	if (node.kind === SK.PropertyAccessExpression) {
-		return new JSXMemberExpressionNode(node, parent);
+		return new jsxMemberExpressionShape(node as ts.PropertyAccessExpression, parent);
 	}
 	if (node.kind === SK.JsxNamespacedName) {
-		return new JSXNamespacedNameNode(node, parent);
+		return new jsxNamespacedNameShape(node as ts.JsxNamespacedName, parent);
 	}
-	if (node.kind === SK.ThisKeyword) {
-		// `<this />` — typescript-estree falls back to convertJSXNamespaceOrIdentifier
-		// which then calls convertJSXIdentifier (treats it as a JSXIdentifier
-		// with name='this'). Mirror that.
-		return new JSXIdentifierNode(node, parent, 'this');
-	}
-	const id = node as ts.Identifier;
-	return new JSXIdentifierNode(id, parent, id.text);
+	return new jsxIdentifierShape(node as ts.Identifier, parent);
 }
 
 // JSX attribute-name dispatch: a JsxNamespacedName (`<el ns:attr=… />`)
 // or a plain ts.Identifier (`<el attr=… />`).
 function convertJSXNamespaceOrIdentifier(node: ts.Node, parent: LazyNode): LazyNode {
 	if (node.kind === SK.JsxNamespacedName) {
-		return new JSXNamespacedNameNode(node, parent);
+		return new jsxNamespacedNameShape(node as ts.JsxNamespacedName, parent);
 	}
-	const id = node as ts.Identifier;
-	return new JSXIdentifierNode(id, parent, id.text);
+	return new jsxIdentifierShape(node as ts.Identifier, parent);
 }
 
 // JsxText / JsxAttribute-string entity decoding. typescript-estree's
