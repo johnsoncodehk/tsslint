@@ -378,7 +378,13 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		// on the CLI's neighbour copy — different module instances,
 		// different counters. globalThis closes that gap.
 		const COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-counts');
+		const SOURCE_COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-source-counts');
 		const counts = (globalThis as any)[COUNTS_KEY] as Map<string, number> | undefined;
+		// Source attribution: each (type, source) pair counted separately.
+		// Source enum: leaf-direct (visitor / scope-manager called materialise),
+		// leaf-resolve (resolveParent walked into this kind), child (top-down
+		// slot getter or wrapper construction), root (parent === null).
+		const sourceCounts = (globalThis as any)[SOURCE_COUNTS_KEY] as Map<string, number> | undefined;
 		const sorted = counts
 			? [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 			: [];
@@ -388,11 +394,38 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			colors.cyan('estree node types')
 				+ colors.gray(` (${sorted.length} kinds, ${total.toLocaleString()} nodes)`),
 		);
+		const SOURCES = ['leaf-direct', 'leaf-resolve', 'child', 'root'] as const;
+		const sourceWidths = SOURCES.map(s => s.length);
 		for (const [name, n] of sorted) {
-			renderer.info('  ' + name.padEnd(widthName) + '  ' + colors.gray(n.toLocaleString()));
+			let line = '  ' + name.padEnd(widthName) + '  ' + colors.gray(n.toLocaleString().padStart(8));
+			if (sourceCounts) {
+				const parts: string[] = [];
+				for (let i = 0; i < SOURCES.length; i++) {
+					const s = SOURCES[i];
+					const c = sourceCounts.get(name + '|' + s) ?? 0;
+					if (c > 0) parts.push(`${s}=${c.toLocaleString()}`);
+					sourceWidths[i] = Math.max(sourceWidths[i], s.length);
+				}
+				if (parts.length) line += colors.gray('  [' + parts.join(', ') + ']');
+			}
+			renderer.info(line);
 		}
 		if (!sorted.length) {
 			renderer.info(colors.gray('  (no nodes converted — no @tsslint/compat-eslint rules ran)'));
+		}
+		else if (sourceCounts) {
+			// Roll-up: total per source across all kinds.
+			const rollup = new Map<string, number>();
+			for (const [k, n] of sourceCounts) {
+				const src = k.slice(k.lastIndexOf('|') + 1);
+				rollup.set(src, (rollup.get(src) ?? 0) + n);
+			}
+			const rollupParts: string[] = [];
+			for (const s of SOURCES) {
+				const n = rollup.get(s) ?? 0;
+				if (n > 0) rollupParts.push(`${s}=${n.toLocaleString()}`);
+			}
+			renderer.info(colors.gray('  total by source: ' + rollupParts.join(', ')));
 		}
 	}
 
