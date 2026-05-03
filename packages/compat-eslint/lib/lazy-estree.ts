@@ -89,11 +89,13 @@ const SOURCE_COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-source-co
 //   - 'root'         : `parent === null`. Only ProgramNode + the
 //                      GenericTSNode fallback when the chain exhausts.
 type NodeSource = 'leaf-direct' | 'leaf-resolve' | 'child' | 'root';
-type GlobalCountsHolder = {
-	[k in typeof COUNTS_KEY]?: Map<string, number>;
-} & {
-	[k in typeof SOURCE_COUNTS_KEY]?: Map<string, number>;
-};
+type GlobalCountsHolder =
+	& {
+		[k in typeof COUNTS_KEY]?: Map<string, number>;
+	}
+	& {
+		[k in typeof SOURCE_COUNTS_KEY]?: Map<string, number>;
+	};
 const _global = globalThis as unknown as GlobalCountsHolder;
 const nodeTypeCounts: Map<string, number> = _global[COUNTS_KEY] ??= new Map();
 // Keyed `${type}|${source}` so the CLI can split the per-kind total by
@@ -451,12 +453,11 @@ abstract class LazyNode {
 			//
 			// Capture `source` synchronously — by the microtask, the
 			// `parent === undefined` / `resolvingParent` state has moved on.
-			const source: NodeSource =
-				parent === null
-					? 'root'
-					: parent === undefined
-					? (resolvingParent ? 'leaf-resolve' : 'leaf-direct')
-					: 'child';
+			const source: NodeSource = parent === null
+				? 'root'
+				: parent === undefined
+				? (resolvingParent ? 'leaf-resolve' : 'leaf-direct')
+				: 'child';
 			queueMicrotask(() => {
 				const t = (this as unknown as { type: string }).type;
 				nodeTypeCounts.set(t, (nodeTypeCounts.get(t) ?? 0) + 1);
