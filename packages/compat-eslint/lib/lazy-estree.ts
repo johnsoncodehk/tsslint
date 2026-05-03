@@ -3020,6 +3020,209 @@ const classExpressionShape = classShape('ClassExpression');
 defineShapeRouter(SK.ClassDeclaration, (tsNode, parent) => new classDeclarationShape(tsNode, parent));
 defineShapeRouter(SK.ClassExpression, (tsNode, parent) => new classExpressionShape(tsNode, parent));
 
+// --- Round 8 migrations -----------------------------------------------
+defineShape<ts.ExpressionWithTypeArguments>(SK.ExpressionWithTypeArguments, {
+	// Parent-aware shape — TS parent (not lazy parent) carries the signal,
+	// since HeritageClause has no LazyNode counterpart (collapsed into the
+	// owning class/interface).
+	type: tn => {
+		const tp = tn.parent;
+		if (tp?.kind === SK.HeritageClause) {
+			return (tp as ts.HeritageClause).parent?.kind === SK.InterfaceDeclaration
+				? 'TSInterfaceHeritage'
+				: 'TSClassImplements';
+		}
+		return 'TSInstantiationExpression';
+	},
+	slots: {
+		expression: { tsField: 'expression' },
+		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
+	},
+});
+
+// PropertyDeclaration → 4 type variants based on modifiers.
+defineShape<ts.PropertyDeclaration>(SK.PropertyDeclaration, {
+	type: tn => {
+		const isAbstract = !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword);
+		const isAccessor = !!tn.modifiers?.some(m => m.kind === SK.AccessorKeyword);
+		if (isAbstract && isAccessor) return 'TSAbstractAccessorProperty';
+		if (isAbstract) return 'TSAbstractPropertyDefinition';
+		if (isAccessor) return 'AccessorProperty';
+		return 'PropertyDefinition';
+	},
+	consts: tn => {
+		const accMod = tn.modifiers?.find(m =>
+			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
+		);
+		return {
+			static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
+			override: !!tn.modifiers?.some(m => m.kind === SK.OverrideKeyword),
+			readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
+			declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+			accessibility: accMod
+				? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
+				: undefined,
+			computed: tn.name.kind === SK.ComputedPropertyName,
+			optional: !!tn.questionToken,
+			definite: !!tn.exclamationToken,
+		};
+	},
+	slots: {
+		key: { tsField: 'name' },
+		value: { tsField: 'initializer' },
+		typeAnnotation: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
+		// Use `name` (always defined) so via runs even when modifiers
+		// is undefined (factory short-circuits null tsValue otherwise).
+		decorators: { tsField: 'name', via: (_n, parent) =>
+			convertDecorators((parent as unknown as { _ts: ts.Node })._ts, parent) },
+	},
+});
+
+// BindingElement — context-aware: in ArrayBindingPattern collapses to
+// inner (or RestElement / AssignmentPattern wrapping), in
+// ObjectBindingPattern becomes Property / RestElement.
+const objectBindingElementShape = makeShapeClass<ts.BindingElement>({
+	type: tn => tn.dotDotDotToken ? 'RestElement' : 'Property',
+	defaults: { kind: 'init', method: false, optional: false, decorators: EMPTY_ARRAY },
+	consts: tn => ({
+		shorthand: !tn.propertyName,
+		computed: !!tn.propertyName && tn.propertyName.kind === SK.ComputedPropertyName,
+	}),
+	slots: {
+		key: { tsField: 'name', via: (_n, parent) => {
+			const tn = (parent as unknown as { _ts: ts.BindingElement })._ts;
+			return convertChild(tn.propertyName ?? tn.name, parent);
+		} },
+		value: { tsField: 'name', via: (name, parent) => {
+			const tn = (parent as unknown as { _ts: ts.BindingElement })._ts;
+			if (tn.dotDotDotToken) return undefined;
+			const inner = convertChildAsPattern(name, parent);
+			if (tn.initializer) {
+				return new BindingAssignmentPatternNode(tn, parent, inner!);
+			}
+			return inner;
+		} },
+		argument: { tsField: 'name' },
+	},
+});
+defineShapeRouter(SK.BindingElement, (tsNode, parent) => {
+	const be = tsNode as ts.BindingElement;
+	if (parent && parent._ts.kind === SK.ArrayBindingPattern) {
+		if (be.dotDotDotToken) {
+			return new RestElementNode(be, parent);
+		}
+		if (be.initializer) {
+			const inner = convertChild(be.name, parent);
+			if (!inner) return null;
+			return new BindingAssignmentPatternNode(be, parent, inner);
+		}
+		return convertChild(be.name, parent);
+	}
+	return new objectBindingElementShape(be, parent);
+});
+
+// MethodDeclaration / GetAccessor / SetAccessor — context-aware dispatch:
+// in object-literal context → Property variants; in class context →
+// MethodDefinition. Constructor only appears in class context.
+const objectMethodShape = makeShapeClass<ts.MethodDeclaration>({
+	type: 'Property',
+	defaults: { kind: 'init', method: true, shorthand: false },
+	consts: tn => ({
+		computed: tn.name.kind === SK.ComputedPropertyName,
+		optional: !!tn.questionToken,
+	}),
+	slots: {
+		key: { tsField: 'name' },
+		value: { tsField: 'name', via: (_n, parent) => {
+			const tn = (parent as unknown as { _ts: ts.MethodDeclaration })._ts;
+			return new MethodFunctionExpressionNode(tn, parent);
+		} },
+	},
+});
+const objectAccessorShape = (kind: 'get' | 'set') =>
+	makeShapeClass<ts.GetAccessorDeclaration | ts.SetAccessorDeclaration>({
+		type: 'Property',
+		defaults: { method: false, shorthand: false, optional: false },
+		consts: tn => ({
+			kind,
+			computed: tn.name.kind === SK.ComputedPropertyName,
+		}),
+		slots: {
+			key: { tsField: 'name' },
+			value: { tsField: 'name', via: (_n, parent) => {
+				const tn = (parent as unknown as { _ts: ts.GetAccessorDeclaration | ts.SetAccessorDeclaration })._ts;
+				return new MethodFunctionExpressionNode(tn, parent);
+			} },
+		},
+	});
+const objectGetAccessorShape = objectAccessorShape('get');
+const objectSetAccessorShape = objectAccessorShape('set');
+
+const methodDefinitionShape = makeShapeClass<ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration>({
+	type: tn => tn.modifiers?.some(m => m.kind === SK.AbstractKeyword)
+		? 'TSAbstractMethodDefinition'
+		: 'MethodDefinition',
+	consts: tn => {
+		const accMod = tn.modifiers?.find(m =>
+			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
+		);
+		return {
+			kind: tn.kind === SK.Constructor ? 'constructor'
+				: tn.kind === SK.GetAccessor ? 'get'
+				: tn.kind === SK.SetAccessor ? 'set'
+				: 'method',
+			static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
+			override: !!tn.modifiers?.some(m => m.kind === SK.OverrideKeyword),
+			accessibility: accMod
+				? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
+				: undefined,
+			computed: tn.kind !== SK.Constructor
+				&& !!(tn as ts.MethodDeclaration).name
+				&& (tn as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName,
+			optional: !!(tn as ts.MethodDeclaration).questionToken,
+		};
+	},
+	slots: {
+		// Use `parameters` (always defined for method-likes including
+		// Constructor, which has no `name`) so via runs even for the
+		// constructor case.
+		key: { tsField: 'parameters', via: (_p, parent) => {
+			const t = (parent as unknown as { _ts: ts.MethodDeclaration | ts.ConstructorDeclaration })._ts;
+			if (t.kind === SK.Constructor) {
+				return new ConstructorKeyIdentifierNode(t, parent);
+			}
+			return convertChild((t as ts.MethodDeclaration).name, parent);
+		} },
+		value: { tsField: 'parameters', via: (_p, parent) => {
+			const tn = (parent as unknown as { _ts: ts.MethodDeclaration | ts.ConstructorDeclaration })._ts;
+			return new MethodFunctionExpressionNode(tn, parent);
+		} },
+		decorators: { tsField: 'parameters', via: (_p, parent) =>
+			convertDecorators((parent as unknown as { _ts: ts.Node })._ts, parent) },
+	},
+});
+
+defineShapeRouter(SK.MethodDeclaration, (tsNode, parent) => {
+	if (parent && parent._ts.kind === SK.ObjectLiteralExpression) {
+		return new objectMethodShape(tsNode as ts.MethodDeclaration, parent);
+	}
+	return new methodDefinitionShape(tsNode as ts.MethodDeclaration, parent);
+});
+defineShapeRouter(SK.GetAccessor, (tsNode, parent) => {
+	if (parent && parent._ts.kind === SK.ObjectLiteralExpression) {
+		return new objectGetAccessorShape(tsNode as ts.GetAccessorDeclaration, parent);
+	}
+	return new methodDefinitionShape(tsNode as ts.GetAccessorDeclaration, parent);
+});
+defineShapeRouter(SK.SetAccessor, (tsNode, parent) => {
+	if (parent && parent._ts.kind === SK.ObjectLiteralExpression) {
+		return new objectSetAccessorShape(tsNode as ts.SetAccessorDeclaration, parent);
+	}
+	return new methodDefinitionShape(tsNode as ts.SetAccessorDeclaration, parent);
+});
+defineShapeRouter(SK.Constructor, (tsNode, parent) =>
+	new methodDefinitionShape(tsNode as ts.ConstructorDeclaration, parent));
+
 defineShape<ts.ImportDeclaration>(SK.ImportDeclaration, {
 	type: 'ImportDeclaration',
 	consts: tn => ({ importKind: tn.importClause?.isTypeOnly ? 'type' : 'value' }),
@@ -3089,75 +3292,8 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 			return convertChild((child as ts.ParenthesizedExpression).expression, parent);
 		case SK.ComputedPropertyName:
 			return convertChild((child as ts.ComputedPropertyName).expression, parent);
-		case SK.MethodDeclaration: {
-			// In an ObjectLiteralExpression, a MethodDeclaration becomes a
-			// Property with `method: true` and a FunctionExpression value
-			// (eager line 845). In a class body, it stays a MethodDefinition.
-			if (parent._ts.kind === SK.ObjectLiteralExpression) {
-				return new ObjectMethodPropertyNode(child as ts.MethodDeclaration, parent);
-			}
-			return new MethodDefinitionNode(child as ts.MethodDeclaration, parent);
-		}
-		case SK.PropertyDeclaration: {
-			const pd = child as ts.PropertyDeclaration;
-			const isAbstract = !!pd.modifiers?.some(m => m.kind === SK.AbstractKeyword);
-			const isAccessor = !!pd.modifiers?.some(m => m.kind === SK.AccessorKeyword);
-			if (isAbstract && isAccessor) return new PropertyDefinitionNode(pd, parent, 'TSAbstractAccessorProperty');
-			if (isAbstract) return new PropertyDefinitionNode(pd, parent, 'TSAbstractPropertyDefinition');
-			if (isAccessor) return new PropertyDefinitionNode(pd, parent, 'AccessorProperty');
-			return new PropertyDefinitionNode(pd, parent, 'PropertyDefinition');
-		}
-		case SK.Constructor:
-			return new MethodDefinitionNode(child as ts.ConstructorDeclaration, parent);
-		case SK.GetAccessor:
-		case SK.SetAccessor: {
-			// In an ObjectLiteralExpression, accessors become Property{kind:'get'/'set'}.
-			if (parent._ts.kind === SK.ObjectLiteralExpression) {
-				return new ObjectAccessorPropertyNode(child as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent);
-			}
-			return new MethodDefinitionNode(child as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent);
-		}
-		case SK.BindingElement: {
-			// In ArrayBindingPattern, BindingElement resolves to the inner
-			// name directly (or wrapped in RestElement if `...`). Only
-			// inside ObjectBindingPattern does it become a Property
-			// (matches eager line 992 split).
-			const be = child as ts.BindingElement;
-			if (parent._ts.kind === SK.ArrayBindingPattern) {
-				if (be.dotDotDotToken) {
-					return new RestElementNode(be, parent);
-				}
-				if (be.initializer) {
-					// `[a = 1] = ...` — AssignmentPattern wrapping the name.
-					const inner = convertChild(be.name, parent);
-					if (!inner) return null;
-					return new BindingAssignmentPatternNode(be, parent, inner);
-				}
-				return convertChild(be.name, parent);
-			}
-			return new BindingElementNode(be, parent);
-		}
 		case SK.OmittedExpression:
 			return null;
-		case SK.ExpressionWithTypeArguments: {
-			// Parent-aware shape (mirrors eager line 1858). The TS parent
-			// chain — not our lazy parent — is what carries this signal:
-			// HeritageClause never has a LazyNode (it's collapsed into the
-			// owning class/interface), so `parent._ts.kind` would never be
-			// HeritageClause. Read directly off the ts.Node.
-			const ewta = child as ts.ExpressionWithTypeArguments;
-			const tsParent = ewta.parent;
-			let tag: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression';
-			if (tsParent?.kind === SK.HeritageClause) {
-				tag = (tsParent as ts.HeritageClause).parent?.kind === SK.InterfaceDeclaration
-					? 'TSInterfaceHeritage'
-					: 'TSClassImplements';
-			}
-			else {
-				tag = 'TSInstantiationExpression';
-			}
-			return new ExpressionWithTypeArgumentsNode(ewta, parent, tag);
-		}
 		case SK.HeritageClause:
 			return null; // handled inline by ClassNode
 		case SK.JsxElement:
@@ -3596,119 +3732,8 @@ class MethodFunctionExpressionNode extends SyntheticLazyNode {
 // Object-literal accessor: `{ get foo() {} }` / `{ set foo(v) {} }` becomes
 // Property with kind:'get'/'set' (eager applies the same MethodDefinition
 // case but flips kind based on the TS SyntaxKind).
-class ObjectAccessorPropertyNode extends LazyNode {
-	readonly type = 'Property' as const;
-	readonly kind: 'get' | 'set';
-	readonly method = false;
-	readonly shorthand = false;
-	readonly computed: boolean;
-	readonly optional = false;
-	private _key?: LazyNode | null;
-	private _value?: MethodFunctionExpressionNode;
-	constructor(tsNode: ts.GetAccessorDeclaration | ts.SetAccessorDeclaration, parent: LazyNode) {
-		super(tsNode, parent);
-		this.kind = tsNode.kind === SK.GetAccessor ? 'get' : 'set';
-		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
-	}
-	get key() {
-		return this._key ??= convertChild(
-			(this._ts as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration).name,
-			this,
-		);
-	}
-	get value() {
-		return this._value ??= new MethodFunctionExpressionNode(
-			this._ts as ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
-			this,
-		);
-	}
-}
-
 // Object-literal method shorthand: `{ foo() {} }` becomes Property with
 // `method: true` and a FunctionExpression value (mirrors eager line 845).
-class ObjectMethodPropertyNode extends LazyNode {
-	readonly type = 'Property' as const;
-	readonly kind: 'init' = 'init';
-	readonly method = true;
-	readonly shorthand = false;
-	readonly computed: boolean;
-	readonly optional: boolean;
-	private _key?: LazyNode | null;
-	private _value?: MethodFunctionExpressionNode;
-	constructor(tsNode: ts.MethodDeclaration, parent: LazyNode) {
-		super(tsNode, parent);
-		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
-		this.optional = !!tsNode.questionToken;
-	}
-	get key() {
-		return this._key ??= convertChild((this._ts as ts.MethodDeclaration).name, this);
-	}
-	get value() {
-		return this._value ??= new MethodFunctionExpressionNode(this._ts as ts.MethodDeclaration, this);
-	}
-}
-
-class MethodDefinitionNode extends LazyNode {
-	readonly type: 'MethodDefinition' | 'TSAbstractMethodDefinition';
-	readonly kind: 'method' | 'constructor' | 'get' | 'set';
-	readonly static: boolean;
-	readonly override: boolean;
-	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
-	readonly computed: boolean;
-	readonly optional: boolean;
-	private _key?: LazyNode | null;
-	private _value?: MethodFunctionExpressionNode;
-	private _decorators?: (LazyNode | null)[];
-	get decorators() {
-		return this._decorators ??= convertDecorators(this._ts, this);
-	}
-
-	constructor(
-		tsNode: ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,
-		parent: LazyNode,
-	) {
-		super(tsNode, parent);
-		this.kind = tsNode.kind === SK.Constructor
-			? 'constructor'
-			: tsNode.kind === SK.GetAccessor
-			? 'get'
-			: tsNode.kind === SK.SetAccessor
-			? 'set'
-			: 'method';
-		// `abstract foo();` (body-less method in an abstract class) becomes
-		// TSAbstractMethodDefinition; everything else stays MethodDefinition.
-		this.type = tsNode.modifiers?.some(m => m.kind === SK.AbstractKeyword)
-			? 'TSAbstractMethodDefinition'
-			: 'MethodDefinition';
-		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
-		this.override = !!tsNode.modifiers?.some(m => m.kind === SK.OverrideKeyword);
-		const accMod = tsNode.modifiers?.find(m =>
-			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
-		);
-		this.accessibility = accMod
-			? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
-			: undefined;
-		this.computed = !!(tsNode as ts.MethodDeclaration).name
-			&& (tsNode as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName;
-		this.optional = !!(tsNode as ts.MethodDeclaration).questionToken;
-	}
-	get key() {
-		if (this._key !== undefined) return this._key;
-		const t = this._ts as ts.MethodDeclaration | ts.ConstructorDeclaration;
-		// Constructor has no `name`; eager synthesizes an Identifier 'constructor'.
-		if (t.kind === SK.Constructor) {
-			return this._key = new ConstructorKeyIdentifierNode(t, this);
-		}
-		return this._key = convertChild(t.name, this);
-	}
-	get value() {
-		return this._value ??= new MethodFunctionExpressionNode(
-			this._ts as ts.MethodDeclaration | ts.ConstructorDeclaration,
-			this,
-		);
-	}
-}
-
 // Synthetic Identifier for `constructor` — eager line 905 builds an
 // Identifier node spanning just the keyword. We replicate the range
 // (start of method, length of "constructor").
@@ -3726,63 +3751,6 @@ class ConstructorKeyIdentifierNode extends SyntheticLazyNode {
 		const end = tsNode.parameters.pos - 1;
 		const start = end - 'constructor'.length;
 		this.range = [start, end];
-	}
-}
-
-class PropertyDefinitionNode extends LazyNode {
-	readonly type:
-		| 'PropertyDefinition'
-		| 'TSAbstractPropertyDefinition'
-		| 'AccessorProperty'
-		| 'TSAbstractAccessorProperty';
-	readonly static: boolean;
-	readonly override: boolean;
-	readonly readonly: boolean;
-	readonly declare: boolean;
-	readonly accessibility: 'public' | 'private' | 'protected' | undefined;
-	readonly computed: boolean;
-	readonly optional: boolean;
-	readonly definite: boolean;
-	private _key?: LazyNode | null;
-	private _value?: LazyNode | null;
-	private _typeAnnotation?: LazyNode | null | undefined;
-	private _decorators?: (LazyNode | null)[];
-	get decorators() {
-		return this._decorators ??= convertDecorators(this._ts, this);
-	}
-
-	constructor(
-		tsNode: ts.PropertyDeclaration,
-		parent: LazyNode,
-		type: 'PropertyDefinition' | 'TSAbstractPropertyDefinition' | 'AccessorProperty' | 'TSAbstractAccessorProperty' =
-			'PropertyDefinition',
-	) {
-		super(tsNode, parent);
-		this.type = type;
-		this.static = !!tsNode.modifiers?.some(m => m.kind === SK.StaticKeyword);
-		this.override = !!tsNode.modifiers?.some(m => m.kind === SK.OverrideKeyword);
-		this.readonly = !!tsNode.modifiers?.some(m => m.kind === SK.ReadonlyKeyword);
-		this.declare = !!tsNode.modifiers?.some(m => m.kind === SK.DeclareKeyword);
-		const accMod = tsNode.modifiers?.find(m =>
-			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
-		);
-		this.accessibility = accMod
-			? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
-			: undefined;
-		this.computed = tsNode.name.kind === SK.ComputedPropertyName;
-		this.optional = !!tsNode.questionToken;
-		this.definite = !!tsNode.exclamationToken;
-	}
-	get key() {
-		return this._key ??= convertChild((this._ts as ts.PropertyDeclaration).name, this);
-	}
-	get value() {
-		return this._value ??= convertChild((this._ts as ts.PropertyDeclaration).initializer, this);
-	}
-	get typeAnnotation() {
-		if (this._typeAnnotation !== undefined) return this._typeAnnotation;
-		const t = (this._ts as ts.PropertyDeclaration).type;
-		return this._typeAnnotation = t ? convertTypeAnnotation(t, this) : undefined;
 	}
 }
 
@@ -3823,55 +3791,6 @@ class BindingAssignmentPatternNode extends SyntheticLazyNode {
 // bindings, and `RestElement` for `...rest`. ArrayBindingPattern's
 // BindingElement is handled separately at the convertChildInner
 // dispatch (it collapses to the inner Identifier directly).
-class BindingElementNode extends LazyNode {
-	readonly type: 'Property' | 'RestElement';
-	readonly computed: boolean;
-	readonly kind: 'init' = 'init';
-	readonly method = false;
-	readonly optional = false;
-	readonly shorthand: boolean;
-	readonly decorators: never[] = EMPTY_ARRAY;
-	private _key?: LazyNode | null;
-	private _value?: LazyNode | null;
-	private _argument?: LazyNode | null;
-
-	constructor(tsNode: ts.BindingElement, parent: LazyNode) {
-		super(tsNode, parent);
-		this.type = tsNode.dotDotDotToken ? 'RestElement' : 'Property';
-		// shorthand iff no `propertyName` (just `name`).
-		this.shorthand = !tsNode.propertyName;
-		// `{ ["resolution-mode"]: res }` — TS wraps a computed-key
-		// destructure name in `ComputedPropertyName`. ESTree marks the
-		// surrounding Property `computed: true`. no-useless-computed-key
-		// reports computed keys whose value would be the same as the
-		// non-computed form — the rule listens on `Property` and reads
-		// `node.computed`.
-		this.computed = !!tsNode.propertyName
-			&& tsNode.propertyName.kind === SK.ComputedPropertyName;
-	}
-	get key() {
-		if (this._key !== undefined) return this._key;
-		const t = this._ts as ts.BindingElement;
-		return this._key = convertChild(t.propertyName ?? t.name, this);
-	}
-	// `value` only exists on the Property variant (RestElement has none).
-	// eager line 1015 sets value to convertPattern of the binding name.
-	// When the BindingElement carries a default (`{a = 1}`), eager wraps
-	// the value in an AssignmentPattern{left: <name>, right: <initializer>}.
-	get value() {
-		if (this.type !== 'Property') return undefined;
-		if (this._value !== undefined) return this._value;
-		const t = this._ts as ts.BindingElement;
-		const inner = convertChildAsPattern(t.name, this);
-		if (t.initializer) {
-			return this._value = new BindingAssignmentPatternNode(t, this, inner!);
-		}
-		return this._value = inner;
-	}
-	get argument() {
-		return this._argument ??= convertChild((this._ts as ts.BindingElement).name, this);
-	}
-}
 class TSEnumBodyNode extends SyntheticLazyNode {
 	readonly type = 'TSEnumBody' as const;
 	private _members?: (LazyNode | null)[];
@@ -3917,28 +3836,6 @@ function convertDecorators(tsNode: ts.Node, parent: LazyNode): (LazyNode | null)
 // Prefix/postfix unary expressions: ++/-- become UpdateExpression, others
 // become UnaryExpression (matches typescript-estree's split at line 2188).
 // ExpressionWithTypeArguments — three possible ESTree types depending on parent.
-class ExpressionWithTypeArgumentsNode extends LazyNode {
-	readonly type: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression';
-	private _expression?: LazyNode | null;
-	private _typeArguments?: LazyNode | undefined;
-
-	constructor(
-		tsNode: ts.ExpressionWithTypeArguments,
-		parent: LazyNode,
-		type: 'TSInterfaceHeritage' | 'TSClassImplements' | 'TSInstantiationExpression',
-	) {
-		super(tsNode, parent);
-		this.type = type;
-	}
-	get expression() {
-		return this._expression ??= convertChild((this._ts as ts.ExpressionWithTypeArguments).expression, this);
-	}
-	get typeArguments() {
-		if (this._typeArguments !== undefined) return this._typeArguments;
-		return this._typeArguments = convertTypeArguments((this._ts as ts.ExpressionWithTypeArguments).typeArguments, this);
-	}
-}
-
 // upstream: `@typescript-eslint/typescript-estree/dist/ts-estree/.../convert.ts`
 // `convertExportDeclaration` creates an
 // `AST_NODE_TYPES.ExportNamedDeclaration` whose `.declaration` is the
