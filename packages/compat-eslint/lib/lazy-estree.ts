@@ -75,16 +75,49 @@ const SK = ts.SyntaxKind;
 // `this.type` synchronously here would observe `undefined`.
 const DEBUG_ESTREE = process.env.TSSLINT_DEBUG_ESTREE === '1';
 const COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-counts');
-type GlobalCountsHolder = { [k in typeof COUNTS_KEY]?: Map<string, number> };
+const SOURCE_COUNTS_KEY = Symbol.for('@tsslint/compat-eslint:node-type-source-counts');
+// Source attribution (DEBUG_ESTREE only): which code path created this node.
+//   - 'leaf-direct'  : `materialize(tsNode, ctx)` from outside (visitor /
+//                      scope-manager) with `parent: undefined`. The rule
+//                      directly targeted this node.
+//   - 'leaf-resolve' : `materialize` invoked via `resolveParent` while
+//                      walking a parent chain. Indicates a rule reading
+//                      `.parent` deep enough to walk past this kind.
+//   - 'child'        : top-down construction with a real LazyNode parent
+//                      — slot getter (`convertChild(child, this)`) or
+//                      wrapper construction (ChainExpression, …).
+//   - 'root'         : `parent === null`. Only ProgramNode + the
+//                      GenericTSNode fallback when the chain exhausts.
+type NodeSource = 'leaf-direct' | 'leaf-resolve' | 'child' | 'root';
+type GlobalCountsHolder =
+	& {
+		[k in typeof COUNTS_KEY]?: Map<string, number>;
+	}
+	& {
+		[k in typeof SOURCE_COUNTS_KEY]?: Map<string, number>;
+	};
 const _global = globalThis as unknown as GlobalCountsHolder;
 const nodeTypeCounts: Map<string, number> = _global[COUNTS_KEY] ??= new Map();
+// Keyed `${type}|${source}` so the CLI can split the per-kind total by
+// origin without knowing the source enum.
+const nodeTypeSourceCounts: Map<string, number> = _global[SOURCE_COUNTS_KEY] ??= new Map();
+
+// Set inside `resolveParent` while it walks the chain. The constructor
+// reads it to pick `leaf-resolve` over `leaf-direct` for any
+// materialisation that happens during a parent walk-up.
+let resolvingParent = false;
 
 export function getNodeTypeCounts(): ReadonlyMap<string, number> {
 	return nodeTypeCounts;
 }
 
+export function getNodeTypeSourceCounts(): ReadonlyMap<string, number> {
+	return nodeTypeSourceCounts;
+}
+
 export function resetNodeTypeCounts(): void {
 	nodeTypeCounts.clear();
+	nodeTypeSourceCounts.clear();
 }
 
 export interface LazyAstMaps {
@@ -417,9 +450,19 @@ abstract class LazyNode {
 			// `this.type` is set by the subclass's `readonly type = '...'`
 			// field initialiser, which runs AFTER super() returns. Defer to
 			// the next microtask so the read sees the final value.
+			//
+			// Capture `source` synchronously — by the microtask, the
+			// `parent === undefined` / `resolvingParent` state has moved on.
+			const source: NodeSource = parent === null
+				? 'root'
+				: parent === undefined
+				? (resolvingParent ? 'leaf-resolve' : 'leaf-direct')
+				: 'child';
 			queueMicrotask(() => {
 				const t = (this as unknown as { type: string }).type;
 				nodeTypeCounts.set(t, (nodeTypeCounts.get(t) ?? 0) + 1);
+				const key = t + '|' + source;
+				nodeTypeSourceCounts.set(key, (nodeTypeSourceCounts.get(key) ?? 0) + 1);
 			});
 		}
 	}
@@ -1300,6 +1343,19 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 // the SourceFile itself (whose ESTree counterpart, ProgramShape, is
 // pre-registered with parent=null by `convertLazy`).
 function resolveParent(tsNode: ts.Node, ctx: ConvertContext): LazyNode | null {
+	// DEBUG_ESTREE attribution: any LazyNode constructed during the walk
+	// below should be tagged 'leaf-resolve' rather than 'leaf-direct'.
+	const prevResolving = resolvingParent;
+	resolvingParent = true;
+	try {
+		return resolveParentInner(tsNode, ctx);
+	}
+	finally {
+		resolvingParent = prevResolving;
+	}
+}
+
+function resolveParentInner(tsNode: ts.Node, ctx: ConvertContext): LazyNode | null {
 	let walker: ts.Node | undefined = tsNode.parent;
 	while (walker) {
 		if (shouldSkipAsParent(walker)) {
