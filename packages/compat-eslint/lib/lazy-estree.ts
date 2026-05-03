@@ -1537,14 +1537,17 @@ type ShapeDispatch =
 	| { route: (tsNode: ts.Node, parent: LazyNode | null) => LazyNode | null };
 const SHAPE_CLASSES = new Map<ts.SyntaxKind, ShapeDispatch>();
 
-function makeShapeClass<TsT extends ts.Node>(def: ShapeDef<TsT>): new(tsNode: ts.Node, parent: LazyNode | null) => LazyNode {
+function makeShapeClass<TsT extends ts.Node>(def: ShapeDef<TsT>): new(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) => LazyNode {
 	const slotKeys = Object.keys(def.slots).map(g => '_' + g);
 	const cls = class extends LazyNode {
 		// Subclass overrides — assigned in constructor body. The base
 		// class's `abstract readonly type` is satisfied by the assignment.
 		readonly type!: KnownEstreeType;
-		constructor(tsNode: ts.Node, parent: LazyNode | null) {
-			super(tsNode, parent);
+		// `context` is only needed when `parent` is null — happens for the
+		// root Program (convertLazy passes ctx) and for materialise's
+		// fallback GenericTSNode when the TS parent chain is exhausted.
+		constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
+			super(tsNode, parent, context);
 			(this as { type: KnownEstreeType }).type = typeof def.type === 'function'
 				? def.type(tsNode as TsT)
 				: def.type;
@@ -3314,8 +3317,6 @@ function convertChildInner(child: ts.Node, parent: LazyNode): LazyNode | null {
 		}
 	}
 	switch (child.kind) {
-		case SK.SourceFile:
-			return new ProgramNode(child as ts.SourceFile, parent);
 		case SK.Parameter:
 			return convertParameter(child as ts.ParameterDeclaration, parent);
 		case SK.ParenthesizedType:
@@ -3384,34 +3385,20 @@ function convertChildren(children: ReadonlyArray<ts.Node>, parent: LazyNode): (L
 // detect a materialised node that has no real ESTree counterpart and
 // skip dispatching enter/leave on it.
 export const GENERIC_TS_NODE_MARKER: unique symbol = Symbol('GenericTSNode');
-class GenericTSNode extends LazyNode {
-	// Type is dynamic: 'TS' + ts.SyntaxKind[kind]. Most produced types
-	// (e.g. 'TSEnumDeclaration', 'TSImportType') are valid KnownEstreeType
-	// members; some are NOT (e.g. 'TSJsxAttributes', 'TSEndOfFileToken')
-	// and represent the "synthetic fallback" for kinds that don't have
-	// a real ESTree counterpart. The phantom-types invariant test in
-	// lazy-estree.test asserts these never reach a position rules can
-	// observe — they exist only as transient objects on the bottom-up
-	// walk before being shadowed by a real subclass. Cast the field
-	// type to KnownEstreeType to satisfy the LazyNode constraint; the
-	// runtime invariant is the actual gate.
-	readonly type: KnownEstreeType;
-	readonly [GENERIC_TS_NODE_MARKER] = true;
-	constructor(tsNode: ts.Node, parent: LazyNode | null, context?: ConvertContext) {
-		// Synthetic — don't claim the TS node's slot in the maps if a
-		// real subclass might be made for it later (avoid cache pollution).
-		// But DO register so cache hits work for repeated lookups via
-		// materialise during the same conversion. The downside: if a real
-		// converter later wants this slot, we'd return the generic. For
-		// now the cases that hit GenericTSNode are unsupported kinds where
-		// no real subclass exists; safe.
-		// `context` only needed when `parent` is null (no parent to inherit
-		// _ctx from) — happens when materialize() bottom-up exhausts the TS
-		// parent chain without hitting a cached ancestor.
-		super(tsNode, parent, context);
-		this.type = ('TS' + ts.SyntaxKind[tsNode.kind]) as KnownEstreeType;
-	}
-}
+// Catch-all fallback for SyntaxKinds without a dedicated class.
+// Type is dynamic: 'TS' + ts.SyntaxKind[kind]. Most produced types
+// (e.g. 'TSEnumDeclaration', 'TSImportType') are valid KnownEstreeType
+// members; some are NOT (e.g. 'TSJsxAttributes', 'TSEndOfFileToken')
+// and represent the "synthetic fallback" for kinds that don't have a
+// real ESTree counterpart. The phantom-types invariant test asserts
+// these never reach a position rules can observe — they exist only as
+// transient objects on the bottom-up walk before being shadowed by a
+// real subclass.
+const GenericTSNode = makeShapeClass<ts.Node>({
+	type: tn => ('TS' + ts.SyntaxKind[tn.kind]) as KnownEstreeType,
+	defaults: { [GENERIC_TS_NODE_MARKER]: true },
+	slots: {},
+});
 
 // Wraps a type node in an extra TSTypeAnnotation that adds the leading colon
 // (or `=>` for FunctionType / ConstructorType) to its range — matches Flow
@@ -3552,40 +3539,25 @@ class TSTypeParameterInstantiationNode extends SyntheticLazyNode {
 
 // --- Per-kind classes ---------------------------------------------------
 
-class ProgramNode extends LazyNode {
-	readonly type = 'Program' as const;
-	readonly sourceType: 'module' | 'script';
-	comments: any[] = [];
-	tokens: any[] = [];
-	private _body?: (LazyNode | null)[];
-
-	constructor(tsNode: ts.SourceFile, parent: LazyNode | null, context?: ConvertContext) {
-		super(tsNode, parent, context);
-		this.sourceType = (tsNode as { externalModuleIndicator?: unknown }).externalModuleIndicator ? 'module' : 'script';
-	}
-
-	// Program range ends at endOfFileToken.end, not source file end. Override
-	// the lazy getter so we only compute the bounds when read.
-	get range(): [number, number] {
-		const cached = (this as unknown as { _range?: [number, number] })._range;
-		if (cached) return cached;
-		const ts_ = this._ts as ts.SourceFile;
-		const r: [number, number] = [ts_.getStart(this._ctx.ast), ts_.endOfFileToken.end];
-		(this as unknown as { _range: [number, number] })._range = r;
-		return r;
-	}
-	set range(v: [number, number]) {
-		(this as unknown as { _range?: [number, number]; _loc?: unknown })._range = v;
-		(this as unknown as { _loc?: unknown })._loc = undefined;
-	}
-
-	get body() {
-		return this._body ??= convertBodyWithDirectives(
-			(this._ts as ts.SourceFile).statements,
-			this,
-		);
-	}
-}
+// Program — root of every lazy tree. Range ends at `endOfFileToken.end`
+// (not source-file `.end`), and `comments` / `tokens` are mutable arrays
+// that ESLint's SourceCode constructor populates externally — must be
+// per-instance, not shared via `defaults`.
+const ProgramNode = makeShapeClass<ts.SourceFile>({
+	type: 'Program',
+	consts: tn => ({
+		sourceType: (tn as { externalModuleIndicator?: unknown }).externalModuleIndicator ? 'module' : 'script',
+		// Fresh arrays per instance (Object.assign with defaults would
+		// share references across all Programs).
+		comments: [],
+		tokens: [],
+	}),
+	range: (tn, ctx) => [tn.getStart(ctx.ast), tn.endOfFileToken.end],
+	slots: {
+		body: { tsField: 'statements', via: (statements, parent) =>
+			convertBodyWithDirectives(statements as ts.NodeArray<ts.Statement>, parent) },
+	},
+});
 
 // Mirrors typescript-estree's `convertBodyExpressions`: leading
 // string-literal ExpressionStatements get a `directive` field. The check
@@ -4234,14 +4206,25 @@ function unescapeJsxText(text: string): string {
 
 // --- Entry point --------------------------------------------------------
 
+// Public-API shape of the Program — matches the factory-built
+// ProgramNode (see makeShapeClass call). Type alias so callers can read
+// `.body` / `.sourceType` without casting.
+type ProgramShape = LazyNode & {
+	readonly type: 'Program';
+	readonly sourceType: 'module' | 'script';
+	body: (LazyNode | null)[];
+	comments: any[];
+	tokens: any[];
+};
+
 export function convertLazy(
 	file: ts.SourceFile,
-): { estree: ProgramNode; astMaps: LazyAstMaps; context: ConvertContext } {
+): { estree: ProgramShape; astMaps: LazyAstMaps; context: ConvertContext } {
 	const maps: LazyAstMaps = {
 		esTreeNodeToTSNodeMap: ESTREE_TO_TS_FACADE,
 		tsNodeToESTreeNodeMap: new WeakMap(),
 	};
 	const context: ConvertContext = { ast: file, maps };
-	const estree = new ProgramNode(file, null, context);
+	const estree = new ProgramNode(file, null, context) as ProgramShape;
 	return { estree, astMaps: maps, context };
 }
