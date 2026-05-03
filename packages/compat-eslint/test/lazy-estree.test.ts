@@ -1417,6 +1417,103 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	check('saw JSXSpreadAttribute (sanity)', seenTypes.has('JSXSpreadAttribute'));
 }
 
+// --- Lazy parent resolution: targeted invariants ------------------------
+//
+// `LazyNode.parent` is a getter. Bottom-up `materialise(leaf, ctx)`
+// constructs the leaf with `_parent === PARENT_UNSET`; first read fires
+// `resolveParent`, which walks the TS chain. Three subtle pieces in that
+// path each fix a real regression that the parity sweep would catch via
+// 67k assertions, but only with a vague "type mismatch on file X" report.
+// These targeted tests pin each invariant in isolation so a future "make
+// the getter cleaner" edit fails loudly with a clear message.
+//
+// (1) ChainExpression cache-hit re-point. For `arguments?.length` the
+//     ESTree shape is ChainExpression { expression: MemberExpression {
+//     object: Identifier `arguments` } }. The TS PropertyAccessExpression
+//     materialises as ChainExpression — the inner MemberExpression
+//     occupies the SAME TS slot but is registered as the wrapper's
+//     `.expression`. Without `convertChild`'s cache-hit re-point, the
+//     inner Identifier's `.parent` resolves to the outer ChainExpression
+//     (drilling can't recover MemberExpression generically). prefer-rest-
+//     params then over-reports because `parent.type !== 'MemberExpression'`.
+{
+	const sf = parseTs('function f() { return arguments?.length; }');
+	const { context } = lazy.convertLazy(sf);
+	let argsId: ts.Identifier | undefined;
+	const visit = (n: ts.Node) => {
+		if (argsId) return;
+		if (n.kind === ts.SyntaxKind.Identifier && (n as ts.Identifier).text === 'arguments') {
+			argsId = n as ts.Identifier;
+			return;
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	const lazyId = lazy.materialize(argsId!, context) as any;
+	check(
+		'ChainExpression: arguments.parent is MemberExpression (not ChainExpression wrapper)',
+		lazyId.parent?.type === 'MemberExpression',
+		`got: ${lazyId.parent?.type}`,
+	);
+	check(
+		'ChainExpression: arguments.parent.parent is ChainExpression',
+		lazyId.parent?.parent?.type === 'ChainExpression',
+		`got: ${lazyId.parent?.parent?.type}`,
+	);
+}
+
+// (2) BindingElement collapse. `let [a] = b;` parses as
+//     ArrayBindingPattern { elements: [BindingElement { name: Identifier `a` }] }
+//     in TS, but ESTree collapses BindingElement into the inner Identifier
+//     when there's no rest/initializer/property — the BindingElement has
+//     no ESTree counterpart of its own. `resolveParent` must keep walking
+//     past such collapsed walkers (`parent._ts !== walker` check) so the
+//     Identifier's parent resolves to ArrayPattern, not to itself.
+{
+	const sf = parseTs('let [a] = [1];');
+	const { context } = lazy.convertLazy(sf);
+	let aId: ts.Identifier | undefined;
+	const visit = (n: ts.Node) => {
+		if (aId) return;
+		if (n.kind === ts.SyntaxKind.Identifier && (n as ts.Identifier).text === 'a') {
+			aId = n as ts.Identifier;
+			return;
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	const lazyId = lazy.materialize(aId!, context) as any;
+	check(
+		'BindingElement collapse: a.parent is ArrayPattern (not Identifier — no self-loop)',
+		lazyId.parent?.type === 'ArrayPattern',
+		`got: ${lazyId.parent?.type}`,
+	);
+}
+
+// (3) ParenthesizedExpression collapse. `(x);` collapses the parens —
+//     ESTree exposes the inner expression directly. Identifier `x`'s
+//     parent should skip past the parens to the ExpressionStatement.
+{
+	const sf = parseTs('(x);');
+	const { context } = lazy.convertLazy(sf);
+	let xId: ts.Identifier | undefined;
+	const visit = (n: ts.Node) => {
+		if (xId) return;
+		if (n.kind === ts.SyntaxKind.Identifier && (n as ts.Identifier).text === 'x') {
+			xId = n as ts.Identifier;
+			return;
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	const lazyId = lazy.materialize(xId!, context) as any;
+	check(
+		'ParenthesizedExpression collapse: x.parent skips parens to ExpressionStatement',
+		lazyId.parent?.type === 'ExpressionStatement',
+		`got: ${lazyId.parent?.type}`,
+	);
+}
+
 // --- Bottom-up parity sweep ---------------------------------------------
 //
 // The existing `compare()` walks the lazy + eager trees TOP-DOWN through
