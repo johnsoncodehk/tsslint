@@ -126,6 +126,21 @@ export function createTypescriptFacade(): typeof ts {
 	// not `forEachChild`). We add the free-function form rule code expects.
 	facade.forEachChild = forEachChild;
 
+	// Scanner API: tsgo renamed `setTextPos(pos)` to `resetTokenState(pos)`.
+	// Wrap `createScanner` so returned scanners carry both names —
+	// keeps compat-eslint/lib/tokens.ts (and any other ts.createScanner
+	// consumer) working without per-callsite changes.
+	if (typeof ast.createScanner === 'function') {
+		const origCreateScanner = ast.createScanner;
+		facade.createScanner = function (...args: unknown[]) {
+			const scanner = (origCreateScanner as (...a: unknown[]) => any).apply(null, args);
+			if (scanner && typeof scanner.setTextPos !== 'function' && typeof scanner.resetTokenState === 'function') {
+				scanner.setTextPos = scanner.resetTokenState.bind(scanner);
+			}
+			return scanner;
+		};
+	}
+
 	// Sentinel marker so the worker can detect this isn't real ts when
 	// debugging cache-substitution issues.
 	facade.__tsgoFacade__ = true;

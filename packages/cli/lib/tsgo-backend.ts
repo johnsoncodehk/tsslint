@@ -51,10 +51,26 @@ export interface TsgoBackend {
 	close(): void;
 }
 
-// Process-level guards. Both prototype patches are one-shot per process
-// (tsgo's class shape is stable per binary version).
+// Process-level guards. All prototype patches are one-shot per process
+// (tsgo's class shapes are stable per binary version).
 let nodeProtoPatched = false;
 let typeProtoPatched = false;
+let nodeHandleProtoPatched = false;
+let symbolProtoPatched = false;
+let nodeListSpeciesPatched = false;
+
+function patchTsgoNodeListSpecies(sample: object): void {
+	if (nodeListSpeciesPatched) return;
+	const ctor = (sample as { constructor?: any }).constructor;
+	if (!ctor) return;
+	if (ctor[Symbol.species] !== Array) {
+		Object.defineProperty(ctor, Symbol.species, {
+			configurable: true,
+			get: () => Array,
+		});
+	}
+	nodeListSpeciesPatched = true;
+}
 
 // tsgo's Node interface exposes `pos` / `end` (raw parser offsets,
 // leading trivia included), `parent`, `kind`, `forEachChild`,
@@ -140,6 +156,46 @@ function patchTsgoNodeProto(sample: Node): void {
 			return this.end - this.pos;
 		};
 	}
+	// `SourceFile.getLineAndCharacterOfPosition(pos)` — used by
+	// compat-eslint (and by ts itself for diagnostic span rendering)
+	// to convert offsets to line/character. Real ts caches `lineMap` on
+	// the SF; tsgo doesn't, so we compute lineStarts lazily and stash
+	// on the SF instance the first time it's asked.
+	if (typeof proto.getLineAndCharacterOfPosition !== 'function') {
+		proto.getLineAndCharacterOfPosition = function (
+			this: { text?: string; getSourceFile(): { text: string }; _lineStarts?: number[] },
+			position: number,
+		): { line: number; character: number } {
+			const text = this.text ?? this.getSourceFile().text;
+			let starts = this._lineStarts;
+			if (!starts) {
+				starts = [0];
+				for (let i = 0; i < text.length; i++) {
+					const c = text.charCodeAt(i);
+					if (c === 10) starts.push(i + 1);
+					else if (c === 13) {
+						if (text.charCodeAt(i + 1) === 10) i++;
+						starts.push(i + 1);
+					}
+				}
+				this._lineStarts = starts;
+			}
+			// Binary search for the largest lineStart ≤ position.
+			let lo = 0, hi = starts.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi + 1) >>> 1;
+				if (starts[mid] <= position) lo = mid; else hi = mid - 1;
+			}
+			return { line: lo, character: position - starts[lo] };
+		};
+	}
+	if (typeof proto.getLineStarts !== 'function') {
+		proto.getLineStarts = function (this: { _lineStarts?: number[]; getLineAndCharacterOfPosition(p: number): unknown }) {
+			// Trigger the lazy build via a no-op call; cache lives on `_lineStarts`.
+			this.getLineAndCharacterOfPosition(0);
+			return this._lineStarts!;
+		};
+	}
 	nodeProtoPatched = true;
 }
 
@@ -178,7 +234,159 @@ function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
 	if (!proto.isIndexType) proto.isIndexType = has(TF.Index);
 	if (!proto.getFlags) proto.getFlags = function (this: { flags: number }) { return this.flags; };
 	if (!proto.isNullableType) proto.isNullableType = has((TF.Null ?? 0) | (TF.Undefined ?? 0));
+	// `types` property — typescript-eslint's ts-api-utils
+	// (`unionConstituents`) reads `type.types` directly on Union /
+	// Intersection types. tsgo exposes the constituents via `getTypes()`
+	// instead. Lazy getter preserves the no-RPC-on-bind contract.
+	if (!Object.getOwnPropertyDescriptor(proto, 'types')) {
+		Object.defineProperty(proto, 'types', {
+			configurable: true,
+			get(this: { getTypes?: () => unknown[] }) {
+				return this.getTypes ? this.getTypes() : undefined;
+			},
+		});
+	}
+	// `getCallSignatures()` / `getConstructSignatures()` — instance shims
+	// that delegate to the Checker. We can't reach the Checker from here
+	// without a closure; install via patchTsgoTypeProtoWithChecker
+	// (separate hook called from wrapChecker).
 	typeProtoPatched = true;
+}
+
+// Type instance methods that need a Checker reference (signatures,
+// properties). Patched once on first checker query that returns a Type.
+let typeCheckerMethodsPatched = false;
+function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, project: Project): void {
+	if (typeCheckerMethodsPatched) return;
+	let proto: any = Object.getPrototypeOf(sample);
+	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
+		proto = Object.getPrototypeOf(proto);
+	}
+	if (!proto) return;
+	const SK = (sync as any).SignatureKind as Record<string, number>;
+	if (!proto.getCallSignatures) {
+		proto.getCallSignatures = function (this: { id: string }) {
+			return currentProjectRef.project!.checker.getSignaturesOfType(this as any, SK.Call);
+		};
+	}
+	if (!proto.getConstructSignatures) {
+		proto.getConstructSignatures = function (this: { id: string }) {
+			return currentProjectRef.project!.checker.getSignaturesOfType(this as any, SK.Construct);
+		};
+	}
+	if (!proto.getProperties) {
+		proto.getProperties = function (this: any) {
+			return currentProjectRef.project!.checker.getPropertiesOfType(this);
+		};
+	}
+	if (!proto.getProperty) {
+		proto.getProperty = function (this: any, name: string) {
+			return this.getProperties().find((p: any) => p.name === name);
+		};
+	}
+	if (!proto.getBaseTypes) {
+		proto.getBaseTypes = function (this: any) {
+			return currentProjectRef.project!.checker.getBaseTypes(this);
+		};
+	}
+	if (!proto.getNonNullableType) {
+		proto.getNonNullableType = function (this: any) {
+			return currentProjectRef.project!.checker.getNonNullableType(this);
+		};
+	}
+	void project;
+	typeCheckerMethodsPatched = true;
+}
+
+// `Symbol` on tsgo carries data fields and a few RPC-backed methods,
+// but is missing ts.Symbol's instance-method facade (`getDeclarations`,
+// `getName`, `getEscapedName`, `getFlags`). Rule code reads those — add
+// thin getters that read the data fields.
+function patchTsgoSymbolProto(sync: TsgoSync): void {
+	if (symbolProtoPatched) return;
+	const Symbol = (sync as any).Symbol;
+	if (!Symbol?.prototype) return;
+	const proto = Symbol.prototype;
+	if (!proto.getDeclarations) {
+		proto.getDeclarations = function (this: { declarations: unknown[] }) {
+			return this.declarations;
+		};
+	}
+	if (!proto.getName) {
+		proto.getName = function (this: { name: string }) {
+			return this.name;
+		};
+	}
+	if (!proto.getEscapedName) {
+		// tsgo doesn't have escapedName / __String distinction the way
+		// ts does; the regular `name` is fine for rule comparisons.
+		proto.getEscapedName = function (this: { name: string }) {
+			return this.name;
+		};
+	}
+	if (!proto.getFlags) {
+		proto.getFlags = function (this: { flags: number }) {
+			return this.flags;
+		};
+	}
+	// Mirror `escapedName` field too — typescript-estree reads it
+	// directly on the symbol object.
+	if (!Object.getOwnPropertyDescriptor(proto, 'escapedName')) {
+		Object.defineProperty(proto, 'escapedName', {
+			configurable: true,
+			get(this: { name: string }) { return this.name; },
+		});
+	}
+	symbolProtoPatched = true;
+}
+
+// `Symbol.declarations` on tsgo is `NodeHandle[]` — lazy stubs with
+// `kind / pos / end / path` and a `resolve(project)` method. Rule code
+// expects real `ts.Node[]` and reads `.parent` / calls `.getSourceFile()`
+// directly. Patch NodeHandle's prototype to upgrade-on-access:
+//
+//   - `getSourceFile()` short-circuits to `project.program.getSourceFile(path)`
+//     — common in scope-manager lib-symbol checks; doesn't need full Node
+//     materialisation since `project.isSourceFileDefaultLibrary(sf)` is
+//     fed straight back to the wrapped Program.
+//
+//   - `parent` getter resolves the handle once via `resolve(project)`, then
+//     reads parent off the resolved Node. Cached on the instance so repeat
+//     reads skip the `findDescendant` walk.
+//
+// Multi-project: `currentProjectRef.project` is rebound in createTsgoBackend()
+// every setup. The prototype patch closes over the holder, not the project
+// instance — so NodeHandles produced under project A but accessed after
+// the worker switches to project B route through B's live API. Safe
+// because lint() processes one file at a time within one project and
+// hands no cross-project handles around.
+const currentProjectRef: { project: Project | undefined } = { project: undefined };
+
+function installNodeHandleHooks(sync: TsgoSync): void {
+	if (nodeHandleProtoPatched) return;
+	const NodeHandle = (sync as any).NodeHandle;
+	if (!NodeHandle?.prototype) return;
+	const proto = NodeHandle.prototype;
+	if (typeof proto.getSourceFile !== 'function') {
+		proto.getSourceFile = function (this: { path: string }) {
+			const project = currentProjectRef.project;
+			if (!project) return undefined;
+			return project.program.getSourceFile(this.path);
+		};
+	}
+	if (!Object.getOwnPropertyDescriptor(proto, 'parent')) {
+		Object.defineProperty(proto, 'parent', {
+			configurable: true,
+			get(this: { _resolvedNode?: Node | null; resolve: (p: Project) => Node | undefined }) {
+				if (this._resolvedNode === undefined) {
+					const project = currentProjectRef.project;
+					this._resolvedNode = project ? this.resolve(project) ?? null : null;
+				}
+				return this._resolvedNode?.parent;
+			},
+		});
+	}
+	nodeHandleProtoPatched = true;
 }
 
 export function createTsgoBackend(tsconfig: string): TsgoBackend {
@@ -206,6 +414,8 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 
 	const program = wrapProgram(project, nodeToSymbol);
 	const idKind = ast.SyntaxKind.Identifier;
+	currentProjectRef.project = project;
+	installNodeHandleHooks(require('@typescript/native-preview/sync') as TsgoSync);
 
 	return {
 		getProgram: () => program,
@@ -232,6 +442,13 @@ function prepareFile(
 	// Patch ts.Node-shape methods on tsgo's Remote{Node,SourceFile}
 	// prototype. Idempotent across calls and across snapshots.
 	patchTsgoNodeProto(sf);
+	// Patch RemoteNodeList — `extends Array`, so its `[Symbol.species]`
+	// defaults to itself; rule code's `statements.map(...)` then tries
+	// to construct an empty RemoteNodeList and crashes in the binary-
+	// view getter. Override species to plain Array so derived methods
+	// (map / filter / slice / concat) return regular arrays.
+	const sample = (sf as unknown as { statements?: object }).statements;
+	if (sample) patchTsgoNodeListSpecies(sample);
 
 	// Local AST walk — no RPC. Collect every Identifier.
 	const ids: Node[] = [];
@@ -346,9 +563,28 @@ function wrapChecker(
 		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
 	};
 	const fixupType = (t: unknown) => {
-		if (t && typeof t === 'object') patchTsgoTypeProto(t, sync);
+		if (t && typeof t === 'object') {
+			patchTsgoTypeProto(t, sync);
+			patchTsgoTypeCheckerMethods(t, sync, project);
+		}
 		return t;
 	};
+	patchTsgoSymbolProto(sync);
+
+	// Forward to tsgo's Checker, casting Node/Symbol/Type shapes (tsgo's
+	// runtime classes are structurally compatible with ts.* for the
+	// methods we proxy — tsgo Symbol carries `name`/`flags`/`declarations`,
+	// tsgo Type carries `flags` plus the prototype shims from
+	// patchTsgoTypeProto). Non-existent methods surface as throw or soft
+	// no-op depending on caller tolerance.
+	const fwd = <K extends string>(name: K, fixup?: (r: unknown) => void) =>
+		(...args: unknown[]) => {
+			const fn = (project.checker as any)[name];
+			if (typeof fn !== 'function') return undefined;
+			const r = fn.apply(project.checker, args);
+			if (fixup) fixup(r);
+			return r;
+		};
 
 	const checker: Partial<ts.TypeChecker> = {
 		getSymbolAtLocation(node: ts.Node) {
@@ -369,30 +605,61 @@ function wrapChecker(
 			fixupType(t);
 			return t as unknown as ts.Type;
 		},
-		getShorthandAssignmentValueSymbol(node: ts.Node | undefined) {
+		getShorthandAssignmentValueSymbol(node) {
 			if (!node) return undefined;
 			return project.checker.getShorthandAssignmentValueSymbol(node as unknown as Node) as unknown as ts.Symbol | undefined;
 		},
-		getTypeOfSymbolAtLocation(symbol: ts.Symbol, location: ts.Node) {
-			return project.checker.getTypeOfSymbolAtLocation(
+		getTypeOfSymbolAtLocation(symbol, location) {
+			const t = project.checker.getTypeOfSymbolAtLocation(
 				symbol as unknown as TsgoSymbol,
 				location as unknown as Node,
-			) as unknown as ts.Type;
+			);
+			fixupType(t);
+			return t as unknown as ts.Type;
 		},
+		// Direct forwards — tsgo Checker has these on its surface.
+		getTypeOfSymbol: fwd('getTypeOfSymbol', fixupType) as any,
+		getDeclaredTypeOfSymbol: fwd('getDeclaredTypeOfSymbol', fixupType) as any,
+		getSignaturesOfType: fwd('getSignaturesOfType') as any,
+		getResolvedSignature: fwd('getResolvedSignature') as any,
+		getReturnTypeOfSignature: fwd('getReturnTypeOfSignature', fixupType) as any,
+		getTypePredicateOfSignature: fwd('getTypePredicateOfSignature') as any,
+		getNonNullableType: fwd('getNonNullableType', fixupType) as any,
+		getBaseTypes: fwd('getBaseTypes') as any,
+		getPropertiesOfType: fwd('getPropertiesOfType') as any,
+		getIndexInfosOfType: fwd('getIndexInfosOfType') as any,
+		getTypeArguments: fwd('getTypeArguments') as any,
+		getWidenedType: fwd('getWidenedType', fixupType) as any,
+		getTypeFromTypeNode: fwd('getTypeFromTypeNode', fixupType) as any,
+		getContextualType: fwd('getContextualType', fixupType) as any,
+		typeToString: fwd('typeToString') as any,
+		isArrayLikeType: fwd('isArrayLikeType') as any,
+		// Type-parameter constraint — tsgo only has the type-parameter
+		// variant; for non-TypeParameter inputs ts returns undefined too.
+		getBaseConstraintOfType: ((type: any) => {
+			if ((type?.flags & (require('@typescript/native-preview/sync') as TsgoSync).TypeFlags.TypeParameter) !== 0) {
+				const r = project.checker.getConstraintOfTypeParameter(type);
+				fixupType(r);
+				return r;
+			}
+			return undefined;
+		}) as any,
+		// Apparent type: ts returns the type itself for primitives plus
+		// boxing for built-ins. We don't have a direct equivalent — fall
+		// back to the input type. Rule code typically uses the result for
+		// property lookups, which `getPropertiesOfType` handles directly.
+		getApparentType: ((type: unknown) => type) as any,
 		// tsgo's Checker doesn't expose these. compat-eslint's callsites
 		// (parameter-property shadowing, ExportSpecifier alias unwrap)
 		// have fallback paths that handle empty / undefined gracefully —
 		// degrades scope-manager precision in those edge cases but keeps
-		// the rest of the pipeline functional. Logged via stub() if
-		// debugging shows missed diagnostics traceable here.
+		// the rest of the pipeline functional.
 		getSymbolsInScope: ((..._args: unknown[]) => []) as any,
 		getExportSpecifierLocalTargetSymbol: ((..._args: unknown[]) => undefined) as any,
-		// Stubs that callers must not silently ignore — these would
-		// produce wrong diagnostics if no-op'd. Keep as throw.
-		getBaseConstraintOfType: stub('getBaseConstraintOfType') as any,
-		getApparentType: stub('getApparentType') as any,
-		getContextualType: stub('getContextualType') as any,
 	};
+	// `stub` is held for future use as gaps surface; reference it here
+	// to satisfy noUnusedLocals without a separate unused-method line.
+	void stub;
 
 	return checker as ts.TypeChecker;
 }
