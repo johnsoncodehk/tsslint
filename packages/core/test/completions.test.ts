@@ -108,7 +108,7 @@ function makeContext(files: Record<string, string>) {
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const result = linter.getCompletions('/a.ts', 0);
 	check('two plugins: 2 entries total', result.length === 2);
-	check('plugin B saw plugin A\'s entry first', observedByPluginB === 1);
+	check("plugin B saw plugin A's entry first", observedByPluginB === 1);
 	check('order preserved: a before b', result[0]?.name === 'a' && result[1]?.name === 'b');
 }
 

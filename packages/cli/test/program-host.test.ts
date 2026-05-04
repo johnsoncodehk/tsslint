@@ -27,8 +27,8 @@
 // Run via:
 //   node packages/cli/test/program-host.test.js
 
-import * as ts from 'typescript';
 import * as crypto from 'crypto';
+import * as ts from 'typescript';
 
 const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: string) {
@@ -111,7 +111,11 @@ function buildProgram(files: Record<string, string>, fileTextOverrides: Map<stri
 	catch (err) {
 		threw = err;
 	}
-	check('createSemanticDiagnosticsBuilderProgram does not throw', threw === undefined, threw ? String(threw) : undefined);
+	check(
+		'createSemanticDiagnosticsBuilderProgram does not throw',
+		threw === undefined,
+		threw ? String(threw) : undefined,
+	);
 	check('BuilderProgram instance returned', !!builder);
 }
 
