@@ -1,18 +1,30 @@
 import type {
 	CodeFixAction,
+	CompletionEntry,
 	Diagnostic,
 	DiagnosticWithLocation,
 	FileTextChanges,
-	LanguageService,
-	LanguageServiceHost,
 	Program,
 	SourceFile,
 } from 'typescript';
 
 export interface LinterContext {
 	typescript: typeof import('typescript');
-	languageServiceHost: LanguageServiceHost;
-	languageService: LanguageService;
+	// Program thunk (not a stable instance). Callers that mutate the
+	// project mid-session (e.g. CLI `--fix` rewriting a file) rebuild the
+	// Program and the next `lint()` call sees the new one. Each `lint()`
+	// reads this once at the top, so within a single file's pass the
+	// Program identity stays stable.
+	//
+	// Pre-3.2: this was `{ languageService, languageServiceHost }`.
+	// LinterContext consumed only `getProgram()` and `getCancellationToken()`
+	// from those — the rest of the LS / Host surface was unused, so the
+	// indirection was paying for capabilities (completions, refactors,
+	// navigation) that the linter never touches. Direct Program access
+	// also makes the surface trivially compatible with hosts that don't
+	// run a full LanguageService (raw `ts.createProgram`, tsgo's
+	// `Project.program`, etc.).
+	program: () => Program;
 }
 
 export interface Config {
@@ -30,6 +42,12 @@ export interface PluginInstance {
 	resolveRules?(fileName: string, rules: Record<string, Rule>): Record<string, Rule>;
 	resolveDiagnostics?(file: SourceFile, diagnostics: DiagnosticWithLocation[]): DiagnosticWithLocation[];
 	resolveCodeFixes?(file: SourceFile, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
+	// IDE-side completion entries. Hosted environments (typescript-plugin)
+	// merge the result into `LanguageService.getCompletionsAtPosition`.
+	// CLI ignores it. Pre-3.2 the ignore plugin reached for `LanguageService`
+	// directly via `LinterContext`; that path is gone, so plugins that want
+	// IDE completions hook in here instead.
+	resolveCompletions?(file: SourceFile, position: number, entries: CompletionEntry[]): CompletionEntry[];
 }
 
 export interface Rules {

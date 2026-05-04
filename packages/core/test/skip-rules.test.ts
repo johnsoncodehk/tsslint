@@ -42,7 +42,8 @@ function makeContext(files: Record<string, string>) {
 		fileExists: n => n in files || n === realLibPath,
 		readFile: n => (n in files ? files[n] : (n === realLibPath ? realLibContent : undefined)),
 	};
-	return { typescript: ts, languageServiceHost: host, languageService: ts.createLanguageService(host) };
+	const languageService = ts.createLanguageService(host);
+	return { typescript: ts, program: () => languageService.getProgram()! };
 }
 
 // ── Test 1: rule in skipRules doesn't run, no diagnostic in result ───────

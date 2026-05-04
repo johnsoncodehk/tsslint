@@ -211,9 +211,14 @@ async function setup(
 	};
 	linter = core.createLinter(
 		{
-			languageService: linterLanguageService,
-			languageServiceHost: linterHost,
 			typescript: ts,
+			// Thunk: each `lint()` call observes the LS's CURRENT program.
+			// `--fix` rewrites a file mid-session, bumps `projectVersion`,
+			// and the next `lint()` picks up the rebuilt program here. The
+			// LS itself is still TSSLint CLI's internal handle to TS — the
+			// public Linter API only sees Program. Pre-3.2 the linter took
+			// `{ languageService, languageServiceHost }`; both are gone.
+			program: () => linterLanguageService.getProgram()!,
 		},
 		path.dirname(configFile),
 		config,

@@ -72,10 +72,12 @@ export function createLinter(
 			const skipRules = options?.skipRules;
 
 			const rules = getRulesForFile(fileName);
-			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName);
 
-			const program = ctx.languageService.getProgram()!;
+			// Single read at top of `lint()`: rule callbacks all observe
+			// the same Program identity for this file's pass, even if a
+			// caller swaps the underlying program between `lint()` calls.
+			const program = ctx.program();
 			const file = program.getSourceFile(fileName)!;
 			let touchedProgram = false;
 			const rulesContext: RuleContext = {
@@ -93,10 +95,6 @@ export function createLinter(
 			const lintResult = lintResults.get(fileName)!;
 
 			for (const [ruleId, rule] of Object.entries(rules)) {
-				if (token?.isCancellationRequested()) {
-					break;
-				}
-
 				currentRuleId = ruleId;
 
 				if (skipRules?.has(currentRuleId)) {
@@ -324,6 +322,26 @@ export function createLinter(
 					return refactor.getEdits();
 				}
 			}
+		},
+		// IDE-side completion entries. Aggregates `resolveCompletions`
+		// across plugins; CLI never calls this. typescript-plugin merges
+		// the result into the host LanguageService's getCompletionsAtPosition.
+		getCompletions(fileName: string, position: number): ts.CompletionEntry[] {
+			const program = ctx.program();
+			const file = program.getSourceFile(fileName);
+			if (!file) {
+				return [];
+			}
+			const configs = getConfigsForFile(fileName);
+			let entries: ts.CompletionEntry[] = [];
+			for (const { plugins } of configs) {
+				for (const { resolveCompletions } of plugins) {
+					if (resolveCompletions) {
+						entries = resolveCompletions(file, position, entries);
+					}
+				}
+			}
+			return entries;
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,

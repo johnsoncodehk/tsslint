@@ -47,7 +47,7 @@ function makeContext(files: Record<string, string>) {
 		readFile: n => (n in files ? files[n] : (n === realLibPath ? realLibContent : undefined)),
 	};
 	const languageService = ts.createLanguageService(host);
-	return { typescript: ts, languageServiceHost: host, languageService };
+	return { typescript: ts, program: () => languageService.getProgram()! };
 }
 
 // ── Test 1: rule that doesn't read program → not classified ──────────────
