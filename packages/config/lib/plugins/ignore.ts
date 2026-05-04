@@ -57,107 +57,77 @@ export function create(
 	const completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/;
 	const completeReg2 = new RegExp(`//\\s*${cmd}(\\S*)?$`);
 
-	return ({ typescript: ts, languageService }) => {
+	return ({ typescript: ts }) => {
 		const reportedRulesOfFile = new Map<string, [string, number][]>();
-		const { getCompletionsAtPosition } = languageService;
 
-		languageService.getCompletionsAtPosition = (fileName, position, ...rest) => {
-			let result = getCompletionsAtPosition(fileName, position, ...rest);
+		return {
+			// IDE-side suggestions: when typing `// @ts-` on a fresh line,
+			// suggest the configured ignore-comment command; when the
+			// command is already typed, suggest rule IDs that fired on the
+			// next line so users can scope the ignore precisely. Only runs
+			// under typescript-plugin (CLI doesn't aggregate completions).
+			resolveCompletions(file, position, entries) {
+				const reportedRules = reportedRulesOfFile.get(file.fileName);
+				const line = file.getLineAndCharacterOfPosition(position).line;
+				const lineStart = file.getPositionOfLineAndCharacter(line, 0);
+				const prefix = file.text.slice(lineStart, position);
+				const matchCmd = prefix.match(completeReg1);
 
-			const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
-			if (!sourceFile) {
-				return result;
-			}
-
-			const reportedRules = reportedRulesOfFile.get(fileName);
-			const line = sourceFile.getLineAndCharacterOfPosition(position).line;
-			const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-			const prefix = sourceFile.text.slice(lineStart, position);
-			const matchCmd = completeReg1
-				? prefix.match(completeReg1)
-				: undefined;
-
-			if (matchCmd) {
-				const nextLineRules = reportedRules?.filter(([, reportedLine]) => reportedLine === line + 1) ?? [];
-				const item: ts.CompletionEntry = {
-					name: cmdText,
-					insertText: matchCmd[1].length ? cmdText : ` ${cmdText}`,
-					kind: ts.ScriptElementKind.keyword,
-					sortText: 'a',
-					replacementSpan: matchCmd[2]
-						? {
-							start: position - matchCmd[2].length,
-							length: matchCmd[2].length,
-						}
-						: undefined,
-					labelDetails: {
-						description: nextLineRules.length >= 2
-							? `Ignore ${nextLineRules.length} issues in next line`
-							: nextLineRules.length
-							? 'Ignore 1 issue in next line'
+				if (matchCmd) {
+					const nextLineRules = reportedRules?.filter(([, reportedLine]) => reportedLine === line + 1) ?? [];
+					entries.push({
+						name: cmdText,
+						insertText: matchCmd[1].length ? cmdText : ` ${cmdText}`,
+						kind: ts.ScriptElementKind.keyword,
+						sortText: 'a',
+						replacementSpan: matchCmd[2]
+							? {
+								start: position - matchCmd[2].length,
+								length: matchCmd[2].length,
+							}
 							: undefined,
-					},
-				};
-				if (result) {
-					result.entries.push(item);
-				}
-				else {
-					result = {
-						isGlobalCompletion: false,
-						isMemberCompletion: false,
-						isNewIdentifierLocation: false,
-						entries: [item],
-					};
-				}
-			}
-			else if (reportedRules?.length) {
-				const matchRule = completeReg2
-					? prefix.match(completeReg2)
-					: undefined;
-				if (matchRule) {
-					const visited = new Set<string>();
-					for (const [ruleId] of reportedRules) {
-						if (visited.has(ruleId)) {
-							continue;
-						}
-						visited.add(ruleId);
-
-						const reportedLines = reportedRules
-							.filter(([r]) => r === ruleId)
-							.map(([, l]) => l + 1);
-						const item: ts.CompletionEntry = {
-							name: ruleId,
-							kind: ts.ScriptElementKind.keyword,
-							sortText: ruleId,
-							replacementSpan: matchRule[1]
-								? {
-									start: position - matchRule[1].length,
-									length: matchRule[1].length,
-								}
+						labelDetails: {
+							description: nextLineRules.length >= 2
+								? `Ignore ${nextLineRules.length} issues in next line`
+								: nextLineRules.length
+								? 'Ignore 1 issue in next line'
 								: undefined,
-							labelDetails: {
-								description: `Reported in line${reportedLines.length >= 2 ? 's' : ''} ${reportedLines.join(', ')}`,
-							},
-						};
-						if (result) {
-							result.entries.push(item);
-						}
-						else {
-							result = {
-								isGlobalCompletion: false,
-								isMemberCompletion: false,
-								isNewIdentifierLocation: false,
-								entries: [item],
-							};
+						},
+					});
+				}
+				else if (reportedRules?.length) {
+					const matchRule = prefix.match(completeReg2);
+					if (matchRule) {
+						const visited = new Set<string>();
+						for (const [ruleId] of reportedRules) {
+							if (visited.has(ruleId)) {
+								continue;
+							}
+							visited.add(ruleId);
+
+							const reportedLines = reportedRules
+								.filter(([r]) => r === ruleId)
+								.map(([, l]) => l + 1);
+							entries.push({
+								name: ruleId,
+								kind: ts.ScriptElementKind.keyword,
+								sortText: ruleId,
+								replacementSpan: matchRule[1]
+									? {
+										start: position - matchRule[1].length,
+										length: matchRule[1].length,
+									}
+									: undefined,
+								labelDetails: {
+									description: `Reported in line${reportedLines.length >= 2 ? 's' : ''} ${reportedLines.join(', ')}`,
+								},
+							});
 						}
 					}
 				}
-			}
 
-			return result;
-		};
-
-		return {
+				return entries;
+			},
 			resolveDiagnostics(file, results) {
 				if (
 					!reportsUnusedComments

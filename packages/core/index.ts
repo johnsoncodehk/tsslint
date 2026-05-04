@@ -72,10 +72,12 @@ export function createLinter(
 			const skipRules = options?.skipRules;
 
 			const rules = getRulesForFile(fileName);
-			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName);
 
-			const program = ctx.languageService.getProgram()!;
+			// Single read at top of `lint()`: rule callbacks all observe
+			// the same Program identity for this file's pass, even if a
+			// caller swaps the underlying program between `lint()` calls.
+			const program = ctx.program();
 			const file = program.getSourceFile(fileName)!;
 			let touchedProgram = false;
 			const rulesContext: RuleContext = {
@@ -93,10 +95,6 @@ export function createLinter(
 			const lintResult = lintResults.get(fileName)!;
 
 			for (const [ruleId, rule] of Object.entries(rules)) {
-				if (token?.isCancellationRequested()) {
-					break;
-				}
-
 				currentRuleId = ruleId;
 
 				if (skipRules?.has(currentRuleId)) {
@@ -325,6 +323,26 @@ export function createLinter(
 				}
 			}
 		},
+		// IDE-side completion entries. Aggregates `resolveCompletions`
+		// across plugins; CLI never calls this. typescript-plugin merges
+		// the result into the host LanguageService's getCompletionsAtPosition.
+		getCompletions(fileName: string, position: number): ts.CompletionEntry[] {
+			const program = ctx.program();
+			const file = program.getSourceFile(fileName);
+			if (!file) {
+				return [];
+			}
+			const configs = getConfigsForFile(fileName);
+			let entries: ts.CompletionEntry[] = [];
+			for (const { plugins } of configs) {
+				for (const { resolveCompletions } of plugins) {
+					if (resolveCompletions) {
+						entries = resolveCompletions(file, position, entries);
+					}
+				}
+			}
+			return entries;
+		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
 		// Snapshot of rules classified type-aware so far. The CLI reads
@@ -416,21 +434,13 @@ export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
 	return finalTextChanges;
 }
 
-export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: ts.TextChange[]): ts.IScriptSnapshot {
-	textChanges = [...textChanges].sort((a, b) => b.span.start - a.span.start);
-	let text = baseSnapshot.getText(0, baseSnapshot.getLength());
-	for (const change of textChanges) {
+export function applyTextChanges(baseText: string, textChanges: ts.TextChange[]): string {
+	// Apply edits back-to-front so each change's offsets remain valid as
+	// earlier ones shift the suffix.
+	const sorted = [...textChanges].sort((a, b) => b.span.start - a.span.start);
+	let text = baseText;
+	for (const change of sorted) {
 		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
 	}
-	return {
-		getText(start, end) {
-			return text.substring(start, end);
-		},
-		getLength() {
-			return text.length;
-		},
-		getChangeRange() {
-			return undefined;
-		},
-	};
+	return text;
 }

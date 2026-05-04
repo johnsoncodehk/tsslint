@@ -43,7 +43,8 @@ function makeContext(files: Record<string, string>) {
 		fileExists: n => n in files || n === realLibPath,
 		readFile: n => (n in files ? files[n] : (n === realLibPath ? realLibContent : undefined)),
 	};
-	return { typescript: ts, languageServiceHost: host, languageService: ts.createLanguageService(host) };
+	const languageService = ts.createLanguageService(host);
+	return { typescript: ts, program: () => languageService.getProgram()! };
 }
 
 function emptyFileCache(mtime = 0): FileCache {
@@ -62,7 +63,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 	check('syntactic rule cache entry written', !!cache.rules['syntactic']);
 	check('cache has 1 diagnostic', cache.rules['syntactic']?.diagnostics.length === 1);
 	check('hasFix false (no fix reported)', cache.rules['syntactic']?.hasFix === false);
@@ -81,7 +82,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 	check('type-aware rule still produces diagnostics', result.length === 1);
 	check('type-aware rule NOT cached', !cache.rules['typed']);
 }
@@ -100,7 +101,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
 	check('first call ran rule', runs === 1);
@@ -128,7 +129,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
 	check('first call ran', runs === 1);
@@ -156,7 +157,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 	check('post-rule cleanup deleted entry', !cache.rules['report-then-touch']);
 }
 
@@ -179,7 +180,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cacheA = emptyFileCache(1);
 	const cacheB = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 	cacheFlow.lintWithCache(linter, '/a.ts', cacheA, 1, program);
 	cacheFlow.lintWithCache(linter, '/b.ts', cacheB, 1, program);
 	check('a.ts no cache entry (touched)', !cacheA.rules['sometimes-typed']);
@@ -221,7 +222,7 @@ function emptyFileCache(mtime = 0): FileCache {
 			},
 		},
 	};
-	const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 	check('rule re-ran (stale cache ignored)', runs === 1);
 	check('result reflects fresh run', result.length === 1);
 	check('stale entry deleted', !cache.rules['typed']);
@@ -239,7 +240,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 	check('hasFix true after rule registered fix', cache.rules['fixable']?.hasFix === true);
 }
 
@@ -261,7 +262,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	// First call: both run
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
@@ -294,7 +295,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
 	check('first call ran (no cache yet)', runs === 1);
@@ -324,7 +325,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
 	const second = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, {
@@ -358,7 +359,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	// Mode B: write the entry.
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program, { incremental: true, typeAwareUnaffected: true });
@@ -383,7 +384,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	// No options arg → mode A. Type-aware rules never cached.
 	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
@@ -414,7 +415,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	const program = ctx.languageService.getProgram()!;
+	const program = ctx.program();
 
 	// Cold session under --incremental: no prev state, file is "affected"
 	// (unaffected=false). Must run AND write entry.
@@ -454,7 +455,7 @@ function emptyFileCache(mtime = 0): FileCache {
 		'/a.ts',
 		cache,
 		1,
-		ctx.languageService.getProgram()!,
+		ctx.program(),
 	);
 	check('current run returns both diagnostics', diags.length === 2);
 	check(
@@ -485,7 +486,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 
 	// Second run with the same mtime — rule cache-hits, only the
 	// persisted diagnostic comes back.
@@ -495,7 +496,7 @@ function emptyFileCache(mtime = 0): FileCache {
 		'/a.ts',
 		cache,
 		1,
-		ctx.languageService.getProgram()!,
+		ctx.program(),
 	);
 	check('warm cache hit returns 1 diagnostic', diags.length === 1);
 	check('warm replay drops the marked one', diags[0]?.messageText === 'plain');
@@ -528,7 +529,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	// ── Session 1: cold, both files lint — process the early-return file
 	// FIRST so the rule isn't yet type-aware when its entry gets written.
 	const linter1 = core.createLinter(ctx, '/', config, () => []);
-	const program1 = ctx.languageService.getProgram()!;
+	const program1 = ctx.program();
 	const cacheSkip: FileCache = emptyFileCache(1);
 	const cacheCheck: FileCache = emptyFileCache(1);
 	cacheFlow.lintWithCache(linter1, '/skip.ts', cacheSkip, 1, program1);
@@ -551,7 +552,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	// Both files unchanged. typeAwareUnaffected=true → both should
 	// cache-hit and replay cleanly.
 	const linter2 = core.createLinter(ctx, '/', config, () => [], ['mixed-mode']);
-	const program2 = ctx.languageService.getProgram()!;
+	const program2 = ctx.program();
 	let earlyReturnRanInSession2 = false;
 	const config2: Config = {
 		rules: {
@@ -599,7 +600,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	};
 	const linter = core.createLinter(ctx, '/', config, () => []);
 	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.program());
 	// rule entry exists but with 0 diagnostics — no smuggled keys.
 	const json = JSON.stringify(cache);
 	check('NO_CACHE marker not visible in serialised cache', !json.includes('no-cache'));

@@ -40,6 +40,7 @@ function decorateLanguageService(
 		getSemanticDiagnostics,
 		getCodeFixesAtPosition,
 		getCombinedCodeFix,
+		getCompletionsAtPosition,
 		getApplicableRefactors,
 		getEditsForRefactor,
 	} = info.languageService;
@@ -90,6 +91,33 @@ function decorateLanguageService(
 			};
 		}
 		return getCombinedCodeFix(scope, fixId, formatOptions, preferences);
+	};
+	// Merge plugin-supplied completion entries (e.g. ignore-comment
+	// suggestions from `@tsslint/config`'s ignore plugin) into the host's
+	// own completion result. Pre-3.2 plugins reached for
+	// `LanguageService.getCompletionsAtPosition` directly via
+	// `LinterContext`; the cleaner Program-based context takes that path
+	// away, so the IDE side reaches in through `linter.getCompletions`
+	// instead.
+	info.languageService.getCompletionsAtPosition = (fileName, position, ...rest) => {
+		let result = getCompletionsAtPosition(fileName, position, ...rest);
+		if (linter && isProjectFileName(fileName)) {
+			const extra = linter.getCompletions(fileName, position);
+			if (extra.length) {
+				if (result) {
+					result.entries.push(...extra);
+				}
+				else {
+					result = {
+						isGlobalCompletion: false,
+						isMemberCompletion: false,
+						isNewIdentifierLocation: false,
+						entries: extra,
+					};
+				}
+			}
+		}
+		return result;
 	};
 	info.languageService.getApplicableRefactors = (
 		fileName,
@@ -167,8 +195,8 @@ function decorateLanguageService(
 			}
 
 			const projectContext: LinterContext = {
-				...info,
 				typescript: ts,
+				program: () => info.languageService.getProgram()!,
 			};
 
 			try {

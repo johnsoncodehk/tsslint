@@ -4,9 +4,9 @@ type CheckMode = 'syntactic' | 'semantic' | 'declaration';
 
 export function create(mode: CheckMode | CheckMode[] = 'semantic'): Plugin {
 	const modes = Array.isArray(mode) ? mode : [mode];
-	return ({ languageService }) => ({
+	return ({ program: getProgram }) => ({
 		resolveDiagnostics(file, diagnostics) {
-			const program = languageService.getProgram()!;
+			const program = getProgram();
 			for (const mode of modes) {
 				const diags = mode === 'syntactic'
 					? program.getSyntacticDiagnostics(file)
