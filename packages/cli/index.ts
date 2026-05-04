@@ -35,6 +35,7 @@ Options:
   --failures-only               Only print errors and messages (skip warnings and suggestions)
   --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
   --debug-estree                After linting, print the actual ESTree node types converted by @tsslint/compat-eslint and their counts
+  --tsgo                        Use @typescript/native-preview as the type-check backend (experimental; plain-TS only, no Vue/MDX/Astro, no layer-2 cache)
   -h, --help                    Show this help message
 
 Examples:

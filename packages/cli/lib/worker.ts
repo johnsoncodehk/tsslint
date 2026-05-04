@@ -10,6 +10,13 @@ import cacheFlow = require('./cache-flow.js');
 import incrementalState = require('./incremental-state.js');
 import type { FileCache } from './cache.js';
 import type { IncrementalState } from './incremental-state.js';
+import type { TsgoBackend } from './tsgo-backend.js';
+
+// `--tsgo` opts the worker into the @typescript/native-preview backend.
+// Detected once at module load — switching mid-run isn't supported (the
+// backend owns the spawned tsgo process and its snapshot ref-graph).
+const useTsgo = process.argv.includes('--tsgo');
+let tsgoBackend: TsgoBackend | undefined;
 
 // Fallback if `ts.sys.createHash` is undefined on this host (Node ≥ 22.6
 // always provides it via crypto, but the type is optional). sha256 hex.
@@ -252,6 +259,32 @@ async function setup(
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
 	fileNames = _fileNames;
+
+	if (useTsgo) {
+		// Validate compatibility. The tsgo backend currently lacks two
+		// pieces master assumes: (1) Volar host injection, so language
+		// plugins (Vue / MDX / Astro / etc.) can't virtualise script
+		// content; (2) BuilderProgram JS API, so layer-2 affected-file
+		// classification is unavailable.
+		if (plugins.length) {
+			return 'tsgo backend does not yet support --vue-project / --mdx-project / --astro-project / --vue-vine-project / --ts-macro-project';
+		}
+		// Layer 2 is disabled — every file is treated as "affected" so
+		// cached type-aware entries are re-validated rather than served
+		// from a stale snapshot. No BuilderProgram drain runs.
+		affectedFiles = new Set();
+		tsgoBackend?.close();
+		tsgoBackend = require('./tsgo-backend.js').createTsgoBackend(tsconfig) as TsgoBackend;
+		linter = core.createLinter(
+			{ typescript: ts, program: tsgoBackend.getProgram },
+			path.dirname(configFile),
+			config,
+			() => [],
+			initialTypeAwareRules,
+		);
+		return true;
+	}
+
 	// Internal API path: BuilderProgram.emitBuildInfo only produces
 	// content when these options are set. Override the user's values
 	// (their own tsc --incremental builds shouldn't share this file).
@@ -368,6 +401,14 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	let newText: string | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
+
+	if (tsgoBackend) {
+		// Per-file batched-symbol prepass. Walks the SF locally, resolves
+		// every Identifier in one IPC, populates the adapter's
+		// `nodeToSymbol` cache. Idempotent — repeat calls for the same
+		// file return immediately.
+		tsgoBackend.prepareFile(fileName);
+	}
 
 	// Layer 2 signals. `incremental` is always true under the CLI now —
 	// `--force` opts out by clearing the loaded cache instead.

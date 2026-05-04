@@ -30,6 +30,12 @@
 		"minimatch": "^10.0.1"
 	},
 	"peerDependencies": {
-		"typescript": "*"
+		"typescript": "*",
+		"@typescript/native-preview": "*"
+	},
+	"peerDependenciesMeta": {
+		"@typescript/native-preview": {
+			"optional": true
+		}
 	}
 }
