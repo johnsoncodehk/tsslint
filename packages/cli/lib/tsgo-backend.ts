@@ -607,6 +607,7 @@ function wrapChecker(
 	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
 ): ts.TypeChecker {
 	const sync = require('@typescript/native-preview/sync') as TsgoSync;
+	const ast = require('@typescript/native-preview/ast') as TsgoAst;
 	const stub = (name: string) => () => {
 		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
 	};
@@ -650,7 +651,31 @@ function wrapChecker(
 			return sym as unknown as ts.Symbol | undefined;
 		},
 		getTypeAtLocation(node: ts.Node) {
-			const t = project.checker.getTypeAtLocation(node as unknown as Node);
+			// Semantic divergence: ts's `getTypeAtLocation(AsExpression)`
+			// returns the *asserted* target type (post-`as`), tsgo's
+			// returns the inner expression's type. typescript-eslint's
+			// `no-unnecessary-type-assertion` rule depends on the ts
+			// semantics — without this routing, `outer === inner` is
+			// trivially true (both = inner type), and every assertion
+			// in the codebase fires as "unnecessary".
+			//
+			// Re-route assertions to `getTypeFromTypeNode(node.type)` so
+			// the asserted target type comes back. SK constants from
+			// tsgo's enum (this file imports the runtime).
+			const tsgoNode = node as unknown as Node;
+			if (
+				(tsgoNode.kind === ast.SyntaxKind.AsExpression
+					|| tsgoNode.kind === ast.SyntaxKind.TypeAssertionExpression
+					|| tsgoNode.kind === ast.SyntaxKind.SatisfiesExpression)
+				&& (tsgoNode as unknown as { type?: Node }).type
+			) {
+				const t = project.checker.getTypeFromTypeNode(
+					(tsgoNode as unknown as { type: Node }).type as any,
+				);
+				fixupType(t);
+				return t as unknown as ts.Type;
+			}
+			const t = project.checker.getTypeAtLocation(tsgoNode);
 			fixupType(t);
 			return t as unknown as ts.Type;
 		},
