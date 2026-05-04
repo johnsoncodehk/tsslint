@@ -804,12 +804,34 @@ function wrapChecker(
 			}
 			return undefined;
 		}) as any,
-		// Apparent type: ts boxes primitives + walks type-parameter
-		// constraints for property lookup. tsgo has no direct equivalent.
-		// Identity fallback is unsound but rule code rarely reaches it on
-		// the checker-API tier we currently expose; revisit when a
-		// concrete crash signature points here.
-		getApparentType: ((type: unknown) => type) as any,
+		// Apparent type: ts boxes primitives (`5` → Number),
+		// walks type-parameter constraints, and unwraps generic
+		// instantiations for property lookup. tsgo has no direct API.
+		// Compose what tsgo DOES expose:
+		//   1. TypeParameter → its constraint (fall through if absent).
+		//   2. Literal types → their widened primitive base
+		//      (`getWidenedType` exists in tsgo).
+		//   3. Otherwise return the input type.
+		// Imperfect (can't fully box `string` → `String` interface w/o
+		// host symbol resolution we don't have), but materially better
+		// than identity-fallback for rule logic that switches on
+		// "primitive vs object" or "constrained-T vs raw T".
+		getApparentType: ((type: any) => {
+			if (!type) return type;
+			const TF = (sync as any).TypeFlags as Record<string, number>;
+			if ((type.flags & TF.TypeParameter) !== 0) {
+				const c = project.checker.getConstraintOfTypeParameter(type);
+				if (c) { fixupType(c); return c; }
+				return type;
+			}
+			const literalMask = TF.StringLiteral | TF.NumberLiteral
+				| TF.BooleanLiteral | TF.BigIntLiteral | TF.EnumLiteral;
+			if ((type.flags & literalMask) !== 0) {
+				const w = project.checker.getWidenedType(type);
+				if (w) { fixupType(w); return w; }
+			}
+			return type;
+		}) as any,
 		// tsgo's Checker doesn't expose these. compat-eslint's callsites
 		// (parameter-property shadowing, ExportSpecifier alias unwrap)
 		// have fallback paths that handle empty / undefined gracefully —
@@ -818,11 +840,15 @@ function wrapChecker(
 		getSymbolsInScope: ((..._args: unknown[]) => []) as any,
 		getExportSpecifierLocalTargetSymbol: ((..._args: unknown[]) => undefined) as any,
 		// `isTypeAssignableTo` — tsgo doesn't expose subtype checking.
-		// Conservative `false` keeps type-safety rules (no-unnecessary-
-		// type-assertion, no-misused-promises) on their "can't prove
-		// assignable, leave alone" branch — same behaviour as ts when
-		// the checker can't decide. May suppress some legitimate
-		// diagnostics until upstream surfaces this.
+		// We tried a structural-cover impl (id equality, any/unknown/
+		// never sentinels, union decomposition, literal widening): it
+		// returned `true` for cases TS would say `false`, which made
+		// the rule's contextual-unnecessary path fire on assertions
+		// the receiver type wouldn't actually accept (added ~26 new
+		// FPs in dogfood). Conservative `false` outperforms partial
+		// truth here — the rule's "can't prove assignable, leave alone"
+		// branch is what we want. Revisit when full structural
+		// compatibility is portable.
 		isTypeAssignableTo: ((..._args: unknown[]) => false) as any,
 	};
 	// `stub` is held for future use as gaps surface; reference it here
