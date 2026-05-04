@@ -746,6 +746,27 @@ function wrapChecker(
 				}
 				catch { /* fall through to default */ }
 			}
+			if (k === SK.PropertyAccessExpression || k === SK.ElementAccessExpression) {
+				// tsgo's `getTypeAtLocation(propAccess)` returns wrong
+				// types in some real-codebase contexts (e.g. inside
+				// argument lists of generic-typed call expressions —
+				// observed `string[]` / `string` when the declared type
+				// is `string | undefined`). The same property at the
+				// same position via `getTypeAtPosition(file, end)`
+				// returns the correct type. Minimal repros don't
+					// trigger the wrong path; the divergence requires
+				// surrounding-context complexity we haven't isolated.
+				// Position-based query is the workaround.
+				const sfPath = ((tsgoNode as unknown as { getSourceFile?: () => { fileName: string } })
+					.getSourceFile?.() ?? { fileName: '' }).fileName;
+				if (sfPath) {
+					const t = project.checker.getTypeAtPosition(sfPath, tsgoNode.end);
+					if (t) {
+						fixupType(t);
+						return t as unknown as ts.Type;
+					}
+				}
+			}
 			if (k === SK.NonNullExpression) {
 				const inner = (tsgoNode as unknown as { expression: Node }).expression;
 				// Recurse through the adapter so nested CallExpression /
