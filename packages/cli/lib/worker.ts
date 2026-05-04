@@ -226,6 +226,15 @@ async function setup(
 	initialTypeAwareRules: readonly string[],
 	prevIncrementalState: IncrementalState | undefined,
 ): Promise<true | string> {
+	if (useTsgo) {
+		// Install the tsgo `typescript` facade BEFORE loading tsslint
+		// config — config + compat-eslint + rules will then `require('typescript')`
+		// and get tsgo enums + type guards + walkers, so kind-value
+		// comparisons line up with tsgo Node objects. Idempotent across
+		// setup() calls (first install wins; subsequent ones short-circuit).
+		require('./tsgo-typescript-facade.js').installFacade();
+	}
+
 	let config: config.Config | config.Config[];
 	try {
 		config = (await import(url.pathToFileURL(configFile).toString())).default;
