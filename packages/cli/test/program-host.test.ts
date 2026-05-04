@@ -136,11 +136,11 @@ function buildProgram(files: Record<string, string>, fileTextOverrides: Map<stri
 {
 	const program = buildProgram({ '/a.ts': 'const x = 1;' }, new Map());
 	const sf = program.getSourceFile('/a.ts')!;
-	const stmt = sf.statements[0]!; // VariableStatement
+	const stmt = sf.statements[0] as ts.VariableStatement;
 	check('SourceFile root has no parent expectation', sf.parent === undefined);
 	check('top-level statement.parent === SourceFile', stmt.parent === sf);
 	// Drill: VariableStatement → declarationList → declarations[0] → name (Identifier `x`)
-	const list = (stmt as ts.VariableStatement).declarationList;
+	const list = stmt.declarationList;
 	check('declarationList.parent === VariableStatement', list.parent === stmt);
 	const decl = list.declarations[0];
 	check('declaration.parent === declarationList', decl.parent === list);
