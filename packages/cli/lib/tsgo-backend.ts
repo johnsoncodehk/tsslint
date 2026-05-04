@@ -693,10 +693,11 @@ function wrapChecker(
 			}
 			return undefined;
 		}) as any,
-		// Apparent type: ts returns the type itself for primitives plus
-		// boxing for built-ins. We don't have a direct equivalent — fall
-		// back to the input type. Rule code typically uses the result for
-		// property lookups, which `getPropertiesOfType` handles directly.
+		// Apparent type: ts boxes primitives + walks type-parameter
+		// constraints for property lookup. tsgo has no direct equivalent.
+		// Identity fallback is unsound but rule code rarely reaches it on
+		// the checker-API tier we currently expose; revisit when a
+		// concrete crash signature points here.
 		getApparentType: ((type: unknown) => type) as any,
 		// tsgo's Checker doesn't expose these. compat-eslint's callsites
 		// (parameter-property shadowing, ExportSpecifier alias unwrap)
