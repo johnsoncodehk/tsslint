@@ -698,24 +698,65 @@ function wrapChecker(
 					}
 				}
 				catch { /* fall through to plan B */ }
+				const sk = (sync as any).SignatureKind as Record<string, number>;
 				try {
 					const funcType = project.checker.getTypeAtLocation(tsgoNode);
-					if (!funcType) throw 0;
-					const sk = (sync as any).SignatureKind as Record<string, number>;
-					const sigs = project.checker.getSignaturesOfType(funcType, sk.Call);
-					if (sigs && sigs.length > 0) {
-						const t = project.checker.getReturnTypeOfSignature(sigs[0]);
-						fixupType(t);
-						return t as unknown as ts.Type;
+					if (funcType) {
+						const sigs = project.checker.getSignaturesOfType(funcType, sk.Call);
+						if (sigs && sigs.length > 0) {
+							const t = project.checker.getReturnTypeOfSignature(sigs[0]);
+							fixupType(t);
+							return t as unknown as ts.Type;
+						}
+					}
+				}
+				catch { /* try plan C */ }
+				// Plan C: tsgo's getTypeAtLocation(call) sometimes returns
+				// the callee's RECEIVER type rather than the function
+				// type (observed for nested method calls like
+				// `a.b.c()`). Pull the method's symbol off the callee
+				// expression and read its type instead — this resolves
+				// to the function type even in the receiver-collapsed
+				// case.
+				try {
+					const callee = (tsgoNode as unknown as { expression?: Node }).expression;
+					if (callee) {
+						// For property-access callees (`a.b.c()`), tsgo's
+						// `getSymbolAtLocation(propAccess)` returns the
+						// symbol of the LEFT side (`a.b`'s symbol —
+						// e.g. `languageService`). The METHOD's symbol
+						// is on the right (`callee.name`). Probe both
+						// shapes — direct identifier callees use the
+						// node itself.
+						const targetForSymbol =
+							(callee as unknown as { name?: Node }).name ?? callee;
+						const sym = project.checker.getSymbolAtLocation(targetForSymbol);
+						if (sym) {
+							const methodType = project.checker.getTypeOfSymbolAtLocation(sym, callee);
+							if (methodType) {
+								const sigs = project.checker.getSignaturesOfType(methodType, sk.Call);
+								if (sigs && sigs.length > 0) {
+									const t = project.checker.getReturnTypeOfSignature(sigs[0]);
+									fixupType(t);
+									return t as unknown as ts.Type;
+								}
+							}
+						}
 					}
 				}
 				catch { /* fall through to default */ }
 			}
 			if (k === SK.NonNullExpression) {
 				const inner = (tsgoNode as unknown as { expression: Node }).expression;
-				const innerT = project.checker.getTypeAtLocation(inner);
+				// Recurse through the adapter so nested CallExpression /
+				// AsExpression / NonNull get their own routing applied
+				// before we strip nullability. e.g. `someMap.get(k)!` —
+				// the inner CallExpression needs Call routing to get the
+				// return type (`T | undefined`), and only then does
+				// `getNonNullableType` produce `T`.
+				const innerT = checker.getTypeAtLocation!(inner as unknown as ts.Node);
 				if (innerT) {
-					const t = project.checker.getNonNullableType(innerT);
+					const t = project.checker.getNonNullableType(innerT as unknown as any);
 					fixupType(t);
 					return t as unknown as ts.Type;
 				}
