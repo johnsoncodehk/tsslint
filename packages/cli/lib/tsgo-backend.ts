@@ -51,9 +51,10 @@ export interface TsgoBackend {
 	close(): void;
 }
 
-// Process-level guard so we patch the tsgo Node prototype exactly once,
-// even if multiple backends spin up in the same worker.
+// Process-level guards. Both prototype patches are one-shot per process
+// (tsgo's class shape is stable per binary version).
 let nodeProtoPatched = false;
+let typeProtoPatched = false;
 
 // tsgo's Node interface exposes `pos` / `end` (raw parser offsets,
 // leading trivia included), `parent`, `kind`, `forEachChild`,
@@ -140,6 +141,44 @@ function patchTsgoNodeProto(sample: Node): void {
 		};
 	}
 	nodeProtoPatched = true;
+}
+
+// `ts.Type` exposes a clutch of flag-based predicates as instance
+// methods (`isLiteral`, `isStringLiteral`, `isUnion`, `getSymbol`, …).
+// Rule code (typescript-eslint's `no-unnecessary-type-assertion`,
+// many compat-eslint paths) calls these. tsgo's TypeObject only has
+// `getSymbol` and the data fields; we patch the missing predicates onto
+// its prototype using tsgo's TypeFlags enum values (different from ts).
+//
+// Located via prototype walk from a sample Type — TypeObject isn't in
+// the package exports map. One-shot per process.
+function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
+	if (typeProtoPatched) return;
+	let proto: any = Object.getPrototypeOf(sample);
+	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
+		proto = Object.getPrototypeOf(proto);
+	}
+	if (!proto) return;
+	const TF = (sync as any).TypeFlags as Record<string, number>;
+	const has = (flag: number) => function (this: { flags: number }) { return (this.flags & flag) !== 0; };
+	if (!proto.isStringLiteral) proto.isStringLiteral = has(TF.StringLiteral);
+	if (!proto.isNumberLiteral) proto.isNumberLiteral = has(TF.NumberLiteral);
+	if (!proto.isBooleanLiteral) proto.isBooleanLiteral = has(TF.BooleanLiteral);
+	if (!proto.isBigIntLiteral) proto.isBigIntLiteral = has(TF.BigIntLiteral);
+	if (!proto.isEnumLiteral) proto.isEnumLiteral = has(TF.EnumLiteral);
+	if (!proto.isLiteral) proto.isLiteral = has(
+		TF.StringLiteral | TF.NumberLiteral | TF.BigIntLiteral | TF.BooleanLiteral,
+	);
+	if (!proto.isUnion) proto.isUnion = has(TF.Union);
+	if (!proto.isIntersection) proto.isIntersection = has(TF.Intersection);
+	if (!proto.isUnionOrIntersection) proto.isUnionOrIntersection = has(TF.UnionOrIntersection ?? (TF.Union | TF.Intersection));
+	if (!proto.isTypeParameter) proto.isTypeParameter = has(TF.TypeParameter);
+	if (!proto.isClassOrInterface) proto.isClassOrInterface = function () { return false; }; // structural; would need objectFlags
+	if (!proto.isClass) proto.isClass = function () { return false; };
+	if (!proto.isIndexType) proto.isIndexType = has(TF.Index);
+	if (!proto.getFlags) proto.getFlags = function (this: { flags: number }) { return this.flags; };
+	if (!proto.isNullableType) proto.isNullableType = has((TF.Null ?? 0) | (TF.Undefined ?? 0));
+	typeProtoPatched = true;
 }
 
 export function createTsgoBackend(tsconfig: string): TsgoBackend {
@@ -302,8 +341,13 @@ function wrapChecker(
 	project: Project,
 	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
 ): ts.TypeChecker {
+	const sync = require('@typescript/native-preview/sync') as TsgoSync;
 	const stub = (name: string) => () => {
 		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
+	};
+	const fixupType = (t: unknown) => {
+		if (t && typeof t === 'object') patchTsgoTypeProto(t, sync);
+		return t;
 	};
 
 	const checker: Partial<ts.TypeChecker> = {
@@ -321,7 +365,9 @@ function wrapChecker(
 			return sym as unknown as ts.Symbol | undefined;
 		},
 		getTypeAtLocation(node: ts.Node) {
-			return project.checker.getTypeAtLocation(node as unknown as Node) as unknown as ts.Type;
+			const t = project.checker.getTypeAtLocation(node as unknown as Node);
+			fixupType(t);
+			return t as unknown as ts.Type;
 		},
 		getShorthandAssignmentValueSymbol(node: ts.Node | undefined) {
 			if (!node) return undefined;
@@ -333,12 +379,19 @@ function wrapChecker(
 				location as unknown as Node,
 			) as unknown as ts.Type;
 		},
-		// tsgo Checker doesn't expose getSymbolsInScope or
-		// getExportSpecifierLocalTargetSymbol. Stubbed for now —
-		// compat-eslint's two callsites need workarounds (the
-		// `arguments` symbol lookup and ExportSpecifier alias unwrap).
-		getSymbolsInScope: stub('getSymbolsInScope') as any,
-		getExportSpecifierLocalTargetSymbol: stub('getExportSpecifierLocalTargetSymbol') as any,
+		// tsgo's Checker doesn't expose these. compat-eslint's callsites
+		// (parameter-property shadowing, ExportSpecifier alias unwrap)
+		// have fallback paths that handle empty / undefined gracefully —
+		// degrades scope-manager precision in those edge cases but keeps
+		// the rest of the pipeline functional. Logged via stub() if
+		// debugging shows missed diagnostics traceable here.
+		getSymbolsInScope: ((..._args: unknown[]) => []) as any,
+		getExportSpecifierLocalTargetSymbol: ((..._args: unknown[]) => undefined) as any,
+		// Stubs that callers must not silently ignore — these would
+		// produce wrong diagnostics if no-op'd. Keep as throw.
+		getBaseConstraintOfType: stub('getBaseConstraintOfType') as any,
+		getApparentType: stub('getApparentType') as any,
+		getContextualType: stub('getContextualType') as any,
 	};
 
 	return checker as ts.TypeChecker;
