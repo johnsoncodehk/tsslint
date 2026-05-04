@@ -434,21 +434,13 @@ export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
 	return finalTextChanges;
 }
 
-export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: ts.TextChange[]): ts.IScriptSnapshot {
-	textChanges = [...textChanges].sort((a, b) => b.span.start - a.span.start);
-	let text = baseSnapshot.getText(0, baseSnapshot.getLength());
-	for (const change of textChanges) {
+export function applyTextChanges(baseText: string, textChanges: ts.TextChange[]): string {
+	// Apply edits back-to-front so each change's offsets remain valid as
+	// earlier ones shift the suffix.
+	const sorted = [...textChanges].sort((a, b) => b.span.start - a.span.start);
+	let text = baseText;
+	for (const change of sorted) {
 		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
 	}
-	return {
-		getText(start, end) {
-			return text.substring(start, end);
-		},
-		getLength() {
-			return text.length;
-		},
-		getChangeRange() {
-			return undefined;
-		},
-	};
+	return text;
 }

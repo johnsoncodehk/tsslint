@@ -15,18 +15,37 @@ import type { IncrementalState } from './incremental-state.js';
 // always provides it via crypto, but the type is optional). sha256 hex.
 const defaultHash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
-import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
-import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
+import { isCodeActionsEnabled, type Language } from '@volar/language-core';
+import { proxyCreateProgram } from '@volar/typescript';
 import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 
-let projectVersion = 0;
-let typeRootsVersion = 0;
 let options: ts.CompilerOptions = {};
 let fileNames: string[] = [];
 let language: Language<string> | undefined;
 let linter: core.Linter;
-let linterLanguageService!: ts.LanguageService;
-// Layer 2 state. We wrap the LS program in a SemanticDiagnostics-
+// Cached Program instance + dirty flag. Pre-3.2 the worker wrapped a
+// LanguageService over a LanguageServiceHost; getProgram() implicitly
+// rebuilt when the host's projectVersion bumped. We've collapsed that
+// down to direct `ts.createProgram` calls — the LS provided no
+// linter-relevant capability beyond program-rebuild-on-version-bump,
+// and it pulled in completion / refactor / navigation machinery we
+// never used. `--fix` rewrites a file → bumps `programDirty` → next
+// `ensureProgram()` rebuilds with `oldProgram` for incremental binder
+// reuse (TS reuses unchanged SourceFiles' bound state, only re-binds
+// the modified file).
+let currentProgram: ts.Program | undefined;
+let programDirty = true;
+// In-session content overrides for `--fix`-modified files. The
+// CompilerHost's readFile / getSourceFile consult this map first so
+// the next program rebuild sees the post-fix text without disk I/O.
+const fileTextOverrides = new Map<string, string>();
+// Volar Language instance for Vue / MDX / Astro projects. Set by
+// `proxyCreateProgram`'s `setup` callback when a language plugin is
+// active; undefined for plain-TS projects.
+// `proxyCreateProgram` returns the wrapped `ts.createProgram`. For
+// plain-TS this stays as `ts.createProgram` itself.
+let createProgram: typeof ts.createProgram = ts.createProgram;
+// Layer 2 state. We wrap the program in a SemanticDiagnostics-
 // BuilderProgram (with the prev session's BP fed back via TS's internal
 // `tsBuildInfoText` round-trip) and walk affected files once. cache-
 // flow consults this set to decide whether type-aware rules can be
@@ -37,65 +56,59 @@ let affectedFiles: Set<string> | undefined;
 // capture its updated buildinfo text for next session's persistence.
 let currentBuilder: ts.SemanticDiagnosticsBuilderProgram | undefined;
 
-const snapshots = new Map<string, ts.IScriptSnapshot>();
-const versions = new Map<string, number>();
-const originalHost: ts.LanguageServiceHost = {
-	...ts.sys,
-	useCaseSensitiveFileNames() {
-		return ts.sys.useCaseSensitiveFileNames;
-	},
-	getProjectVersion() {
-		return projectVersion.toString();
-	},
-	getTypeRootsVersion() {
-		return typeRootsVersion;
-	},
-	getCompilationSettings() {
-		return options;
-	},
-	getScriptFileNames() {
-		return fileNames;
-	},
-	getScriptVersion(fileName) {
-		// In-session bumps win — `--fix` updates this map after writing
-		// the file. Otherwise fall back to the on-disk mtime so the
-		// version reflects content across CLI invocations. Layer 2's
-		// BuilderProgram diff relies on this — without it, every cross-
-		// session file looks unchanged (always '0') even when the
-		// content moved on disk.
-		const inSession = versions.get(fileName);
-		if (inSession !== undefined) return inSession.toString();
-		const stat = fs.statSync(fileName, { throwIfNoEntry: false });
-		return stat ? stat.mtimeMs.toString() : '0';
-	},
-	getScriptSnapshot(fileName) {
-		if (!snapshots.has(fileName)) {
-			snapshots.set(fileName, ts.ScriptSnapshot.fromString(ts.sys.readFile(fileName)!));
+// CompilerHost: lower-level than LanguageServiceHost. Just
+// readFile / writeFile / fileExists / lib-file resolution / case
+// sensitivity. We override `readFile` (and `getSourceFile`, which
+// internally reads via readFile) to consult `fileTextOverrides`.
+let compilerHost: ts.CompilerHost = createCompilerHost();
+
+function createCompilerHost(): ts.CompilerHost {
+	// `setParentNodes: true` — compat-eslint's bottom-up materialise
+	// walks ts.Node.parent chains; without parent pointers it crashes.
+	// `ts.createLanguageService` set this implicitly; `ts.createProgram`
+	// via `createCompilerHost` defaults false, so we set it explicitly.
+	const host = ts.createCompilerHost(options, true);
+	const originalReadFile = host.readFile.bind(host);
+	const originalGetSourceFile = host.getSourceFile.bind(host);
+	const hash = ts.sys.createHash ?? defaultHash;
+	host.readFile = (fileName: string) => {
+		const override = fileTextOverrides.get(fileName);
+		if (override !== undefined) return override;
+		return originalReadFile(fileName);
+	};
+	host.getSourceFile = (fileName, languageVersion, onError, shouldCreate) => {
+		const sf = originalGetSourceFile(fileName, languageVersion, onError, shouldCreate);
+		// BuilderProgram requires `SourceFile.version` (Debug.checkDefined
+		// throws otherwise). The LS-host path got this via the host's
+		// `getScriptVersion`; raw CompilerHost has no equivalent, so we
+		// stamp a content hash here. Same value across runs as long as
+		// content matches → BuilderProgram's reference-graph diff
+		// correctly identifies unchanged files.
+		if (sf && (sf as unknown as { version?: string }).version === undefined) {
+			(sf as unknown as { version: string }).version = hash(sf.text);
 		}
-		return snapshots.get(fileName);
-	},
-	getScriptKind(fileName) {
-		const languageId = resolveFileLanguageId(fileName);
-		switch (languageId) {
-			case 'javascript':
-				return ts.ScriptKind.JS;
-			case 'javascriptreact':
-				return ts.ScriptKind.JSX;
-			case 'typescript':
-				return ts.ScriptKind.TS;
-			case 'typescriptreact':
-				return ts.ScriptKind.TSX;
-			case 'json':
-				return ts.ScriptKind.JSON;
-		}
-		return ts.ScriptKind.Unknown;
-	},
-	getDefaultLibFileName(options) {
-		return ts.getDefaultLibFilePath(options);
-	},
-};
-const linterHost: ts.LanguageServiceHost = { ...originalHost };
-const originalService = ts.createLanguageService(linterHost);
+		return sf;
+	};
+	return host;
+}
+
+function ensureProgram(): ts.Program {
+	if (programDirty || !currentProgram) {
+		// `oldProgram` lets `ts.createProgram` reuse SourceFiles whose
+		// text hasn't changed (text-equality check vs old SF) and skip
+		// re-parsing + re-binding for those. Modified files (via
+		// `fileTextOverrides`) get re-parsed; unchanged files are zero-
+		// cost.
+		currentProgram = createProgram({
+			rootNames: fileNames,
+			options,
+			host: compilerHost,
+			oldProgram: currentProgram,
+		});
+		programDirty = false;
+	}
+	return currentProgram;
+}
 
 // Linter is single-threaded by design. The previous version split into a
 // worker_threads worker for TTY mode (so the spinner could update during a
@@ -148,54 +161,20 @@ async function setup(
 		return String(err);
 	}
 
-	for (let key in linterHost) {
-		if (!(key in originalHost)) {
-			// @ts-ignore
-			delete linterHost[key];
-		}
-		else {
-			// @ts-ignore
-			linterHost[key] = originalHost[key];
-		}
-	}
-	linterLanguageService = originalService;
-	language = undefined;
-
 	// Reset per-project state. Multi-project runs reuse the same worker
 	// (in-process) — without this, cross-project file paths accumulate in
-	// `snapshots` / `versions` (memory leak) and `affectedFiles` from a
-	// prior project would mis-classify this project's files as cache-hit
+	// `fileTextOverrides` (memory leak) and `affectedFiles` from a prior
+	// project would mis-classify this project's files as cache-hit
 	// candidates if their absolute paths happened to overlap.
-	snapshots.clear();
-	versions.clear();
+	fileTextOverrides.clear();
+	currentProgram = undefined;
+	programDirty = true;
+	language = undefined;
+	createProgram = ts.createProgram;
 	affectedFiles = undefined;
 	currentBuilder = undefined;
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
-	if (plugins.length) {
-		const { getScriptSnapshot } = originalHost;
-		language = createLanguage<string>(
-			[
-				...plugins,
-				{ getLanguageId: fileName => resolveFileLanguageId(fileName) },
-			],
-			new FileMap(ts.sys.useCaseSensitiveFileNames),
-			fileName => {
-				const snapshot = getScriptSnapshot(fileName);
-				if (snapshot) {
-					language!.scripts.set(fileName, snapshot);
-				}
-			},
-		);
-		decorateLanguageServiceHost(ts, language, linterHost);
-
-		const proxy = createProxyLanguageService(linterLanguageService);
-		proxy.initialize(language);
-		linterLanguageService = proxy.proxy;
-	}
-
-	projectVersion++;
-	typeRootsVersion++;
 	fileNames = _fileNames;
 	// Internal API path: BuilderProgram.emitBuildInfo only produces
 	// content when these options are set. Override the user's values
@@ -209,16 +188,30 @@ async function setup(
 		incremental: true,
 		tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
 	};
+	// Compile a fresh CompilerHost each setup — `options` may have
+	// changed, and createCompilerHost bakes them in (default lib paths,
+	// case sensitivity).
+	compilerHost = createCompilerHost();
+	if (plugins.length) {
+		// Volar wraps `ts.createProgram` so Vue / MDX / Astro virtual
+		// scripts get spliced into the program. The `setup` callback
+		// gives us the Volar Language handle for diagnostic / fix
+		// transforms downstream.
+		createProgram = proxyCreateProgram(ts, ts.createProgram, () => ({
+			languagePlugins: plugins,
+			setup(lang) {
+				language = lang;
+			},
+		}));
+	}
 	linter = core.createLinter(
 		{
 			typescript: ts,
-			// Thunk: each `lint()` call observes the LS's CURRENT program.
-			// `--fix` rewrites a file mid-session, bumps `projectVersion`,
-			// and the next `lint()` picks up the rebuilt program here. The
-			// LS itself is still TSSLint CLI's internal handle to TS — the
-			// public Linter API only sees Program. Pre-3.2 the linter took
-			// `{ languageService, languageServiceHost }`; both are gone.
-			program: () => linterLanguageService.getProgram()!,
+			// Thunk: each `lint()` call gets the latest Program. `--fix`
+			// rewrites a file mid-session → flips `programDirty` → next
+			// `ensureProgram()` rebuilds with `oldProgram` for incremental
+			// binder reuse.
+			program: ensureProgram,
 		},
 		path.dirname(configFile),
 		config,
@@ -227,7 +220,7 @@ async function setup(
 	);
 
 	{
-		const program = linterLanguageService.getProgram()!;
+		const program = ensureProgram();
 		// Reconstruct the prev session's BP from cached buildinfo text,
 		// fall through to undefined on any failure (cold-start path).
 		const oldBuilder = incrementalState.reconstructOldBuilder(ts, prevIncrementalState, {
@@ -284,7 +277,7 @@ function buildIncrementalState(): IncrementalState | undefined {
 }
 
 function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: number) {
-	let newSnapshot: ts.IScriptSnapshot | undefined;
+	let newText: string | undefined;
 	let diagnostics!: ts.DiagnosticWithLocation[];
 	let shouldCheck = true;
 
@@ -307,8 +300,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 				delete fileCache.rules[ruleId];
 			}
 		}
-		const program = linterLanguageService.getProgram()!;
-		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, ensureProgram(), {
 			incremental: true,
 			typeAwareUnaffected,
 		});
@@ -327,19 +319,20 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 
 		const textChanges = core.combineCodeFixes(fileName, fixes);
 		if (textChanges.length) {
-			const oldSnapshot = snapshots.get(fileName)!;
-			newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
-			snapshots.set(fileName, newSnapshot);
-			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
-			projectVersion++;
+			// Apply edits to the current text (override map first, fall
+			// through to disk). Stash result in `fileTextOverrides` so the
+			// next `ensureProgram()` rebuild sees the post-fix content.
+			const baseText = fileTextOverrides.get(fileName) ?? ts.sys.readFile(fileName) ?? '';
+			newText = core.applyTextChanges(baseText, textChanges);
+			fileTextOverrides.set(fileName, newText);
+			programDirty = true;
 		}
 	}
 
-	if (newSnapshot) {
-		const newText = newSnapshot.getText(0, newSnapshot.getLength());
+	if (newText !== undefined) {
 		const oldText = ts.sys.readFile(fileName);
 		if (newText !== oldText) {
-			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+			ts.sys.writeFile(fileName, newText);
 			// File content moved — refresh mtime so the next lint pass
 			// invalidates layer-1 cache entries for this file. lintWithCache
 			// compares fileCache.mtime against the fileMtime we pass in.
@@ -349,8 +342,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	}
 
 	if (shouldCheck) {
-		const program = linterLanguageService.getProgram()!;
-		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, ensureProgram(), {
 			incremental: true,
 			typeAwareUnaffected,
 		});
@@ -358,12 +350,12 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 
 	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
 	// the transformed file to the original source. The original file
-	// might not be in the language service's program, so we substitute a
-	// SourceFile-shaped POJO with the real source text — `formatDiagnostics-
-	// WithColorAndContext` reads `.file.text` to render code snippets.
+	// might not be in the program, so we substitute a SourceFile-shaped
+	// POJO with the real source text — `formatDiagnosticsWithColorAndContext`
+	// reads `.file.text` to render code snippets.
 	if (language) {
 		diagnostics = diagnostics
-			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
+			.map(d => transformDiagnostic(language!, d, ensureProgram(), false))
 			.filter(d => !!d);
 		const fileShim = new Map<string, { fileName: string; text: string }>();
 		const getShim = (fn: string) => {
@@ -392,7 +384,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 }
 
 function getFileText(fileName: string) {
-	return originalHost.getScriptSnapshot(fileName)!.getText(0, Number.MAX_VALUE);
+	return fileTextOverrides.get(fileName) ?? ts.sys.readFile(fileName) ?? '';
 }
 
 function hasCodeFixes(fileName: string) {
