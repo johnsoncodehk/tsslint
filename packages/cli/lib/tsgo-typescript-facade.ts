@@ -86,7 +86,19 @@ export function createTypescriptFacade(): typeof ts {
 	// Plus: all `is.*` predicates, visitor (visitNode/visitNodes/visitEachChild),
 	// scanner, AST utils.
 	for (const k of Object.keys(ast)) {
-		facade[k] = ast[k];
+		const v = ast[k];
+		// Null-tolerant wrap for `is*` predicates. tsgo emits these as
+		// `node.kind === SyntaxKind.X` without a null guard; ts's
+		// versions tolerate `undefined`. ESLint rule code commonly walks
+		// `node.parent.parent.parent…` and tests on the result, hitting
+		// undefined at SourceFile-root and beyond. Wrap every is* fn to
+		// short-circuit-return false on falsy input.
+		if (typeof v === 'function' && /^is[A-Z]/.test(k)) {
+			facade[k] = (n: unknown, ...rest: unknown[]) => n ? v(n, ...rest) : false;
+		}
+		else {
+			facade[k] = v;
+		}
 	}
 
 	// Enums from /api/sync that aren't in /ast: SymbolFlags, TypeFlags,

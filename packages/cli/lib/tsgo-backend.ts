@@ -58,6 +58,7 @@ let typeProtoPatched = false;
 let nodeHandleProtoPatched = false;
 let symbolProtoPatched = false;
 let nodeListSpeciesPatched = false;
+let signatureProtoPatched = false;
 
 function patchTsgoNodeListSpecies(sample: object): void {
 	if (nodeListSpeciesPatched) return;
@@ -196,6 +197,21 @@ function patchTsgoNodeProto(sample: Node): void {
 			return this._lineStarts!;
 		};
 	}
+	// Inverse: convert (line, character) → position. compat-eslint's
+	// ESLint→TSSLint report converter calls this to map ESTree's
+	// loc-based descriptors back to file offsets. Without it, the
+	// converter's swallowing try/catch defaults start/end to 0 → all
+	// diagnostics collapse to (line=1, col=1) at file start.
+	if (typeof proto.getPositionOfLineAndCharacter !== 'function') {
+		proto.getPositionOfLineAndCharacter = function (
+			this: { getLineStarts(): number[] },
+			line: number,
+			character: number,
+		): number {
+			const starts = this.getLineStarts();
+			return (starts[line] ?? 0) + character;
+		};
+	}
 	nodeProtoPatched = true;
 }
 
@@ -296,6 +312,38 @@ function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, project: Pr
 	}
 	void project;
 	typeCheckerMethodsPatched = true;
+}
+
+// `Signature` on tsgo lacks ts.Signature's accessor methods
+// (`getReturnType`, `getDeclaration`, `getTypeParameters`,
+// `getParameters`). Add thin wrappers — `getReturnType` delegates via
+// the current project's checker; the rest read existing data fields.
+function patchTsgoSignatureProto(sync: TsgoSync): void {
+	if (signatureProtoPatched) return;
+	const Signature = (sync as any).Signature;
+	if (!Signature?.prototype) return;
+	const proto = Signature.prototype;
+	if (!proto.getReturnType) {
+		proto.getReturnType = function (this: { id: string }) {
+			return currentProjectRef.project!.checker.getReturnTypeOfSignature(this as any);
+		};
+	}
+	if (!proto.getDeclaration) {
+		proto.getDeclaration = function (this: { declaration: unknown }) {
+			return this.declaration;
+		};
+	}
+	if (!proto.getTypeParameters) {
+		proto.getTypeParameters = function (this: { typeParameters: unknown[] }) {
+			return this.typeParameters;
+		};
+	}
+	if (!proto.getParameters) {
+		proto.getParameters = function (this: { parameters: unknown[] }) {
+			return this.parameters;
+		};
+	}
+	signatureProtoPatched = true;
 }
 
 // `Symbol` on tsgo carries data fields and a few RPC-backed methods,
@@ -570,6 +618,7 @@ function wrapChecker(
 		return t;
 	};
 	patchTsgoSymbolProto(sync);
+	patchTsgoSignatureProto(sync);
 
 	// Forward to tsgo's Checker, casting Node/Symbol/Type shapes (tsgo's
 	// runtime classes are structurally compatible with ts.* for the
@@ -656,6 +705,13 @@ function wrapChecker(
 		// the rest of the pipeline functional.
 		getSymbolsInScope: ((..._args: unknown[]) => []) as any,
 		getExportSpecifierLocalTargetSymbol: ((..._args: unknown[]) => undefined) as any,
+		// `isTypeAssignableTo` — tsgo doesn't expose subtype checking.
+		// Conservative `false` keeps type-safety rules (no-unnecessary-
+		// type-assertion, no-misused-promises) on their "can't prove
+		// assignable, leave alone" branch — same behaviour as ts when
+		// the checker can't decide. May suppress some legitimate
+		// diagnostics until upstream surfaces this.
+		isTypeAssignableTo: ((..._args: unknown[]) => false) as any,
 	};
 	// `stub` is held for future use as gaps surface; reference it here
 	// to satisfy noUnusedLocals without a separate unused-method line.
