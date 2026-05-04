@@ -15,12 +15,15 @@ import type { IncrementalState } from './incremental-state.js';
 // always provides it via crypto, but the type is optional). sha256 hex.
 const defaultHash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
-import { isCodeActionsEnabled, type Language } from '@volar/language-core';
-import { proxyCreateProgram } from '@volar/typescript';
+import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
+import { resolveFileLanguageId } from '@volar/typescript';
 import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 
 let options: ts.CompilerOptions = {};
 let fileNames: string[] = [];
+// Volar Language handle — populated by `proxyCreateProgram`'s `setup`
+// callback when a language plugin is active (Vue / MDX / Astro);
+// undefined for plain-TS projects.
 let language: Language<string> | undefined;
 let linter: core.Linter;
 // Cached Program instance + dirty flag. Pre-3.2 the worker wrapped a
@@ -39,12 +42,6 @@ let programDirty = true;
 // CompilerHost's readFile / getSourceFile consult this map first so
 // the next program rebuild sees the post-fix text without disk I/O.
 const fileTextOverrides = new Map<string, string>();
-// Volar Language instance for Vue / MDX / Astro projects. Set by
-// `proxyCreateProgram`'s `setup` callback when a language plugin is
-// active; undefined for plain-TS projects.
-// `proxyCreateProgram` returns the wrapped `ts.createProgram`. For
-// plain-TS this stays as `ts.createProgram` itself.
-let createProgram: typeof ts.createProgram = ts.createProgram;
 // Layer 2 state. We wrap the program in a SemanticDiagnostics-
 // BuilderProgram (with the prev session's BP fed back via TS's internal
 // `tsBuildInfoText` round-trip) and walk affected files once. cache-
@@ -59,7 +56,8 @@ let currentBuilder: ts.SemanticDiagnosticsBuilderProgram | undefined;
 // CompilerHost: lower-level than LanguageServiceHost. Just
 // readFile / writeFile / fileExists / lib-file resolution / case
 // sensitivity. We override `readFile` (and `getSourceFile`, which
-// internally reads via readFile) to consult `fileTextOverrides`.
+// internally reads via readFile) to consult `fileTextOverrides` AND
+// to virtualise Vue / MDX / Astro files via the active language plugin.
 let compilerHost: ts.CompilerHost = createCompilerHost();
 
 function createCompilerHost(): ts.CompilerHost {
@@ -77,17 +75,56 @@ function createCompilerHost(): ts.CompilerHost {
 		return originalReadFile(fileName);
 	};
 	host.getSourceFile = (fileName, languageVersion, onError, shouldCreate) => {
-		const sf = originalGetSourceFile(fileName, languageVersion, onError, shouldCreate);
+		const orig = originalGetSourceFile(fileName, languageVersion, onError, shouldCreate);
+		if (!orig) return orig;
+		// Vue / MDX / Astro virtualisation. We replicate `proxyCreateProgram`
+		// but DO NOT apply its `decorateProgram` step — that wraps
+		// `program.getSemanticDiagnostics` to call `fillSourceFileText`,
+		// which mutates `SourceFile.text` in place to splice the original
+		// .vue text back over the leading-offset spaces. The mutation
+		// happens AFTER the AST has been parsed, so the rule walks an AST
+		// whose positions now point at characters in the post-mutation
+		// text — the rule reports diagnostics at offsets that no longer
+		// match the AST it was given. Master got away with this by going
+		// through `decorateLanguageServiceHost` (LS-side, doesn't touch
+		// the program) instead.
+		if (language) {
+			const sourceScript = language.scripts.get(fileName);
+			const tsAdapter = sourceScript?.generated?.languagePlugin.typescript;
+			if (sourceScript && tsAdapter) {
+				const serviceScript = tsAdapter.getServiceScript(sourceScript.generated!.root);
+				if (serviceScript) {
+					// Two layouts depending on the plugin:
+					//   - !preventLeadingOffset: replace original-text positions
+					//     with whitespace (preserves source-map offsets), then
+					//     append the plugin's emitted TS.
+					//   - preventLeadingOffset: just emit the plugin's TS.
+					const virtualText = !serviceScript.preventLeadingOffset
+						? orig.text.split('\n').map(l => ' '.repeat(l.length)).join('\n')
+							+ serviceScript.code.snapshot.getText(0, serviceScript.code.snapshot.getLength())
+						: serviceScript.code.snapshot.getText(0, serviceScript.code.snapshot.getLength());
+					const virtual = ts.createSourceFile(
+						fileName,
+						virtualText,
+						languageVersion,
+						/*setParentNodes*/ true,
+						serviceScript.scriptKind,
+					);
+					(virtual as unknown as { version: string }).version = hash(virtualText);
+					return virtual;
+				}
+			}
+		}
 		// BuilderProgram requires `SourceFile.version` (Debug.checkDefined
 		// throws otherwise). The LS-host path got this via the host's
 		// `getScriptVersion`; raw CompilerHost has no equivalent, so we
 		// stamp a content hash here. Same value across runs as long as
 		// content matches → BuilderProgram's reference-graph diff
 		// correctly identifies unchanged files.
-		if (sf && (sf as unknown as { version?: string }).version === undefined) {
-			(sf as unknown as { version: string }).version = hash(sf.text);
+		if ((orig as unknown as { version?: string }).version === undefined) {
+			(orig as unknown as { version: string }).version = hash(orig.text);
 		}
-		return sf;
+		return orig;
 	};
 	return host;
 }
@@ -99,7 +136,7 @@ function ensureProgram(): ts.Program {
 		// re-parsing + re-binding for those. Modified files (via
 		// `fileTextOverrides`) get re-parsed; unchanged files are zero-
 		// cost.
-		currentProgram = createProgram({
+		currentProgram = ts.createProgram({
 			rootNames: fileNames,
 			options,
 			host: compilerHost,
@@ -170,7 +207,6 @@ async function setup(
 	currentProgram = undefined;
 	programDirty = true;
 	language = undefined;
-	createProgram = ts.createProgram;
 	affectedFiles = undefined;
 	currentBuilder = undefined;
 
@@ -188,22 +224,34 @@ async function setup(
 		incremental: true,
 		tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
 	};
-	// Compile a fresh CompilerHost each setup — `options` may have
-	// changed, and createCompilerHost bakes them in (default lib paths,
-	// case sensitivity).
-	compilerHost = createCompilerHost();
 	if (plugins.length) {
-		// Volar wraps `ts.createProgram` so Vue / MDX / Astro virtual
-		// scripts get spliced into the program. The `setup` callback
-		// gives us the Volar Language handle for diagnostic / fix
-		// transforms downstream.
-		createProgram = proxyCreateProgram(ts, ts.createProgram, () => ({
-			languagePlugins: plugins,
-			setup(lang) {
-				language = lang;
+		// Manual replication of `proxyCreateProgram`'s language setup —
+		// without its `decorateProgram` step, which mutates the program's
+		// `getSemanticDiagnostics` to call `fillSourceFileText` and
+		// breaks AST-position lookups (see `createCompilerHost`). The
+		// host's `getSourceFile` consults `language.scripts` to splice
+		// virtual TS into Vue / MDX / Astro files.
+		language = createLanguage<string>(
+			[
+				...plugins,
+				{ getLanguageId: fileName => resolveFileLanguageId(fileName) },
+			],
+			new FileMap(ts.sys.useCaseSensitiveFileNames),
+			(fileName, includeFsFiles) => {
+				if (!includeFsFiles) return;
+				const text = fileTextOverrides.get(fileName) ?? ts.sys.readFile(fileName);
+				if (text === undefined) {
+					language!.scripts.delete(fileName);
+					return;
+				}
+				language!.scripts.set(fileName, ts.ScriptSnapshot.fromString(text));
 			},
-		}));
+		);
 	}
+	// Compile a fresh CompilerHost AFTER `language` is wired so the
+	// host's getSourceFile virtualisation can read from it. `options`
+	// may have changed too — createCompilerHost bakes those in.
+	compilerHost = createCompilerHost();
 	linter = core.createLinter(
 		{
 			typescript: ts,
