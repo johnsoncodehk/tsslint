@@ -42,6 +42,16 @@ let programDirty = true;
 // CompilerHost's readFile / getSourceFile consult this map first so
 // the next program rebuild sees the post-fix text without disk I/O.
 const fileTextOverrides = new Map<string, string>();
+// Process-level SourceFile cache, shared across projects in the same
+// CLI invocation (`tsslint --project a/tsconfig.json --project b/tsconfig.json`
+// runs in one worker). Pre-3.2 the LS instance survived setup() calls
+// and its internal SourceFile cache reused lib.es5.d.ts / shared
+// node_modules types across projects; with the LS gone, `oldProgram`-
+// based reuse only works within a project (TS bails when
+// compilerOptions differ across tsconfigs). This keeps lib + shared
+// types from re-parsing per project. Invalidated by content change
+// (text-equality check on lookup) so `--fix` rewrites are seen.
+const sourceFileCache = new Map<string, ts.SourceFile>();
 // Layer 2 state. We wrap the program in a SemanticDiagnostics-
 // BuilderProgram (with the prev session's BP fed back via TS's internal
 // `tsBuildInfoText` round-trip) and walk affected files once. cache-
@@ -75,8 +85,6 @@ function createCompilerHost(): ts.CompilerHost {
 		return originalReadFile(fileName);
 	};
 	host.getSourceFile = (fileName, languageVersion, onError, shouldCreate) => {
-		const orig = originalGetSourceFile(fileName, languageVersion, onError, shouldCreate);
-		if (!orig) return orig;
 		// Vue / MDX / Astro virtualisation. We replicate `proxyCreateProgram`
 		// but DO NOT apply its `decorateProgram` step — that wraps
 		// `program.getSemanticDiagnostics` to call `fillSourceFileText`,
@@ -88,10 +96,17 @@ function createCompilerHost(): ts.CompilerHost {
 		// match the AST it was given. Master got away with this by going
 		// through `decorateLanguageServiceHost` (LS-side, doesn't touch
 		// the program) instead.
+		//
+		// Virtualised SFs are NOT cached cross-project: the plugin's
+		// `getServiceScript` output depends on the per-project `language`
+		// instance, so two projects with different language plugins can
+		// produce different virtual TS for the same fileName.
 		if (language) {
 			const sourceScript = language.scripts.get(fileName);
 			const tsAdapter = sourceScript?.generated?.languagePlugin.typescript;
 			if (sourceScript && tsAdapter) {
+				const orig = originalGetSourceFile(fileName, languageVersion, onError, shouldCreate);
+				if (!orig) return orig;
 				const serviceScript = tsAdapter.getServiceScript(sourceScript.generated!.root);
 				if (serviceScript) {
 					// Two layouts depending on the plugin:
@@ -115,6 +130,22 @@ function createCompilerHost(): ts.CompilerHost {
 				}
 			}
 		}
+		// Plain-TS path. Cross-project SF cache: same path + same content
+		// → return the cached SF unchanged. Skips re-parse for lib.es5.d.ts
+		// and any node_modules types both projects pull in. The text-
+		// equality check is what invalidates after `--fix` (override
+		// changes the text → cache miss → fresh parse).
+		const text = host.readFile(fileName);
+		if (text === undefined) {
+			sourceFileCache.delete(fileName);
+			return undefined;
+		}
+		const cached = sourceFileCache.get(fileName);
+		if (cached && cached.text === text) {
+			return cached;
+		}
+		const orig = originalGetSourceFile(fileName, languageVersion, onError, shouldCreate);
+		if (!orig) return orig;
 		// BuilderProgram requires `SourceFile.version` (Debug.checkDefined
 		// throws otherwise). The LS-host path got this via the host's
 		// `getScriptVersion`; raw CompilerHost has no equivalent, so we
@@ -124,6 +155,7 @@ function createCompilerHost(): ts.CompilerHost {
 		if ((orig as unknown as { version?: string }).version === undefined) {
 			(orig as unknown as { version: string }).version = hash(orig.text);
 		}
+		sourceFileCache.set(fileName, orig);
 		return orig;
 	};
 	return host;
@@ -204,11 +236,19 @@ async function setup(
 	// project would mis-classify this project's files as cache-hit
 	// candidates if their absolute paths happened to overlap.
 	fileTextOverrides.clear();
-	currentProgram = undefined;
-	programDirty = true;
 	language = undefined;
 	affectedFiles = undefined;
 	currentBuilder = undefined;
+	// `currentProgram` is intentionally NOT cleared — `ensureProgram()`
+	// will pass it as `oldProgram` to the next `ts.createProgram` call.
+	// TS reuses SourceFiles whose path + text match across the two
+	// programs, so lib files (lib.es5.d.ts etc., shared between every
+	// project) and any node_modules types both projects pull in skip
+	// the parse + bind cost on the second project. Pre-3.2 the LS
+	// instance survived across projects with the same effect; this
+	// preserves that. `programDirty = true` forces the rebuild so the
+	// new project's rootNames + options take effect.
+	programDirty = true;
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
 	fileNames = _fileNames;
