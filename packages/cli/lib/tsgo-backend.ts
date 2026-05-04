@@ -651,22 +651,27 @@ function wrapChecker(
 			return sym as unknown as ts.Symbol | undefined;
 		},
 		getTypeAtLocation(node: ts.Node) {
-			// Semantic divergence: ts's `getTypeAtLocation(AsExpression)`
-			// returns the *asserted* target type (post-`as`), tsgo's
-			// returns the inner expression's type. typescript-eslint's
-			// `no-unnecessary-type-assertion` rule depends on the ts
-			// semantics — without this routing, `outer === inner` is
-			// trivially true (both = inner type), and every assertion
-			// in the codebase fires as "unnecessary".
+			// Semantic divergences between ts and tsgo for
+			// `getTypeAtLocation`. ts returns the type of the expression
+			// AS IT EVALUATES; tsgo's default returns the type of the
+			// node STRUCTURALLY (inner expression's type for assertions,
+			// the function type for calls). typescript-eslint rules
+			// depend on the ts semantic. Route per-kind:
 			//
-			// Re-route assertions to `getTypeFromTypeNode(node.type)` so
-			// the asserted target type comes back. SK constants from
-			// tsgo's enum (this file imports the runtime).
+			//   AsExpression / TypeAssertion / Satisfies  → getTypeFromTypeNode(.type)
+			//   CallExpression / NewExpression            → getReturnTypeOfSignature(getResolvedSignature(node))
+			//   NonNullExpression                         → getNonNullableType(getTypeAtLocation(.expression))
+			//
+			// All other kinds use tsgo's default (which IS the right
+			// thing for variable references, member accesses, literals,
+			// etc.).
 			const tsgoNode = node as unknown as Node;
+			const k = tsgoNode.kind;
+			const SK = ast.SyntaxKind;
 			if (
-				(tsgoNode.kind === ast.SyntaxKind.AsExpression
-					|| tsgoNode.kind === ast.SyntaxKind.TypeAssertionExpression
-					|| tsgoNode.kind === ast.SyntaxKind.SatisfiesExpression)
+				(k === SK.AsExpression
+					|| k === SK.TypeAssertionExpression
+					|| k === SK.SatisfiesExpression)
 				&& (tsgoNode as unknown as { type?: Node }).type
 			) {
 				const t = project.checker.getTypeFromTypeNode(
@@ -674,6 +679,46 @@ function wrapChecker(
 				);
 				fixupType(t);
 				return t as unknown as ts.Type;
+			}
+			if (k === SK.CallExpression || k === SK.NewExpression) {
+				// Two attempts to recover the call's RETURN type:
+				//   1) `getResolvedSignature(node)` — the canonical way,
+				//      but tsgo panics on some method-call sites.
+				//   2) Walk via the function type's call signatures —
+				//      uses two `getCallSignatures(funcType)` and one
+				//      `getReturnTypeOfSignature(sig)` calls. Slightly
+				//      less precise (picks the first overload) but
+				//      doesn't trigger the panic.
+				try {
+					const sig = project.checker.getResolvedSignature(tsgoNode);
+					if (sig) {
+						const t = project.checker.getReturnTypeOfSignature(sig);
+						fixupType(t);
+						return t as unknown as ts.Type;
+					}
+				}
+				catch { /* fall through to plan B */ }
+				try {
+					const funcType = project.checker.getTypeAtLocation(tsgoNode);
+					if (!funcType) throw 0;
+					const sk = (sync as any).SignatureKind as Record<string, number>;
+					const sigs = project.checker.getSignaturesOfType(funcType, sk.Call);
+					if (sigs && sigs.length > 0) {
+						const t = project.checker.getReturnTypeOfSignature(sigs[0]);
+						fixupType(t);
+						return t as unknown as ts.Type;
+					}
+				}
+				catch { /* fall through to default */ }
+			}
+			if (k === SK.NonNullExpression) {
+				const inner = (tsgoNode as unknown as { expression: Node }).expression;
+				const innerT = project.checker.getTypeAtLocation(inner);
+				if (innerT) {
+					const t = project.checker.getNonNullableType(innerT);
+					fixupType(t);
+					return t as unknown as ts.Type;
+				}
 			}
 			const t = project.checker.getTypeAtLocation(tsgoNode);
 			fixupType(t);
