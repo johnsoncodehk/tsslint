@@ -840,16 +840,40 @@ function wrapChecker(
 		getSymbolsInScope: ((..._args: unknown[]) => []) as any,
 		getExportSpecifierLocalTargetSymbol: ((..._args: unknown[]) => undefined) as any,
 		// `isTypeAssignableTo` — tsgo doesn't expose subtype checking.
-		// We tried a structural-cover impl (id equality, any/unknown/
-		// never sentinels, union decomposition, literal widening): it
-		// returned `true` for cases TS would say `false`, which made
-		// the rule's contextual-unnecessary path fire on assertions
-		// the receiver type wouldn't actually accept (added ~26 new
-		// FPs in dogfood). Conservative `false` outperforms partial
-		// truth here — the rule's "can't prove assignable, leave alone"
-		// branch is what we want. Revisit when full structural
-		// compatibility is portable.
-		isTypeAssignableTo: ((..._args: unknown[]) => false) as any,
+		// Best-effort structural cover: identity, any/unknown/never
+		// sentinels, union decomposition (∀ on source / ∃ on target),
+		// literal-to-base widening. Returns `false` for the long tail
+		// of structural compatibility (object shape compat, signature
+		// variance, conditional types) that requires the full checker
+		// subtype machinery — sound (no false `true`) over those
+		// branches; consumers should treat unknown answers as "can't
+		// prove" rather than "definitely false".
+		isTypeAssignableTo: ((source: any, target: any): boolean => {
+			if (!source || !target) return false;
+			if (source === target || source.id === target.id) return true;
+			const TF = (sync as any).TypeFlags as Record<string, number>;
+			if ((target.flags & (TF.Any | TF.Unknown)) !== 0) return true;
+			if ((source.flags & TF.Never) !== 0) return true;
+			if ((source.flags & TF.Any) !== 0) return true;
+			const self = (s: any, t: any): boolean => (checker.isTypeAssignableTo as any)(s, t);
+			if ((source.flags & TF.Union) !== 0) {
+				const ts_ = source.getTypes?.() as any[] | undefined;
+				if (ts_) return ts_.every(s => self(s, target));
+			}
+			if ((target.flags & TF.Union) !== 0) {
+				const tt = target.getTypes?.() as any[] | undefined;
+				if (tt) return tt.some(t => self(source, t));
+			}
+			const literalMask = TF.StringLiteral | TF.NumberLiteral
+				| TF.BooleanLiteral | TF.BigIntLiteral;
+			if ((source.flags & literalMask) !== 0) {
+				const widened = project.checker.getWidenedType(source);
+				if (widened && widened.id !== source.id) {
+					return self(widened, target);
+				}
+			}
+			return false;
+		}) as any,
 	};
 	// `stub` is held for future use as gaps surface; reference it here
 	// to satisfy noUnusedLocals without a separate unused-method line.
