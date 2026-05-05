@@ -43,10 +43,15 @@ type Node = import('@typescript/native-preview/ast', { with: { 'resolution-mode'
 export interface TsgoBackend {
 	// ts.Program-shape adapter, fed to LinterContext.program().
 	getProgram(): ts.Program;
-	// Per-file prepass: walks the SF, collects every Identifier, resolves
-	// in one batched RPC, populates the symbol cache. Must be called for
-	// each file before rules run against it.
+	// Per-file setup before rules run: prototype-patches the tsgo Node
+	// hierarchy on first call, then bind-via-real-ts the file so the
+	// JS-side scope walker can answer in-process Symbol queries.
+	// Idempotent on unchanged text (cached).
 	prepareFile(fileName: string): void;
+	// Drop the JS-side bind cache for a file. Call after `--fix`
+	// rewrites file content so the next `prepareFile` re-binds against
+	// the new text.
+	invalidateFile(fileName: string): void;
 	// Tear down child process + free snapshot refs.
 	close(): void;
 }
@@ -471,6 +476,16 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 	// Files prepass'd this snapshot. Skip re-walk on repeat lint() calls.
 	const preparedFiles = new Set<string>();
 
+	// Per-backend JS Symbol resolver. Owns the bound-SF + position-map
+	// caches; releases them on close(). Replaces the module-level singleton
+	// so two backends in the same worker (multi-project lint) don't share
+	// stale caches across snapshots.
+	const jsSymbolResolver: import('./tsgo-js-symbols.js').JsSymbolResolver
+		= require('./tsgo-js-symbols.js').createJsSymbolResolver({
+			tsgoSyntaxKind: require('@typescript/native-preview/ast').SyntaxKind,
+		});
+	jsSymbolResolverRef.current = jsSymbolResolver;
+
 	const program = wrapProgram(project, nodeToSymbol);
 	currentProjectRef.project = project;
 	installNodeHandleHooks(require('@typescript/native-preview/sync') as TsgoSync);
@@ -483,12 +498,22 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 			if (preparedFiles.has(fileName)) return;
 			preparedFiles.add(fileName);
 			const t = Date.now();
-			prepareFile(project, fileName);
+			prepareFile(project, fileName, jsSymbolResolver);
 			prepareTotalMs += Date.now() - t;
 			prepareCount++;
 			if (trace && (prepareCount % 100 === 0 || prepareCount === 1)) {
 				console.error(`[tsgo-time] prepareFile #${prepareCount} cumul=${prepareTotalMs}ms`);
 			}
+		},
+		// Drop the JS-side bind for a single file. Called by the worker
+		// after `--fix` rewrites file content, so the next prepareFile
+		// re-binds against the new text and returns fresh symbols.
+		invalidateFile(fileName: string) {
+			preparedFiles.delete(fileName);
+			jsSymbolResolver.invalidate(fileName);
+			// `nodeToSymbol` is a WeakMap keyed by tsgo Node references;
+			// after the next ensureProgram() rebuild those Node refs are
+			// new, so the stale entries become garbage automatically.
 		},
 		close() {
 			if (trace) {
@@ -499,16 +524,21 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 					+ `(getSF=${s.getSF}ms bind=${s.bind}ms)`,
 				);
 			}
+			jsSymbolResolver.clear();
+			if (jsSymbolResolverRef.current === jsSymbolResolver) {
+				jsSymbolResolverRef.current = undefined;
+			}
 			api.close();
 		},
 	};
 }
 
-// Module-level resolver instance, lazily constructed on first prepareFile.
-// Survives across project setups within a single CLI invocation (its
-// internal SF cache is keyed by fileName so cross-project sharing of
-// shared files — node_modules types etc. — is safe).
-let jsSymbolResolver: ReturnType<typeof import('./tsgo-js-symbols.js').createJsSymbolResolver> | undefined;
+// Bridge so wrapChecker.getSymbolAtLocation can reach the active
+// backend's resolver without re-threading the wiring through every
+// adapter method. Set by createTsgoBackend on construction; cleared on
+// close(). Multi-project worker swaps it on each setup.
+const jsSymbolResolverRef: { current: import('./tsgo-js-symbols.js').JsSymbolResolver | undefined } = { current: undefined };
+
 
 // Cumulative timers — printed by createBackend.close() under
 // TSSLINT_TIME_TSGO=1. Negligible cost when the flag is off (single
@@ -535,7 +565,11 @@ export function getPrepareTimingSnapshot() {
 //      on Dify (5000 files); JS-side bind costs ~1.8s for the same
 //      workload and produces real ts.Symbol objects with stable
 //      identity.
-function prepareFile(project: Project, fileName: string): void {
+function prepareFile(
+	project: Project,
+	fileName: string,
+	jsSymbolResolver: import('./tsgo-js-symbols.js').JsSymbolResolver,
+): void {
 	const trace = process.env.TSSLINT_TIME_TSGO === '1';
 	const t0 = trace ? Date.now() : 0;
 	const sf = project.program.getSourceFile(fileName);
@@ -551,11 +585,8 @@ function prepareFile(project: Project, fileName: string): void {
 	if (sample) patchTsgoNodeListSpecies(sample);
 
 	const text = (sf as unknown as { text: string }).text;
-	jsSymbolResolver ??= require('./tsgo-js-symbols.js').createJsSymbolResolver({
-		tsgoSyntaxKind: require('@typescript/native-preview/ast').SyntaxKind,
-	});
 	const tBind = trace ? Date.now() : 0;
-	jsSymbolResolver!.prepareFile(fileName, text);
+	jsSymbolResolver.prepareFile(fileName, text);
 	if (trace) _prepareBind += Date.now() - tBind;
 }
 
@@ -676,8 +707,9 @@ function wrapChecker(
 			// declarations, in-file specifiers, in-file type refs)
 			// resolves locally — no IPC. The walker returns a real
 			// ts.Symbol with identity stable across calls.
-			if (jsSymbolResolver && tsgoSf) {
-				const local = jsSymbolResolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
+			const resolver = jsSymbolResolverRef.current;
+			if (resolver && tsgoSf) {
+				const local = resolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
 				if (local) {
 					nodeToSymbol.set(tsgoNode, local as unknown as TsgoSymbol);
 					return local as unknown as ts.Symbol;

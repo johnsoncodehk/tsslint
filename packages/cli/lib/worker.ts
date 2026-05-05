@@ -471,6 +471,11 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 			newText = core.applyTextChanges(baseText, textChanges);
 			fileTextOverrides.set(fileName, newText);
 			programDirty = true;
+			// On the tsgo backend, drop the JS-side bind cache for this
+			// file so the next prepareFile rebinds against post-fix text.
+			// (`programDirty` handles the tsgo-program rebuild for type
+			// queries; this handles the in-process Symbol cache.)
+			tsgoBackend?.invalidateFile(fileName);
 		}
 	}
 

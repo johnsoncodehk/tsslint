@@ -140,6 +140,30 @@ try {
 	check('cwd is project dir', cwd === path.dirname(tsconfig));
 	const opts = program.getCompilerOptions();
 	check('compilerOptions returned', opts && typeof opts === 'object');
+
+	// ── Test 6: invalidateFile clears the JS-side bind cache ────────────
+	// After invalidate, prepareFile must re-bind. We can't directly observe
+	// the bind, but if the cache were stale we'd see a wrong-symbol return
+	// for an identifier whose enclosing context didn't actually change.
+	// Test exercises the no-op codepath: invalidate + re-prepare on the
+	// SAME unchanged file, verify the same identifier still resolves.
+	const sampleId = (function findFirst(n: any): any {
+		if (n.kind === idKind) return n;
+		let f: any;
+		n.forEachChild((c: any) => f = f ?? findFirst(c));
+		return f;
+	})(sf);
+	const symBefore = checker.getSymbolAtLocation(sampleId);
+	check('sample identifier resolves before invalidate', !!symBefore);
+	(handle as any).invalidateFile(target);
+	handle.prepareFile(target);
+	const symAfter = checker.getSymbolAtLocation(sampleId);
+	check('sample identifier still resolves after invalidate + re-prepare', !!symAfter);
+	check(
+		'invalidate-then-reprepare returns equivalent symbol',
+		symBefore?.name === symAfter?.name,
+		`before=${symBefore?.name} after=${symAfter?.name}`,
+	);
 }
 finally {
 	handle.close();
