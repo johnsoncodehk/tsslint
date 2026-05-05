@@ -1,3 +1,10 @@
+// Eager-load `./real-ts.js` so its module cache entry — capturing the
+// genuine `typescript` exports BEFORE the tsgo facade installs its
+// `Module._resolveFilename` hook — is in place for any later in-process
+// code that needs real ts behaviour (parser/binder/scanner) regardless
+// of facade activation.
+import _ = require('./real-ts.js');
+void _;
 import ts = require('typescript');
 import type config = require('@tsslint/config');
 import core = require('@tsslint/core');

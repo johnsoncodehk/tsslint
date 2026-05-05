@@ -514,6 +514,7 @@ let _prepareGetSF = 0;
 let _prepareWalk = 0;
 let _prepareBatchSym = 0;
 let _prepareFallbackSym = 0;
+let jsSymbolResolver: ReturnType<typeof import('./tsgo-js-symbols.js').createJsSymbolResolver> | undefined;
 
 export function getPrepareTimingSnapshot() {
 	return { getSF: _prepareGetSF, walk: _prepareWalk, batchSym: _prepareBatchSym, fallbackSym: _prepareFallbackSym };
@@ -562,6 +563,29 @@ function prepareFile(
 	if (trace) _prepareWalk += Date.now() - tWalk;
 
 	if (ids.length === 0) return;
+
+	// JS-side bind + scope walker as Symbol provider. Avoids the
+	// cross-process IPC of `getSymbolAtPosition`. PoC measurement: on
+	// Dify, replaces ~11s prepass with ~1.8s in-process bind. Recall on
+	// lint-relevant identifier classes (value-ref, decl-name, member-name,
+	// specifier, type-ref) is ~87%; the missing 13% are mostly globals
+	// (Array, Promise) — rule code typically text-matches those without
+	// querying symbol. Falls back to tsgo only for uncovered cases via
+	// the existing `nodeToSymbol` cache miss path in `wrapChecker`.
+	if (process.env.TSSLINT_JS_SYMBOLS === '1') {
+		// Bind the file's JS-side AST eagerly (cheap, ~0.36ms/file),
+		// but leave scope-walk to lazy on-demand via the wrapped
+		// getSymbolAtLocation. Avoids paying scope-walk cost for
+		// identifiers that rules never query.
+		const text = (sf as unknown as { text: string }).text;
+		jsSymbolResolver ??= require('./tsgo-js-symbols.js').createJsSymbolResolver({
+			tsgoSyntaxKind: require('@typescript/native-preview/ast').SyntaxKind,
+		});
+		const tBind = trace ? Date.now() : 0;
+		jsSymbolResolver!.prepareFile(fileName, text);
+		if (trace) _prepareBatchSym += Date.now() - tBind;
+		return;
+	}
 
 	// Position-based batch resolves identifiers in declaration position
 	// (import/export specifier names, etc.) that the node-based API
@@ -698,13 +722,26 @@ function wrapChecker(
 
 	const checker: Partial<ts.TypeChecker> = {
 		getSymbolAtLocation(node: ts.Node) {
-			// Cache hit (prepass'd files) returns synchronously, no RPC.
-			// Cache miss falls through to a single RPC — covers nodes the
-			// rule discovered after the prepass (e.g. via type queries
-			// that returned a synthetic node).
 			const tsgoNode = node as unknown as Node;
+			// Cache hit returns synchronously, no further work.
 			if (nodeToSymbol.has(tsgoNode)) {
 				return nodeToSymbol.get(tsgoNode) as unknown as ts.Symbol | undefined;
+			}
+			// JS-symbols mode: try in-process scope walker first.
+			// Resolves Layer A (variable refs, declarations, specifiers)
+			// without IPC. Falls through to tsgo only on miss — typically
+			// the type-driven cases (property names on imported types,
+			// globals in lib).
+			if (process.env.TSSLINT_JS_SYMBOLS === '1' && jsSymbolResolver) {
+				const tsgoSf = (tsgoNode as unknown as { getSourceFile?: () => { fileName: string; text: string } })
+					.getSourceFile?.();
+				if (tsgoSf) {
+					const local = jsSymbolResolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
+					if (local) {
+						nodeToSymbol.set(tsgoNode, local as unknown as TsgoSymbol);
+						return local as unknown as ts.Symbol;
+					}
+				}
 			}
 			const sym = project.checker.getSymbolAtLocation(tsgoNode);
 			nodeToSymbol.set(tsgoNode, sym);
