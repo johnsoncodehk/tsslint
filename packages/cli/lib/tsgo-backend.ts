@@ -542,6 +542,16 @@ function prepareFile(
 	const sample = (sf as unknown as { statements?: object }).statements;
 	if (sample) patchTsgoNodeListSpecies(sample);
 
+	// Skip the batched symbol prepass when the env flag is set. The
+	// prototype patches above (getStart/getText/forEach/species) MUST
+	// still run — without them rules crash immediately on the first
+	// node access. With the flag set, rules fall back to per-call
+	// `getSymbolAtLocation` (one RPC per query). On Dify web/ this is a
+	// net win because the configured rule (`react-x/no-leaked-conditional-rendering`)
+	// barely queries symbols — the prepass walks every identifier in the
+	// project upfront for nothing.
+	if (process.env.TSSLINT_NO_PREPASS === '1') return;
+
 	// Local AST walk — no RPC. Collect every Identifier.
 	const tWalk = trace ? Date.now() : 0;
 	const ids: Node[] = [];
