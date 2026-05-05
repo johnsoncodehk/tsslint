@@ -444,7 +444,6 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 	const trace = process.env.TSSLINT_TIME_TSGO === '1';
 	const t0 = Date.now();
 	const { API: APICtor } = require('@typescript/native-preview/sync') as TsgoSync;
-	const ast: TsgoAst = require('@typescript/native-preview/ast');
 	const tImport = Date.now();
 	const api: API = new APICtor({});
 	const tApi = Date.now();
@@ -473,7 +472,6 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 	const preparedFiles = new Set<string>();
 
 	const program = wrapProgram(project, nodeToSymbol);
-	const idKind = ast.SyntaxKind.Identifier;
 	currentProjectRef.project = project;
 	installNodeHandleHooks(require('@typescript/native-preview/sync') as TsgoSync);
 
@@ -485,7 +483,7 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 			if (preparedFiles.has(fileName)) return;
 			preparedFiles.add(fileName);
 			const t = Date.now();
-			prepareFile(project, idKind, fileName, nodeToSymbol);
+			prepareFile(project, fileName);
 			prepareTotalMs += Date.now() - t;
 			prepareCount++;
 			if (trace && (prepareCount % 100 === 0 || prepareCount === 1)) {
@@ -498,8 +496,7 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 				console.error(
 					`[tsgo-time] final prepareFiles=${prepareCount} `
 					+ `prepareTotal=${prepareTotalMs}ms `
-					+ `(getSF=${s.getSF}ms walk=${s.walk}ms `
-					+ `batchSym=${s.batchSym}ms fallbackSym=${s.fallbackSym}ms)`,
+					+ `(getSF=${s.getSF}ms bind=${s.bind}ms)`,
 				);
 			}
 			api.close();
@@ -507,113 +504,59 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 	};
 }
 
-// Cumulative timers — exposed via prepareTiming() for the backend's
-// closing summary. Bumped only when the env trace flag is on, so the
-// added arithmetic is negligible when off.
-let _prepareGetSF = 0;
-let _prepareWalk = 0;
-let _prepareBatchSym = 0;
-let _prepareFallbackSym = 0;
+// Module-level resolver instance, lazily constructed on first prepareFile.
+// Survives across project setups within a single CLI invocation (its
+// internal SF cache is keyed by fileName so cross-project sharing of
+// shared files — node_modules types etc. — is safe).
 let jsSymbolResolver: ReturnType<typeof import('./tsgo-js-symbols.js').createJsSymbolResolver> | undefined;
 
+// Cumulative timers — printed by createBackend.close() under
+// TSSLINT_TIME_TSGO=1. Negligible cost when the flag is off (single
+// env-var read per call).
+let _prepareGetSF = 0;
+let _prepareBind = 0;
+
 export function getPrepareTimingSnapshot() {
-	return { getSF: _prepareGetSF, walk: _prepareWalk, batchSym: _prepareBatchSym, fallbackSym: _prepareFallbackSym };
+	return { getSF: _prepareGetSF, bind: _prepareBind };
 }
 
-function prepareFile(
-	project: Project,
-	idKind: number,
-	fileName: string,
-	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
-): void {
+// Per-file setup before rules run. Two pieces of essential work:
+//
+//   1. Prototype patches on the tsgo Node hierarchy — adds the
+//      ts.Node-shaped instance methods (`getStart` / `getEnd` /
+//      `getText` / `getLineAndCharacterOfPosition` / etc.) that rule
+//      code calls directly. One-shot per process; subsequent calls
+//      short-circuit inside the patch helpers.
+//
+//   2. Real-ts bind of the file. Symbol resolution then runs in-process
+//      via `wrapChecker.getSymbolAtLocation` — JS-side scope walker
+//      first, tsgo IPC fallback only on miss. Replaces the previous
+//      tsgo `getSymbolAtPosition` batched RPC prepass which cost ~11s
+//      on Dify (5000 files); JS-side bind costs ~1.8s for the same
+//      workload and produces real ts.Symbol objects with stable
+//      identity.
+function prepareFile(project: Project, fileName: string): void {
 	const trace = process.env.TSSLINT_TIME_TSGO === '1';
 	const t0 = trace ? Date.now() : 0;
 	const sf = project.program.getSourceFile(fileName);
 	if (trace) _prepareGetSF += Date.now() - t0;
 	if (!sf) return;
 
-	// Patch ts.Node-shape methods on tsgo's Remote{Node,SourceFile}
-	// prototype. Idempotent across calls and across snapshots.
 	patchTsgoNodeProto(sf);
-	// Patch RemoteNodeList — `extends Array`, so its `[Symbol.species]`
-	// defaults to itself; rule code's `statements.map(...)` then tries
-	// to construct an empty RemoteNodeList and crashes in the binary-
-	// view getter. Override species to plain Array so derived methods
-	// (map / filter / slice / concat) return regular arrays.
+	// RemoteNodeList extends Array; without species override, derived
+	// methods (`statements.map(...)` etc.) try to construct a fresh
+	// RemoteNodeList and crash in its binary-view getter. Override to
+	// plain Array.
 	const sample = (sf as unknown as { statements?: object }).statements;
 	if (sample) patchTsgoNodeListSpecies(sample);
 
-	// Skip the batched symbol prepass when the env flag is set. The
-	// prototype patches above (getStart/getText/forEach/species) MUST
-	// still run — without them rules crash immediately on the first
-	// node access. With the flag set, rules fall back to per-call
-	// `getSymbolAtLocation` (one RPC per query). On Dify web/ this is a
-	// net win because the configured rule (`react-x/no-leaked-conditional-rendering`)
-	// barely queries symbols — the prepass walks every identifier in the
-	// project upfront for nothing.
-	if (process.env.TSSLINT_NO_PREPASS === '1') return;
-
-	// Local AST walk — no RPC. Collect every Identifier.
-	const tWalk = trace ? Date.now() : 0;
-	const ids: Node[] = [];
-	(function walk(n: Node) {
-		if (n.kind === idKind) ids.push(n);
-		n.forEachChild(walk);
-	})(sf);
-	if (trace) _prepareWalk += Date.now() - tWalk;
-
-	if (ids.length === 0) return;
-
-	// JS-side bind + scope walker as Symbol provider. Avoids the
-	// cross-process IPC of `getSymbolAtPosition`. PoC measurement: on
-	// Dify, replaces ~11s prepass with ~1.8s in-process bind. Recall on
-	// lint-relevant identifier classes (value-ref, decl-name, member-name,
-	// specifier, type-ref) is ~87%; the missing 13% are mostly globals
-	// (Array, Promise) — rule code typically text-matches those without
-	// querying symbol. Falls back to tsgo only for uncovered cases via
-	// the existing `nodeToSymbol` cache miss path in `wrapChecker`.
-	if (process.env.TSSLINT_JS_SYMBOLS === '1') {
-		// Bind the file's JS-side AST eagerly (cheap, ~0.36ms/file),
-		// but leave scope-walk to lazy on-demand via the wrapped
-		// getSymbolAtLocation. Avoids paying scope-walk cost for
-		// identifiers that rules never query.
-		const text = (sf as unknown as { text: string }).text;
-		jsSymbolResolver ??= require('./tsgo-js-symbols.js').createJsSymbolResolver({
-			tsgoSyntaxKind: require('@typescript/native-preview/ast').SyntaxKind,
-		});
-		const tBind = trace ? Date.now() : 0;
-		jsSymbolResolver!.prepareFile(fileName, text);
-		if (trace) _prepareBatchSym += Date.now() - tBind;
-		return;
-	}
-
-	// Position-based batch resolves identifiers in declaration position
-	// (import/export specifier names, etc.) that the node-based API
-	// misses. Use end offset — caret-after-name semantics.
-	const tBatch = trace ? Date.now() : 0;
-	const positions = ids.map(id => id.end);
-	const symsByPos = project.checker.getSymbolAtPosition(fileName, positions);
-	if (trace) _prepareBatchSym += Date.now() - tBatch;
-
-	// Fill from position-based result. For nulls, fall back to node-based
-	// (handles a small minority — object-spread method names etc.).
-	const fallbackIdx: number[] = [];
-	for (let i = 0; i < ids.length; i++) {
-		if (symsByPos[i]) {
-			nodeToSymbol.set(ids[i], symsByPos[i]);
-		} else {
-			fallbackIdx.push(i);
-		}
-	}
-	if (fallbackIdx.length > 0) {
-		const tFb = trace ? Date.now() : 0;
-		const fallbackNodes = fallbackIdx.map(i => ids[i]);
-		const symsByNode = project.checker.getSymbolAtLocation(fallbackNodes);
-		for (let j = 0; j < fallbackIdx.length; j++) {
-			nodeToSymbol.set(ids[fallbackIdx[j]], symsByNode[j]);
-		}
-		if (trace) _prepareFallbackSym += Date.now() - tFb;
-	}
+	const text = (sf as unknown as { text: string }).text;
+	jsSymbolResolver ??= require('./tsgo-js-symbols.js').createJsSymbolResolver({
+		tsgoSyntaxKind: require('@typescript/native-preview/ast').SyntaxKind,
+	});
+	const tBind = trace ? Date.now() : 0;
+	jsSymbolResolver!.prepareFile(fileName, text);
+	if (trace) _prepareBind += Date.now() - tBind;
 }
 
 // Wraps tsgo Program + Checker as a `ts.Program`-shape. Only the methods
@@ -727,23 +670,33 @@ function wrapChecker(
 			if (nodeToSymbol.has(tsgoNode)) {
 				return nodeToSymbol.get(tsgoNode) as unknown as ts.Symbol | undefined;
 			}
-			// JS-symbols mode: try in-process scope walker first.
-			// Resolves Layer A (variable refs, declarations, specifiers)
-			// without IPC. Falls through to tsgo only on miss — typically
-			// the type-driven cases (property names on imported types,
-			// globals in lib).
-			if (process.env.TSSLINT_JS_SYMBOLS === '1' && jsSymbolResolver) {
-				const tsgoSf = (tsgoNode as unknown as { getSourceFile?: () => { fileName: string; text: string } })
-					.getSourceFile?.();
-				if (tsgoSf) {
-					const local = jsSymbolResolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
-					if (local) {
-						nodeToSymbol.set(tsgoNode, local as unknown as TsgoSymbol);
-						return local as unknown as ts.Symbol;
-					}
+			const tsgoSf = (tsgoNode as unknown as { getSourceFile?: () => { fileName: string; text: string } })
+				.getSourceFile?.();
+			// In-process JS scope walker first. Layer A (variable refs,
+			// declarations, in-file specifiers, in-file type refs)
+			// resolves locally — no IPC. The walker returns a real
+			// ts.Symbol with identity stable across calls.
+			if (jsSymbolResolver && tsgoSf) {
+				const local = jsSymbolResolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
+				if (local) {
+					nodeToSymbol.set(tsgoNode, local as unknown as TsgoSymbol);
+					return local as unknown as ts.Symbol;
 				}
 			}
-			const sym = project.checker.getSymbolAtLocation(tsgoNode);
+			// Layer C fallback. tsgo has two checker entry points with
+			// different coverage — `getSymbolAtPosition` resolves
+			// declaration-position identifiers (import/export specifier
+			// names) that the node-based API misses; `getSymbolAtLocation`
+			// covers a small remainder (object-spread method names etc.).
+			// Try position first to recover the previous prepass's recall
+			// without paying its eager batched cost.
+			let sym: TsgoSymbol | undefined;
+			if (tsgoSf) {
+				sym = project.checker.getSymbolAtPosition(tsgoSf.fileName, tsgoNode.end);
+			}
+			if (!sym) {
+				sym = project.checker.getSymbolAtLocation(tsgoNode);
+			}
 			nodeToSymbol.set(tsgoNode, sym);
 			return sym as unknown as ts.Symbol | undefined;
 		},
