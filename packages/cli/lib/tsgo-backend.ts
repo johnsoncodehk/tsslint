@@ -441,15 +441,27 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 	// Lazy require so users without the optional peer dep don't crash on
 	// load. The CLI gates this behind `--tsgo` so non-tsgo users never
 	// reach here.
+	const trace = process.env.TSSLINT_TIME_TSGO === '1';
+	const t0 = Date.now();
 	const { API: APICtor } = require('@typescript/native-preview/sync') as TsgoSync;
 	const ast: TsgoAst = require('@typescript/native-preview/ast');
-
+	const tImport = Date.now();
 	const api: API = new APICtor({});
+	const tApi = Date.now();
 	const snapshot: Snapshot = api.updateSnapshot({ openProject: tsconfig });
+	const tSnap = Date.now();
 	const project = snapshot.getProject(tsconfig);
+	const tProject = Date.now();
 	if (!project) {
 		api.close();
 		throw new Error(`tsgo: project not found for ${tsconfig}`);
+	}
+	if (trace) {
+		console.error(
+			`[tsgo-time] createBackend total=${tProject - t0}ms `
+			+ `(import=${tImport - t0} apiCtor=${tApi - tImport} `
+			+ `updateSnapshot=${tSnap - tApi} getProject=${tProject - tSnap})`,
+		);
 	}
 
 	// Per-fileName Symbol cache, populated by `prepareFile`. Keyed by the
@@ -465,17 +477,46 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 	currentProjectRef.project = project;
 	installNodeHandleHooks(require('@typescript/native-preview/sync') as TsgoSync);
 
+	let prepareTotalMs = 0;
+	let prepareCount = 0;
 	return {
 		getProgram: () => program,
 		prepareFile(fileName: string) {
 			if (preparedFiles.has(fileName)) return;
 			preparedFiles.add(fileName);
+			const t = Date.now();
 			prepareFile(project, idKind, fileName, nodeToSymbol);
+			prepareTotalMs += Date.now() - t;
+			prepareCount++;
+			if (trace && (prepareCount % 100 === 0 || prepareCount === 1)) {
+				console.error(`[tsgo-time] prepareFile #${prepareCount} cumul=${prepareTotalMs}ms`);
+			}
 		},
 		close() {
+			if (trace) {
+				const s = getPrepareTimingSnapshot();
+				console.error(
+					`[tsgo-time] final prepareFiles=${prepareCount} `
+					+ `prepareTotal=${prepareTotalMs}ms `
+					+ `(getSF=${s.getSF}ms walk=${s.walk}ms `
+					+ `batchSym=${s.batchSym}ms fallbackSym=${s.fallbackSym}ms)`,
+				);
+			}
 			api.close();
 		},
 	};
+}
+
+// Cumulative timers — exposed via prepareTiming() for the backend's
+// closing summary. Bumped only when the env trace flag is on, so the
+// added arithmetic is negligible when off.
+let _prepareGetSF = 0;
+let _prepareWalk = 0;
+let _prepareBatchSym = 0;
+let _prepareFallbackSym = 0;
+
+export function getPrepareTimingSnapshot() {
+	return { getSF: _prepareGetSF, walk: _prepareWalk, batchSym: _prepareBatchSym, fallbackSym: _prepareFallbackSym };
 }
 
 function prepareFile(
@@ -484,7 +525,10 @@ function prepareFile(
 	fileName: string,
 	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
 ): void {
+	const trace = process.env.TSSLINT_TIME_TSGO === '1';
+	const t0 = trace ? Date.now() : 0;
 	const sf = project.program.getSourceFile(fileName);
+	if (trace) _prepareGetSF += Date.now() - t0;
 	if (!sf) return;
 
 	// Patch ts.Node-shape methods on tsgo's Remote{Node,SourceFile}
@@ -499,19 +543,23 @@ function prepareFile(
 	if (sample) patchTsgoNodeListSpecies(sample);
 
 	// Local AST walk — no RPC. Collect every Identifier.
+	const tWalk = trace ? Date.now() : 0;
 	const ids: Node[] = [];
 	(function walk(n: Node) {
 		if (n.kind === idKind) ids.push(n);
 		n.forEachChild(walk);
 	})(sf);
+	if (trace) _prepareWalk += Date.now() - tWalk;
 
 	if (ids.length === 0) return;
 
 	// Position-based batch resolves identifiers in declaration position
 	// (import/export specifier names, etc.) that the node-based API
 	// misses. Use end offset — caret-after-name semantics.
+	const tBatch = trace ? Date.now() : 0;
 	const positions = ids.map(id => id.end);
 	const symsByPos = project.checker.getSymbolAtPosition(fileName, positions);
+	if (trace) _prepareBatchSym += Date.now() - tBatch;
 
 	// Fill from position-based result. For nulls, fall back to node-based
 	// (handles a small minority — object-spread method names etc.).
@@ -524,11 +572,13 @@ function prepareFile(
 		}
 	}
 	if (fallbackIdx.length > 0) {
+		const tFb = trace ? Date.now() : 0;
 		const fallbackNodes = fallbackIdx.map(i => ids[i]);
 		const symsByNode = project.checker.getSymbolAtLocation(fallbackNodes);
 		for (let j = 0; j < fallbackIdx.length; j++) {
 			nodeToSymbol.set(ids[fallbackIdx[j]], symsByNode[j]);
 		}
+		if (trace) _prepareFallbackSym += Date.now() - tFb;
 	}
 }
 
