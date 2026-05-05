@@ -530,6 +530,12 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
 	// only computes line starts once per file).
 
+	// Done with this file — drop the JS-side bind so the bound SF and
+	// position maps don't pin in memory for the rest of the lint pass.
+	// Without this, all linted files' bound SFs accumulate (~30 KB each
+	// — adds up to ~150 MB on a 5000-file codebase).
+	tsgoBackend?.releaseFile(fileName);
+
 	return diagnostics;
 }
 

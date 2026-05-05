@@ -48,6 +48,12 @@ export interface TsgoBackend {
 	// JS-side scope walker can answer in-process Symbol queries.
 	// Idempotent on unchanged text (cached).
 	prepareFile(fileName: string): void;
+	// Drop the JS-side bind + position maps for one file. Call after
+	// the file's lint pass completes so the bound SF doesn't pin in
+	// memory across the rest of the project's lint. Subsequent lint of
+	// the SAME file (rare, e.g. `--fix` rewrite + re-lint) re-binds
+	// from current text via prepareFile.
+	releaseFile(fileName: string): void;
 	// Drop the JS-side bind cache for a file. Call after `--fix`
 	// rewrites file content so the next `prepareFile` re-binds against
 	// the new text.
@@ -514,6 +520,16 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 			// `nodeToSymbol` is a WeakMap keyed by tsgo Node references;
 			// after the next ensureProgram() rebuild those Node refs are
 			// new, so the stale entries become garbage automatically.
+		},
+		// Drop the JS-side bind for a file after its lint pass is done.
+		// Distinct from invalidateFile: keeps `preparedFiles` membership
+		// (so a stray re-lint of the same file in the same backend
+		// re-binds rather than no-ops), but releases the bound SF +
+		// position maps for GC. Without this, all 5000 Dify files'
+		// bound SFs sit in memory simultaneously across a lint pass.
+		releaseFile(fileName: string) {
+			preparedFiles.delete(fileName);
+			jsSymbolResolver.invalidate(fileName);
 		},
 		close() {
 			if (trace) {
