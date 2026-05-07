@@ -108,7 +108,7 @@ interface DeferredReport {
 // Module-level state — populated by convertRule, queried at lint time.
 const ruleRegistry = new Map</* eslintRule */ ESLint.Rule.RuleModule, RuleEntry>();
 
-// Per-file lint state. Single object that bundles:
+// Per-file lint state, keyed by ts.SourceFile identity. Bundles:
 //   - `sourceCode` / `convertContext`: lazy ESTree + LazySourceCode for
 //     this file. `convertContext` survives across rule replays so each
 //     `materialize(tsNode, context)` hit hits the same identity-preserved
@@ -119,17 +119,77 @@ const ruleRegistry = new Map</* eslintRule */ ESLint.Rule.RuleModule, RuleEntry>
 //     can rethrow at replay time (preserving TSSLint core's per-rule
 //     type-aware retry semantics).
 //
-// Everything in here invalidates together when `file` changes — there's
-// no scenario where one part is reusable without the others, so a single
-// per-file slot replaces the two separate caches the earlier design had.
-let perFileState: {
-	file: ts.SourceFile;
+// WeakMap (vs prior single-slot module variable) means concurrent files
+// don't thrash, and ts.SourceFile GC cleans up automatically.
+const fileStates = new WeakMap<ts.SourceFile, {
 	sourceCode: ESLint.SourceCode;
 	convertContext: unknown;
 	reports: Map</* eslintRule */ ESLint.Rule.RuleModule, DeferredReport[]>;
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
-} | undefined;
+}>();
 
+// `isExternalModule` checks `externalModuleIndicator` only (ESM-only).
+// `commonJsModuleIndicator` flags TS files that look like CJS — those
+// runtime-wrap in a function scope, so top-level vars are NOT global,
+// matching module semantics for our purposes. Fold both flags into one
+// classification; pure script (neither flag) is rare in real TS code
+// but classifying it correctly avoids `no-var` rewriting a genuinely
+// global `var` to `const` (which would change runtime visibility).
+function classifySourceType(file: ts.SourceFile): 'module' | 'script' {
+	const f = file as { externalModuleIndicator?: unknown; commonJsModuleIndicator?: unknown };
+	return (f.externalModuleIndicator || f.commonJsModuleIndicator) ? 'module' : 'script';
+}
+
+// Caller may pass an ESLint-style `Partial<RuleContext>` that includes
+// `parserOptions` / `languageOptions`. We compute those per-file from TS,
+// so caller values would either be silently dropped or — worse — silently
+// override our derived ruleContext while the scope tree (built earlier
+// from TS) keeps the original value, recreating the cross-source mismatch
+// that broke `no-var`'s autofix. Strip + one-shot warn instead.
+let warnedDroppedFields = false;
+function stripDerivedFields(
+	context: Partial<ESLint.Rule.RuleContext>,
+): Partial<ESLint.Rule.RuleContext> {
+	const c = context as {
+		parserOptions?: unknown;
+		languageOptions?: { parserOptions?: unknown; ecmaVersion?: unknown; sourceType?: unknown };
+	};
+	const dropped: string[] = [];
+	if (c.parserOptions !== undefined) dropped.push('parserOptions');
+	if (c.languageOptions?.parserOptions !== undefined) dropped.push('languageOptions.parserOptions');
+	if (c.languageOptions?.ecmaVersion !== undefined) dropped.push('languageOptions.ecmaVersion');
+	if (c.languageOptions?.sourceType !== undefined) dropped.push('languageOptions.sourceType');
+	if (!dropped.length) return context;
+	if (!warnedDroppedFields) {
+		warnedDroppedFields = true;
+		console.warn(
+			`[@tsslint/compat-eslint] Dropping caller-supplied ${dropped.join(', ')}. tsslint derives these per-file from TS (sourceType from externalModuleIndicator/commonJsModuleIndicator; ecmaVersion fixed at 'latest'). Remove these from the convertRule context to silence this warning.`,
+		);
+	}
+	const cleaned: Record<string, unknown> = { ...(context as Record<string, unknown>) };
+	delete cleaned.parserOptions;
+	if (c.languageOptions) {
+		const lo = { ...(c.languageOptions as Record<string, unknown>) };
+		delete lo.parserOptions;
+		delete lo.ecmaVersion;
+		delete lo.sourceType;
+		cleaned.languageOptions = lo;
+	}
+	return cleaned as Partial<ESLint.Rule.RuleContext>;
+}
+
+/**
+ * Adapt an ESLint rule into a TSSLint rule.
+ *
+ * Per-file `sourceType` comes from TS's classification (whether the file
+ * has any module-level construct), not from a global config knob. This
+ * diverges from typescript-eslint's parser, which forces `sourceType`
+ * from `parserOptions` — but we live inside the TS Program, so the
+ * parser-level question doesn't apply: the file IS what TS says it is.
+ * `ecmaVersion` is similarly absent — TS accepts every modern syntax,
+ * so rule listener gating on `ecmaVersion >= 2015` is reported as
+ * `'latest'` to keep ES6+ listeners registered everywhere.
+ */
 export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
@@ -150,20 +210,31 @@ export function convertRule(
 		options = deepMergeArrays(eslintRule.meta.defaultOptions, options);
 	}
 
+	// Strip parserOptions/languageOptions from caller's context. We compute
+	// them ourselves (sourceType from TS classification, ecmaVersion fixed
+	// to a value that keeps every modern listener registered) and the
+	// runtime `...entry.context` spread would otherwise let a caller's
+	// stray ESLint-style config silently override the derived ruleContext
+	// without affecting the scope tree built in buildEstree — exactly the
+	// disagreement that broke `no-var`'s autofix gating before. One-shot
+	// warn so callers find their dead config rather than wondering why
+	// their override is ignored.
 	const id = (context as { id?: string }).id ?? 'unknown';
-	const entry: RuleEntry = { id, eslintRule, options, context, category };
+	const cleanedContext = stripDerivedFields(context);
+	const entry: RuleEntry = { id, eslintRule, options, context: cleanedContext, category };
 	ruleRegistry.set(eslintRule, entry);
 
 	const tsslintRule: TSSLint.Rule = ({ file, report, program }) => {
-		if (perFileState?.file !== file) {
-			const { sourceCode, convertContext } = buildEstree(file, program);
+		let perFileState = fileStates.get(file);
+		if (!perFileState) {
+			const { sourceCode, convertContext } = buildEstree(file, program, classifySourceType(file));
 			perFileState = {
-				file,
 				sourceCode,
 				convertContext,
 				reports: new Map(),
 				errors: new Map(),
 			};
+			fileStates.set(file, perFileState);
 			runSharedTraversal(file, program, perFileState);
 		}
 
@@ -213,10 +284,17 @@ export function convertRule(
 function runSharedTraversal(
 	file: ts.SourceFile,
 	program: ts.Program,
-	state: NonNullable<typeof perFileState>,
+	state: NonNullable<ReturnType<typeof fileStates.get>>,
 ) {
 	const { sourceCode, convertContext, reports, errors } = state;
 	const cwd = program.getCurrentDirectory();
+	// Pull the per-file sourceType buildEstree wrote onto the AST so
+	// ruleContext.parserOptions reports the same value the scope manager
+	// was built with. `no-var`'s `canFix` checks `variable.scope.type ===
+	// 'global'` — flagged only in script mode — so any disagreement
+	// between context.parserOptions and the scope tree would break the
+	// rule's own gating.
+	const sourceType = (sourceCode.ast as { sourceType?: 'module' | 'script' }).sourceType ?? 'module';
 
 	let currentNode: any;
 	// (rule, selector, listener) triples — fed into buildFastDispatch
@@ -245,20 +323,21 @@ function runSharedTraversal(
 				return sourceCode;
 			},
 			settings: {},
-			parserOptions: { ecmaVersion: 2026 as const, sourceType: 'module' as const },
+			parserOptions: { ecmaVersion: 2026 as const, sourceType },
 			// Provide nested parserOptions to avoid TypeError in rules that read
 			// `context.languageOptions.parserOptions.X` without a guard.
-			// Set `ecmaVersion: 2026` (matches `ESLINT_BUILTIN_GLOBALS` set we
-			// register) and `sourceType: 'module'` — many rules gate listener
-			// registration on `ecmaVersion >= 2015` for ES6-only nodes
-			// (BlockStatement:exit + VariableDeclaration on no-lone-blocks,
-			// const/let detection, generator/async checks). Without this, those
-			// rules degrade to a pre-ES6 dispatch that misses block-scoped
-			// declarations and over-reports lone blocks.
+			// `ecmaVersion: 2026` matches the `ESLINT_BUILTIN_GLOBALS` set we
+			// register; many rules gate listener registration on
+			// `ecmaVersion >= 2015` for ES6-only nodes (BlockStatement:exit +
+			// VariableDeclaration on no-lone-blocks, const/let detection,
+			// generator/async checks). Without that floor, those rules degrade
+			// to a pre-ES6 dispatch that misses block-scoped declarations and
+			// over-reports lone blocks. `sourceType` follows the file (set
+			// above) so it agrees with the scope tree built in buildEstree.
 			languageOptions: {
 				parserOptions: {},
 				ecmaVersion: 2026 as const,
-				sourceType: 'module' as const,
+				sourceType,
 			},
 			parserPath: undefined,
 			id: entry.id,
@@ -778,7 +857,11 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 // whole parser package on first call (the heaviest single dep) and just
 // dispatches to typescript-estree's astConverter, which we already have a
 // ts.SourceFile for. Calling our own converter directly avoids the require.
-function buildEstree(file: ts.SourceFile, program: ts.Program): {
+function buildEstree(
+	file: ts.SourceFile,
+	program: ts.Program,
+	sourceType: 'module' | 'script',
+): {
 	sourceCode: ESLint.SourceCode;
 	convertContext: unknown;
 } {
@@ -818,10 +901,14 @@ function buildEstree(file: ts.SourceFile, program: ts.Program): {
 		},
 	});
 
-	estree.sourceType = (file as { externalModuleIndicator?: unknown }).externalModuleIndicator
-		? 'module'
-		: 'script';
-	const scopeManager = new TsScopeManager(file, program, estree, astMaps, estree.sourceType);
+	// Caller (convertRule's tsslintRule closure) computes sourceType from
+	// the file via classifySourceType — TS's truth, not a global config.
+	// Same source code's classification can shift with tsconfig `module`
+	// (Node16 auto-classifies every .ts as module; CommonJS only when
+	// ESM syntax is present); that's intentional, since it reflects how
+	// the file is actually emitted/run.
+	estree.sourceType = sourceType;
+	const scopeManager = new TsScopeManager(file, program, estree, astMaps, sourceType);
 	// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
 	// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
 	// `TsScopeManager` itself stays free of this lint-pipeline policy
