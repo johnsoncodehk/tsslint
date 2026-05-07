@@ -1703,6 +1703,42 @@ export class TsScope {
 			});
 		};
 
+		// In JS files, TS's binder hoists `const x = require('…')` into
+		// the enclosing `SourceFile.locals` / `FunctionLikeDeclaration.locals`
+		// as a CommonJS Alias symbol (flags=0x200000) for module-shape
+		// inference, even when the declaration is nested inside a
+		// Block/IfStatement/etc. From an ESLint scope-analysis standpoint
+		// that binding is purely block-scoped — the inner 'block' scope
+		// already enumerates it, so adding it at the outer scope creates
+		// a phantom upper-scope binding and `no-shadow` fires on the
+		// inner declaration as if it shadowed itself.
+		//
+		// Filter: only skip if the symbol is a CommonJS Alias whose decl
+		// sits inside a nested sub-scope. `var` (FunctionScopedVariable /
+		// BlockScopedVariable) genuinely hoists to the function/global
+		// scope under JS semantics, so those entries must stay — `for
+		// (var a in xs)` at the file root would otherwise drop `a`'s
+		// file-scope reference and break `no-undef` / reference
+		// resolution. `function f()` in a block likewise hoists in
+		// sloppy JS, but TS binder treats it as block-scoped and doesn't
+		// put it in the outer locals so this code never sees it.
+		const SymbolFlags_Alias = ts.SymbolFlags.Alias;
+		const owner: ts.Node = this.tsNode;
+		const directlyOwned = (sym: ts.Symbol): boolean => {
+			if ((sym.flags & SymbolFlags_Alias) === 0) return true;
+			const decls = sym.declarations;
+			if (!decls || decls.length === 0) return true;
+			outer: for (const decl of decls) {
+				// Walk up from decl's parent. If we hit any sub-scope
+				// boundary before reaching `owner`, this decl is nested.
+				for (let cur: ts.Node | undefined = decl.parent; cur; cur = cur.parent) {
+					if (cur === owner) return true;
+					if (this._isOwnScopeBoundary(cur)) continue outer;
+				}
+			}
+			return false;
+		};
+
 		switch (this.type) {
 			case 'global': {
 				// In module mode the globalScope is empty — moduleScope owns the
@@ -1717,6 +1753,7 @@ export class TsScope {
 					locals.forEach(sym => {
 						// Skip TS's synthetic `default` export symbol.
 						if (sym.name === 'default') return;
+						if (!directlyOwned(sym)) return;
 						push(sym);
 					});
 				}
@@ -1729,6 +1766,7 @@ export class TsScope {
 				if (locals) {
 					locals.forEach(sym => {
 						if (sym.name === 'default') return;
+						if (!directlyOwned(sym)) return;
 						push(sym);
 					});
 				}
@@ -1791,9 +1829,17 @@ export class TsScope {
 				}
 				// Pick up any var-hoisted decls TS recorded in fn.locals that
 				// the source-order walk missed (e.g. `var x` inside nested
-				// blocks of the function body).
+				// blocks of the function body). Same Alias-hoist filter as
+				// global/module: `const x = require('…')` nested in a sub-
+				// block is JS-CJS-aliased into fn.locals, but lexically
+				// belongs to its inner block scope.
 				const fnLocals = (fn as { locals?: ts.SymbolTable }).locals;
-				if (fnLocals) fnLocals.forEach(sym => push(sym));
+				if (fnLocals) {
+					fnLocals.forEach(sym => {
+						if (!directlyOwned(sym)) return;
+						push(sym);
+					});
+				}
 				break;
 			}
 			case 'function-expression-name': {
@@ -2199,6 +2245,33 @@ export class TsVariable {
 		if (!decl) return this._scope = this.manager.globalScope;
 		const ts_ = ts;
 		const SK = ts_.SyntaxKind;
+		// Special-case: a named function expression's name binding lives in
+		// its own `function-expression-name` scope (the wrapper around the
+		// inner `function` body scope). The decl IS the FunctionExpression
+		// itself — for body-local bindings (parameter, body let/const) the
+		// decl is a Parameter / VariableDeclaration whose parent walk
+		// reaches the FunctionExpression from below, so they land in the
+		// inner `function` scope as expected.
+		//
+		// Without this special-case `no-shadow.isOnInitializer` sees the
+		// inner `resolve` of `const resolve = function resolve(...)` as
+		// living in the body scope (one too deep) — `outerScope ===
+		// innerScope.upper` then compares the outer body scope against the
+		// `function-expression-name` scope and fails, so the rule emits a
+		// false-positive shadow report on every named function expression
+		// that shares its name with the surrounding declarator.
+		if (
+			ts_.isFunctionExpression(decl)
+			&& decl.name
+			&& this.symbol.name === decl.name.text
+		) {
+			const arr = this.manager.nodeToScope.get(decl);
+			if (arr) {
+				for (const s of arr) {
+					if (s.type === 'function-expression-name') return this._scope = s;
+				}
+			}
+		}
 		// Walk parents until we hit a scope-creating node.
 		for (let cur: ts.Node | undefined = decl; cur; cur = cur.parent) {
 			const arr = this.manager.nodeToScope.get(cur);

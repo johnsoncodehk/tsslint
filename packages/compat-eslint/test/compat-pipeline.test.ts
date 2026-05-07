@@ -72,7 +72,14 @@ function buildProgram(
 	code: string,
 	kind: ts.ScriptKind = ts.ScriptKind.TS,
 ): { program: ts.Program; file: ts.SourceFile } {
-	const fileName = kind === ts.ScriptKind.TSX ? '/test.tsx' : '/test.ts';
+	const isJs = kind === ts.ScriptKind.JS || kind === ts.ScriptKind.JSX;
+	const fileName = kind === ts.ScriptKind.TSX
+		? '/test.tsx'
+		: kind === ts.ScriptKind.JSX
+		? '/test.jsx'
+		: kind === ts.ScriptKind.JS
+		? '/test.js'
+		: '/test.ts';
 	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, kind);
 	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
 	const realLibName = realLibPath.split(/[\\/]/).pop()!;
@@ -103,7 +110,10 @@ function buildProgram(
 			target: ts.ScriptTarget.Latest,
 			lib: [realLibName],
 			noEmit: true,
-			jsx: kind === ts.ScriptKind.TSX ? ts.JsxEmit.Preserve : undefined,
+			allowJs: isJs || undefined,
+			jsx: kind === ts.ScriptKind.TSX || kind === ts.ScriptKind.JSX
+				? ts.JsxEmit.Preserve
+				: undefined,
 		},
 		host,
 	});
@@ -987,6 +997,197 @@ function f(sys: string) { return sys; }
 		'TsVariable.isValueVariable: ImportBinding counts as value (no-shadow fires on import-vs-param value/value shadow)',
 		reports.length === 1 && reports[0].msg.includes("'sys'"),
 		`expected 1 sys shadow; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
+}
+
+// 3l-tris. Named function expression with same-name initializer:
+//     `const resolve = function resolve(x) { return resolve(x); }`. The
+//     inner `resolve` IS the function-expression-name binding (lives in
+//     the wrapping `function-expression-name` scope), and `no-shadow`'s
+//     `isOnInitializer` skips reports when:
+//       outerScope === innerScope.upper
+//       && innerDef is FunctionName on a FunctionExpression
+//     For that check `variable.scope` of the inner name MUST resolve to
+//     the `function-expression-name` scope. The previous walker picked
+//     "innermost non-fn-expr-name", which returned the inner body
+//     `function` scope instead — its `.upper` is the fn-expr-name scope
+//     (one level too deep), the identity check fails, and every named
+//     function expression that re-uses its declarator's name reports a
+//     spurious self-shadow. Real Astro repro:
+//     `packages/astro/src/core/app/pipeline.ts:21`.
+{
+	const code = `
+function outer() {
+	const resolve = function resolve(x: string) { return resolve(x); };
+	return resolve;
+}
+`;
+	const { program, file } = buildProgram(code);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' });
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check(
+		'TsVariable.scope: named function expression name binding lives in the function-expression-name scope (not the inner function body)',
+		reports.length === 0,
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
+}
+
+// 3l-bis. JS files: TS's binder hoists `const x = require('…')` into
+//     `SourceFile.locals` (Alias symbol, flags=0x200000) for CommonJS
+//     module-shape inference, even when the declaration is nested inside
+//     a Block / IfStatement / etc. ESLint scope analysis treats that
+//     binding as purely lexical. Without filtering, the file/global
+//     scope ends up with a phantom `x`, the inner block scope has its
+//     own `x`, and `no-shadow` reports the inner one as shadowing the
+//     outer — pointing at itself ("upper scope on line N column N" where
+//     N matches the declaration site). Real Astro repro:
+//     `packages/language-tools/language-server/bin/nodeServer.js`.
+{
+	const code = `
+if (process.argv.includes('--version')) {
+	const pkgJSON = require('../package.json');
+	console.info(pkgJSON['version']);
+} else {
+	require('../dist/x.js');
+}
+`;
+	const { program, file } = buildProgram(code, ts.ScriptKind.JS);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' });
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check(
+		'TsScope global/module: skip sf.locals entries whose decls are nested inside a scope-boundary (JS CJS-alias hoist)',
+		reports.length === 0,
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
+	);
+}
+
+// 3l-quater. Same Alias-hoist pattern as 3l-bis but at *function* scope:
+//     `function f() { if (a) { const x = require('m'); } }` — TS binder
+//     hoists `x` into `f.locals` (not just SourceFile.locals). The
+//     filter must apply to function-scope `_collectVariables` too,
+//     using the generic "directly-owned" walk via `_isOwnScopeBoundary`.
+{
+	const code = `function f() {
+	if (a) {
+		const x = require('a');
+		console.log(x);
+	}
+}`;
+	const { program, file } = buildProgram(code, ts.ScriptKind.JS);
+	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
+	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(noShadow, [], { id: 'no-shadow' });
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check(
+		'TsScope function: skip fn.locals entries whose decls are nested inside a sub-scope (JS CJS-alias hoist into function locals)',
+		reports.length === 0,
+		`expected 0 reports; got ${reports.length}: ${reports.map(r => r.msg).join(' | ')}`,
 	);
 }
 
