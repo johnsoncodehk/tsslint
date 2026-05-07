@@ -163,6 +163,12 @@ export class UnsupportedSelectorError extends Error {
 	}
 }
 
+// Selectors are static strings baked into rule code; the same selector
+// is decomposed once per file × per rule, which on a 1k-file project
+// adds up to hundreds of thousands of redundant esquery.parse calls
+// (~0.5 s of CPU on nest's 73-rule config). Cache the pure result.
+const cache = new Map<string, FastDispatchInfo[] | Error>();
+
 // `decomposeSimple` returns an array of dispatch infos. A single
 // identifier / compound / child selector typically yields one entry, but
 // a top-level matches/`A, B` list with per-branch filters expands into
@@ -175,6 +181,23 @@ export class UnsupportedSelectorError extends Error {
 //     tryBuildFastDispatch) MUST propagate, never silently swallow —
 //     fallback to NodeEventGenerator was retired.
 export function decomposeSimple(selector: string): FastDispatchInfo[] {
+	const cached = cache.get(selector);
+	if (cached !== undefined) {
+		if (cached instanceof Error) throw cached;
+		return cached;
+	}
+	try {
+		const result = decomposeSimpleUncached(selector);
+		cache.set(selector, result);
+		return result;
+	}
+	catch (e) {
+		cache.set(selector, e as Error);
+		throw e;
+	}
+}
+
+function decomposeSimpleUncached(selector: string): FastDispatchInfo[] {
 	// ESLint's selector parser strips `:exit` from the end of the raw source
 	// BEFORE handing off to esquery (see `eslint/lib/linter/esquery.js`).
 	// Without the strip, `'A, B:exit'` parses as `matches([A, B:exit])`,
