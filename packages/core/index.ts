@@ -43,6 +43,17 @@ export function createLinter(
 			}[],
 		]
 	>();
+	// Snapshot of each file's rule output BEFORE plugin `resolveDiagnostics`
+	// runs. Plugins can suppress diagnostics (e.g. `eslint-disable-next-line`
+	// matching a fired diagnostic) — the suppression is the right thing for
+	// the live API, but the cache layer needs the unsuppressed view so a
+	// warm pass can re-feed plugins with the cached diagnostics that were
+	// originally suppressed. Without this, cache stores post-suppression
+	// state, the next warm pass restores nothing for skipped rules, and the
+	// ignore plugin can no longer match disable comments to rule output —
+	// turning every successful suppression into a warm-only unused-comment
+	// false positive.
+	const rawDiagnosticsByFile = new Map<string, ts.DiagnosticWithLocation[]>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
 			include: config.include,
@@ -64,9 +75,19 @@ export function createLinter(
 		// list. Decoupling cache lifecycle from core means future cache
 		// changes (BuilderProgram-based invalidation, schema bumps) live
 		// in the CLI without churning this layer.
+		//
+		// `options.prevDiagnostics`: cached diagnostics from prior sessions
+		// for rules in `skipRules`. Seeded into the diagnostics array
+		// before plugin `resolveDiagnostics` runs so plugins see the same
+		// view they would on a cold pass — critical for `createIgnorePlugin`,
+		// which decides "is this disable comment used?" by matching against
+		// fired diagnostics.
 		lint(
 			fileName: string,
-			options?: { skipRules?: ReadonlySet<string> },
+			options?: {
+				skipRules?: ReadonlySet<string>;
+				prevDiagnostics?: readonly ts.DiagnosticWithLocation[];
+			},
 		): ts.DiagnosticWithLocation[] {
 			let currentRuleId: string;
 			const skipRules = options?.skipRules;
@@ -120,7 +141,15 @@ export function createLinter(
 				}
 			}
 
-			let diagnostics = [...lintResult[1].keys()];
+			// Snapshot fresh rule output for the cache layer (callers read
+			// it via `getRawLintResult`). Skipped rules' diagnostics aren't
+			// re-issued here — they live in the caller's cache.
+			rawDiagnosticsByFile.set(fileName, [...lintResult[1].keys()]);
+
+			let diagnostics: ts.DiagnosticWithLocation[] = [
+				...(options?.prevDiagnostics ?? []),
+				...lintResult[1].keys(),
+			];
 
 			for (const { plugins } of configs) {
 				for (const { resolveDiagnostics } of plugins) {
@@ -333,6 +362,12 @@ export function createLinter(
 		// on the next session.
 		getTypeAwareRules(): ReadonlySet<string> {
 			return typeAwareRules;
+		},
+		// Pre-suppression rule output from the most recent `lint(fileName)`.
+		// Cache layer keys writes off this so suppressed-but-fired
+		// diagnostics survive into the next session's `prevDiagnostics`.
+		getRawLintResult(fileName: string): readonly ts.DiagnosticWithLocation[] {
+			return rawDiagnosticsByFile.get(fileName) ?? [];
 		},
 	};
 

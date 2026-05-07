@@ -605,6 +605,138 @@ function emptyFileCache(mtime = 0): FileCache {
 	check('NO_CACHE marker not visible in serialised cache', !json.includes('no-cache'));
 }
 
+// ── Test 19: warm cache must not break resolveDiagnostics view ───────────
+//
+// Scenario: a rule fires on line 2, an `// eslint-disable-next-line foo`
+// comment on line 1 suppresses it, ignore plugin (`reportsUnusedComments
+// = true`) marks the comment used. Cold pass produces 0 user-visible
+// errors. Warm pass: the rule is cached → skipped → its diagnostic
+// would be missing from the array `resolveDiagnostics` sees, so the
+// ignore plugin can no longer match the comment to a diagnostic and
+// erroneously reports it as unused.
+//
+// Cache flow MUST seed `prevDiagnostics` with the cached entries before
+// `resolveDiagnostics` runs, so the plugin's view matches the cold pass.
+{
+	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
+		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
+	};
+	const code = '// eslint-disable-next-line foo\nconst x = 1;\n';
+	const ctx = makeContext({ '/a.ts': code });
+	const config: Config = {
+		rules: {
+			foo: ((rctx: RuleContext) => {
+				// Report on line 2 (after the disable comment on line 1).
+				const lineStart = code.indexOf('const');
+				rctx.report('foo fires', lineStart, lineStart + 5);
+			}),
+		},
+		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const program = ctx.languageService.getProgram()!;
+
+	const cold = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	check(
+		'cold pass: rule diag suppressed by disable comment, no user-visible diag',
+		cold.length === 0,
+		`cold returned ${cold.length} diags: ${cold.map(d => d.code).join(',')}`,
+	);
+	check('cold pass: rule entry written to cache', !!cache.rules['foo']);
+	check(
+		'cold pass: cache stores the suppressed diagnostic so warm can re-evaluate',
+		cache.rules['foo']?.diagnostics.length === 1,
+	);
+
+	const warm = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	check(
+		'warm pass: same comment suppresses the same (now-cached) diag — no unused-comment FP',
+		warm.length === 0,
+		`warm returned ${warm.length} diags: ${warm.map(d => d.code).join(',')}`,
+	);
+}
+
+// ── Test 20: prevDiagnostics + fresh must not duplicate ──────────────────
+//
+// `skipRules` and the rules that actually run are disjoint by construction
+// (cache-flow only adds a rule to skipRules if it has a cached entry, and
+// lint skips those — so they can't also produce fresh output). Verify the
+// invariant: across cold + warm passes for a non-suppressed diagnostic,
+// the user sees exactly one report each pass — never two.
+{
+	const ctx = makeContext({ '/a.ts': 'const x = 1;\n' });
+	let runs = 0;
+	const config: Config = {
+		rules: {
+			r: ((rctx: RuleContext) => {
+				runs++;
+				rctx.report('once', 0, 1);
+			}),
+		},
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const program = ctx.languageService.getProgram()!;
+
+	const cold = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	check('cold: rule ran once', runs === 1);
+	check('cold: 1 diag returned', cold.length === 1);
+
+	const warm = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	check('warm: rule did NOT re-run (cached)', runs === 1);
+	check('warm: 1 diag returned (no duplication)', warm.length === 1);
+	check(
+		'warm diag has same payload as cold',
+		warm[0].code === cold[0].code && warm[0].start === cold[0].start,
+	);
+}
+
+// ── Test 21: multiple rules + ignore plugin, no duplication on warm ──────
+//
+// Two rules, only one suppressed by a disable comment. Warm pass must
+// produce the same final set as cold — no double-report on the
+// non-suppressed rule, no resurrection of the suppressed one.
+{
+	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
+		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
+	};
+	const code = '// eslint-disable-next-line foo\nconst x = 1;\n';
+	const ctx = makeContext({ '/a.ts': code });
+	const config: Config = {
+		rules: {
+			foo: ((rctx: RuleContext) => {
+				const at = code.indexOf('const');
+				rctx.report('foo', at, at + 5);
+			}),
+			bar: ((rctx: RuleContext) => {
+				const at = code.indexOf('const');
+				rctx.report('bar', at, at + 5);
+			}),
+		},
+		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const program = ctx.languageService.getProgram()!;
+
+	const cold = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	const coldCodes = cold.map(d => d.code).sort();
+	check(
+		'cold: only `bar` survives (`foo` suppressed by comment for `foo`)',
+		cold.length === 1 && String(cold[0].code) === 'bar',
+		`cold codes: ${coldCodes.join(',')}`,
+	);
+
+	const warm = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	const warmCodes = warm.map(d => d.code).sort();
+	check(
+		'warm: same single `bar` — no duplicate, no resurrected `foo`, no FP unused-comment',
+		warm.length === 1 && String(warm[0].code) === 'bar',
+		`warm codes: ${warmCodes.join(',')}`,
+	);
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

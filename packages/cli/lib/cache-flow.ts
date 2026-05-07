@@ -65,12 +65,31 @@ export function lintWithCache(
 		}
 	}
 
-	const fresh = linter.lint(fileName, { skipRules });
+	// Restore cached diagnostics BEFORE calling lint. They're seeded as
+	// `prevDiagnostics` so plugin `resolveDiagnostics` (e.g. ignore plugin
+	// matching disable comments to fired diagnostics) sees the same view
+	// it would on a cold pass — without this, skipped rules' diagnostics
+	// are missing during plugin filtering and every successful suppression
+	// turns into a warm-only unused-comment false positive.
+	const restored: ts.DiagnosticWithLocation[] = [];
+	for (const ruleId of skipRules) {
+		const entry = fileCache.rules[ruleId];
+		if (!entry) continue;
+		for (const sd of entry.diagnostics) {
+			restored.push(deserializeDiagnostic(sd, fileName, program));
+		}
+	}
 
-	// Group fresh diagnostics by rule. `report()` in core sets
-	// `diagnostic.code = ruleId`, so the attribution is intrinsic.
+	const fresh = linter.lint(fileName, { skipRules, prevDiagnostics: restored });
+
+	// Cache writes key off the PRE-suppression rule output (`getRawLintResult`),
+	// not the post-plugin `fresh`. Otherwise a diagnostic the ignore plugin
+	// successfully suppressed would never make it to disk, and the next
+	// warm pass would have nothing to feed back in via `prevDiagnostics`
+	// — re-creating the very FP this is fixing.
+	const raw = linter.getRawLintResult(fileName);
 	const byRule = new Map<string, ts.DiagnosticWithLocation[]>();
-	for (const diag of fresh) {
+	for (const diag of raw) {
 		const ruleId = String(diag.code);
 		let bucket = byRule.get(ruleId);
 		if (!bucket) byRule.set(ruleId, bucket = []);
@@ -110,19 +129,9 @@ export function lintWithCache(
 		};
 	}
 
-	// Restore cached diagnostics for the rules we skipped. Rehydrate
-	// `file` from the current Program — the cached form drops live
-	// SourceFile refs at write time.
-	const restored: ts.DiagnosticWithLocation[] = [];
-	for (const ruleId of skipRules) {
-		const entry = fileCache.rules[ruleId];
-		if (!entry) continue;
-		for (const sd of entry.diagnostics) {
-			restored.push(deserializeDiagnostic(sd, fileName, program));
-		}
-	}
-
-	return [...restored, ...fresh];
+	// `fresh` already contains the survived `restored` items (seeded via
+	// `prevDiagnostics`) plus the rules that ran this session, post-plugin.
+	return fresh;
 }
 
 function serializeDiagnostic(d: ts.DiagnosticWithLocation): SerializedDiagnostic {
