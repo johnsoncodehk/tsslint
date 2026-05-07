@@ -302,32 +302,60 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 				delete fileCache.rules[ruleId];
 			}
 		}
-		const program = linterLanguageService.getProgram()!;
-		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
-			incremental: true,
-			typeAwareUnaffected,
-		});
-		shouldCheck = false;
-
-		let fixes = linter
-			.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
-			.filter(fix => fix.fixId === 'tsslint');
-
-		if (language) {
-			fixes = fixes.map(fix => {
-				fix.changes = transformFileTextChanges(language!, fix.changes, false, isCodeActionsEnabled);
-				return fix;
+		// Iterate to a fixed point so chained autofixes complete in one
+		// CLI run. Example: `var x = 1` (never reassigned) needs no-var
+		// to rewrite to `let x = 1` before prefer-const can fire and
+		// rewrite to `const x = 1` — without iteration, the user has to
+		// run `--fix` repeatedly. ESLint caps at 10 passes; match that.
+		const MAX_FIX_PASSES = 10;
+		let pass = 0;
+		let converged = false;
+		for (; pass < MAX_FIX_PASSES; pass++) {
+			const program = linterLanguageService.getProgram()!;
+			diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
+				incremental: true,
+				typeAwareUnaffected,
 			});
-		}
 
-		const textChanges = core.combineCodeFixes(fileName, fixes);
-		if (textChanges.length) {
+			let fixes = linter
+				.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
+				.filter(fix => fix.fixId === 'tsslint');
+
+			if (language) {
+				fixes = fixes.map(fix => {
+					fix.changes = transformFileTextChanges(language!, fix.changes, false, isCodeActionsEnabled);
+					return fix;
+				});
+			}
+
+			const textChanges = core.combineCodeFixes(fileName, fixes);
+			if (!textChanges.length) {
+				converged = true;
+				break;
+			}
+
 			const oldSnapshot = snapshots.get(fileName)!;
 			newSnapshot = core.applyTextChanges(oldSnapshot, textChanges);
 			snapshots.set(fileName, newSnapshot);
 			versions.set(fileName, (versions.get(fileName) ?? 0) + 1);
 			projectVersion++;
+
+			// Wipe rule cache so the next pass re-lints the new snapshot.
+			// (cacheFlow keys on mtime, but disk hasn't been written yet —
+			// the post-loop block does the single converged write.)
+			fileCache.rules = {};
 		}
+		if (!converged) {
+			// Hit MAX_FIX_PASSES without the fix loop settling — likely two
+			// rules' fixes conflict (each pass undoes the other) or a single
+			// rule oscillates. Surface it; staying silent leaves the user
+			// thinking --fix succeeded when partial fixes remain. Mirrors
+			// ESLint's "Maximum autofix passes exceeded" warning.
+			console.warn(
+				`[tsslint] --fix did not converge on ${fileName} after ${MAX_FIX_PASSES} passes; remaining fixable diagnostics may indicate a rule conflict.`,
+			);
+		}
+		shouldCheck = false;
 	}
 
 	if (newSnapshot) {
