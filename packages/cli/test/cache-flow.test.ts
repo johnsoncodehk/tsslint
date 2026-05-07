@@ -737,6 +737,51 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
+// ── Test 22: ignore plugin's regex must capture scoped rule IDs ──────────
+//
+// `@scope/rule` and `plugin/rule` IDs (the dominant naming in the
+// ecosystem) must be captured into `groups.ruleId` so each block-disable
+// only suppresses errors for ITS targeted rule. The previous
+// `\b(?<ruleId>\w\S*)?` pattern required the first char to be a word
+// char, dropped scoped IDs onto the `comments.get(undefined)` "disable
+// all" bucket. With multiple stacked block-disables on different scoped
+// rules, only the FIRST entry under `undefined` got marked used by an
+// incoming error — every subsequent block-disable was reported as
+// unused even though it correctly targeted real fired diagnostics. Real
+// repro: Astro's `extendables.ts` head with stacked
+// `/* eslint-disable @typescript-eslint/no-namespace */` +
+// `/* eslint-disable @typescript-eslint/no-empty-object-type */`.
+{
+	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
+		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
+	};
+	const code = '/* eslint-disable @typescript-eslint/r1 */\n/* eslint-disable @typescript-eslint/r2 */\nconst x = 1;\n';
+	const ctx = makeContext({ '/a.ts': code });
+	const config: Config = {
+		rules: {
+			'@typescript-eslint/r1': ((rctx: RuleContext) => {
+				const at = code.indexOf('const');
+				rctx.report('r1 fires', at, at + 5);
+			}),
+			'@typescript-eslint/r2': ((rctx: RuleContext) => {
+				const at = code.indexOf('const');
+				rctx.report('r2 fires', at, at + 5);
+			}),
+		},
+		plugins: [ignorePlugin.create(['eslint-disable', 'eslint-enable'], true)],
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const program = ctx.languageService.getProgram()!;
+
+	const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, program);
+	check(
+		'scoped block-disables: each independently suppresses its targeted rule (no unused FP on second comment)',
+		result.length === 0,
+		`expected 0 diags; got ${result.length}: ${result.map(d => `${d.code}@${d.start}`).join(',')}`,
+	);
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

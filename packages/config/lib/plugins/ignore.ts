@@ -49,7 +49,20 @@ export function create(
 	const mode = typeof cmdOption === 'string' ? 'singleLine' : 'multiLine';
 	const [cmd, endCmd] = Array.isArray(cmdOption) ? cmdOption : [cmdOption, undefined];
 	const cmdText = cmd.replace(/\?/g, '');
-	const withRuleId = '[ \\t]*\\b(?<ruleId>\\w\\S*)?';
+	// Rule IDs in the wild: bare (`no-shadow`), plugin-prefixed
+	// (`regexp/no-foo`), or scoped (`@typescript-eslint/no-foo`,
+	// `@scope/plugin/rule`). The previous `\w\S*` required a word char
+	// first — `@` failed, so every scoped disable comment fell into the
+	// `comments.get(undefined)` "disable all" bucket. Stacking multiple
+	// scoped disables then collapsed them into duplicates, only the first
+	// got marked used by an incoming error, the rest were reported as
+	// unused-comment FPs (real Astro repro: stacked `@typescript-eslint/...`
+	// block disables on `extendables.ts`).
+	//
+	// Match: leading scope segment `@xxx/`, then a name segment that
+	// starts with letter/underscore (skip `--` description delimiter),
+	// allowing `\w / . -` thereafter.
+	const withRuleId = '[ \\t]*(?<ruleId>(?:@[\\w-]+\\/)?[A-Za-z_][\\w/.-]*)?';
 	const header = '^\\s*';
 	const ending = '([ \\t]+[^\\r\\n]*)?$';
 	const reg = new RegExp(`${header}${cmd}${withRuleId}${ending}`);
