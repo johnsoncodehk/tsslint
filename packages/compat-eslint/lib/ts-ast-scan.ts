@@ -689,21 +689,26 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSIndexSignature': n => n.kind === SK.IndexSignature,
 
 	// --- ts.ExpressionWithTypeArguments splits 3 ways in ESTree --------
-	// SK.ExpressionWithTypeArguments under a HeritageClause becomes
-	// TSClassImplements (`class C implements X`) or TSInterfaceHeritage
-	// (`interface I extends X`) depending on the grandparent. Outside a
-	// HeritageClause it's TSInstantiationExpression (`Foo<T>` as a value).
+	// SK.ExpressionWithTypeArguments under a HeritageClause becomes:
+	//   - TSClassImplements        — `class C implements X` (ImplementsKeyword)
+	//   - TSInterfaceHeritage      — `interface I extends X` (ExtendsKeyword + InterfaceDeclaration parent)
+	//   - (no ESTree node)         — `class C extends X` (ExtendsKeyword + ClassDeclaration parent);
+	//                                in ESTree the expression lifts directly to ClassDeclaration.superClass,
+	//                                so neither EWTA nor the HeritageClause surface as nodes.
+	// Outside a HeritageClause it's TSInstantiationExpression (`Foo<T>` as a value).
 	'TSInstantiationExpression': n =>
 		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind !== SK.HeritageClause,
 	'TSClassImplements': n =>
 		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind === SK.HeritageClause
+		&& (n.parent as ts.HeritageClause).token === SK.ImplementsKeyword
 		&& (n.parent.parent?.kind === SK.ClassDeclaration
 			|| n.parent.parent?.kind === SK.ClassExpression),
 	'TSInterfaceHeritage': n =>
 		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind === SK.HeritageClause
+		&& (n.parent as ts.HeritageClause).token === SK.ExtendsKeyword
 		&& n.parent.parent?.kind === SK.InterfaceDeclaration,
 
 	// --- Synthetic ESTree wrappers driven via WRAPPER_HEAD_TYPES -------

@@ -3143,6 +3143,12 @@ defineShape<ts.ArrowFunction>(SK.ArrowFunction, {
 	},
 });
 
+// Sentinel `type` string for the class-extends-EWTA collapse case (see
+// the EWTA shape's `type` getter). No real ESTree type uses this name;
+// the dispatcher's per-type lookup misses for it so no listener fires.
+// String is opaque — only equality-compared by ts-ast-scan dispatch.
+const COLLAPSED_CLASS_EXTENDS_TYPE = '__TSClassExtendsCollapsed__';
+
 // Class declarations / expressions share a shape; type discriminator
 // picks Declaration vs Expression at dispatch.
 const classImplementsShape = makeShapeClass<ts.ExpressionWithTypeArguments>({
@@ -3200,12 +3206,30 @@ defineShape<ts.ExpressionWithTypeArguments>(SK.ExpressionWithTypeArguments, {
 	// Parent-aware shape — TS parent (not lazy parent) carries the signal,
 	// since HeritageClause has no LazyNode counterpart (collapsed into the
 	// owning class/interface).
+	//
+	// Three cases when the parent is a HeritageClause:
+	//   - InterfaceDeclaration extends (ExtendsKeyword) → TSInterfaceHeritage
+	//   - ClassDeclaration implements (ImplementsKeyword) → TSClassImplements
+	//   - ClassDeclaration extends (ExtendsKeyword) → ESTree lifts the inner
+	//     expression to `superClass` and drops both the EWTA and the
+	//     HeritageClause; no real ESTree node materialises. We still need a
+	//     `type` string here because in CPA / wildcard dispatch mode the
+	//     walker materialises every node. Use a synthetic sentinel that no
+	//     rule selector targets — the dispatcher's per-type lookup misses,
+	//     so no listener fires on this collapsed node. Without this,
+	//     `no-wrapper-object-types`'s `TSClassImplements` (or any other
+	//     listener that picked the wrong type) would fire on
+	//     `class A extends String {}`.
 	type: tn => {
 		const tp = tn.parent;
 		if (tp?.kind === SK.HeritageClause) {
-			return (tp as ts.HeritageClause).parent?.kind === SK.InterfaceDeclaration
-				? 'TSInterfaceHeritage'
-				: 'TSClassImplements';
+			const hc = tp as ts.HeritageClause;
+			if (hc.token === SK.ExtendsKeyword) {
+				return hc.parent?.kind === SK.InterfaceDeclaration
+					? 'TSInterfaceHeritage'
+					: COLLAPSED_CLASS_EXTENDS_TYPE as 'TSInstantiationExpression';
+			}
+			return 'TSClassImplements';
 		}
 		return 'TSInstantiationExpression';
 	},

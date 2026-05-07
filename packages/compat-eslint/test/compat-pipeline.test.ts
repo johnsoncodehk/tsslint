@@ -1191,6 +1191,120 @@ if (process.argv.includes('--version')) {
 	);
 }
 
+// 3l-quinque. `class A extends X {}` must NOT route through TSClassImplements.
+//     In ESTree the extends-EWTA collapses: the inner expression lifts
+//     directly to `ClassDeclaration.superClass`, and neither the EWTA nor
+//     the HeritageClause surface as nodes. Without checking the
+//     HeritageClause's `token`, both the lazy-estree shape router and
+//     ts-ast-scan's fast dispatch route `extends X` to TSClassImplements,
+//     making `no-wrapper-object-types` (whose listener is
+//     `TSClassImplements`) fire on `class A extends String {}` — extending
+//     a wrapper class is legitimate JS, not the rule's target (which is
+//     type-position usage like `let x: String`).
+{
+	const code = `
+class A extends String {}
+class B implements String {}
+type C = String;
+`;
+	const { program, file } = buildProgram(code);
+	const tsRoot = require('path').dirname(require.resolve('@typescript-eslint/eslint-plugin/package.json'));
+	const ruleMod = require(tsRoot + '/dist/rules/no-wrapper-object-types.js');
+	const rule = (ruleMod as { default?: ESLint.Rule.RuleModule }).default ?? ruleMod;
+	const reports: { msg: string }[] = [];
+	const tsslintRule = compat.convertRule(rule, [], { id: 'no-wrapper-object-types' });
+	const reportFn: any = (msg: string) => {
+		reports.push({ msg });
+		const r: any = {
+			at() {
+				return r;
+			},
+			asWarning() {
+				return r;
+			},
+			asError() {
+				return r;
+			},
+			asSuggestion() {
+				return r;
+			},
+			withFix() {
+				return r;
+			},
+			withRefactor() {
+				return r;
+			},
+			withDeprecated() {
+				return r;
+			},
+			withUnnecessary() {
+				return r;
+			},
+			withoutCache() {
+				return r;
+			},
+		};
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check(
+		'EWTA shape: class extends X is NOT TSClassImplements (no FP on `class A extends String`); implements X + type alias still fire',
+		reports.length === 2,
+		`expected 2 reports (implements String + type alias); got ${reports.length}: ${
+			reports.map(r => r.msg).join(' | ')
+		}`,
+	);
+}
+
+// 3l-quinque-bis. The fix above must not silently route `class extends X`
+//     to a different listener type — specifically rules that listen on
+//     `TSInstantiationExpression` (e.g. `no-unnecessary-type-arguments`)
+//     must NOT fire on a class's extends clause. Probe each of the three
+//     EWTA destinations on `class A extends Foo<string>` and assert
+//     none fire — the EWTA collapses out of ESTree entirely for this case.
+{
+	const code = `class A extends Foo<string> {}`;
+	const { program, file } = buildProgram(code);
+	const fired: string[] = [];
+	const probe: any = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } },
+		create() {
+			return {
+				TSInstantiationExpression(_n: any) {
+					fired.push('TSInstantiationExpression');
+				},
+				TSClassImplements(_n: any) {
+					fired.push('TSClassImplements');
+				},
+				TSInterfaceHeritage(_n: any) {
+					fired.push('TSInterfaceHeritage');
+				},
+			};
+		},
+	};
+	const tsslintRule = compat.convertRule(probe, [], { id: 'probe' });
+	const reportFn: any = () => {
+		const r: any = {
+			at: () => r,
+			asWarning: () => r,
+			asError: () => r,
+			asSuggestion: () => r,
+			withFix: () => r,
+			withRefactor: () => r,
+			withDeprecated: () => r,
+			withUnnecessary: () => r,
+			withoutCache: () => r,
+		};
+		return r;
+	};
+	tsslintRule({ file, report: reportFn, program } as any);
+	check(
+		'class extends Foo<T>: EWTA fires NO selector (not TSClassImplements / TSInterfaceHeritage / TSInstantiationExpression)',
+		fired.length === 0,
+		`expected no fires; got: ${fired.join(', ')}`,
+	);
+}
+
 // 3m. `TsScope.block` and `TsDefinition.node` must unwrap
 //     `ExportNamedDeclaration` / `ExportDefaultDeclaration` wrappers.
 //     `materialize(FunctionDeclaration)` for an exported function returns
