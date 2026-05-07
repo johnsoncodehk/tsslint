@@ -2019,6 +2019,7 @@ defineShape<ts.SuperExpression>(SK.SuperKeyword, { type: 'Super', slots: {} });
 defineShape<ts.ThisExpression>(SK.ThisKeyword, { type: 'ThisExpression', slots: {} });
 defineShape<ts.ThisTypeNode>(SK.ThisType, { type: 'TSThisType', slots: {} });
 defineShape<ts.EmptyStatement>(SK.EmptyStatement, { type: 'EmptyStatement', slots: {} });
+defineShape<ts.DebuggerStatement>(SK.DebuggerStatement, { type: 'DebuggerStatement', slots: {} });
 defineShape<ts.JsxOpeningFragment>(SK.JsxOpeningFragment, { type: 'JSXOpeningFragment', slots: {} });
 defineShape<ts.JsxClosingFragment>(SK.JsxClosingFragment, { type: 'JSXClosingFragment', slots: {} });
 // `null` literal in expression position. The LiteralType wrapper case
