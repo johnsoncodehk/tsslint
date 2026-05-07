@@ -782,6 +782,94 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
+// ── Test 23: ignore plugin comment scanner — non-comment contexts ─────────
+//
+// The plugin's inlined comment walker relies on the AST-realized token
+// boundaries (via `node.getChildren()` + `forEachLeading/TrailingCommentRange`)
+// rather than driving `ts.createScanner` blindly. This is the difference
+// between treating `\`${1} // fake\`` as a template literal (correct) vs
+// firing a phantom directive on the embedded `//` (wrong).
+//
+// These three patterns must NOT surface as disable directives:
+//   1. `//` substring inside a regex literal
+//   2. `//` substring inside a template literal interpolation
+//   3. `//` substring inside a string literal
+//
+// Plugin behavior: configure `reportsUnusedComments=true` so any
+// detected disable comment becomes an `unused-ignore-comment`
+// diagnostic. If the scanner mistakenly classifies these as comments
+// — or the regex stops at the first match — the output diagnostic
+// count diverges from 0.
+{
+	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
+		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
+	};
+	const cases: { label: string; code: string }[] = [
+		{
+			label: 'regex literal containing /\\//',
+			code: 'const r = /\\//; const x = 1;\n',
+		},
+		{
+			label: 'template literal with ${} interpolation around //',
+			code: 'const x = `${1} // eslint-disable-next-line foo`;\nconst y = 1;\n',
+		},
+		{
+			label: 'string literal with // eslint-disable substring',
+			code: 'const s = "// eslint-disable-next-line foo";\nconst y = 1;\n',
+		},
+	];
+	for (const { label, code } of cases) {
+		const ctx = makeContext({ '/a.ts': code });
+		const config: Config = {
+			rules: {},
+			plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
+		};
+		const linter = core.createLinter(ctx, '/', config, () => []);
+		const cache = emptyFileCache(1);
+		const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+		check(
+			`scanner: no phantom directive in ${label}`,
+			result.length === 0,
+			`expected 0 diags; got ${result.length}: ${result.map(d => d.code).join(',')}`,
+		);
+	}
+}
+
+// ── Test 24: ignore plugin must collect ALL leading comments per token ───
+//
+// `ts.forEachLeading/TrailingCommentRange` short-circuits when the
+// callback returns a truthy value (matches the documented `forEachX`
+// contract). The plugin's `onComment` callback uses block-form arrow
+// (no implicit return) — verify by feeding a file with N stacked
+// disable comments at the head and asserting all N are processed.
+// Concise-arrow `(p, e) => out.push(...)` would return `length` (truthy)
+// and stop after the first comment, so only ONE of the N would be
+// classified — every subsequent one would silently vanish. Real repro
+// caught during inlining: `100 line comments → 1 detected`.
+{
+	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
+		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
+	};
+	const lines: string[] = [];
+	for (let i = 0; i < 20; i++) lines.push(`// eslint-disable-next-line r${i}`);
+	lines.push('const x = 1;');
+	const code = lines.join('\n') + '\n';
+	const ctx = makeContext({ '/a.ts': code });
+	const config: Config = {
+		rules: {},
+		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
+	};
+	const linter = core.createLinter(ctx, '/', config, () => []);
+	const cache = emptyFileCache(1);
+	const result = cacheFlow.lintWithCache(linter, '/a.ts', cache, 1, ctx.languageService.getProgram()!);
+	// Each disable targets a non-existent rule → all 20 are unused → 20 diagnostics.
+	check(
+		'comment-trivia callback: all N stacked comments processed (no truthy-return short-circuit)',
+		result.length === 20,
+		`expected 20 unused-comment diags (one per stacked disable); got ${result.length}`,
+	);
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

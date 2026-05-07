@@ -17,55 +17,137 @@ interface CachedComment {
 	text: string;
 }
 
-// `ts-api-utils`'s `forEachComment` realises the AST tree (`getChildren`
-// + per-token leading/trailing comment scans) just to surface comment
-// trivia — ~270 ms cold on TS's 53 k-LOC `checker.ts`. We don't need
-// node identity here, only comment ranges, so we drive `ts.Scanner`
-// directly: it tokenises raw text in a single pass, correctly handles
-// string / template / regex literals (so `const x = "// fake"` doesn't
-// surface as a comment), and falls under TypeScript's existing public
-// API. ~17 ms on the same file — 16× faster — and zero new deps.
+// Inlined comment-trivia walker. Equivalent to ts-api-utils'
+// `forEachComment` but specialized for our needs (no `kind` / `value`
+// fields, no generator overhead, no per-token closure for the
+// trivia-collector). Algorithm matches upstream:
 //
-// JSX is handled by setting `LanguageVariant.JSX` for `.tsx` / `.jsx`,
-// matching what `ts-api-utils` does. JsxText tokens never carry comment
-// trivia in practice (and the scanner emits them as their own kind), so
-// we only react to the two comment-trivia kinds.
+//   1. Iterative DFS over `node.getChildren(sourceFile)` — token-only
+//      leaves drive the walk. Realizes the AST tree, but the lint
+//      pipeline does this anyway for type-aware rules so the cost is
+//      amortized across the whole pass.
+//   2. For each token, scan `forEachLeadingCommentRange` (skip shebang
+//      at file start) and `forEachTrailingCommentRange`.
+//   3. JSX needs special care: `JsxText` tokens can't carry leading
+//      trivia, and trailing trivia rules differ for `}` / `>` tokens
+//      based on their JSX-element context.
 //
-// Multiple ignore plugins (one per directive form) call this on the
-// same SourceFile in the same pass — cache the result on a WeakMap so
-// the second / third callers pay one map lookup instead of another scan.
+// Trivia regions sit BETWEEN tokens — they can't contain string,
+// template, or regex literals (those belong to token text). That's
+// why driving `ts.createScanner` directly without parser context is
+// unsafe (regex / template `${}` interpolation get misclassified) and
+// why the AST-driven walk stays correct.
+//
+// Multiple ignore plugins (one per directive form) share the result via
+// a per-SourceFile WeakMap so the second / third callers in a pass pay
+// one map lookup instead of another scan.
 const sharedFileComments = new WeakMap<ts.SourceFile, CachedComment[]>();
 
-function getFileComments(ts: typeof import('typescript'), file: ts.SourceFile): CachedComment[] {
+function getFileComments(
+	ts: typeof import('typescript'),
+	file: ts.SourceFile,
+): CachedComment[] {
 	let comments = sharedFileComments.get(file);
 	if (!comments) {
 		comments = [];
-		const text = file.text;
-		const scanner = ts.createScanner(
-			file.languageVersion,
-			/* skipTrivia */ false,
-			file.languageVariant,
-			text,
-		);
-		const SK_Single = ts.SyntaxKind.SingleLineCommentTrivia;
-		const SK_Multi = ts.SyntaxKind.MultiLineCommentTrivia;
-		const SK_EOF = ts.SyntaxKind.EndOfFileToken;
-		let kind: ts.SyntaxKind;
-		while ((kind = scanner.scan()) !== SK_EOF) {
-			if (kind === SK_Single || kind === SK_Multi) {
-				const start = scanner.getTokenStart();
-				const end = scanner.getTokenEnd();
-				const innerStart = start + 2; // strip `//` or `/*`
-				comments.push({
-					pos: innerStart,
-					end,
-					text: text.substring(innerStart, end),
-				});
+		const fullText = file.text;
+		const SK = ts.SyntaxKind;
+		const notJsx = file.languageVariant !== ts.LanguageVariant.JSX;
+
+		// Iterative DFS: token leaves trigger trivia scans. Single shared
+		// callback object instead of allocating a closure per
+		// forEachLeading/Trailing call.
+		//
+		// CRITICAL: TS's `forEachLeading/TrailingCommentRange` stops
+		// iterating as soon as the callback returns a truthy value
+		// (matches the documented `forEachX` contract — return non-
+		// undefined to short-circuit). The callback body MUST NOT
+		// implicit-return `array.push(...)` (returns length → truthy →
+		// only the first comment per token gets collected).
+		const collected = comments;
+		const onComment = (pos: number, end: number) => {
+			const start = pos + 2; // strip `//` or `/*`
+			collected.push({
+				pos: start,
+				end,
+				text: fullText.substring(start, end),
+			});
+			// no return → undefined → continue iteration
+		};
+
+		// `getChildren` array per visit creates the most allocation
+		// pressure; we still need it because `forEachChild` skips token
+		// kinds. Iterative stack avoids the recursive overhead.
+		let stack: ts.Node[] = [file];
+		while (stack.length > 0) {
+			const node = stack.pop()!;
+			if (ts.isTokenKind(node.kind)) {
+				if (node.pos === node.end) {
+					continue;
+				}
+				if (node.kind !== SK.JsxText) {
+					// Skip the shebang at file position 0; otherwise
+					// `forEachLeadingCommentRange` would re-emit it as a
+					// line comment.
+					const scanFrom = node.pos === 0
+						? (ts.getShebang(fullText) ?? '').length
+						: node.pos;
+					ts.forEachLeadingCommentRange(fullText, scanFrom, onComment);
+				}
+				if (notJsx || canHaveTrailingTrivia(ts, node)) {
+					ts.forEachTrailingCommentRange(fullText, node.end, onComment);
+				}
+				continue;
+			}
+			const children = node.getChildren(file);
+			// Push in reverse so DFS order matches source order.
+			for (let i = children.length - 1; i >= 0; --i) {
+				stack.push(children[i]);
 			}
 		}
+
 		sharedFileComments.set(file, comments);
 	}
 	return comments;
+}
+
+function canHaveTrailingTrivia(
+	ts: typeof import('typescript'),
+	token: ts.Node,
+): boolean {
+	const SK = ts.SyntaxKind;
+	switch (token.kind) {
+		case SK.CloseBraceToken:
+			// `}` of a JsxExpression inside a JSX element: no trailing
+			// trivia (the next character is JsxText, not a comment).
+			return token.parent.kind !== SK.JsxExpression
+				|| !isJsxElementOrFragment(ts, token.parent.parent);
+		case SK.GreaterThanToken:
+			switch (token.parent.kind) {
+				case SK.JsxClosingElement:
+				case SK.JsxClosingFragment:
+					return !isJsxElementOrFragment(ts, token.parent.parent.parent);
+				case SK.JsxOpeningElement:
+					// Type-args list keeps trailing trivia; the `>` that
+					// closes the opening tag itself does not (next is
+					// JsxText).
+					return token.end !== token.parent.end;
+				case SK.JsxOpeningFragment:
+					return false;
+				case SK.JsxSelfClosingElement:
+					return token.end !== token.parent.end
+						|| !isJsxElementOrFragment(ts, token.parent.parent);
+			}
+	}
+	return true;
+}
+
+function isJsxElementOrFragment(
+	ts: typeof import('typescript'),
+	node: ts.Node,
+): boolean {
+	const SK = ts.SyntaxKind;
+	return node.kind === SK.JsxElement || node.kind === SK.JsxFragment;
 }
 
 export function create(
