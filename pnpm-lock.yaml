@@ -147,9 +147,6 @@ importers:
       minimatch:
         specifier: ^10.0.1
         version: 10.2.5
-      ts-api-utils:
-        specifier: ^2.0.0
-        version: 2.5.0(typescript@6.0.3)
       tsl:
         specifier: ^1.0.28
         version: 1.0.30(typescript@6.0.3)
