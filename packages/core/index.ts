@@ -429,21 +429,33 @@ export function createLinter(
 }
 
 export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
+	// Match ESLint's `compareMessagesByFixRange` order so overlap resolution
+	// agrees with applyFixes: sort ASC by start, tie-break ASC by end. The
+	// earliest-starting fix wins; later overlapping fixes are dropped. (e.g.
+	// for `'foo' as 'foo'` where no-unnecessary-type-assertion spans the
+	// whole assertion and prefer-as-const just the inner literal, ESLint
+	// keeps the wider no-unnecessary fix and prefer-as-const is silently
+	// skipped — see eslint/lib/linter/source-code-fixer.js:124.)
 	const changes = fixes
 		.map(fix => fix.changes)
 		.flat()
 		.filter(change => change.fileName === fileName && change.textChanges.length)
-		.sort((a, b) => b.textChanges[0].span.start - a.textChanges[0].span.start);
+		.sort((a, b) => {
+			const aFirst = a.textChanges[0];
+			const bFirst = b.textChanges[0];
+			return aFirst.span.start - bFirst.span.start
+				|| (aFirst.span.start + aFirst.span.length) - (bFirst.span.start + bFirst.span.length);
+		});
 
-	let lastChangeAt = Number.MAX_VALUE;
+	let lastChangeEndAt = -1;
 	let finalTextChanges: ts.TextChange[] = [];
 
 	for (const change of changes) {
 		const textChanges = [...change.textChanges].sort((a, b) => a.span.start - b.span.start);
 		const firstChange = textChanges[0];
 		const lastChange = textChanges[textChanges.length - 1];
-		if (lastChangeAt >= lastChange.span.start + lastChange.span.length) {
-			lastChangeAt = firstChange.span.start;
+		if (firstChange.span.start >= lastChangeEndAt) {
+			lastChangeEndAt = lastChange.span.start + lastChange.span.length;
 			finalTextChanges = finalTextChanges.concat(textChanges);
 		}
 	}
