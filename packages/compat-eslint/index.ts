@@ -1,6 +1,6 @@
 import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
-import type * as ts from 'typescript';
+import * as ts from 'typescript';
 import CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js');
 import { convertLazy } from './lib/lazy-estree';
 
@@ -295,6 +295,24 @@ function runSharedTraversal(
 	// between context.parserOptions and the scope tree would break the
 	// rule's own gating.
 	const sourceType = (sourceCode.ast as { sourceType?: 'module' | 'script' }).sourceType ?? 'module';
+	// Derive `ecmaFeatures` from per-file truth — these aren't run-level
+	// config in our model, just observations: jsx follows the file
+	// extension (TS already accepts JSX based on .tsx/.jsx, scope is to
+	// expose this fact to rules that gate JSX-aware behavior on it);
+	// impliedStrict mirrors the ECMA spec (modules are strict-by-default);
+	// globalReturn reflects the CJS-wrapper convention where script-mode
+	// files allow top-level `return`. Built once and reused for both the
+	// legacy `parserOptions` shape and modern `languageOptions.parserOptions`
+	// so rules reading either path see the same view.
+	// `scriptKind` isn't in TS's public SourceFile typing but is set at
+	// runtime when the file is parsed; same access pattern as
+	// `externalModuleIndicator` in classifySourceType.
+	const scriptKind = (file as { scriptKind?: ts.ScriptKind }).scriptKind;
+	const ecmaFeatures = {
+		jsx: scriptKind === ts.ScriptKind.TSX || scriptKind === ts.ScriptKind.JSX,
+		globalReturn: sourceType === 'script',
+		impliedStrict: sourceType === 'module',
+	} as const;
 
 	let currentNode: any;
 	// (rule, selector, listener) triples — fed into buildFastDispatch
@@ -323,7 +341,7 @@ function runSharedTraversal(
 				return sourceCode;
 			},
 			settings: {},
-			parserOptions: { ecmaVersion: 2026 as const, sourceType },
+			parserOptions: { ecmaVersion: 2026 as const, sourceType, ecmaFeatures },
 			// Provide nested parserOptions to avoid TypeError in rules that read
 			// `context.languageOptions.parserOptions.X` without a guard.
 			// `ecmaVersion: 2026` matches the `ESLINT_BUILTIN_GLOBALS` set we
@@ -334,8 +352,10 @@ function runSharedTraversal(
 			// to a pre-ES6 dispatch that misses block-scoped declarations and
 			// over-reports lone blocks. `sourceType` follows the file (set
 			// above) so it agrees with the scope tree built in buildEstree.
+			// `ecmaFeatures` populated on both the inner parserOptions object
+			// and the legacy top-level so rules reading either path agree.
 			languageOptions: {
-				parserOptions: {},
+				parserOptions: { ecmaFeatures },
 				ecmaVersion: 2026 as const,
 				sourceType,
 			},

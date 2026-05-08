@@ -1,18 +1,14 @@
 // Probe rules read `context.parserOptions.ecmaFeatures.{jsx,globalReturn,
 // impliedStrict}` and the same fields under `context.languageOptions.
-// parserOptions`. tsslint's compat layer currently doesn't populate
-// `ecmaFeatures` at all (see `runSharedTraversal` in index.ts where
-// `parserOptions` is built without it), so any rule that gates on these
-// silently sees `undefined` — wrong-but-quiet for `.tsx` (jsx-aware
-// rules), wrong-but-quiet for module-mode strict checks, etc.
+// parserOptions`. We derive these per-file from TS truth — jsx from the
+// file extension, globalReturn from script-mode, impliedStrict from
+// module-mode — so jsx-aware rules and strict-mode-gated rules see the
+// right value without any caller config.
 //
-// These tests fail today on purpose. They serve as a failure-driven
-// inventory of the parserOptions gap; each passing test marks one
-// corner closed. Run via:
+// These tests are a regression guard: they all pass today; if anyone
+// strips the ecmaFeatures derivation in `runSharedTraversal` they'll
+// fail. Run via:
 //   tsc --build && node packages/compat-eslint/test/parser-options-gap.test.js
-//
-// To opt out (e.g. CI gate that allows known failures), wrap in
-// `IGNORE_PARSER_OPTIONS_GAP=1` before running.
 
 import type * as ESLint from 'eslint';
 import * as ts from 'typescript';
@@ -223,16 +219,6 @@ function captureContext(
 
 // --- Summary ---
 process.stdout.write('\n');
-if (process.env.IGNORE_PARSER_OPTIONS_GAP === '1') {
-	if (failures.length) {
-		console.log(`\n${failures.length} known gap(s) (IGNORE_PARSER_OPTIONS_GAP=1):`);
-		for (const f of failures) console.log('  - ' + f);
-	}
-	else {
-		console.log('All passed (IGNORE_PARSER_OPTIONS_GAP=1 set; would have passed anyway).');
-	}
-	process.exit(0);
-}
 if (failures.length) {
 	console.error(`\n${failures.length} failure(s):`);
 	for (const f of failures) console.error('  - ' + f);
