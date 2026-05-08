@@ -17,6 +17,7 @@
 		"bench": "tsc --build && node test/bench/run.js",
 		"test:predicate-coverage": "tsc --build && node test/predicate-coverage.test.js",
 		"test:jsx-react-x": "tsc --build && node test/jsx-react-x.test.mjs",
+		"test:parser-options-gap": "tsc --build && node test/parser-options-gap.test.js",
 		"test:upstream": "tsc --build && node test/upstream-runner.js"
 	},
 	"devDependencies": {
