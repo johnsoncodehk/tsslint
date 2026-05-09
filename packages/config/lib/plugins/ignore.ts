@@ -170,11 +170,44 @@ export function create(
 	// Match: leading scope segment `@xxx/`, then a name segment that
 	// starts with letter/underscore (skip `--` description delimiter),
 	// allowing `\w / . -` thereafter.
-	const withRuleId = '[ \\t]*(?<ruleId>(?:@[\\w-]+\\/)?[A-Za-z_][\\w/.-]*)?';
+	const ruleIdPattern = '(?:@[\\w-]+\\/)?[A-Za-z_][\\w/.-]*';
+	// Capture EVERYTHING after the command word as `tail`. The previous
+	// `(?<ruleId>...)?([ \\t]+[^\\r\\n]*)?` form captured a single rule
+	// id and let the trailing-text group eat the rest — but `,` is not
+	// in `[ \\t]+`, so for `eslint-disable rule1, rule2` the optional
+	// ruleId group backtracked to nothing, the trailing-text group then
+	// consumed `rule1, rule2 */`, and the result was treated as a bare
+	// `eslint-disable` (= disable ALL). Now we capture the whole tail
+	// and split it ourselves below to extract the rule list.
+	//
+	// `cmd` MUST be followed by whitespace, `*/`, or end of comment —
+	// not by another word/`-` char. Otherwise `eslint-disable` would
+	// also match `eslint-disable-line ...` (treating `-line ...` as a
+	// malformed rule list and falling back to disable-all). The
+	// `(?:\\s+(?<tail>...))?` form requires whitespace if anything
+	// follows.
 	const header = '^\\s*';
-	const ending = '([ \\t]+[^\\r\\n]*)?$';
-	const reg = new RegExp(`${header}${cmd}${withRuleId}${ending}`);
-	const endReg = endCmd ? new RegExp(`${header}${endCmd}${withRuleId}${ending}`) : undefined;
+	const tail = '(?:\\s+(?<tail>[^]*?))?(?:\\*\\/)?\\s*$';
+	const reg = new RegExp(`${header}${cmd}${tail}`);
+	const endReg = endCmd ? new RegExp(`${header}${endCmd}${tail}`) : undefined;
+	// `tail` parsing: split by `--` (description marker), keep left side,
+	// split by `,`, trim each, drop blanks, validate against ruleIdPattern.
+	// Empty result = disable-all (matches ESLint semantics).
+	const ruleIdRegExp = new RegExp(`^${ruleIdPattern}$`);
+	function parseRuleList(rawTail: string | undefined): string[] | undefined {
+		if (!rawTail) return undefined; // bare command — disable all
+		const beforeDescription = rawTail.split(/\s--\s/)[0];
+		const parts = beforeDescription.split(',').map(s => s.trim()).filter(Boolean);
+		if (parts.length === 0) return undefined; // disable all
+		const valid = parts.filter(p => ruleIdRegExp.test(p));
+		// If any part is malformed (e.g. trailing `*/` snuck in), be
+		// conservative and treat the whole comment as disable-all rather
+		// than silently dropping rules. ESLint surfaces an error here;
+		// for our purposes mirroring the legacy "disable all on parse
+		// failure" preserves behaviour for malformed comments.
+		if (valid.length !== parts.length) return undefined;
+		return valid;
+	}
 	const completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/;
 	const completeReg2 = new RegExp(`//\\s*${cmd}(\\S*)?$`);
 
@@ -293,16 +326,17 @@ export function create(
 
 					if (startComment?.index !== undefined) {
 						const index = startComment.index + c.pos;
-						const ruleId = startComment.groups?.ruleId;
-
-						if (!comments.has(ruleId)) {
-							comments.set(ruleId, []);
-						}
-						const disabledLines = comments.get(ruleId)!;
+						const ruleList = parseRuleList(startComment.groups?.tail);
+						// `undefined` = bare command (disable all). Else
+						// register one entry PER rule so comma-separated
+						// disables don't collapse into the disable-all
+						// bucket (the bug: `eslint-disable a, b` used
+						// to silently disable everything because the old
+						// regex backtracked to ruleId=undefined).
+						const ruleKeys: (string | undefined)[] = ruleList ?? [undefined];
 						const line = file.getLineAndCharacterOfPosition(index).line;
 
 						let startLine = line;
-
 						if (mode === 'singleLine') {
 							const startWithComment = file.text.slice(
 								file.getPositionOfLineAndCharacter(line, 0),
@@ -313,13 +347,21 @@ export function create(
 							}
 						}
 
-						disabledLines.push({
-							commentRange: [
-								index - 2,
-								index + startComment[0].length,
-							],
-							startLine,
-						});
+						const commentRange: [number, number] = [
+							index - 2,
+							index + startComment[0].length,
+						];
+						for (const ruleId of ruleKeys) {
+							if (!comments.has(ruleId)) {
+								comments.set(ruleId, []);
+							}
+							// Per-rule state object: a paired `eslint-enable
+							// rule1` mutates `.endLine` on the matching
+							// rule's last entry. Sharing one state across
+							// `[rule1, rule2]` would cause the enable to
+							// also close rule2's window.
+							comments.get(ruleId)!.push({ commentRange, startLine });
+						}
 					}
 					else if (endReg) {
 						const endComment = c.text.match(endReg);
@@ -327,11 +369,14 @@ export function create(
 						if (endComment?.index !== undefined) {
 							const index = endComment.index + c.pos;
 							const prevLine = file.getLineAndCharacterOfPosition(index).line;
-							const ruleId = endComment.groups?.ruleId;
+							const endRuleList = parseRuleList(endComment.groups?.tail);
+							const endRuleKeys: (string | undefined)[] = endRuleList ?? [undefined];
 
-							const disabledLines = comments.get(ruleId);
-							if (disabledLines) {
-								disabledLines[disabledLines.length - 1].endLine = prevLine;
+							for (const ruleId of endRuleKeys) {
+								const disabledLines = comments.get(ruleId);
+								if (disabledLines) {
+									disabledLines[disabledLines.length - 1].endLine = prevLine;
+								}
 							}
 						}
 					}
