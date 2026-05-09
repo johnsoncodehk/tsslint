@@ -1907,6 +1907,48 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 			name: 'import-attributes',
 			code: "import json from './data.json' with { type: 'json' };",
 		},
+		// JSDoc-heavy source — exercises the JSDoc kinds end-to-end
+		// (FirstJSDocNode..LastJSDocNode is in `NO_COUNTERPART_NODE_KINDS`'s
+		// range check; predicate-table tests assert each kind's
+		// classification directly, but no fixture exercised the
+		// convertLazy + visit path THROUGH a JSDoc-bearing source until
+		// now). If a future change accidentally tries to materialize
+		// JSDoc nodes (e.g. someone adds a defineShape that pumps
+		// `node.jsDoc` through convertChild), the phantom-type
+		// invariant catches it.
+		{
+			name: 'jsdoc-everything',
+			code: [
+				'/**',
+				' * Doc comment with multiple tags.',
+				' * @param {string} a — first arg',
+				' * @param {number} b — second arg',
+				' * @returns {boolean} truthy',
+				' * @throws {Error} on bad input',
+				' * @deprecated use new API',
+				' * @see https://example.com',
+				' * @example',
+				' *   foo("x", 1)',
+				' * @template T',
+				' * @typedef {object} MyType',
+				' * @property {string} name',
+				' */',
+				'export function foo(a: string, b: number): boolean {',
+				'  return a.length > b;',
+				'}',
+				'/**',
+				' * Inline {@link foo} reference.',
+				' * @callback Cb',
+				' * @param {string} s',
+				' * @returns {void}',
+				' */',
+				'/** @type {Cb} */',
+				'const _cb = (s: string) => console.log(s);',
+				'/** @satisfies {{ x: number }} */',
+				'const obj = { x: 1 };',
+				'console.log(_cb, obj);',
+			].join('\n'),
+		},
 	];
 
 	const offenders: Array<{ fixture: string; type: string; reachedVia: string }> = [];
