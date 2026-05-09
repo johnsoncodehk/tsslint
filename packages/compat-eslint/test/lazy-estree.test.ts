@@ -1990,6 +1990,93 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	);
 }
 
+// --- NoESTreeCounterpartError: direct unit assertion of the predicate --
+//
+// `materialize()` throws a typed `NoESTreeCounterpartError` for TS kinds
+// with no ESTree counterpart by design (tokens, JSDoc, certain
+// TS-internal containers). The catch-all `KEYWORD_HAS_ESTREE_COUNTERPART`
+// exempt set + `NO_COUNTERPART_NODE_KINDS` set together drive the
+// classification — drift in either is silent unless caught here. This
+// table-driven test enumerates representative kinds that MUST throw,
+// and a few that MUST NOT (exempt-set spot-checks). Catches the class
+// of regression where an exempt entry is accidentally double-registered
+// in NO_COUNTERPART (the `AwaitKeyword` / `OverrideKeyword` collision
+// found in agent review).
+{
+	const sf = parseTs('function f() { return 1 + 2; }');
+	const { context: ctx } = lazy.convertLazy(sf);
+	// Find a TS node of the requested kind in the source. Walks via
+	// forEachChild + getChildren so tokens (PlusToken etc.) are
+	// reachable.
+	const findKind = (root: ts.Node, kind: ts.SyntaxKind): ts.Node | undefined => {
+		if (root.kind === kind) return root;
+		// First try forEachChild (real AST nodes only).
+		let found: ts.Node | undefined;
+		ts.forEachChild(root, c => { found ||= findKind(c, kind); });
+		if (found) return found;
+		// Fall back to getChildren (surfaces token children too).
+		for (const c of root.getChildren(sf)) {
+			if (c.kind === kind) return c;
+			const inner = findKind(c, kind);
+			if (inner) return inner;
+		}
+		return undefined;
+	};
+
+	const tryMaterialize = (kind: ts.SyntaxKind): { ok: true; type: string } | { ok: false; throws: boolean } => {
+		const node = findKind(sf, kind);
+		if (!node) return { ok: false, throws: false }; // kind not present in fixture
+		try {
+			const m = lazy.materialize(node, ctx);
+			return { ok: true, type: (m as { type: string }).type };
+		}
+		catch (e) {
+			return { ok: false, throws: e instanceof lazy.NoESTreeCounterpartError };
+		}
+	};
+
+	// MUST throw (no ESTree counterpart by design)
+	const expectThrows: Array<[string, ts.SyntaxKind]> = [
+		['punctuator: PlusToken', ts.SyntaxKind.PlusToken],
+		['punctuator: SemicolonToken', ts.SyntaxKind.SemicolonToken],
+		['punctuator: OpenBraceToken', ts.SyntaxKind.OpenBraceToken],
+		['EndOfFileToken', ts.SyntaxKind.EndOfFileToken],
+		['reserved keyword: ReturnKeyword', ts.SyntaxKind.ReturnKeyword],
+		['reserved keyword: FunctionKeyword', ts.SyntaxKind.FunctionKeyword],
+	];
+	for (const [name, kind] of expectThrows) {
+		const r = tryMaterialize(kind);
+		if (!r.ok && r.throws === false && (r as { throws: boolean }).throws !== false) continue;
+		// Either threw NoESTreeCounterpartError (good), or kind absent (skip).
+		const found = findKind(sf, kind);
+		if (!found) continue;
+		check(
+			`materialize(${name}) throws NoESTreeCounterpartError`,
+			!r.ok && r.throws,
+			r.ok ? `unexpectedly succeeded: type=${r.type}` : 'threw a different error',
+		);
+	}
+
+	// MUST NOT throw (exempt-set spot checks)
+	const expectMaterialize: Array<[string, ts.SyntaxKind, string]> = [
+		// Identifier — exempt as a token but it's the canonical
+		// ESTree leaf; verify it materializes normally.
+		['Identifier', ts.SyntaxKind.Identifier, 'Identifier'],
+		// NumericLiteral — literal-token range, exempt
+		['NumericLiteral', ts.SyntaxKind.NumericLiteral, 'Literal'],
+	];
+	for (const [name, kind, expectedType] of expectMaterialize) {
+		const found = findKind(sf, kind);
+		if (!found) continue;
+		const r = tryMaterialize(kind);
+		check(
+			`materialize(${name}) succeeds with type='${expectedType}'`,
+			r.ok && r.type === expectedType,
+			!r.ok ? 'unexpectedly threw' : `got type=${(r as { type: string }).type}`,
+		);
+	}
+}
+
 // --- Debug-estree counter (env-gated globalThis instrumentation) -------
 //
 // Counter is gated by env TSSLINT_DEBUG_ESTREE=1 (read at module load).

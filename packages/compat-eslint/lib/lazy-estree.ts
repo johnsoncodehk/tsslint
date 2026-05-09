@@ -723,8 +723,16 @@ const SKIP_AS_PARENT: Partial<Record<ts.SyntaxKind, SkipDecision>> = {
 };
 function shouldSkipAsParent(walker: ts.Node): boolean {
 	const decision = SKIP_AS_PARENT[walker.kind];
-	if (decision === undefined) return false;
-	return typeof decision === 'function' ? decision(walker) : decision;
+	if (decision !== undefined) {
+		return typeof decision === 'function' ? decision(walker) : decision;
+	}
+	// Walker has no static SKIP_AS_PARENT entry — extend the skip-up
+	// logic to any kind without an ESTree counterpart by design (tokens,
+	// JSDoc, certain TS-internal containers). Inlined here so
+	// `resolveParentInner`'s hot path doesn't pay the throw/catch cost
+	// of `materialize` → `NoESTreeCounterpartError` for what is
+	// semantically the same "skip this parent" decision.
+	return hasNoEstreeCounterpart(walker.kind);
 }
 
 // Wrapper-drill entries: when materialise's walk-up hits a CACHED ancestor
@@ -3880,47 +3888,47 @@ const NO_COUNTERPART_NODE_KINDS = new Set<ts.SyntaxKind>([
 	SK.Bundle,                      // multi-file container
 	// (UnparsedSource / InputFiles existed in older TS; removed in 5.x —
 	// not listed because the SyntaxKind enum no longer has them)
-	SK.SourceFile,                  // → Program; the root has no `materialize` use
-	// TS-specific contextual keywords without upstream ESTree types.
-	// These appear only in modifier slots or TypePredicate / TypeAssertion
-	// boolean flags on the parent node — never as standalone leaves.
-	// `OverrideKeyword` IS in upstream visitor-keys (TypeKeywordNode
-	// handles it indirectly via `_modifiers` etc.) so it's NOT in this
-	// set; the others are upstream omissions.
-	SK.AssertsKeyword,
-	SK.AwaitKeyword,
-	SK.ConstKeyword,
-	SK.ImportKeyword,
-	SK.InKeyword,
-	SK.InstanceOfKeyword,
-	SK.OutKeyword,
-	SK.OverrideKeyword,
+	// (SK.SourceFile is intentionally NOT here — `convertLazy` pre-
+	// registers the SourceFile→Program mapping in the ESTree map, so
+	// `materialize(sourceFile)` hits the cache before reaching the
+	// `hasNoEstreeCounterpart` check. Adding SourceFile here breaks
+	// `resolveParent` for top-level nodes — `shouldSkipAsParent` would
+	// skip the root, leaving Identifier→VariableDeclarator→…→null.)
+	// (Standalone TS keywords without upstream ESTree types — verified
+	// against `@typescript-eslint/visitor-keys` —
+	// `AssertsKeyword`/`AwaitKeyword`/`ConstKeyword`/`ImportKeyword`/
+	// `InKeyword`/`InstanceOfKeyword`/`OutKeyword`/`OverrideKeyword`/etc.
+	// are NOT in this set: they're already covered by the
+	// `FirstKeyword..LastKeyword` range check in `hasNoEstreeCounterpart`
+	// since they're not in `KEYWORD_HAS_ESTREE_COUNTERPART`. Listing
+	// them here would be a redundant second mention.)
 ] as ts.SyntaxKind[]);
 
 // Keyword kinds that DO map to ESTree leaves — exempted from the
-// reserved-word range check below. Two groups:
-//   1. Value-position literals / expressions: true/false/null →
-//      Literal, this → ThisExpression, super → Super, new → emitted
-//      as part of NewExpression operator (the keyword TS-node itself
-//      shouldn't materialize standalone, but ESLint visitor-keys may
-//      have it; exempt to be safe).
-//   2. Childless leaves emitted by TypeKeywordNode: type keywords
-//      (Any, Unknown, Number, …) and modifier keywords (Abstract,
-//      Async, Declare, …). See `convertChildInner`.
+// reserved-word range check below. ONLY include keywords whose ESTree
+// type appears in upstream `@typescript-eslint/visitor-keys`. Operator
+// keywords (`await`, `yield`, `new`, `typeof`, `delete`) are NOT here:
+// upstream represents them as `argument`/`callee`/`operator` slots on
+// the parent (AwaitExpression / YieldExpression / NewExpression /
+// UnaryExpression), never as standalone `TS<X>Keyword` leaves. If
+// `materialize()` is called directly on such a token (rare — the
+// parent's slot getter handles them top-down), the no-counterpart
+// throw is the correct contract.
 const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
-	// Literal / expression leaves
+	// Literal leaves
 	SK.TrueKeyword, SK.FalseKeyword, SK.NullKeyword,
+	// Expression leaves
 	SK.ThisKeyword, SK.SuperKeyword,
-	// Unary / new operators (parent emits UnaryExpression / NewExpression;
-	// the standalone keyword itself never reaches materialise — listed
-	// for completeness in case a future code path reaches them).
-	SK.NewKeyword, SK.VoidKeyword, SK.TypeOfKeyword, SK.DeleteKeyword,
-	SK.AwaitKeyword, SK.YieldKeyword,
-	// Type keywords (TypeKeywordNode in convertChildInner)
+	// TypeKeywordNode-emitted (see convertChildInner). All 13 in
+	// upstream visitor-keys as `TSAnyKeyword` / `TSVoidKeyword` / etc.
+	// `void` is BOTH a type keyword (`x: void`) and a unary operator
+	// (`void x`); upstream's `TSVoidKeyword` covers the type-position
+	// usage, so it stays exempt.
 	SK.AnyKeyword, SK.UnknownKeyword, SK.NumberKeyword, SK.StringKeyword,
-	SK.BooleanKeyword, SK.SymbolKeyword, SK.NeverKeyword, SK.UndefinedKeyword,
-	SK.BigIntKeyword, SK.ObjectKeyword, SK.IntrinsicKeyword,
-	// Modifier keywords (TypeKeywordNode in convertChildInner)
+	SK.BooleanKeyword, SK.SymbolKeyword, SK.NeverKeyword, SK.VoidKeyword,
+	SK.UndefinedKeyword, SK.BigIntKeyword, SK.ObjectKeyword, SK.IntrinsicKeyword,
+	// Modifier keywords (TypeKeywordNode-emitted). All 9 in upstream
+	// visitor-keys as `TSAsyncKeyword` / `TSStaticKeyword` / etc.
 	SK.AbstractKeyword, SK.AsyncKeyword, SK.DeclareKeyword, SK.ExportKeyword,
 	SK.PrivateKeyword, SK.ProtectedKeyword, SK.PublicKeyword,
 	SK.ReadonlyKeyword, SK.StaticKeyword,
