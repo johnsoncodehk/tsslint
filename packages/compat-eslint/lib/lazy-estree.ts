@@ -2590,6 +2590,40 @@ defineShape<ts.NumericLiteral>(SK.NumericLiteral, {
 		});
 	},
 });
+// `123n` — typescript-estree shape: Literal with `bigint` (string,
+// suffix `n` stripped, numeric separators removed) and `value: BigInt`.
+// Without a dedicated shape this falls through to GenericTSNode which
+// produces `type: 'TSBigIntLiteral'` — NOT a known ESTree type. Any
+// rule using scope-manager's `VisitorBase` then dispatches via the
+// `Object.keys(node)` fallback (no upstream visitor-keys for the
+// invented type), iterates LazyNode's enumerable `_parent` field, and
+// recurses up the parent chain until `Maximum call stack size`. Caught
+// by no-unused-vars on prisma's adapter-mariadb conversion.test.ts.
+defineShape<ts.BigIntLiteral>(SK.BigIntLiteral, {
+	type: 'Literal',
+	consts: tn => {
+		// `tn.text` keeps the trailing `n` suffix; strip for BigInt
+		// parsing. Numeric separators (`1_000n`) come through too —
+		// strip those (`BigInt('1_000')` throws).
+		const text = tn.text.endsWith('n') ? tn.text.slice(0, -1) : tn.text;
+		const stripped = text.replaceAll('_', '');
+		const value = typeof BigInt !== 'undefined' ? BigInt(stripped) : null;
+		return {
+			bigint: value == null ? stripped : String(value),
+			value,
+		};
+	},
+	slots: {},
+	init: instance => {
+		let cached: string | undefined;
+		Object.defineProperty(instance, 'raw', {
+			get(this: { _ts: ts.LiteralExpression; _ctx: ConvertContext }) {
+				return cached ??= this._ts.getText(this._ctx.ast);
+			},
+			configurable: true,
+		});
+	},
+});
 defineShape<ts.StringLiteral>(SK.StringLiteral, {
 	type: 'Literal',
 	consts: tn => {
