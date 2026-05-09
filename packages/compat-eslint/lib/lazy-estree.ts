@@ -1382,16 +1382,25 @@ function findWrapperRoute(tsNode: ts.Node):
 // that child_a's walk-up (or the parent's top-down build) registered.
 // Both end up with the same parent ESTree instance.
 //
-// The contract: every input ts.Node yields a non-undefined LazyNode.
-// Unsupported kinds + null `convertChild` returns + parent-chain
-// exhaustion all fall back to GenericTSNode (synthetic, with
-// `type: 'TS<KindName>'` for diagnostic visibility). Without that
-// contract rules reading `def.node.parent.type` would crash.
+// The contract: every input ts.Node yields a non-undefined LazyNode,
+// EXCEPT for TS kinds with no ESTree counterpart (tokens, JSDoc, certain
+// container wrappers — see `hasNoEstreeCounterpart` + the typed
+// `NoESTreeCounterpartError` it throws). Callers (`tsToEstreeOrStub`,
+// `LazySourceCode.getNodeByRangeIndex`, etc.) catch the error and
+// either walk up to a real ancestor or return undefined to the rule.
+// Unknown kinds (future TS additions we haven't classified) still fall
+// back to GenericTSNode for safety — the `_parent` non-enumerable
+// defense (LazyNode constructor) prevents the visitor's
+// `Object.keys`-fallback recursion that would otherwise stack-overflow
+// on a phantom type.
 //
 // Wrapper-routed slots: see `findWrapperRoute`.
 export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	const cached = ctx.maps.tsNodeToESTreeNodeMap.get(tsNode);
 	if (cached) return cached as LazyNode;
+	if (hasNoEstreeCounterpart(tsNode.kind)) {
+		throw new NoESTreeCounterpartError(tsNode);
+	}
 	// If our TS parent reaches us through a synthetic wrapper, route via the
 	// parent's slot getter rather than constructing directly. The getter
 	// builds the wrapper AND registers our inner ESTree counterpart in the
@@ -1464,7 +1473,19 @@ function resolveParentInner(tsNode: ts.Node, ctx: ConvertContext): LazyNode | nu
 		// Materialise the walker — cache hit, wrapper-route trigger, or
 		// fresh leaf with its own deferred parent. Recursive resolution
 		// happens incrementally as ancestors' `.parent` is read.
-		const parent = materialize(walker, ctx);
+		// `materialize` throws NoESTreeCounterpartError for kinds with no
+		// ESTree shape (HeritageClause, NamespaceExport, …) — same intent
+		// as `shouldSkipAsParent` minus a static lookup table miss; treat
+		// them identically and walk further up.
+		let parent: LazyNode;
+		try {
+			parent = materialize(walker, ctx);
+		}
+		catch (e) {
+			if (!(e instanceof NoESTreeCounterpartError)) throw e;
+			walker = walker.parent;
+			continue;
+		}
 		// Collapse detection: some routers (BindingElement → Identifier,
 		// ParenthesizedExpression → inner expression, etc.) return a
 		// LazyNode whose `_ts` is NOT the walker — the walker has no
@@ -3795,6 +3816,141 @@ class GenericTSNodeFallbackError extends Error {
 		this.name = 'GenericTSNodeFallbackError';
 		this.kind = node.kind;
 	}
+}
+
+// Thrown by `materialize()` when called with a TS kind that has NO ESTree
+// counterpart by design (tokens, JSDoc, certain TS-internal containers).
+// Callers (`tsToEstreeOrStub` etc.) catch this and either walk up to a
+// real ancestor or return undefined to the rule. The typed error
+// distinguishes "no counterpart by design" (recoverable, expected at
+// some call sites like SourceCode token lookups) from
+// `GenericTSNodeFallbackError` ("we don't know how to handle this kind"
+// — a regression / missing shape).
+export class NoESTreeCounterpartError extends Error {
+	readonly kind: ts.SyntaxKind;
+	constructor(node: ts.Node) {
+		super(`materialize: SK.${ts.SyntaxKind[node.kind]} has no ESTree counterpart (kind=${node.kind})`);
+		this.name = 'NoESTreeCounterpartError';
+		this.kind = node.kind;
+	}
+}
+
+// TS SyntaxKinds with no ESTree counterpart. Range-based for tokens and
+// JSDoc; explicit set for the other categories. Source: TypeScript's own
+// SyntaxKind enum boundaries (see `ts.SyntaxKind` in typescript.d.ts).
+//
+// Note: ts.SyntaxKind ranges have collisions on some boundaries (e.g.
+// PunctuationToken overlaps with assignment-token range), but the union
+// is straightforward — punctuators, trivia, JSDoc, and a few internal
+// containers / contextual keywords are NEVER ESTree nodes.
+const NO_COUNTERPART_NODE_KINDS = new Set<ts.SyntaxKind>([
+	// TS-internal container kinds — content is exposed on the parent's
+	// ESTree shape (see SKIP_AS_PARENT for the "walk past" half of this
+	// pair); calling `materialize()` ON one of these returns nothing
+	// useful, so callers should walk up.
+	SK.SyntaxList,                  // synthetic AST grouping
+	SK.NamedImports,                // → ImportDeclaration.specifiers
+	SK.NamedExports,                // → ExportDeclaration.specifiers
+	// (NOT SK.NamespaceImport — same reason as SK.ImportClause: its
+	// `name` slot synthesizes ImportNamespaceSpecifier; the bottom-up
+	// dogfood parity sweep depends on materialize succeeding through it.)
+	SK.NamespaceExport,             // → ExportDeclaration.exported
+	// (NOT included: SK.ImportClause — its `name` slot is what becomes
+	// the synthesized ImportDefaultSpecifier, and ts-ast-scan's bottom-up
+	// walk depends on materializing through ImportClause to register the
+	// ImportDefaultSpecifier wrapper. The container itself produces a
+	// GenericTSNode result that callers already handle via the marker.)
+	SK.JsxAttributes,               // → JSXOpeningElement.attributes
+	SK.CaseBlock,                   // → SwitchStatement.cases
+	SK.HeritageClause,              // → ClassDeclaration.superClass / implements
+	// SK.AssertClause === SK.ImportAttributes (kind 301) — the import-
+	// attributes CONTAINER. Upstream's `convertImportAttributes` flattens
+	// `assertClause.elements` directly into `ImportDeclaration.attributes`
+	// without a wrapper node — so the container has no standalone ESTree
+	// type. Distinct from SK.ImportAttribute (kind 302, the individual
+	// `key: value` entry) which DOES have a defineShape and emits
+	// `'ImportAttribute'`. Confusion potential because TS renamed both at
+	// the same time (4.5: AssertClause/AssertEntry; 5.x:
+	// ImportAttributes/ImportAttribute).
+	SK.AssertClause,
+	SK.OmittedExpression,           // sparse array hole — represented as null
+	SK.TemplateSpan,                // wrapped in TemplateExpression
+	SK.TemplateLiteralTypeSpan,     // wrapped in TSTemplateLiteralType
+	SK.MissingDeclaration,          // parse error
+	SK.Bundle,                      // multi-file container
+	// (UnparsedSource / InputFiles existed in older TS; removed in 5.x —
+	// not listed because the SyntaxKind enum no longer has them)
+	SK.SourceFile,                  // → Program; the root has no `materialize` use
+	// TS-specific contextual keywords without upstream ESTree types.
+	// These appear only in modifier slots or TypePredicate / TypeAssertion
+	// boolean flags on the parent node — never as standalone leaves.
+	// `OverrideKeyword` IS in upstream visitor-keys (TypeKeywordNode
+	// handles it indirectly via `_modifiers` etc.) so it's NOT in this
+	// set; the others are upstream omissions.
+	SK.AssertsKeyword,
+	SK.AwaitKeyword,
+	SK.ConstKeyword,
+	SK.ImportKeyword,
+	SK.InKeyword,
+	SK.InstanceOfKeyword,
+	SK.OutKeyword,
+	SK.OverrideKeyword,
+] as ts.SyntaxKind[]);
+
+// Keyword kinds that DO map to ESTree leaves — exempted from the
+// reserved-word range check below. Two groups:
+//   1. Value-position literals / expressions: true/false/null →
+//      Literal, this → ThisExpression, super → Super, new → emitted
+//      as part of NewExpression operator (the keyword TS-node itself
+//      shouldn't materialize standalone, but ESLint visitor-keys may
+//      have it; exempt to be safe).
+//   2. Childless leaves emitted by TypeKeywordNode: type keywords
+//      (Any, Unknown, Number, …) and modifier keywords (Abstract,
+//      Async, Declare, …). See `convertChildInner`.
+const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
+	// Literal / expression leaves
+	SK.TrueKeyword, SK.FalseKeyword, SK.NullKeyword,
+	SK.ThisKeyword, SK.SuperKeyword,
+	// Unary / new operators (parent emits UnaryExpression / NewExpression;
+	// the standalone keyword itself never reaches materialise — listed
+	// for completeness in case a future code path reaches them).
+	SK.NewKeyword, SK.VoidKeyword, SK.TypeOfKeyword, SK.DeleteKeyword,
+	SK.AwaitKeyword, SK.YieldKeyword,
+	// Type keywords (TypeKeywordNode in convertChildInner)
+	SK.AnyKeyword, SK.UnknownKeyword, SK.NumberKeyword, SK.StringKeyword,
+	SK.BooleanKeyword, SK.SymbolKeyword, SK.NeverKeyword, SK.UndefinedKeyword,
+	SK.BigIntKeyword, SK.ObjectKeyword, SK.IntrinsicKeyword,
+	// Modifier keywords (TypeKeywordNode in convertChildInner)
+	SK.AbstractKeyword, SK.AsyncKeyword, SK.DeclareKeyword, SK.ExportKeyword,
+	SK.PrivateKeyword, SK.ProtectedKeyword, SK.PublicKeyword,
+	SK.ReadonlyKeyword, SK.StaticKeyword,
+] as ts.SyntaxKind[]);
+
+function hasNoEstreeCounterpart(kind: ts.SyntaxKind): boolean {
+	// Trivia (comments, whitespace, shebang, conflict markers).
+	if (kind >= SK.FirstTriviaToken && kind <= SK.LastTriviaToken) return true;
+	// File boundary token.
+	if (kind === SK.EndOfFileToken) return true;
+	// Punctuators / operators (`+`, `?`, `===`, `?.`, `&&`, `=>`, etc.).
+	// ESLint's SourceCode exposes these as Token objects (`{type:
+	// 'Punctuator', value, loc, range}`) — they're NOT ESTree nodes.
+	if (kind >= SK.FirstPunctuation && kind <= SK.LastPunctuation) return true;
+	// Reserved + contextual keyword range. Most are operator / structural
+	// keywords (`break`, `case`, `default`, `if`, `for`, `class`, `const`,
+	// `extends`, …) that appear inside parent nodes' fields, never as
+	// standalone ESTree leaves. The few exceptions
+	// (KEYWORD_HAS_ESTREE_COUNTERPART) opt out.
+	if (
+		kind >= SK.FirstKeyword
+		&& kind <= SK.LastKeyword
+		&& !KEYWORD_HAS_ESTREE_COUNTERPART.has(kind)
+	) return true;
+	// JSDoc family (JSDocComment, JSDocTag, JSDocParameterTag, …). TS
+	// parses JSDoc into ~50 distinct kinds; ESTree either elides them
+	// or surfaces JSDoc text on the leading-comment trivia of the
+	// annotated node.
+	if (kind >= SK.FirstJSDocNode && kind <= SK.LastJSDocNode) return true;
+	return NO_COUNTERPART_NODE_KINDS.has(kind);
 }
 
 function convertChildren(children: ReadonlyArray<ts.Node>, parent: LazyNode): (LazyNode | null)[] {

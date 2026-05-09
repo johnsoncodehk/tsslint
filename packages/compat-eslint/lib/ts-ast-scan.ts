@@ -18,7 +18,7 @@
 // don't pre-build ancestors either.
 
 import * as ts from 'typescript';
-import { type ConvertContext, GENERIC_TS_NODE_MARKER, materialize } from './lazy-estree';
+import { type ConvertContext, GENERIC_TS_NODE_MARKER, materialize, NoESTreeCounterpartError } from './lazy-estree';
 import { UnsupportedSelectorError } from './selector-analysis';
 
 const SK = ts.SyntaxKind;
@@ -1088,14 +1088,28 @@ export function tsScanTraverse(
 		let nextParent = parentTarget;
 		const hit = bitmap ? bitmap[k] === 1 : match(node);
 		if (hit) {
-			const target = materialize(node, ctx);
 			// `predicateAllKinds` visits modifier tokens, NamedImports,
-			// HeritageClause, and other TS-only kinds. Those materialise
-			// into GenericTSNode wrappers with no real ESTree counterpart
-			// — firing enter/leave on them would confuse downstream
-			// dispatchers (e.g. CodePathAnalyzer's preprocess() asserts
-			// child nodes occupy known slots on their parent). Skip.
-			const isGeneric = (target as unknown as Record<symbol, unknown>)[GENERIC_TS_NODE_MARKER];
+			// HeritageClause, and other TS-only kinds. Two skip cases —
+			// both result in NOT firing enter/leave but still walking
+			// children (so descendants can be picked up):
+			//   1. Kinds with NO ESTree counterpart (tokens, JSDoc,
+			//      certain containers) — `materialize()` throws
+			//      NoESTreeCounterpartError. Treat as `target === null`.
+			//   2. Unknown kinds we still wrap in GenericTSNode for
+			//      safety — detect via the marker. Same handling.
+			// Firing enter/leave on either would confuse downstream
+			// dispatchers (CodePathAnalyzer's preprocess() asserts child
+			// nodes occupy known slots on their parent).
+			let target: unknown = null;
+			try {
+				target = materialize(node, ctx);
+			}
+			catch (e) {
+				if (!(e instanceof NoESTreeCounterpartError)) throw e;
+				// fall through with target=null (treated like isGeneric)
+			}
+			const isGeneric = target == null
+				|| (target as unknown as Record<symbol, unknown>)[GENERIC_TS_NODE_MARKER];
 			if (!isGeneric && target !== parentTarget) {
 				const t = (target as { type?: string }).type;
 				if (t && WRAPPER_HEAD_TYPES.has(t)) {

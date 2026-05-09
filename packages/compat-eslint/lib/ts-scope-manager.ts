@@ -12,7 +12,7 @@
 
 import type { TSESTree } from '@typescript-eslint/types';
 import * as ts from 'typescript';
-import { materialize } from './lazy-estree';
+import { materialize, NoESTreeCounterpartError } from './lazy-estree';
 
 type AstMaps = {
 	esTreeNodeToTSNodeMap: WeakMap<TSESTree.Node, ts.Node>;
@@ -1470,21 +1470,27 @@ export class TsScopeManager {
 	// ESTree counterpart from parse time). This is the bridge from
 	// scope-manager's TS-keyed state to the lazy ESTree shim. Every
 	// `def.node` / `def.parent` / `var.identifiers[]` / `ref.identifier`
-	// getter reads through here. Must always return a non-undefined
-	// value for non-undefined input — see `lazy-estree.ts`'s
-	// `materialize()` for the GenericTSNode fallback contract.
+	// getter reads through here. Returns undefined for kinds with no
+	// ESTree counterpart (tokens, JSDoc, certain TS-internal containers
+	// — see `hasNoEstreeCounterpart` in lazy-estree.ts), so callers can
+	// distinguish "TS node exists but has no ESTree shape" from "TS node
+	// is missing". Unknown future kinds still go through GenericTSNode
+	// safety net (with `_parent` non-enumerable defense preventing the
+	// VisitorBase recursion that previously stack-overflowed).
 	tsToEstreeOrStub<T extends TSESTree.Node = TSESTree.Node>(tsNode: ts.Node | undefined): T | undefined {
 		if (!tsNode) return undefined;
 		const real = this.astMaps.tsNodeToESTreeNodeMap.get(tsNode) as T | undefined;
 		if (real) return real;
-		// Bottom-up materialise the missing node via the lazy ESTree shim.
-		// Builds a real ESTree counterpart with proper parent chain. Lazy
-		// has a generic-fallback for unsupported kinds and null returns,
-		// so this never throws.
-		return materialize(tsNode, {
-			ast: this.tsFile,
-			maps: this.astMaps,
-		}) as unknown as T;
+		try {
+			return materialize(tsNode, {
+				ast: this.tsFile,
+				maps: this.astMaps,
+			}) as unknown as T;
+		}
+		catch (e) {
+			if (e instanceof NoESTreeCounterpartError) return undefined;
+			throw e;
+		}
 	}
 }
 
