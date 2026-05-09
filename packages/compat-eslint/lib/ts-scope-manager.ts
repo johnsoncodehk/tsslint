@@ -1779,6 +1779,7 @@ export class TsScope {
 						// `declare global` block emits a fake
 						// `'__global' is defined but never used`.
 						if (sym.name.startsWith('__')) return;
+						if (sym.flags & (ts_.SymbolFlags.ValueModule | ts_.SymbolFlags.NamespaceModule)) return;
 						if (!directlyOwned(sym)) return;
 						push(sym);
 					});
@@ -1800,6 +1801,7 @@ export class TsScope {
 						// 'global' fix above doesn't apply here because
 						// module-mode files take this branch instead.
 						if (sym.name.startsWith('__')) return;
+						if (sym.flags & (ts_.SymbolFlags.ValueModule | ts_.SymbolFlags.NamespaceModule)) return;
 						if (!directlyOwned(sym)) return;
 						push(sym);
 					});

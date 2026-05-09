@@ -245,10 +245,13 @@ export function convertTokens(ast: ts.SourceFile): Token[] {
 // leading trivia covers everything between the previous content and
 // that child's first non-trivia char. `walkInnerCommentsOf` scans
 // every sibling gap (= every non-first child's leading) and every
-// node's "tail" (between last child end and node.end), but
-// intentionally skips the FIRST child's leading: that range is
-// identical to the node's own leading and the caller (= node's
-// parent's per-child gap scan) is responsible for it.
+// node's "tail" (between last child end and node.end). The FIRST
+// child's leading is skipped only when `child.pos === node.pos`
+// (the range is identical to the node's own leading and the caller
+// is responsible for it). Container nodes whose first child starts
+// after an open token (`{`, `(`, `[`) have `child.pos !== node.pos`,
+// so we DO scan there — otherwise comments between the open token
+// and the first child (e.g. `{ // @ts-ignore\n  stmt }`) are lost.
 //
 // Tail handling has three cases:
 //   - leaf (isToken): no inner trivia possible, skip.
@@ -281,7 +284,7 @@ export function walkInnerCommentsOf(
 	let firstSeen = false;
 	let lastEnd = -1;
 	ts.forEachChild(node, child => {
-		if (firstSeen) {
+		if (firstSeen || child.pos !== node.pos) {
 			emitCommentsFrom(child.pos);
 		}
 		firstSeen = true;
