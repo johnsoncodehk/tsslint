@@ -948,6 +948,30 @@ const WRAPPER_ROUTE_CHILD_BITMAP = (() => {
 // getter (`name`, `openingElement.name`, `namespace`/`name` for
 // JsxNamespacedName) which builds JSXIdentifier / JSXMemberExpression /
 // JSXNamespacedName and registers each inner ts.Node in the cache.
+// Recursively walk into a JSX name node (JSXIdentifier / JSXMemberExpression
+// / JSXNamespacedName), reading every slot so each inner JSXIdentifier is
+// constructed and registered in the tsNodeToESTreeNodeMap. Without this,
+// reading just `opening.name` materializes only the outermost wrapper —
+// the JSX-tag-name shapes use lazy slot getters, so an Identifier sitting
+// at e.g. `MenuPrimitive` in `<MenuPrimitive.Root />` is never registered
+// and a later `materialize(Identifier_MenuPrimitive)` lookup misses,
+// throwing "wrapper route did not register the inner node".
+function drillJSXName(node: unknown): void {
+	if (!node || typeof node !== 'object') return;
+	const n = node as { type?: string; object?: unknown; property?: unknown; namespace?: unknown; name?: unknown };
+	const t = n.type;
+	if (t === 'JSXMemberExpression') {
+		drillJSXName(n.object);
+		drillJSXName(n.property);
+	}
+	else if (t === 'JSXNamespacedName') {
+		drillJSXName(n.namespace);
+		drillJSXName(n.name);
+	}
+	// JSXIdentifier: leaf — its construction already registered it via the
+	// shape's default registersInMaps:true.
+}
+
 function findJSXOwnerRoute(tsNode: ts.Node):
 	| { ownerTsNode: ts.Node; trigger: (owner: LazyNode) => void }
 	| null
@@ -975,13 +999,15 @@ function findJSXOwnerRoute(tsNode: ts.Node):
 					// JsxSelfClosingElement materializes to JSXElement; the
 					// JSXOpeningElement (which owns the `name` slot) lives
 					// inside it.
+					let nameNode: unknown;
 					if (p.kind === SK.JsxSelfClosingElement) {
 						const opening = (owner as unknown as { openingElement?: { name?: unknown } }).openingElement;
-						if (opening) void opening.name;
+						nameNode = opening?.name;
 					}
 					else {
-						void (owner as unknown as { name?: unknown }).name;
+						nameNode = (owner as unknown as { name?: unknown }).name;
 					}
+					drillJSXName(nameNode);
 				},
 			};
 		}
@@ -989,7 +1015,10 @@ function findJSXOwnerRoute(tsNode: ts.Node):
 			if ((p as ts.JsxAttribute).name !== cur) return null;
 			return {
 				ownerTsNode: p,
-				trigger: owner => void (owner as unknown as { name?: unknown }).name,
+				trigger: owner => {
+					const nameNode = (owner as unknown as { name?: unknown }).name;
+					drillJSXName(nameNode);
+				},
 			};
 		}
 		if (p.kind === SK.PropertyAccessExpression) {
