@@ -2,7 +2,7 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import * as ts from 'typescript';
 import CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js');
-import { convertLazy } from './lib/lazy-estree';
+import { convertLazy, LISTENER_PRE_MATERIALIZE } from './lib/lazy-estree';
 
 // Debug surface — see lib/lazy-estree.ts. Gated by env TSSLINT_DEBUG_ESTREE=1
 // (set by the CLI's --debug-estree flag, or directly by external callers).
@@ -696,8 +696,16 @@ function dispatchTarget(
 ): void {
 	onTarget(target);
 	const arr = (isEnter ? fast.enter : fast.exit).get((target as any).type);
-	if (arr) runEntries(arr, target, errors);
 	const allArr = isEnter ? fast.enterAll : fast.exitAll;
+	if ((arr || allArr.length) && isEnter) {
+		// Pre-materialize child arrays a rule may iterate via the TS-side
+		// parallel structure (`tsNode.members`). Without this, the rule's
+		// `services.tsNodeToESTreeNodeMap.get(tsMember)` returns undefined
+		// for unmaterialized members. See LISTENER_PRE_MATERIALIZE.
+		const trigger = LISTENER_PRE_MATERIALIZE[(target as any).type as keyof typeof LISTENER_PRE_MATERIALIZE];
+		if (trigger) trigger(target);
+	}
+	if (arr) runEntries(arr, target, errors);
 	if (allArr.length) runEntries(allArr, target, errors);
 }
 

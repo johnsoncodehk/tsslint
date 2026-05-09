@@ -856,6 +856,31 @@ const TYPE_SLOT_TRIGGERS: Partial<Record<ts.SyntaxKind, (owner: any) => void>> =
 	},
 };
 
+// Per-ESTree-type pre-materialization. Fires when a listener is about
+// to dispatch on a target — drills child arrays the rule may iterate
+// directly via the TS-side parallel structure (`tsNode.members`,
+// `tsNode.statements`) rather than the ESTree shape. Without this,
+// `services.tsNodeToESTreeNodeMap.get(tsMember)` returns undefined for
+// any member whose ESTree counterpart hasn't been materialized — and
+// rules like no-misused-promises crash on `node.type` of undefined.
+//
+// This is a no-op when no rule listens on the type (only fires inside
+// dispatchTarget when `arr` is non-empty). The materialization itself
+// is idempotent (the per-slot getter caches), so the cost is one pass
+// at first read.
+//
+// Adding a TS container kind whose rule iterates via `tsNode.members`
+// goes here. The keys are ESTree types (matching the listener
+// selector), the body drills the child slot via the ESTree shape so
+// each child is constructed and registered in `tsNodeToESTreeNodeMap`.
+export const LISTENER_PRE_MATERIALIZE: Partial<Record<KnownEstreeType, (node: any) => void>> = {
+	ClassDeclaration: n => { void n.body?.body; },
+	ClassExpression: n => { void n.body?.body; },
+	TSInterfaceDeclaration: n => { void n.body?.body; },
+	TSEnumDeclaration: n => { void n.body?.members; },
+	TSModuleDeclaration: n => { void n.body?.body; },
+};
+
 // Pattern-position parent kinds (BinaryExpression-LHS / for-loop-LHS /
 // nested-pattern host) — these reach findWrapperRoute via the
 // pattern-literal-target path. Type-slot parent kinds are derived from
