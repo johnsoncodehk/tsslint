@@ -1482,9 +1482,15 @@ function resolveParentInner(tsNode: ts.Node, ctx: ConvertContext): LazyNode | nu
 		// fresh leaf with its own deferred parent. Recursive resolution
 		// happens incrementally as ancestors' `.parent` is read.
 		// `materialize` throws NoESTreeCounterpartError for kinds with no
-		// ESTree shape (HeritageClause, NamespaceExport, …) — same intent
-		// as `shouldSkipAsParent` minus a static lookup table miss; treat
-		// them identically and walk further up.
+		// ESTree shape — but `shouldSkipAsParent` above already routes
+		// those to the skip path via its inline `hasNoEstreeCounterpart`
+		// fallback, so this catch is mostly defensive. It DOES still fire
+		// for kinds where `SKIP_AS_PARENT`'s entry is conditional and
+		// returns false (e.g. `HeritageClause` skips only the `extends`
+		// branch — `implements` falls through here, lands in materialise,
+		// and throws). The catch unifies both paths into one
+		// "walk further up" decision; deleting it would break the
+		// `implements`-clause walk-up.
 		let parent: LazyNode;
 		try {
 			parent = materialize(walker, ctx);
@@ -3923,7 +3929,18 @@ const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
 	// upstream visitor-keys as `TSAnyKeyword` / `TSVoidKeyword` / etc.
 	// `void` is BOTH a type keyword (`x: void`) and a unary operator
 	// (`void x`); upstream's `TSVoidKeyword` covers the type-position
-	// usage, so it stays exempt.
+	// usage. ASYMMETRY: in unary position upstream emits
+	// `UnaryExpression { operator: 'void', argument: x }` — the bare
+	// `void` token is NOT exposed as a child node. If a rule walks raw
+	// tokens via `forEachChild` and asks for the ESTree counterpart of
+	// the unary `void` token, it materializes here as `TSVoidKeyword`
+	// (childless leaf), which is structurally fine for visitor-keys
+	// dispatch but semantically misleading. Type-position takes
+	// precedence; the unary case is rare enough that no observed rule
+	// relies on it. Same applies to other unary keywords promoted to
+	// flag-position by parents (`new`, `typeof`, `delete`, etc.) but
+	// those are NOT in this exempt set — they correctly throw.
+
 	SK.AnyKeyword, SK.UnknownKeyword, SK.NumberKeyword, SK.StringKeyword,
 	SK.BooleanKeyword, SK.SymbolKeyword, SK.NeverKeyword, SK.VoidKeyword,
 	SK.UndefinedKeyword, SK.BigIntKeyword, SK.ObjectKeyword, SK.IntrinsicKeyword,
@@ -3944,6 +3961,12 @@ const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
 // commit a3cee01, masked until the perf-inline change in b153129
 // moved the predicate onto `shouldSkipAsParent`'s pre-cache path —
 // caught by integration parity-sweep but a unit test would be tighter.)
+//
+// @internal — exported solely for tsslint's own test coverage. The
+// signature and classification semantics are not stable surface API.
+// External consumers wanting to distinguish "no counterpart" from
+// other `materialize()` failures should `instanceof NoESTreeCounterpartError`
+// (re-exported from `compat-eslint/index.ts`).
 export function hasNoEstreeCounterpart(kind: ts.SyntaxKind): boolean {
 	// Trivia (comments, whitespace, shebang, conflict markers).
 	if (kind >= SK.FirstTriviaToken && kind <= SK.LastTriviaToken) return true;

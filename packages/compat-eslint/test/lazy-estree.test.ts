@@ -2044,6 +2044,14 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		['TypeOfKeyword', ts.SyntaxKind.TypeOfKeyword, true],
 		['DeleteKeyword', ts.SyntaxKind.DeleteKeyword, true],
 		['YieldKeyword', ts.SyntaxKind.YieldKeyword, true],
+		// Newer TS modifier kinds — `accessor` (TS 4.9+ class auto-
+		// accessors) and `using` (TS 5.2+ explicit resource management)
+		// — both are flag-on-parent like `override` was; neither has a
+		// `TSAccessorKeyword` / `TSUsingKeyword` upstream visitor-key.
+		// Listed explicitly so any future drift in their classification
+		// surfaces here, not in downstream rule misbehavior.
+		['AccessorKeyword', ts.SyntaxKind.AccessorKeyword, true],
+		['UsingKeyword', ts.SyntaxKind.UsingKeyword, true],
 		// Reserved words that never appear standalone in ESTree
 		['ReturnKeyword', ts.SyntaxKind.ReturnKeyword, true],
 		['FunctionKeyword', ts.SyntaxKind.FunctionKeyword, true],
@@ -2133,11 +2141,9 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		['reserved keyword: FunctionKeyword', ts.SyntaxKind.FunctionKeyword],
 	];
 	for (const [name, kind] of expectThrows) {
+		// Skip if the kind isn't present in our minimal fixture.
+		if (!findKind(sf, kind)) continue;
 		const r = tryMaterialize(kind);
-		if (!r.ok && r.throws === false && (r as { throws: boolean }).throws !== false) continue;
-		// Either threw NoESTreeCounterpartError (good), or kind absent (skip).
-		const found = findKind(sf, kind);
-		if (!found) continue;
 		check(
 			`materialize(${name}) throws NoESTreeCounterpartError`,
 			!r.ok && r.throws,
