@@ -3962,11 +3962,10 @@ const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
 // moved the predicate onto `shouldSkipAsParent`'s pre-cache path —
 // caught by integration parity-sweep but a unit test would be tighter.)
 //
-// @internal — exported solely for tsslint's own test coverage. The
-// signature and classification semantics are not stable surface API.
-// External consumers wanting to distinguish "no counterpart" from
-// other `materialize()` failures should `instanceof NoESTreeCounterpartError`
-// (re-exported from `compat-eslint/index.ts`).
+// @internal — exported within `@tsslint/compat-eslint` for the unit
+// test in `test/lazy-estree.test.ts` and for `shouldSkipAsParent` to
+// inline. Not part of any cross-package contract; the package itself
+// is implementation detail behind `@tsslint/config`'s `convertRule`.
 export function hasNoEstreeCounterpart(kind: ts.SyntaxKind): boolean {
 	// Trivia (comments, whitespace, shebang, conflict markers).
 	if (kind >= SK.FirstTriviaToken && kind <= SK.LastTriviaToken) return true;
