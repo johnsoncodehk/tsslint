@@ -370,7 +370,23 @@ abstract class LazyNode {
 	// like 'TSJsxAttributes' that don't exist in typescript-estree's
 	// shape. New ESTree shape = add to KnownEstreeType first.
 	abstract readonly type: KnownEstreeType;
-	private _parent: LazyNode | null | typeof PARENT_UNSET = PARENT_UNSET;
+	// `_parent` is intentionally excluded from `Object.keys(this)`. It's
+	// installed non-enumerably in the constructor. The systematic fix
+	// for unknown-type fallback recursion: scope-manager's
+	// `VisitorBase.visitChildren` falls back to `Object.keys(node)` when
+	// a node's `type` isn't in upstream `visitor-keys`, then walks every
+	// own property whose `.type` is a string. `_parent` is a LazyNode
+	// with `.type: string` — so without this hiding, the visitor walks
+	// UP the parent chain and stack-overflows on any TS SyntaxKind that
+	// falls through to GenericTSNode (~56 candidates seen on prisma;
+	// `123n` was the one that hit). `_ts` / `_ctx` / `_range` / `_loc`
+	// stay enumerable: they don't have `.type: string` so isNode returns
+	// false on them, AND `_ts`'s identity gives deep-eq rules
+	// (`no-duplicate-type-constituents`) a unique per-node fingerprint
+	// they need to discriminate structurally-identical-but-distinct
+	// type constituents. Hiding them all uniformly breaks that rule
+	// (815-fire over-fire on prisma).
+	private _parent!: LazyNode | null | typeof PARENT_UNSET;
 	get parent(): LazyNode | null {
 		if (this._parent !== PARENT_UNSET) return this._parent;
 		const resolved = resolveParent(this._ts, this._ctx);
@@ -434,13 +450,22 @@ abstract class LazyNode {
 		// (e.g. JSXOpeningElement: real for JsxOpeningElement, synthetic
 		// for JsxSelfClosingElement). Reordering breaks that contract.
 		this._ts = tsNode;
-		// `parent === undefined` is the lazy-parent path: caller doesn't
-		// know the ESTree parent yet. Skip the assignment so `_parent`
-		// stays at PARENT_UNSET — first read of `.parent` triggers
-		// `resolveParent`. ctx falls back to `currentCtx` (set by
-		// `materialize` for the lazy-leaf path) when no parent is
-		// available to inherit from.
-		if (parent !== undefined) this._parent = parent;
+		// `_parent` installed non-enumerable so `Object.keys(this)`
+		// doesn't expose it (see field declaration above for why). The
+		// `writable: true` keeps subsequent ordinary assignments
+		// (`this._parent = p` in the setter and `_setParentIfUnset`)
+		// working without redefining; descriptor's `enumerable: false`
+		// is preserved across assignments. `parent === undefined` is the
+		// lazy-parent path: keep `_parent` at PARENT_UNSET so the first
+		// read of `.parent` triggers `resolveParent`. ctx falls back to
+		// `currentCtx` (set by `materialize` for the lazy-leaf path)
+		// when no parent is available to inherit from.
+		Object.defineProperty(this, '_parent', {
+			value: parent === undefined ? PARENT_UNSET : parent,
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		});
 		this._ctx = context ?? parent?._ctx ?? currentCtx!;
 		if (this._registersInMaps()) {
 			this._ctx.maps.tsNodeToESTreeNodeMap.set(tsNode, this);
