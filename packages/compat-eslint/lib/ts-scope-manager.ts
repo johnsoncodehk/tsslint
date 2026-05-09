@@ -1568,15 +1568,25 @@ export class TsScope {
 	}
 
 	get variableScope(): TsScope {
-		// Nearest enclosing function / global / module / class /
-		// class-field-initializer scope.
+		// Nearest enclosing scope that owns `var`-style declarations.
+		// Mirrors upstream `VARIABLE_SCOPE_TYPES` (scope-manager
+		// `ScopeBase.js`): function / global / module / tsModule /
+		// class-field-initializer (and class-static-block, which we
+		// don't tag yet). NOT `class` — classes are NOT variable
+		// scopes (an upstream test asserts this).
+		// Without `tsModule`, `markDeclarationChildAsUsed` in
+		// no-unused-vars walks past the `declare global { var FOO }` /
+		// `declare module 'X' { var BAR }` body looking for `FOO`/`BAR`
+		// in the global scope's set, misses, and leaves them flagged
+		// as unused (4 false fires across prisma's runtime/* declare-
+		// global blocks).
 		let s: TsScope | null = this;
 		while (
 			s
 			&& s.type !== 'function'
 			&& s.type !== 'global'
 			&& s.type !== 'module'
-			&& s.type !== 'class'
+			&& s.type !== 'tsModule'
 			&& s.type !== 'class-field-initializer'
 		) {
 			s = s.upper;
@@ -1753,6 +1763,16 @@ export class TsScope {
 					locals.forEach(sym => {
 						// Skip TS's synthetic `default` export symbol.
 						if (sym.name === 'default') return;
+						// Skip TS-internal escaped names (double-underscore
+						// prefix). These are NOT user-facing bindings — TS's
+						// binder uses them for `__global` (declare global
+						// augmentations), `__type` (anonymous type literals),
+						// `__call` / `__index` / `__new` (signatures), etc.
+						// `declare global { ... }` lifts a `__global` symbol
+						// into `sf.locals`; without skipping it here, every
+						// `declare global` block emits a fake
+						// `'__global' is defined but never used`.
+						if (sym.name.startsWith('__')) return;
 						if (!directlyOwned(sym)) return;
 						push(sym);
 					});
@@ -1766,6 +1786,14 @@ export class TsScope {
 				if (locals) {
 					locals.forEach(sym => {
 						if (sym.name === 'default') return;
+						// See `case 'global'`: TS-internal escaped names
+						// (`__global`, `__type`, `__call`, …) are not
+						// user-facing bindings. `declare global { ... }`
+						// in a module-mode file (any file with import/
+						// export) lifts `__global` into `sf.locals`; the
+						// 'global' fix above doesn't apply here because
+						// module-mode files take this branch instead.
+						if (sym.name.startsWith('__')) return;
 						if (!directlyOwned(sym)) return;
 						push(sym);
 					});
@@ -2085,6 +2113,20 @@ export class TsScope {
 			return;
 		}
 		if (ts_.isEnumDeclaration(stmt) || ts_.isModuleDeclaration(stmt)) {
+			// `declare global { ... }` is an augmentation of the ambient
+			// global scope — its `name` is the synthetic `global` keyword
+			// (TS represents the symbol with the escaped name `__global`).
+			// scope-manager-upstream skips defineIdentifier on this branch
+			// (`Referencer.TSModuleDeclaration` returns early when
+			// `node.kind === 'global'`); without the parallel skip here,
+			// every `declare global` block in the codebase emits a fake
+			// `'__global' is defined but never used` diagnostic.
+			if (
+				ts_.isModuleDeclaration(stmt)
+				&& (stmt.flags & ts.NodeFlags.GlobalAugmentation)
+			) {
+				return;
+			}
 			if (stmt.name && ts.isIdentifier(stmt.name)) {
 				push(this.manager.checker.getSymbolAtLocation(stmt.name));
 			}

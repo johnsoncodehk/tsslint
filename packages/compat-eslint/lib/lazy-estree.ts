@@ -2006,7 +2006,22 @@ defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 	consts: tn => ({
 		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
 		global: !!(tn.flags & ts.NodeFlags.GlobalAugmentation),
-		kind: tn.flags & ts.NodeFlags.Namespace ? 'namespace' : 'module',
+		// `declare global { ... }` is `kind: 'global'` per typescript-estree.
+		// Distinct from `namespace` and `module` — scope-manager's
+		// Referencer.TSModuleDeclaration skips defineIdentifier for
+		// kind==='global' (so `global` doesn't enter scope as an unused
+		// binding), and no-unused-vars' collectUnusedVariables marks
+		// the synthetic 'global' var as used in this branch. With kind
+		// misreported as 'module', `declare global` files emitted both
+		// `'global' is defined but never used` AND failed the ambient-
+		// declaration selector that would have marked inner var/fn
+		// declarations as used. Caught on prisma matched-type-aware
+		// (4 false fires across runtime/getPrismaClient.ts and friends).
+		kind: tn.flags & ts.NodeFlags.GlobalAugmentation
+			? 'global'
+			: tn.flags & ts.NodeFlags.Namespace
+			? 'namespace'
+			: 'module',
 	}),
 	slots: {
 		id: { tsField: 'name' },
