@@ -274,6 +274,19 @@ type KnownEstreeType =
 	| 'TSAbstractPropertyDefinition'
 	| 'TSArrayType'
 	| 'TSAsExpression'
+	// Modifier keywords. Childless leaf types in upstream visitor-keys —
+	// appear in modifier-array slots (`MethodDefinition.modifiers` etc.).
+	// Routed through TypeKeywordNode in convertChildInner so stand-alone
+	// kinds get the canonical shape rather than the GenericTSNode
+	// fallback. Stays grouped with the other TS-specifics (sorted by name).
+	| 'TSAsyncKeyword'
+	| 'TSDeclareKeyword'
+	| 'TSExportKeyword'
+	| 'TSPrivateKeyword'
+	| 'TSProtectedKeyword'
+	| 'TSPublicKeyword'
+	| 'TSReadonlyKeyword'
+	| 'TSStaticKeyword'
 	| 'TSCallSignatureDeclaration'
 	| 'TSClassImplements'
 	| 'TSConditionalType'
@@ -682,6 +695,13 @@ const SKIP_AS_PARENT: Partial<Record<ts.SyntaxKind, SkipDecision>> = {
 	// siblings, no per-span container. Skip past TemplateSpan so the
 	// expressions/literal-pieces resolve to TemplateLiteral as parent.
 	[SK.TemplateSpan]: true,
+	// TSTemplateLiteralType has the same wrapping problem in TYPE position
+	// (`Prefix${T}Suffix${U}End` as a type): TS uses TemplateLiteralTypeSpan
+	// wrappers around each `${T}` plus its trailing literal. Upstream
+	// elides them — TSTemplateLiteralType.types is the bare TypeNode
+	// list. Without this skip, bottom-up materialise of an inner
+	// TemplateMiddle/Tail walks up to a phantom 'TSTemplateLiteralTypeSpan'.
+	[SK.TemplateLiteralTypeSpan]: true,
 	// TS MappedType wraps the iterating identifier in a TypeParameter
 	// container; ESTree exposes the bare name on TSMappedType.key. Skip
 	// past TypeParameter so the inner Identifier resolves to TSMappedType,
@@ -3029,6 +3049,44 @@ defineShape<ts.TemplateExpression>(SK.TemplateExpression, {
 		});
 	},
 });
+// `${expr}` template parts (TemplateHead/Middle/Tail) only appear inside
+// TemplateExpression / TaggedTemplateExpression / TemplateLiteralType.
+// The parent's `quasis` builder above creates inline plain-object
+// TemplateElements eagerly. These shapes only get reached via bottom-up
+// `materialize()` when something walks the TS AST and asks for the
+// ESTree counterpart of a stand-alone template-part TS node — without
+// them the path falls through to GenericTSNode (`'TSTemplateHead'` etc.,
+// not in upstream visitor-keys / AST_NODE_TYPES). The shape produced
+// here mirrors typescript-estree convert.js:1118 — TemplateElement with
+// `tail` (true for TemplateTail) and `value: { cooked, raw }` where raw
+// strips the literal's leading `${` `}`/backtick framing characters.
+const buildTemplateElementConsts = (tn: ts.TemplateLiteralLikeNode) => {
+	const ast = tn.getSourceFile();
+	const tail = tn.kind === SK.TemplateTail;
+	const raw = tn.getText(ast);
+	const isHead = tn.kind === SK.TemplateHead;
+	// Strip framing chars (matches convert.js:1122 logic):
+	//   TemplateHead   `…${  → drop leading backtick + trailing `${` (2 chars)
+	//   TemplateMiddle }…${  → drop leading `}` + trailing `${`         (2 chars)
+	//   TemplateTail   }…`   → drop leading `}` + trailing backtick     (1 char)
+	const sliced = isHead ? raw.slice(1, -2) : tail ? raw.slice(1, -1) : raw.slice(1, -2);
+	return { tail, value: { cooked: tn.text, raw: sliced } };
+};
+defineShape<ts.TemplateHead>(SK.TemplateHead, {
+	type: 'TemplateElement',
+	consts: buildTemplateElementConsts,
+	slots: {},
+});
+defineShape<ts.TemplateMiddle>(SK.TemplateMiddle, {
+	type: 'TemplateElement',
+	consts: buildTemplateElementConsts,
+	slots: {},
+});
+defineShape<ts.TemplateTail>(SK.TemplateTail, {
+	type: 'TemplateElement',
+	consts: buildTemplateElementConsts,
+	slots: {},
+});
 defineShape<ts.TemplateLiteralTypeNode>(SK.TemplateLiteralType, {
 	type: 'TSTemplateLiteralType',
 	slots: {
@@ -3683,6 +3741,30 @@ function convertChildInner(child: ts.Node, parent: LazyNode | null | undefined):
 			return new TypeKeywordNode('TSObjectKeyword', child, parent);
 		case SK.IntrinsicKeyword:
 			return new TypeKeywordNode('TSIntrinsicKeyword', child, parent);
+		// Modifier keywords. Upstream visitor-keys defines these as
+		// childless ESTree types; without explicit cases they fall to
+		// GenericTSNode which still emits the same `'TS<Keyword>'` type
+		// (so visitor-keys lookup succeeds and the visitor doesn't
+		// recurse), but TypeKeywordNode is the canonical shape and
+		// shaves a phantom-type path.
+		case SK.AbstractKeyword:
+			return new TypeKeywordNode('TSAbstractKeyword', child, parent);
+		case SK.AsyncKeyword:
+			return new TypeKeywordNode('TSAsyncKeyword', child, parent);
+		case SK.DeclareKeyword:
+			return new TypeKeywordNode('TSDeclareKeyword', child, parent);
+		case SK.ExportKeyword:
+			return new TypeKeywordNode('TSExportKeyword', child, parent);
+		case SK.PrivateKeyword:
+			return new TypeKeywordNode('TSPrivateKeyword', child, parent);
+		case SK.ProtectedKeyword:
+			return new TypeKeywordNode('TSProtectedKeyword', child, parent);
+		case SK.PublicKeyword:
+			return new TypeKeywordNode('TSPublicKeyword', child, parent);
+		case SK.ReadonlyKeyword:
+			return new TypeKeywordNode('TSReadonlyKeyword', child, parent);
+		case SK.StaticKeyword:
+			return new TypeKeywordNode('TSStaticKeyword', child, parent);
 		default:
 			// Unsupported SyntaxKind — fall back to a generic node mirroring
 			// typescript-estree's `deeplyCopy`: type='TS<KindName>', range +
@@ -3690,7 +3772,28 @@ function convertChildInner(child: ts.Node, parent: LazyNode | null | undefined):
 			// so callers reading `.type === 'X'` etc. don't crash. Add a
 			// real case if the shape matters (i.e. children should be
 			// reachable via getter, not just the type tag).
+			//
+			// Strict-mode escape hatch (`TSSLINT_STRICT_GENERIC=1`) THROWS
+			// instead, so the test harness can detect any GenericTSNode
+			// emission rather than letting a phantom `'TS<KindName>'`
+			// type slip through silently. Production / default keeps the
+			// safe fallback (with `_parent` non-enumerable from the
+			// LazyNode base — see commit 2bf33a4 — so stack overflow
+			// can't surface even if a phantom does materialize).
+			if (STRICT_GENERIC) {
+				throw new GenericTSNodeFallbackError(child);
+			}
 			return new GenericTSNode(child, parent);
+	}
+}
+
+const STRICT_GENERIC = process.env.TSSLINT_STRICT_GENERIC === '1';
+class GenericTSNodeFallbackError extends Error {
+	readonly kind: ts.SyntaxKind;
+	constructor(node: ts.Node) {
+		super(`convertChildInner: no shape for SK.${ts.SyntaxKind[node.kind]} (kind=${node.kind})`);
+		this.name = 'GenericTSNodeFallbackError';
+		this.kind = node.kind;
 	}
 }
 
@@ -3963,7 +4066,23 @@ type TypeKeyword =
 	| 'TSSymbolKeyword'
 	| 'TSUndefinedKeyword'
 	| 'TSUnknownKeyword'
-	| 'TSVoidKeyword';
+	| 'TSVoidKeyword'
+	// Modifier keywords. typescript-estree exposes these as childless
+	// nodes in modifier-array slots (`MethodDefinition.modifiers`,
+	// `PropertyDefinition.modifiers`, etc.). Adding them here lets
+	// convertChildInner route stand-alone modifier kinds through the
+	// canonical TypeKeywordNode shape rather than the GenericTSNode
+	// fallback (which would still emit the same `'TS<X>'` type string,
+	// but via a phantom node without proper visitor-keys handling).
+	| 'TSAbstractKeyword'
+	| 'TSAsyncKeyword'
+	| 'TSDeclareKeyword'
+	| 'TSExportKeyword'
+	| 'TSPrivateKeyword'
+	| 'TSProtectedKeyword'
+	| 'TSPublicKeyword'
+	| 'TSReadonlyKeyword'
+	| 'TSStaticKeyword';
 // Factory-built — type derived from the keyword kind (`SK.AnyKeyword`
 // → `'TSAnyKeyword'`). Callers pass the resolved type as the first arg
 // for legacy reasons; TypeKeywordNode is the constructor function that

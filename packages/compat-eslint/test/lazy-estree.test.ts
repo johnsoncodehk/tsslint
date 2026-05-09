@@ -1880,6 +1880,33 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 			code: 'function f({ a, b: { c = 1, ...inner }, ...rest }: any, [x, , ...ys]: any[]) {}',
 		},
 		{ name: 'jsx-fragment-mix', code: 'let _ = <><a prop={x} /><b>{y}</b><c {...r} /></>;', tsx: true },
+		// Cover the kinds prisma matched-type-aware bench surfaced as
+		// hitting GenericTSNode (~16 real-node candidates). Every one
+		// emitted `'TS<KindName>'` not in upstream's AST_NODE_TYPES, so
+		// this fixture set will fail the invariant below until each gets
+		// proper handling. Drives the systematic elimination of the
+		// `convertChildInner` fallback path. See d8badc0 (BigIntLiteral
+		// shape fix), 2bf33a4 (`_parent` non-enumerable defense).
+		{ name: 'bigint-literals', code: 'let _ = 0n + 1_000n + 0xffn;' },
+		{ name: 'tagged-template', code: 'let _ = tag`a${x}b${y}c`;' },
+		{
+			name: 'template-literal-types',
+			code: 'type T<S extends string> = `prefix-${S}-suffix`;',
+		},
+		{ name: 'as-const', code: "let _ = { x: 1 } as const;" },
+		{ name: 'asserts-keyword', code: 'function isFoo(x: unknown): asserts x is string { if (typeof x !== "string") throw new Error(); }' },
+		{ name: 'await-keyword', code: 'async function f(xs: AsyncIterable<number>) { for await (const x of xs) {} }' },
+		{ name: 'in-out-variance', code: 'interface Box<in out T> { v: T; }' },
+		{ name: 'override-keyword', code: 'class A { m() {} } class B extends A { override m() {} }' },
+		{ name: 'in-keyword', code: 'function f(o: any) { return "x" in o; }' },
+		{ name: 'instanceof-keyword', code: 'function f(o: unknown) { return o instanceof Error; }' },
+		{ name: 'omitted-expression', code: 'let [a, , c] = [1, 2, 3];' },
+		{ name: 'heritage-clauses', code: 'interface A {} interface B {} class C implements A, B {} class D extends C implements A {}' },
+		{ name: 'export-named-shapes', code: "const a = 1, b = 2; export { a as default, b }; export * as ns from 'm';" },
+		{
+			name: 'import-attributes',
+			code: "import json from './data.json' with { type: 'json' };",
+		},
 	];
 
 	const offenders: Array<{ fixture: string; type: string; reachedVia: string }> = [];
