@@ -1990,6 +1990,94 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 	);
 }
 
+// --- hasNoEstreeCounterpart: direct classification (cache-bypassing) ---
+//
+// `materialize()` checks the cache BEFORE the `hasNoEstreeCounterpart`
+// predicate. `convertLazy` pre-registers `SourceFile→Program` in the
+// ESTree map, so `materialize(sourceFile)` always hits the cache —
+// any `materialize`-based test for the SourceFile classification
+// silently passes regardless of the predicate's actual return value.
+// The same hazard applies to any other kind that might end up cached
+// before the predicate decides on it.
+//
+// This block asserts the predicate directly. Any drift between the
+// `KEYWORD_HAS_ESTREE_COUNTERPART` exempt set and the `NO_COUNTERPART_NODE_KINDS`
+// throw set (the dual-membership class of bug found in agent review,
+// fixed in b153129) is caught here unconditionally.
+{
+	const cases: Array<[string, ts.SyntaxKind, boolean]> = [
+		// MUST return false (HAS counterpart) — would have caught
+		// the SourceFile-in-no-counterpart-set bug masked by cache.
+		['SourceFile', ts.SyntaxKind.SourceFile, false],
+		['Identifier', ts.SyntaxKind.Identifier, false],
+		['NumericLiteral', ts.SyntaxKind.NumericLiteral, false],
+		['StringLiteral', ts.SyntaxKind.StringLiteral, false],
+		['BigIntLiteral', ts.SyntaxKind.BigIntLiteral, false],
+		['TrueKeyword', ts.SyntaxKind.TrueKeyword, false],
+		['FalseKeyword', ts.SyntaxKind.FalseKeyword, false],
+		['NullKeyword', ts.SyntaxKind.NullKeyword, false],
+		['ThisKeyword', ts.SyntaxKind.ThisKeyword, false],
+		['SuperKeyword', ts.SyntaxKind.SuperKeyword, false],
+		['VariableDeclaration', ts.SyntaxKind.VariableDeclaration, false],
+		['ImportDeclaration', ts.SyntaxKind.ImportDeclaration, false],
+		// Kinds intentionally NOT in NO_COUNTERPART (deferred to
+		// SHAPE_CLASSES / wrapper materialise paths)
+		['ImportClause', ts.SyntaxKind.ImportClause, false],
+		['NamespaceImport', ts.SyntaxKind.NamespaceImport, false],
+		// Type keywords — handled by TypeKeywordNode
+		['AnyKeyword', ts.SyntaxKind.AnyKeyword, false],
+		['VoidKeyword', ts.SyntaxKind.VoidKeyword, false],
+		// Modifier keywords — handled by TypeKeywordNode
+		['AbstractKeyword', ts.SyntaxKind.AbstractKeyword, false],
+		['AsyncKeyword', ts.SyntaxKind.AsyncKeyword, false],
+		['ReadonlyKeyword', ts.SyntaxKind.ReadonlyKeyword, false],
+
+		// MUST return true (NO counterpart by design) — would have
+		// caught the AwaitKeyword/OverrideKeyword dual-membership
+		// regression directly without needing a real source fixture.
+		['AwaitKeyword', ts.SyntaxKind.AwaitKeyword, true],
+		['OverrideKeyword', ts.SyntaxKind.OverrideKeyword, true],
+		['AssertsKeyword', ts.SyntaxKind.AssertsKeyword, true],
+		['ConstKeyword', ts.SyntaxKind.ConstKeyword, true],
+		['ImportKeyword', ts.SyntaxKind.ImportKeyword, true],
+		['NewKeyword', ts.SyntaxKind.NewKeyword, true],
+		['TypeOfKeyword', ts.SyntaxKind.TypeOfKeyword, true],
+		['DeleteKeyword', ts.SyntaxKind.DeleteKeyword, true],
+		['YieldKeyword', ts.SyntaxKind.YieldKeyword, true],
+		// Reserved words that never appear standalone in ESTree
+		['ReturnKeyword', ts.SyntaxKind.ReturnKeyword, true],
+		['FunctionKeyword', ts.SyntaxKind.FunctionKeyword, true],
+		['IfKeyword', ts.SyntaxKind.IfKeyword, true],
+		['ForKeyword', ts.SyntaxKind.ForKeyword, true],
+		['ClassKeyword', ts.SyntaxKind.ClassKeyword, true],
+		['DefaultKeyword', ts.SyntaxKind.DefaultKeyword, true],
+		// Punctuators
+		['PlusToken', ts.SyntaxKind.PlusToken, true],
+		['EqualsEqualsEqualsToken', ts.SyntaxKind.EqualsEqualsEqualsToken, true],
+		['QuestionDotToken', ts.SyntaxKind.QuestionDotToken, true],
+		// File / trivia boundaries
+		['EndOfFileToken', ts.SyntaxKind.EndOfFileToken, true],
+		// Container kinds without standalone ESTree shape
+		['SyntaxList', ts.SyntaxKind.SyntaxList, true],
+		['HeritageClause', ts.SyntaxKind.HeritageClause, true],
+		['NamedExports', ts.SyntaxKind.NamedExports, true],
+		['NamespaceExport', ts.SyntaxKind.NamespaceExport, true],
+		['TemplateSpan', ts.SyntaxKind.TemplateSpan, true],
+		['OmittedExpression', ts.SyntaxKind.OmittedExpression, true],
+		// JSDoc — entire family routed through range check
+		['JSDocComment', ts.SyntaxKind.JSDocComment, true],
+		['JSDocTag', ts.SyntaxKind.JSDocTag, true],
+	];
+	for (const [name, kind, expected] of cases) {
+		const actual = lazy.hasNoEstreeCounterpart(kind);
+		check(
+			`hasNoEstreeCounterpart(${name})${expected ? '' : ' === false'}${expected ? ' === true' : ''}`,
+			actual === expected,
+			`expected ${expected}, got ${actual} (kind=${kind})`,
+		);
+	}
+}
+
 // --- NoESTreeCounterpartError: direct unit assertion of the predicate --
 //
 // `materialize()` throws a typed `NoESTreeCounterpartError` for TS kinds

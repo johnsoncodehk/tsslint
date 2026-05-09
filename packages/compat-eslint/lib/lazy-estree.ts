@@ -3934,7 +3934,17 @@ const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
 	SK.ReadonlyKeyword, SK.StaticKeyword,
 ] as ts.SyntaxKind[]);
 
-function hasNoEstreeCounterpart(kind: ts.SyntaxKind): boolean {
+// Exported so tests can assert classification directly without going
+// through `materialize()` — the cache fast-path inside `materialize`
+// (`convertLazy` pre-registers `SourceFile→Program`) silently masks any
+// `NO_COUNTERPART_NODE_KINDS` membership for cached kinds, so a test
+// like `expect(materialize(sourceFile)).toThrow()` would pass even with
+// `SK.SourceFile` wrongly in the throw set. Direct assertion on the
+// predicate sidesteps the cache. (That exact bug shipped briefly in
+// commit a3cee01, masked until the perf-inline change in b153129
+// moved the predicate onto `shouldSkipAsParent`'s pre-cache path —
+// caught by integration parity-sweep but a unit test would be tighter.)
+export function hasNoEstreeCounterpart(kind: ts.SyntaxKind): boolean {
 	// Trivia (comments, whitespace, shebang, conflict markers).
 	if (kind >= SK.FirstTriviaToken && kind <= SK.LastTriviaToken) return true;
 	// File boundary token.
