@@ -163,7 +163,9 @@ function stripDerivedFields(
 	if (!warnedDroppedFields) {
 		warnedDroppedFields = true;
 		console.warn(
-			`[@tsslint/compat-eslint] Dropping caller-supplied ${dropped.join(', ')}. tsslint derives these per-file from TS (sourceType from externalModuleIndicator/commonJsModuleIndicator; ecmaVersion fixed at 'latest'). Remove these from the convertRule context to silence this warning.`,
+			`[@tsslint/compat-eslint] Dropping caller-supplied ${
+				dropped.join(', ')
+			}. tsslint derives these per-file from TS (sourceType from externalModuleIndicator/commonJsModuleIndicator; ecmaVersion fixed at 'latest'). Remove these from the convertRule context to silence this warning.`,
 		);
 	}
 	const cleaned: Record<string, unknown> = { ...(context as Record<string, unknown>) };
@@ -175,7 +177,7 @@ function stripDerivedFields(
 		delete lo.sourceType;
 		cleaned.languageOptions = lo;
 	}
-	return cleaned as Partial<ESLint.Rule.RuleContext>;
+	return cleaned;
 }
 
 /**

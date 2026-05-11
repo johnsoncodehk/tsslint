@@ -1893,15 +1893,21 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 			name: 'template-literal-types',
 			code: 'type T<S extends string> = `prefix-${S}-suffix`;',
 		},
-		{ name: 'as-const', code: "let _ = { x: 1 } as const;" },
-		{ name: 'asserts-keyword', code: 'function isFoo(x: unknown): asserts x is string { if (typeof x !== "string") throw new Error(); }' },
+		{ name: 'as-const', code: 'let _ = { x: 1 } as const;' },
+		{
+			name: 'asserts-keyword',
+			code: 'function isFoo(x: unknown): asserts x is string { if (typeof x !== "string") throw new Error(); }',
+		},
 		{ name: 'await-keyword', code: 'async function f(xs: AsyncIterable<number>) { for await (const x of xs) {} }' },
 		{ name: 'in-out-variance', code: 'interface Box<in out T> { v: T; }' },
 		{ name: 'override-keyword', code: 'class A { m() {} } class B extends A { override m() {} }' },
 		{ name: 'in-keyword', code: 'function f(o: any) { return "x" in o; }' },
 		{ name: 'instanceof-keyword', code: 'function f(o: unknown) { return o instanceof Error; }' },
 		{ name: 'omitted-expression', code: 'let [a, , c] = [1, 2, 3];' },
-		{ name: 'heritage-clauses', code: 'interface A {} interface B {} class C implements A, B {} class D extends C implements A {}' },
+		{
+			name: 'heritage-clauses',
+			code: 'interface A {} interface B {} class C implements A, B {} class D extends C implements A {}',
+		},
 		{ name: 'export-named-shapes', code: "const a = 1, b = 2; export { a as default, b }; export * as ns from 'm';" },
 		{
 			name: 'import-attributes',
@@ -2150,7 +2156,9 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		if (root.kind === kind) return root;
 		// First try forEachChild (real AST nodes only).
 		let found: ts.Node | undefined;
-		ts.forEachChild(root, c => { found ||= findKind(c, kind); });
+		ts.forEachChild(root, c => {
+			found ||= findKind(c, kind);
+		});
 		if (found) return found;
 		// Fall back to getChildren (surfaces token children too).
 		for (const c of root.getChildren(sf)) {

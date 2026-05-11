@@ -927,11 +927,21 @@ const TYPE_SLOT_TRIGGERS: Partial<Record<ts.SyntaxKind, (owner: any) => void>> =
 // selector), the body drills the child slot via the ESTree shape so
 // each child is constructed and registered in `tsNodeToESTreeNodeMap`.
 export const LISTENER_PRE_MATERIALIZE: Partial<Record<KnownEstreeType, (node: any) => void>> = {
-	ClassDeclaration: n => { void n.body?.body; },
-	ClassExpression: n => { void n.body?.body; },
-	TSInterfaceDeclaration: n => { void n.body?.body; },
-	TSEnumDeclaration: n => { void n.body?.members; },
-	TSModuleDeclaration: n => { void n.body?.body; },
+	ClassDeclaration: n => {
+		void n.body?.body;
+	},
+	ClassExpression: n => {
+		void n.body?.body;
+	},
+	TSInterfaceDeclaration: n => {
+		void n.body?.body;
+	},
+	TSEnumDeclaration: n => {
+		void n.body?.members;
+	},
+	TSModuleDeclaration: n => {
+		void n.body?.body;
+	},
 };
 
 // Pattern-position parent kinds (BinaryExpression-LHS / for-loop-LHS /
@@ -3862,21 +3872,21 @@ const NO_COUNTERPART_NODE_KINDS = new Set<ts.SyntaxKind>([
 	// ESTree shape (see SKIP_AS_PARENT for the "walk past" half of this
 	// pair); calling `materialize()` ON one of these returns nothing
 	// useful, so callers should walk up.
-	SK.SyntaxList,                  // synthetic AST grouping
-	SK.NamedImports,                // → ImportDeclaration.specifiers
-	SK.NamedExports,                // → ExportDeclaration.specifiers
+	SK.SyntaxList, // synthetic AST grouping
+	SK.NamedImports, // → ImportDeclaration.specifiers
+	SK.NamedExports, // → ExportDeclaration.specifiers
 	// (NOT SK.NamespaceImport — same reason as SK.ImportClause: its
 	// `name` slot synthesizes ImportNamespaceSpecifier; the bottom-up
 	// dogfood parity sweep depends on materialize succeeding through it.)
-	SK.NamespaceExport,             // → ExportDeclaration.exported
+	SK.NamespaceExport, // → ExportDeclaration.exported
 	// (NOT included: SK.ImportClause — its `name` slot is what becomes
 	// the synthesized ImportDefaultSpecifier, and ts-ast-scan's bottom-up
 	// walk depends on materializing through ImportClause to register the
 	// ImportDefaultSpecifier wrapper. The container itself produces a
 	// GenericTSNode result that callers already handle via the marker.)
-	SK.JsxAttributes,               // → JSXOpeningElement.attributes
-	SK.CaseBlock,                   // → SwitchStatement.cases
-	SK.HeritageClause,              // → ClassDeclaration.superClass / implements
+	SK.JsxAttributes, // → JSXOpeningElement.attributes
+	SK.CaseBlock, // → SwitchStatement.cases
+	SK.HeritageClause, // → ClassDeclaration.superClass / implements
 	// SK.AssertClause === SK.ImportAttributes (kind 301) — the import-
 	// attributes CONTAINER. Upstream's `convertImportAttributes` flattens
 	// `assertClause.elements` directly into `ImportDeclaration.attributes`
@@ -3887,11 +3897,11 @@ const NO_COUNTERPART_NODE_KINDS = new Set<ts.SyntaxKind>([
 	// the same time (4.5: AssertClause/AssertEntry; 5.x:
 	// ImportAttributes/ImportAttribute).
 	SK.AssertClause,
-	SK.OmittedExpression,           // sparse array hole — represented as null
-	SK.TemplateSpan,                // wrapped in TemplateExpression
-	SK.TemplateLiteralTypeSpan,     // wrapped in TSTemplateLiteralType
-	SK.MissingDeclaration,          // parse error
-	SK.Bundle,                      // multi-file container
+	SK.OmittedExpression, // sparse array hole — represented as null
+	SK.TemplateSpan, // wrapped in TemplateExpression
+	SK.TemplateLiteralTypeSpan, // wrapped in TSTemplateLiteralType
+	SK.MissingDeclaration, // parse error
+	SK.Bundle, // multi-file container
 	// (UnparsedSource / InputFiles existed in older TS; removed in 5.x —
 	// not listed because the SyntaxKind enum no longer has them)
 	// (SK.SourceFile is intentionally NOT here — `convertLazy` pre-
@@ -3922,9 +3932,12 @@ const NO_COUNTERPART_NODE_KINDS = new Set<ts.SyntaxKind>([
 // throw is the correct contract.
 const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
 	// Literal leaves
-	SK.TrueKeyword, SK.FalseKeyword, SK.NullKeyword,
+	SK.TrueKeyword,
+	SK.FalseKeyword,
+	SK.NullKeyword,
 	// Expression leaves
-	SK.ThisKeyword, SK.SuperKeyword,
+	SK.ThisKeyword,
+	SK.SuperKeyword,
 	// TypeKeywordNode-emitted (see convertChildInner). All 13 in
 	// upstream visitor-keys as `TSAnyKeyword` / `TSVoidKeyword` / etc.
 	// `void` is BOTH a type keyword (`x: void`) and a unary operator
@@ -3941,14 +3954,29 @@ const KEYWORD_HAS_ESTREE_COUNTERPART = new Set<ts.SyntaxKind>([
 	// flag-position by parents (`new`, `typeof`, `delete`, etc.) but
 	// those are NOT in this exempt set — they correctly throw.
 
-	SK.AnyKeyword, SK.UnknownKeyword, SK.NumberKeyword, SK.StringKeyword,
-	SK.BooleanKeyword, SK.SymbolKeyword, SK.NeverKeyword, SK.VoidKeyword,
-	SK.UndefinedKeyword, SK.BigIntKeyword, SK.ObjectKeyword, SK.IntrinsicKeyword,
+	SK.AnyKeyword,
+	SK.UnknownKeyword,
+	SK.NumberKeyword,
+	SK.StringKeyword,
+	SK.BooleanKeyword,
+	SK.SymbolKeyword,
+	SK.NeverKeyword,
+	SK.VoidKeyword,
+	SK.UndefinedKeyword,
+	SK.BigIntKeyword,
+	SK.ObjectKeyword,
+	SK.IntrinsicKeyword,
 	// Modifier keywords (TypeKeywordNode-emitted). All 9 in upstream
 	// visitor-keys as `TSAsyncKeyword` / `TSStaticKeyword` / etc.
-	SK.AbstractKeyword, SK.AsyncKeyword, SK.DeclareKeyword, SK.ExportKeyword,
-	SK.PrivateKeyword, SK.ProtectedKeyword, SK.PublicKeyword,
-	SK.ReadonlyKeyword, SK.StaticKeyword,
+	SK.AbstractKeyword,
+	SK.AsyncKeyword,
+	SK.DeclareKeyword,
+	SK.ExportKeyword,
+	SK.PrivateKeyword,
+	SK.ProtectedKeyword,
+	SK.PublicKeyword,
+	SK.ReadonlyKeyword,
+	SK.StaticKeyword,
 ] as ts.SyntaxKind[]);
 
 // Exported so tests can assert classification directly without going
