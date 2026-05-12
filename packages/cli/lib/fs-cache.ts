@@ -31,7 +31,7 @@ const realStatSync = fs.statSync.bind(fs);
 		let entry = statCache.get(key);
 		if (!entry) {
 			try {
-				entry = { kind: 'ok', value: realStatSync(p, { bigint: false }) as fs.Stats };
+				entry = { kind: 'ok', value: realStatSync(p, { bigint: false }) };
 			}
 			catch (err) {
 				entry = { kind: 'err', value: err as NodeJS.ErrnoException };
