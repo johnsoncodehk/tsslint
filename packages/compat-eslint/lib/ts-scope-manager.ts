@@ -1684,7 +1684,7 @@ export class TsScope {
 					}
 					if (existing._mergedSymbols) {
 						for (const ms of existing._mergedSymbols) {
-							if (ms.declarations) for (const d of ms.declarations) existingDecls.add(d);
+							if (ms.declarations) { for (const d of ms.declarations) existingDecls.add(d); }
 						}
 					}
 					const newDecls = sym.declarations ?? [];
