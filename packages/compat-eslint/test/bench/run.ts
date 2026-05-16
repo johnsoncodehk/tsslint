@@ -136,10 +136,25 @@ function loadRule(ruleName: string): unknown {
 	return require(path.join(eslintRoot, 'lib/rules', ruleName + '.js'));
 }
 
-function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
-	const rule = loadRule(ruleName);
+// Pre-register all rules with convertRule BEFORE running any of them on
+// files. convertRule's shared traversal (`runSharedTraversal`) fires once
+// per file using whatever rules are in `ruleRegistry` at that point. If
+// rules are registered one-by-one interleaved with file processing, later
+// rules miss the already-cached traversal. Pre-registering mirrors
+// production usage (importESLintRules registers everything, then the CLI
+// calls the returned functions on files).
+const convertedRules = new Map<string, ReturnType<typeof compat.convertRule>>();
+
+function preRegisterAllRules(): void {
+	for (const [ruleName, options = []] of RULES) {
+		const rule = loadRule(ruleName);
+		convertedRules.set(ruleName, compat.convertRule(rule as any, options as any[], { id: ruleName }));
+	}
+}
+
+function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, _options: unknown[]): DiagLoc[] {
 	const out: DiagLoc[] = [];
-	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName });
+	const tsslintRule = convertedRules.get(ruleName)!;
 	const reportFn: any = (msg: string, start: number, _end: number) => {
 		const lc = sf.getLineAndCharacterOfPosition(start);
 		if (process.env.BENCH_DEBUG && ruleName === process.env.BENCH_DEBUG) {
@@ -285,6 +300,8 @@ async function main() {
 
 	let totalRegressions = 0;
 	let totalFixed = 0;
+
+	preRegisterAllRules();
 
 	for (const [ruleName, options = []] of RULES) {
 		newBaseline[ruleName] = {};

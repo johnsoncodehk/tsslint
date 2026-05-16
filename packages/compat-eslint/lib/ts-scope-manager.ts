@@ -1663,11 +1663,41 @@ export class TsScope {
 		const push = (sym: ts.Symbol | undefined) => {
 			if (!sym || seen.has(sym)) return;
 			seen.add(sym);
-			// Dedupe by name too: TS sometimes produces multiple symbols for the
-			// same lexical binding (e.g. parameter properties have one symbol
-			// for the parameter and another for the synthesized class member).
-			// ESLint expects one Variable per name in a scope.
-			if (seenNames.has(sym.name)) return;
+			// Dedupe by name: TS sometimes produces multiple symbols for the
+			// same lexical binding. Two cases:
+			//   1. Same declaration seen as two symbols (export alias + local
+			//      symbol, parameter property + class member). These share at
+			//      least one declaration node → just register the symbol alias
+			//      for reference resolution, don't add extra defs.
+			//   2. Genuine redeclarations with different symbols and different
+			//      declaration nodes: `function foo` + `var foo`, duplicate
+			//      `class X`, `enum C` + `interface C`. Merge so no-redeclare
+			//      sees all identifiers.
+			if (seenNames.has(sym.name)) {
+				const existing = out.find(v => v.name === sym.name);
+				if (existing) {
+					// Check if the new symbol has any declaration nodes NOT
+					// already covered by the existing variable's symbol(s).
+					const existingDecls = new Set<ts.Node>();
+					if (existing.symbol.declarations) {
+						for (const d of existing.symbol.declarations) existingDecls.add(d);
+					}
+					if (existing._mergedSymbols) {
+						for (const ms of existing._mergedSymbols) {
+							if (ms.declarations) for (const d of ms.declarations) existingDecls.add(d);
+						}
+					}
+					const newDecls = sym.declarations ?? [];
+					const hasNewDecl = newDecls.some(d => !existingDecls.has(d));
+					if (hasNewDecl) {
+						// Genuine redeclaration — merge.
+						(existing._mergedSymbols ??= []).push(sym);
+					}
+					// Always register for reference resolution.
+					this.manager._variableBySymbol.set(sym, existing);
+				}
+				return;
+			}
 			seenNames.add(sym.name);
 			out.push(this.manager._getOrCreateVariable(sym));
 		};
@@ -2266,6 +2296,11 @@ export class TsVariable {
 	_defs?: TsDefinition[];
 	_references?: TsReference[];
 	_identifiers?: TSESTree.Identifier[];
+	// Extra symbols merged into this variable — occurs when TS uses
+	// separate symbols for the same lexical name (e.g. `function foo` +
+	// `var foo` creates two distinct symbols in the checker, but ESLint
+	// scope-manager sees one Variable with two Definitions).
+	_mergedSymbols?: ts.Symbol[];
 	eslintUsed = false;
 	eslintExported = false;
 	eslintExplicitGlobal = false;
@@ -2345,7 +2380,14 @@ export class TsVariable {
 	get defs(): TsDefinition[] {
 		if (this._defsOverride) return this._defsOverride;
 		if (!this._defs) {
-			const decls = this.symbol.declarations ?? [];
+			let decls = this.symbol.declarations ?? [];
+			// Include declarations from merged symbols (e.g. `function foo`
+			// + `var foo` create two TS symbols for the same name).
+			if (this._mergedSymbols) {
+				for (const ms of this._mergedSymbols) {
+					if (ms.declarations) decls = decls.concat(ms.declarations);
+				}
+			}
 			// Filter out declarations that aren't in the user's source file
 			// (e.g. TS lib declarations for `Map`, `Set`, `Promise`).
 			// `materialize()` can't reach those — convertLazy only
