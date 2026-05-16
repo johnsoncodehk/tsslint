@@ -370,64 +370,74 @@ function walkChild(left: any, right: any, isExit: boolean): FastDispatchInfo | n
 			}
 		}
 		if (fieldName) {
-			// 1. Fast fieldFire path — single-level. Trigger on Parent
-			//    (left), extract `target[fieldName]`. Only works when
-			//    `left` is a leaf type matcher (finite trigger types).
-			const parentInfo = walkTypeMatcher(left, isExit);
-			if (parentInfo && parentInfo.types !== 'all') {
-				// Parent-side filters (e.g. `[optional=true]`) check the
-				// triggering node, but `filter` runs on the post-fieldFire
-				// `actual` — wrap them as `actual.parent` checks.
-				const parentSideFilter = parentInfo.filter;
-				const composed = parentSideFilter && extraFilter
-					? (actual: any) => parentSideFilter(actual.parent) && extraFilter!(actual)
-					: parentSideFilter
-					? (actual: any) => parentSideFilter(actual.parent)
-					: extraFilter;
-				return {
-					types: parentInfo.types,
-					isExit,
-					fieldFire: fieldName,
-					typeFilter,
-					filter: composed,
-				};
-			}
-			// 2. Multi-level fast path — when `left` is itself a chain
-			//    (`A > B.f1 > C.f2`), recursively decompose left to a
-			//    fieldFire/fieldChain entry and extend the chain with
-			//    the current `fieldName`. Triggers on the OUTERMOST
-			//    parent (smallest visit set), extracts step-by-step, and
-			//    type-checks intermediates inline. Strictly cheaper than
-			//    triggering on the (numerous) target type and walking up
-			//    the parent chain in a filter.
-			if (left.type === 'child' && (typeFilter || wildcard)) {
-				const leftInfo = walkChild(left.left, left.right, isExit);
-				const leftHasOnlyFastFields = leftInfo
-					&& leftInfo.types !== 'all'
-					&& !leftInfo.filter
-					&& (leftInfo.fieldFire !== undefined || leftInfo.fieldChain !== undefined);
-				if (leftHasOnlyFastFields) {
-					const chain = leftInfo.fieldChain
-						? [...leftInfo.fieldChain]
-						: [leftInfo.fieldFire!];
-					const chainTypes = leftInfo.fieldChainTypes
-						? [...leftInfo.fieldChainTypes]
-						: [leftInfo.typeFilter];
-					chain.push(fieldName);
-					// Final-step type check carried separately via
-					// `typeFilter` so dispatch's existing post-extraction
-					// type gate applies; intermediate types live in
-					// `chainTypes` (parallel to `chain`, last entry =
-					// the new typeFilter to preserve uniformity).
-					chainTypes.push(typeFilter);
+			// fieldFire / fieldChain fast paths trigger on the PARENT's
+			// enter/exit event and extract the child via `target[field]`.
+			// This is only correct for :enter (parent enters before child).
+			// For :exit the child exits BEFORE the parent, so triggering on
+			// the parent's exit fires too late — CPA-dependent rules (e.g.
+			// no-useless-return with `TryStatement > BlockStatement.block:exit`)
+			// observe stale code-path state. Skip to the slow path (3) which
+			// triggers on the child type's own exit with a parent filter.
+			if (!isExit) {
+				// 1. Fast fieldFire path — single-level. Trigger on Parent
+				//    (left), extract `target[fieldName]`. Only works when
+				//    `left` is a leaf type matcher (finite trigger types).
+				const parentInfo = walkTypeMatcher(left, isExit);
+				if (parentInfo && parentInfo.types !== 'all') {
+					// Parent-side filters (e.g. `[optional=true]`) check the
+					// triggering node, but `filter` runs on the post-fieldFire
+					// `actual` — wrap them as `actual.parent` checks.
+					const parentSideFilter = parentInfo.filter;
+					const composed = parentSideFilter && extraFilter
+						? (actual: any) => parentSideFilter(actual.parent) && extraFilter!(actual)
+						: parentSideFilter
+						? (actual: any) => parentSideFilter(actual.parent)
+						: extraFilter;
 					return {
-						types: leftInfo.types,
+						types: parentInfo.types,
 						isExit,
-						fieldChain: chain,
-						fieldChainTypes: chainTypes,
+						fieldFire: fieldName,
 						typeFilter,
-						filter: extraFilter,
+						filter: composed,
 					};
+				}
+				// 2. Multi-level fast path — when `left` is itself a chain
+				//    (`A > B.f1 > C.f2`), recursively decompose left to a
+				//    fieldFire/fieldChain entry and extend the chain with
+				//    the current `fieldName`. Triggers on the OUTERMOST
+				//    parent (smallest visit set), extracts step-by-step, and
+				//    type-checks intermediates inline. Strictly cheaper than
+				//    triggering on the (numerous) target type and walking up
+				//    the parent chain in a filter.
+				if (left.type === 'child' && (typeFilter || wildcard)) {
+					const leftInfo = walkChild(left.left, left.right, isExit);
+					const leftHasOnlyFastFields = leftInfo
+						&& leftInfo.types !== 'all'
+						&& !leftInfo.filter
+						&& (leftInfo.fieldFire !== undefined || leftInfo.fieldChain !== undefined);
+					if (leftHasOnlyFastFields) {
+						const chain = leftInfo.fieldChain
+							? [...leftInfo.fieldChain]
+							: [leftInfo.fieldFire!];
+						const chainTypes = leftInfo.fieldChainTypes
+							? [...leftInfo.fieldChainTypes]
+							: [leftInfo.typeFilter];
+						chain.push(fieldName);
+						// Final-step type check carried separately via
+						// `typeFilter` so dispatch's existing post-extraction
+						// type gate applies; intermediate types live in
+						// `chainTypes` (parallel to `chain`, last entry =
+						// the new typeFilter to preserve uniformity).
+						chainTypes.push(typeFilter);
+						return {
+							types: leftInfo.types,
+							isExit,
+							fieldChain: chain,
+							fieldChainTypes: chainTypes,
+							typeFilter,
+							filter: extraFilter,
+						};
+					}
 				}
 			}
 			// 3. Slow-path fallback: trigger on the compound's type and

@@ -1,9 +1,1 @@
-{
-	"no-useless-return": {
-		"adversarial-tryflow.ts": {
-			"eslintOnly": [
-				"/adversarial-tryflow.ts:39:3"
-			]
-		}
-	}
-}
+{}
