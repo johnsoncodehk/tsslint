@@ -10,13 +10,13 @@ importers:
     devDependencies:
       '@lerna-lite/cli':
         specifier: latest
-        version: 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)
+        version: 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)
       '@lerna-lite/publish':
         specifier: latest
-        version: 5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0)
+        version: 5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0)
       '@types/node':
         specifier: latest
-        version: 25.7.0
+        version: 25.8.0
       '@typescript-eslint/eslint-plugin':
         specifier: latest
         version: 8.59.3(@typescript-eslint/parser@8.59.0(eslint@10.2.1(jiti@2.6.1))(typescript@6.0.3))(eslint@10.2.1(jiti@2.6.1))(typescript@6.0.3)
@@ -33,10 +33,10 @@ importers:
   fixtures/compat-eslint:
     devDependencies:
       '@tsslint/compat-eslint':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../../packages/compat-eslint
       '@tsslint/config':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../../packages/config
       eslint-plugin-expect-type:
         specifier: ^0.4.0
@@ -45,7 +45,7 @@ importers:
   fixtures/compat-tsl:
     devDependencies:
       '@tsslint/config':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../../packages/config
       tsl:
         specifier: ^1.0.28
@@ -54,7 +54,7 @@ importers:
   fixtures/compat-tslint:
     devDependencies:
       '@tsslint/config':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../../packages/config
       tslint:
         specifier: ^6.1.3
@@ -64,7 +64,7 @@ importers:
     devDependencies:
       '@astrojs/ts-plugin':
         specifier: latest
-        version: 1.10.7
+        version: 1.10.8
       '@mdx-js/language-service':
         specifier: latest
         version: 0.7.3
@@ -76,12 +76,12 @@ importers:
         version: 1.7.27(typescript@6.0.3)
       '@vue/language-core':
         specifier: latest
-        version: 3.2.8
+        version: 3.2.9
 
   fixtures/typescript-plugin:
     devDependencies:
       '@tsslint/typescript-plugin':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../../packages/typescript-plugin
       typescript:
         specifier: latest
@@ -90,13 +90,13 @@ importers:
   packages/cli:
     dependencies:
       '@tsslint/config':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../config
       '@tsslint/core':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../core
       '@tsslint/types':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../types
       '@volar/language-core':
         specifier: ~2.4.0
@@ -117,7 +117,7 @@ importers:
   packages/compat-eslint:
     dependencies:
       '@tsslint/types':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../types
       esquery:
         specifier: ^1.5.0
@@ -142,7 +142,7 @@ importers:
   packages/config:
     dependencies:
       '@tsslint/types':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../types
       minimatch:
         specifier: ^10.0.1
@@ -152,7 +152,7 @@ importers:
         version: 1.0.30(typescript@6.0.3)
     devDependencies:
       '@tsslint/compat-eslint':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../compat-eslint
       tslint:
         specifier: ^6.1.3
@@ -161,7 +161,7 @@ importers:
   packages/core:
     dependencies:
       '@tsslint/types':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../types
       minimatch:
         specifier: ^10.0.1
@@ -172,20 +172,20 @@ importers:
   packages/typescript-plugin:
     dependencies:
       '@tsslint/core':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../core
       error-stack-parser:
         specifier: ^2.1.4
         version: 2.1.4
     devDependencies:
       '@tsslint/config':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../config
 
   packages/vscode:
     dependencies:
       '@tsslint/typescript-plugin':
-        specifier: 3.1.2
+        specifier: 3.1.3
         version: link:../typescript-plugin
     devDependencies:
       '@types/vscode':
@@ -200,8 +200,8 @@ packages:
   '@astrojs/compiler@2.13.1':
     resolution: {integrity: sha512-f3FN83d2G/v32ipNClRKgYv30onQlMZX1vCeZMjPsMMPl1mDpmbl0+N5BYo4S/ofzqJyS5hvwacEo0CCVDn/Qg==}
 
-  '@astrojs/ts-plugin@1.10.7':
-    resolution: {integrity: sha512-CFJQgMLxi7F21VMcLBuAQmD9KrnT/ACfhZgdhsmVzOcb5Lscu7MIUl/ZxYDviXqDnhDBF1JzYOj+kusJlGmG8w==}
+  '@astrojs/ts-plugin@1.10.8':
+    resolution: {integrity: sha512-fispa3VB/bRozjeLb8SqsnEWOIX8AIbDM9+yX2WTIhkIgO7axcstQYmfc6Oq0ZYRWQfLqdsW4CKxeClNcJ35tA==}
 
   '@astrojs/yaml2ts@0.2.3':
     resolution: {integrity: sha512-PJzRmgQzUxI2uwpdX2lXSHtP4G8ocp24/t+bZyf5Fy0SZLSF9f9KXZoMlFM/XCGue+B0nH/2IZ7FpBYQATBsCg==}
@@ -998,8 +998,8 @@ packages:
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
 
-  '@types/node@25.7.0':
-    resolution: {integrity: sha512-z+pdZyxE+RTQE9AcboAZCb4otwcrvgHD+GlBpPgn0emDVt0ohrTMhAwlr2Wd9nZ+nihhYFxO2pThz3C5qSu2Eg==}
+  '@types/node@25.8.0':
+    resolution: {integrity: sha512-TCFSk8IZh+iLX1xtksoBVtdmgL+1IX0fC9BeU4QqFSuNdN/K+HUlhqOzEmSYYpZUVsLYcPqc9KX+60iDuninSQ==}
 
   '@types/normalize-package-data@2.4.4':
     resolution: {integrity: sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA==}
@@ -1239,8 +1239,8 @@ packages:
       typescript:
         optional: true
 
-  '@vue/language-core@3.2.8':
-    resolution: {integrity: sha512-9OiSPQFiAAWNVnXb0d2dcTmcKnFQamhuNES6ayyISrb/mwPWVgoGdAqSfCWqKhQpa3D5gDTcYD+w7ObiheZ81g==}
+  '@vue/language-core@3.2.9':
+    resolution: {integrity: sha512-ie0ojt/0fU/GfIogh+zgHbaYRPlt9S+cLOxcWwF7nTSFh897BVgnFKL2byT4kpp1mlqYWZ2psGwSniyE2xsxYw==}
 
   '@vue/shared@3.5.33':
     resolution: {integrity: sha512-5vR2QIlmaLG77Ygd4pMP6+SGQ5yox9VhtnbDWTy9DzMzdmeLxZ1QqxrywEZ9sa1AVubfIJyaCG3ytyWU81ufcQ==}
@@ -1272,8 +1272,8 @@ packages:
   alien-signals@2.0.8:
     resolution: {integrity: sha512-844G1VLkk0Pe2SJjY0J8vp8ADI73IM4KliNu2OGlYzWpO28NexEUvjHTcFjFX3VXoiUtwTbHxLNI9ImkcoBqzA==}
 
-  alien-signals@3.1.2:
-    resolution: {integrity: sha512-d9dYqZTS90WLiU0I5c6DHj/HcKkF8ZyGN3G5x8wSbslulz70KOxaqCT0hQCo9KOyhVqzqGojvNdJXoTumZOtcw==}
+  alien-signals@3.2.1:
+    resolution: {integrity: sha512-I8FjmltrfnDFoZedi5CG8DghVYNhzb/Ijluz7tCSJH0xpd0484Kowhbb1XDYOxfJpU1p5wnM2X54dA+IfGyD1g==}
 
   ansi-escapes@7.3.0:
     resolution: {integrity: sha512-BvU8nYgGQBxcmMuEeUEmNTvrMVjJNSH7RgW24vXexN4Ven6qCvy4TntnvlnwnMLTVlcRQQdbRY8NKnaIoeWDNg==}
@@ -3234,8 +3234,8 @@ packages:
   underscore@1.13.8:
     resolution: {integrity: sha512-DXtD3ZtEQzc7M8m4cXotyHR+FAS18C64asBYY5vqZexfYryNNnDc02W4hKg3rdQuqOYas1jkseX0+nZXjTXnvQ==}
 
-  undici-types@7.21.0:
-    resolution: {integrity: sha512-w9IMgQrz4O0YN1LtB7K5P63vhlIOvC7opSmouCJ+ZywlPAlO9gIkJ+otk6LvGpAs2wg4econaCz3TvQ9xPoyuQ==}
+  undici-types@7.24.6:
+    resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
   undici@6.25.0:
     resolution: {integrity: sha512-ZgpWDC5gmNiuY9CnLVXEH8rl50xhRCuLNA97fAUnKi8RRuV4E6KG31pDTsLVUKnohJE0I3XDrTeEydAXRw47xg==}
@@ -3447,7 +3447,7 @@ snapshots:
 
   '@astrojs/compiler@2.13.1': {}
 
-  '@astrojs/ts-plugin@1.10.7':
+  '@astrojs/ts-plugin@1.10.8':
     dependencies:
       '@astrojs/compiler': 2.13.1
       '@astrojs/yaml2ts': 0.2.3
@@ -3845,46 +3845,46 @@ snapshots:
 
   '@inquirer/ansi@2.0.5': {}
 
-  '@inquirer/core@11.1.9(@types/node@25.7.0)':
+  '@inquirer/core@11.1.9(@types/node@25.8.0)':
     dependencies:
       '@inquirer/ansi': 2.0.5
       '@inquirer/figures': 2.0.5
-      '@inquirer/type': 4.0.5(@types/node@25.7.0)
+      '@inquirer/type': 4.0.5(@types/node@25.8.0)
       cli-width: 4.1.0
       fast-wrap-ansi: 0.2.0
       mute-stream: 3.0.0
       signal-exit: 4.1.0
     optionalDependencies:
-      '@types/node': 25.7.0
+      '@types/node': 25.8.0
 
-  '@inquirer/expand@5.0.13(@types/node@25.7.0)':
+  '@inquirer/expand@5.0.13(@types/node@25.8.0)':
     dependencies:
-      '@inquirer/core': 11.1.9(@types/node@25.7.0)
-      '@inquirer/type': 4.0.5(@types/node@25.7.0)
+      '@inquirer/core': 11.1.9(@types/node@25.8.0)
+      '@inquirer/type': 4.0.5(@types/node@25.8.0)
     optionalDependencies:
-      '@types/node': 25.7.0
+      '@types/node': 25.8.0
 
   '@inquirer/figures@2.0.5': {}
 
-  '@inquirer/input@5.0.12(@types/node@25.7.0)':
+  '@inquirer/input@5.0.12(@types/node@25.8.0)':
     dependencies:
-      '@inquirer/core': 11.1.9(@types/node@25.7.0)
-      '@inquirer/type': 4.0.5(@types/node@25.7.0)
+      '@inquirer/core': 11.1.9(@types/node@25.8.0)
+      '@inquirer/type': 4.0.5(@types/node@25.8.0)
     optionalDependencies:
-      '@types/node': 25.7.0
+      '@types/node': 25.8.0
 
-  '@inquirer/select@5.1.4(@types/node@25.7.0)':
+  '@inquirer/select@5.1.4(@types/node@25.8.0)':
     dependencies:
       '@inquirer/ansi': 2.0.5
-      '@inquirer/core': 11.1.9(@types/node@25.7.0)
+      '@inquirer/core': 11.1.9(@types/node@25.8.0)
       '@inquirer/figures': 2.0.5
-      '@inquirer/type': 4.0.5(@types/node@25.7.0)
+      '@inquirer/type': 4.0.5(@types/node@25.8.0)
     optionalDependencies:
-      '@types/node': 25.7.0
+      '@types/node': 25.8.0
 
-  '@inquirer/type@4.0.5(@types/node@25.7.0)':
+  '@inquirer/type@4.0.5(@types/node@25.8.0)':
     optionalDependencies:
-      '@types/node': 25.7.0
+      '@types/node': 25.8.0
 
   '@isaacs/cliui@9.0.0': {}
 
@@ -3896,10 +3896,10 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@lerna-lite/cli@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)':
+  '@lerna-lite/cli@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)':
     dependencies:
-      '@lerna-lite/core': 5.2.1(@types/node@25.7.0)
-      '@lerna-lite/init': 5.2.1(@types/node@25.7.0)
+      '@lerna-lite/core': 5.2.1(@types/node@25.8.0)
+      '@lerna-lite/init': 5.2.1(@types/node@25.8.0)
       '@lerna-lite/npmlog': 5.1.0
       dedent: 1.7.2
       dotenv: 17.4.2
@@ -3907,17 +3907,17 @@ snapshots:
       load-json-file: 7.0.1
       yargs: 18.0.0
     optionalDependencies:
-      '@lerna-lite/publish': 5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0)
-      '@lerna-lite/version': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/publish': 5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/version': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0)
     transitivePeerDependencies:
       - '@types/node'
       - babel-plugin-macros
 
-  '@lerna-lite/core@5.2.1(@types/node@25.7.0)':
+  '@lerna-lite/core@5.2.1(@types/node@25.8.0)':
     dependencies:
-      '@inquirer/expand': 5.0.13(@types/node@25.7.0)
-      '@inquirer/input': 5.0.12(@types/node@25.7.0)
-      '@inquirer/select': 5.1.4(@types/node@25.7.0)
+      '@inquirer/expand': 5.0.13(@types/node@25.8.0)
+      '@inquirer/input': 5.0.12(@types/node@25.8.0)
+      '@inquirer/select': 5.1.4(@types/node@25.8.0)
       '@lerna-lite/npmlog': 5.1.0
       '@npmcli/run-script': 10.0.4
       ci-info: 4.4.0
@@ -3939,9 +3939,9 @@ snapshots:
       - '@types/node'
       - babel-plugin-macros
 
-  '@lerna-lite/init@5.2.1(@types/node@25.7.0)':
+  '@lerna-lite/init@5.2.1(@types/node@25.8.0)':
     dependencies:
-      '@lerna-lite/core': 5.2.1(@types/node@25.7.0)
+      '@lerna-lite/core': 5.2.1(@types/node@25.8.0)
       p-map: 7.0.4
       write-json-file: 7.0.0
     transitivePeerDependencies:
@@ -3953,12 +3953,12 @@ snapshots:
       fast-string-width: 3.0.2
       signal-exit: 4.1.0
 
-  '@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0)':
+  '@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0)':
     dependencies:
-      '@lerna-lite/cli': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)
-      '@lerna-lite/core': 5.2.1(@types/node@25.7.0)
+      '@lerna-lite/cli': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)
+      '@lerna-lite/core': 5.2.1(@types/node@25.8.0)
       '@lerna-lite/npmlog': 5.1.0
-      '@lerna-lite/version': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0)
+      '@lerna-lite/version': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0)
       '@npmcli/arborist': 9.4.3
       '@npmcli/package-json': 7.0.5
       ci-info: 4.4.0
@@ -3984,11 +3984,11 @@ snapshots:
       - conventional-commits-filter
       - supports-color
 
-  '@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0)':
+  '@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0)':
     dependencies:
       '@conventional-changelog/git-client': 2.7.0(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)
-      '@lerna-lite/cli': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)(conventional-commits-filter@5.0.0))(@types/node@25.7.0)
-      '@lerna-lite/core': 5.2.1(@types/node@25.7.0)
+      '@lerna-lite/cli': 5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@lerna-lite/version@5.2.1(@lerna-lite/publish@5.2.1(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)(conventional-commits-filter@5.0.0))(@types/node@25.8.0)
+      '@lerna-lite/core': 5.2.1(@types/node@25.8.0)
       '@lerna-lite/npmlog': 5.1.0
       '@octokit/plugin-enterprise-rest': 6.0.1
       '@octokit/rest': 22.0.1
@@ -4430,9 +4430,9 @@ snapshots:
 
   '@types/ms@2.1.0': {}
 
-  '@types/node@25.7.0':
+  '@types/node@25.8.0':
     dependencies:
-      undici-types: 7.21.0
+      undici-types: 7.24.6
 
   '@types/normalize-package-data@2.4.4': {}
 
@@ -4805,12 +4805,12 @@ snapshots:
     optionalDependencies:
       typescript: 6.0.3
 
-  '@vue/language-core@3.2.8':
+  '@vue/language-core@3.2.9':
     dependencies:
       '@volar/language-core': 2.4.28
       '@vue/compiler-dom': 3.5.33
       '@vue/shared': 3.5.33
-      alien-signals: 3.1.2
+      alien-signals: 3.2.1
       muggle-string: 0.4.1
       path-browserify: 1.0.1
       picomatch: 4.0.4
@@ -4843,7 +4843,7 @@ snapshots:
 
   alien-signals@2.0.8: {}
 
-  alien-signals@3.1.2: {}
+  alien-signals@3.2.1: {}
 
   ansi-escapes@7.3.0:
     dependencies:
@@ -7168,7 +7168,7 @@ snapshots:
 
   underscore@1.13.8: {}
 
-  undici-types@7.21.0: {}
+  undici-types@7.24.6: {}
 
   undici@6.25.0: {}
 
