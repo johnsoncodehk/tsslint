@@ -122,7 +122,11 @@ function detectRuleLoader(
 					() => {
 						try {
 							const m = require(filePath);
-							return (m && 'default' in m ? m.default : m);
+							if (m && 'default' in m) return m.default;
+							if (m && typeof m === 'object' && typeof m.create === 'function') return m;
+							// Unrecognized format (e.g. named exports) — return
+							// undefined so loadRule falls back to whole-plugin load.
+							return undefined;
 						}
 						catch {
 							return undefined;
