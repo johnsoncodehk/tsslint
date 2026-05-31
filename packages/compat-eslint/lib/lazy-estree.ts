@@ -2029,9 +2029,9 @@ defineShape<ts.ImportAttribute>(SK.ImportAttribute, {
 defineShape<ts.TypeParameterDeclaration>(SK.TypeParameter, {
 	type: 'TSTypeParameter',
 	consts: tn => ({
-		const: !!tn.modifiers?.some(m => m.kind === SK.ConstKeyword),
-		in: !!tn.modifiers?.some(m => m.kind === SK.InKeyword),
-		out: !!tn.modifiers?.some(m => m.kind === SK.OutKeyword),
+		const: hasMod(tn, SK.ConstKeyword),
+		in: hasMod(tn, SK.InKeyword),
+		out: hasMod(tn, SK.OutKeyword),
 	}),
 	slots: {
 		name: { tsField: 'name' },
@@ -2100,7 +2100,7 @@ defineShape<ts.TypeReferenceNode>(SK.TypeReference, {
 defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 	type: 'TSConstructorType',
 	consts: tn => ({
-		abstract: !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword),
+		abstract: hasMod(tn, SK.AbstractKeyword),
 	}),
 	slots: {
 		typeParameters: { tsField: 'typeParameters', via: convertTypeParameters, whenAbsent: 'undefined' },
@@ -2111,7 +2111,7 @@ defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 	type: 'TSModuleDeclaration',
 	consts: tn => ({
-		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		declare: hasMod(tn, SK.DeclareKeyword),
 		global: !!(tn.flags & ts.NodeFlags.GlobalAugmentation),
 		// `declare global { ... }` is `kind: 'global'` per typescript-estree.
 		// Distinct from `namespace` and `module` — scope-manager's
@@ -2148,7 +2148,7 @@ defineShape<ts.EnumMember>(SK.EnumMember, {
 defineShape<ts.TypeAliasDeclaration>(SK.TypeAliasDeclaration, {
 	type: 'TSTypeAliasDeclaration',
 	consts: tn => ({
-		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		declare: hasMod(tn, SK.DeclareKeyword),
 	}),
 	slots: {
 		id: { tsField: 'name' },
@@ -2170,8 +2170,8 @@ defineShape<ts.IndexSignatureDeclaration>(SK.IndexSignature, {
 	type: 'TSIndexSignature',
 	defaults: { accessibility: undefined },
 	consts: tn => ({
-		readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
-		static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
+		readonly: hasMod(tn, SK.ReadonlyKeyword),
+		static: hasMod(tn, SK.StaticKeyword),
 	}),
 	slots: {
 		parameters: { tsField: 'parameters', via: 'convertChildren' },
@@ -2405,7 +2405,7 @@ defineShape<ts.PropertySignature>(SK.PropertySignature, {
 	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
 		optional: !!tn.questionToken,
-		readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
+		readonly: hasMod(tn, SK.ReadonlyKeyword),
 	}),
 	slots: {
 		key: { tsField: 'name' },
@@ -2418,7 +2418,7 @@ defineShape<ts.MethodSignature>(SK.MethodSignature, {
 	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
 		optional: !!tn.questionToken,
-		readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
+		readonly: hasMod(tn, SK.ReadonlyKeyword),
 	}),
 	slots: {
 		key: { tsField: 'name' },
@@ -2437,7 +2437,7 @@ defineShape<ts.FunctionTypeNode>(SK.FunctionType, {
 });
 defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 	type: 'TSConstructorType',
-	consts: tn => ({ abstract: !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword) }),
+	consts: tn => ({ abstract: hasMod(tn, SK.AbstractKeyword) }),
 	slots: {
 		params: { tsField: 'parameters', via: 'convertChildren' },
 		returnType: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
@@ -2629,8 +2629,8 @@ defineShape<ts.Block>(SK.Block, {
 defineShape<ts.EnumDeclaration>(SK.EnumDeclaration, {
 	type: 'TSEnumDeclaration',
 	consts: tn => ({
-		const: !!tn.modifiers?.some(m => m.kind === SK.ConstKeyword),
-		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		const: hasMod(tn, SK.ConstKeyword),
+		declare: hasMod(tn, SK.DeclareKeyword),
 	}),
 	slots: {
 		id: { tsField: 'name' },
@@ -2641,7 +2641,7 @@ defineShape<ts.EnumDeclaration>(SK.EnumDeclaration, {
 defineShape<ts.InterfaceDeclaration>(SK.InterfaceDeclaration, {
 	type: 'TSInterfaceDeclaration',
 	consts: tn => ({
-		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		declare: hasMod(tn, SK.DeclareKeyword),
 	}),
 	slots: {
 		id: { tsField: 'name' },
@@ -2897,7 +2897,7 @@ defineShape<ts.VariableStatement>(SK.VariableStatement, {
 			: 'var';
 		return {
 			kind,
-			declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+			declare: hasMod(tn, SK.DeclareKeyword),
 		};
 	},
 	slots: {
@@ -3360,8 +3360,8 @@ defineShape<ts.FunctionDeclaration>(SK.FunctionDeclaration, {
 	type: tn => tn.body ? 'FunctionDeclaration' : 'TSDeclareFunction',
 	defaults: { expression: false },
 	consts: tn => ({
-		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
-		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		async: hasMod(tn, SK.AsyncKeyword),
+		declare: hasMod(tn, SK.DeclareKeyword),
 		generator: !!tn.asteriskToken,
 	}),
 	slots: {
@@ -3376,7 +3376,7 @@ defineShape<ts.FunctionExpression>(SK.FunctionExpression, {
 	type: 'FunctionExpression',
 	defaults: { declare: false, expression: false },
 	consts: tn => ({
-		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		async: hasMod(tn, SK.AsyncKeyword),
 		generator: !!tn.asteriskToken,
 	}),
 	slots: {
@@ -3391,7 +3391,7 @@ defineShape<ts.ArrowFunction>(SK.ArrowFunction, {
 	type: 'ArrowFunctionExpression',
 	defaults: { generator: false, id: null },
 	consts: tn => ({
-		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		async: hasMod(tn, SK.AsyncKeyword),
 		// `() => x` is expression-bodied; `() => { x }` is not.
 		expression: tn.body.kind !== SK.Block,
 	}),
@@ -3425,8 +3425,8 @@ const classShape = makeShapeClass<ts.ClassDeclaration | ts.ClassExpression>({
 	type: tn => tn.kind === SK.ClassDeclaration ? 'ClassDeclaration' : 'ClassExpression',
 	defaults: { superTypeParameters: undefined },
 	consts: tn => ({
-		abstract: !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword),
-		declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
+		abstract: hasMod(tn, SK.AbstractKeyword),
+		declare: hasMod(tn, SK.DeclareKeyword),
 	}),
 	// `compute` slots derive from the whole TS node — heritageClauses /
 	// modifiers can be absent and a `tsField`-keyed slot would
@@ -3502,25 +3502,20 @@ defineShape<ts.ExpressionWithTypeArguments>(SK.ExpressionWithTypeArguments, {
 // PropertyDeclaration → 4 type variants based on modifiers.
 defineShape<ts.PropertyDeclaration>(SK.PropertyDeclaration, {
 	type: tn => {
-		const isAbstract = !!tn.modifiers?.some(m => m.kind === SK.AbstractKeyword);
-		const isAccessor = !!tn.modifiers?.some(m => m.kind === SK.AccessorKeyword);
+		const isAbstract = hasMod(tn, SK.AbstractKeyword);
+		const isAccessor = hasMod(tn, SK.AccessorKeyword);
 		if (isAbstract && isAccessor) return 'TSAbstractAccessorProperty';
 		if (isAbstract) return 'TSAbstractPropertyDefinition';
 		if (isAccessor) return 'AccessorProperty';
 		return 'PropertyDefinition';
 	},
 	consts: tn => {
-		const accMod = tn.modifiers?.find(m =>
-			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
-		);
 		return {
-			static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
-			override: !!tn.modifiers?.some(m => m.kind === SK.OverrideKeyword),
-			readonly: !!tn.modifiers?.some(m => m.kind === SK.ReadonlyKeyword),
-			declare: !!tn.modifiers?.some(m => m.kind === SK.DeclareKeyword),
-			accessibility: accMod
-				? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
-				: undefined,
+			static: hasMod(tn, SK.StaticKeyword),
+			override: hasMod(tn, SK.OverrideKeyword),
+			readonly: hasMod(tn, SK.ReadonlyKeyword),
+			declare: hasMod(tn, SK.DeclareKeyword),
+			accessibility: accessibilityOf(tn),
 			computed: tn.name.kind === SK.ComputedPropertyName,
 			optional: !!tn.questionToken,
 			definite: !!tn.exclamationToken,
@@ -3620,9 +3615,6 @@ const methodDefinitionShape = makeShapeClass<
 			? 'TSAbstractMethodDefinition'
 			: 'MethodDefinition',
 	consts: tn => {
-		const accMod = tn.modifiers?.find(m =>
-			m.kind === SK.PublicKeyword || m.kind === SK.PrivateKeyword || m.kind === SK.ProtectedKeyword
-		);
 		return {
 			kind: tn.kind === SK.Constructor
 				? 'constructor'
@@ -3631,11 +3623,9 @@ const methodDefinitionShape = makeShapeClass<
 				: tn.kind === SK.SetAccessor
 				? 'set'
 				: 'method',
-			static: !!tn.modifiers?.some(m => m.kind === SK.StaticKeyword),
-			override: !!tn.modifiers?.some(m => m.kind === SK.OverrideKeyword),
-			accessibility: accMod
-				? (accMod.kind === SK.PublicKeyword ? 'public' : accMod.kind === SK.PrivateKeyword ? 'private' : 'protected')
-				: undefined,
+			static: hasMod(tn, SK.StaticKeyword),
+			override: hasMod(tn, SK.OverrideKeyword),
+			accessibility: accessibilityOf(tn),
 			computed: tn.kind !== SK.Constructor
 				&& !!(tn as ts.MethodDeclaration).name
 				&& (tn as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName,
@@ -4432,7 +4422,7 @@ const MethodFunctionExpressionNode = makeShapeClass<
 	defaults: { id: null, declare: false, expression: false },
 	registersInMaps: () => false,
 	consts: tn => ({
-		async: !!tn.modifiers?.some(m => m.kind === SK.AsyncKeyword),
+		async: hasMod(tn, SK.AsyncKeyword),
 		generator: !!(tn as ts.MethodDeclaration).asteriskToken,
 	}),
 	range: tn => {
@@ -4511,6 +4501,19 @@ const TSEnumBodyNode = makeShapeClass<ts.EnumDeclaration>({
 // Pull `@dec` decorators out of a node's `modifiers` array. TS folds
 // decorators and modifiers into one list since 4.8; typescript-estree
 // emits them as a separate `decorators` slot on the owning ESTree node.
+function hasMod(tsNode: ts.Node, kind: ts.SyntaxKind): boolean {
+	const ms = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
+	return !!ms?.some(m => m.kind === kind);
+}
+function accessibilityOf(tsNode: ts.Node): 'public' | 'private' | 'protected' | undefined {
+	const ms = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
+	const m = ms?.find(x =>
+		x.kind === SK.PublicKeyword || x.kind === SK.PrivateKeyword || x.kind === SK.ProtectedKeyword
+	);
+	return m
+		? (m.kind === SK.PublicKeyword ? 'public' : m.kind === SK.PrivateKeyword ? 'private' : 'protected')
+		: undefined;
+}
 function convertDecorators(tsNode: ts.Node, parent: LazyNode): (LazyNode | null)[] {
 	const modifiers = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
 	if (!modifiers) return [];
