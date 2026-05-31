@@ -18,7 +18,13 @@
 // don't pre-build ancestors either.
 
 import * as ts from 'typescript';
-import { type ConvertContext, GENERIC_TS_NODE_MARKER, materialize, NoESTreeCounterpartError } from './lazy-estree';
+import {
+	type ConvertContext,
+	GENERIC_TS_NODE_MARKER,
+	isOutermostOptionalChain,
+	materialize,
+	NoESTreeCounterpartError,
+} from './lazy-estree';
 import { UnsupportedSelectorError } from './selector-analysis';
 
 const SK = ts.SyntaxKind;
@@ -108,55 +114,10 @@ function isUpdateOp(op: ts.SyntaxKind): boolean {
 	return op === SK.PlusPlusToken || op === SK.MinusMinusToken;
 }
 
-// ChainExpression detection. typescript-estree wraps the OUTERMOST node
-// of an optional-chain in ChainExpression — the inner accesses end up as
-// plain MemberExpression / CallExpression. Predicate only fires on the
-// outermost: a chain-shaped node (PropertyAccess / ElementAccess / Call)
-// where (a) some descendant in the chain has `?.`, and (b) the parent
-// doesn't extend this chain via `.expression` / `.callee`.
-function chainHasQuestionDot(n: ts.Node): boolean {
-	if (n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression) {
-		const acc = n as ts.PropertyAccessExpression | ts.ElementAccessExpression;
-		if (acc.questionDotToken) return true;
-		return chainHasQuestionDot(acc.expression);
-	}
-	if (n.kind === SK.CallExpression) {
-		const ce = n as ts.CallExpression;
-		if (ce.questionDotToken) return true;
-		return chainHasQuestionDot(ce.expression);
-	}
-	if (n.kind === SK.NonNullExpression) {
-		return chainHasQuestionDot((n as ts.NonNullExpression).expression);
-	}
-	return false;
-}
-function parentExtendsChainOf(parent: ts.Node, child: ts.Node): boolean {
-	if (
-		parent.kind === SK.PropertyAccessExpression
-		|| parent.kind === SK.ElementAccessExpression
-	) {
-		return (parent as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression === child;
-	}
-	if (parent.kind === SK.CallExpression) {
-		return (parent as ts.CallExpression).expression === child;
-	}
-	if (parent.kind === SK.NonNullExpression) {
-		return (parent as ts.NonNullExpression).expression === child;
-	}
-	return false;
-}
-function isOutermostOptionalChain(n: ts.Node): boolean {
-	if (
-		n.kind !== SK.PropertyAccessExpression
-		&& n.kind !== SK.ElementAccessExpression
-		&& n.kind !== SK.CallExpression
-	) {
-		return false;
-	}
-	if (!chainHasQuestionDot(n)) return false;
-	if (n.parent && parentExtendsChainOf(n.parent, n)) return false;
-	return true;
-}
+// ChainExpression detection (`isOutermostOptionalChain`) lives in lazy-estree
+// and is imported above — the materializer's `wrapChainIfNeeded` and this
+// predicate share it so the produced shape and the dispatch trigger can't
+// disagree on what the outermost link is.
 
 function hasModifier(n: ts.Node, kind: ts.SyntaxKind): boolean {
 	return !!(n as { modifiers?: ReadonlyArray<ts.ModifierLike> }).modifiers
@@ -962,6 +923,19 @@ export function hasPredicate(estreeType: string): boolean {
 	return PREDICATES[estreeType] !== undefined;
 }
 
+// Every ESTree type whose predicate fires for `node`. Exposed for the
+// predicate↔materializer consistency test: for any type T this returns,
+// materialize(node) must produce a node of type T somewhere in its chain —
+// else a rule listening on T is told (by dispatch) this node is a T while
+// materialize builds something else. Keeps PREDICATES itself private.
+export function predicatesMatching(node: ts.Node): string[] {
+	const out: string[] = [];
+	for (const t in PREDICATES) {
+		if (PREDICATES[t](node)) out.push(t);
+	}
+	return out;
+}
+
 // Predicate that fires on every node — used when a rule registers a
 // wildcard-typed listener (`*`, `Parent > *`, etc.) or when CPA mode
 // needs CodePathAnalyzer to see every ts.Node. Stash an all-ones bitmap
@@ -1193,7 +1167,7 @@ export function tsScanTraverse(
 // head is actually a wrapper. Saves the while-loop body for ~95% of hits.
 // The Set itself lives near the top of the file so visit() can use it for
 // its inline fast path.
-function unwrapChain(node: unknown): unknown[] {
+export function unwrapChain(node: unknown): unknown[] {
 	const chain: unknown[] = [];
 	let cur: unknown = node;
 	while (cur) {

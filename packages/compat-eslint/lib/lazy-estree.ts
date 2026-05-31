@@ -521,10 +521,14 @@ abstract class LazyNode {
 	// (it usually does after a getter call), this stays cheap.
 	protected _extendRange(childRange: [number, number]) {
 		const r = this.range;
-		if (childRange[0] < r[0]) r[0] = childRange[0];
-		if (childRange[1] > r[1]) r[1] = childRange[1];
-		// Invalidate cached loc — will recompute next .loc read.
-		this._loc = undefined;
+		const lo = childRange[0] < r[0] ? childRange[0] : r[0];
+		const hi = childRange[1] > r[1] ? childRange[1] : r[1];
+		if (lo === r[0] && hi === r[1]) return;
+		// Assign a FRESH array (the setter also invalidates _loc). A leaf built
+		// bottom-up can be range-extended later when its parent attaches a
+		// typeAnnotation; mutating `r` in place would silently change a `.range`
+		// array a rule may already hold.
+		this.range = [lo, hi];
 	}
 }
 
@@ -1419,6 +1423,14 @@ export function materialize(tsNode: ts.Node, ctx: ConvertContext): LazyNode {
 	if (hasNoEstreeCounterpart(tsNode.kind)) {
 		throw new NoESTreeCounterpartError(tsNode);
 	}
+	// A CatchClause's `variableDeclaration` has no ESTree counterpart: the
+	// binding surfaces as `CatchClause.param` (Identifier). Without this guard
+	// the `VariableDeclaration → VariableDeclarator` shape builds a phantom
+	// VariableDeclarator at the param's position. Throw so callers walk up /
+	// skip (convertChild of `CatchClause.param` reaches the Identifier).
+	if (tsNode.kind === SK.VariableDeclaration && tsNode.parent?.kind === SK.CatchClause) {
+		throw new NoESTreeCounterpartError(tsNode);
+	}
 	// If our TS parent reaches us through a synthetic wrapper, route via the
 	// parent's slot getter rather than constructing directly. The getter
 	// builds the wrapper AND registers our inner ESTree counterpart in the
@@ -1570,7 +1582,12 @@ function maybeFixExports(
 	inner: LazyNode,
 	parent: LazyNode | null | undefined,
 ): LazyNode {
-	const modifiers = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
+	// `ts.getModifiers` (keyword modifiers only), NOT raw `node.modifiers`:
+	// since TS 4.8 decorators live in `modifiers` in source order, so
+	// `@dec export class` has `modifiers[0]` = the Decorator. getModifiers
+	// excludes decorators (matching typescript-estree's fixExports), so the
+	// `export` keyword is first whatever the decorator position.
+	const modifiers = ts.canHaveModifiers(tsNode) ? ts.getModifiers(tsNode) : undefined;
 	if (!modifiers?.length || modifiers[0].kind !== SK.ExportKeyword) return inner;
 	const exportKeyword = modifiers[0];
 	const next = modifiers[1];
@@ -2272,7 +2289,10 @@ defineShape<ts.NewExpression>(SK.NewExpression, {
 	defaults: { typeParameters: undefined },
 	slots: {
 		callee: { tsField: 'expression' },
-		arguments: { tsField: 'arguments', via: (args, parent) => convertChildren(args ?? [], parent) },
+		// `new Foo` (no parens) has `node.arguments === undefined`; a `tsField`
+		// slot would short-circuit to null before `?? []`, but eager emits `[]`.
+		// `compute` always runs.
+		arguments: { compute: (tn: ts.NewExpression, parent) => convertChildren(tn.arguments ?? [], parent) },
 		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
 	},
 });
@@ -2347,9 +2367,13 @@ defineShape<ts.RegularExpressionLiteral>(SK.RegularExpressionLiteral, {
 	type: 'Literal',
 	slots: {},
 	consts: tn => {
-		const m = /^\/(.+)\/([gimsuy]*)$/.exec(tn.text);
-		const pattern = m?.[1] ?? '';
-		const flags = m?.[2] ?? '';
+		// Split on the LAST `/` (matching typescript-estree and tokens.ts). A
+		// `[gimsuy]` flag whitelist silently breaks on `d` (ES2022) / `v`
+		// (ES2024) / any future flag — the regex fails to match and
+		// pattern/flags both go empty.
+		const lastSlash = tn.text.lastIndexOf('/');
+		const pattern = tn.text.slice(1, lastSlash);
+		const flags = tn.text.slice(lastSlash + 1);
 		return { raw: tn.text, regex: { pattern, flags } };
 	},
 	init: (instance, tn) => {
@@ -3232,7 +3256,11 @@ const sequenceExpressionShape = makeShapeClass<ts.BinaryExpression>({
 					&& left.type === 'SequenceExpression'
 					&& be.left.kind !== SK.ParenthesizedExpression
 				) {
+					// Re-point each flattened operand to the OUTER sequence so
+					// `operand.parent` matches eager (traversal reaches them via
+					// the outer node's `expressions` slot, not the inner).
 					for (const e of (left as unknown as { expressions: (LazyNode | null)[] }).expressions) {
+						if (e) (e as { parent: LazyNode }).parent = parent;
 						out.push(e);
 					}
 				}
@@ -4065,53 +4093,75 @@ function convertTypeAnnotation(child: ts.Node, parent: LazyNode): LazyNode {
 	return wrapper;
 }
 
-// Optional-chain wrapping (mirrors typescript-estree's `convertChainExpression`,
-// line 182). Each MemberExpression / CallExpression that's part of an
-// optional chain gets handled here:
-//   - If neither the current node is optional NOR its child is already a
-//     ChainExpression, return as-is (most common path).
-//   - If the child is a ChainExpression (and we're not parenthesized),
-//     UNWRAP it: take child.expression as our new object/callee, then wrap
-//     the result in a fresh ChainExpression. This collapses nested chain
-//     expressions to a single outer ChainExpression covering the whole.
-//   - Otherwise (we're optional, child isn't yet a chain), wrap us in a
-//     fresh ChainExpression.
-//
-// Side effect: forces `object`/`callee` materialisation so we can see
-// whether the child is a ChainExpression. The optional-chain code path
-// is rare enough that this eager step is cheap.
+// Optional-chain shape detection. typescript-estree wraps only the OUTERMOST
+// node of an optional chain in ChainExpression; inner accesses stay plain
+// MemberExpression / CallExpression. These three helpers are the single source
+// of truth for "what is the outermost link" — `wrapChainIfNeeded` (the
+// materializer) and ts-ast-scan's ChainExpression predicate (the dispatch
+// trigger) both consult them, so the produced shape and the visited target
+// can't disagree.
+export function chainHasQuestionDot(n: ts.Node): boolean {
+	if (n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression) {
+		const acc = n as ts.PropertyAccessExpression | ts.ElementAccessExpression;
+		if (acc.questionDotToken) return true;
+		return chainHasQuestionDot(acc.expression);
+	}
+	if (n.kind === SK.CallExpression) {
+		const ce = n as ts.CallExpression;
+		if (ce.questionDotToken) return true;
+		return chainHasQuestionDot(ce.expression);
+	}
+	if (n.kind === SK.NonNullExpression) {
+		return chainHasQuestionDot((n as ts.NonNullExpression).expression);
+	}
+	return false;
+}
+export function parentExtendsChainOf(parent: ts.Node, child: ts.Node): boolean {
+	if (
+		parent.kind === SK.PropertyAccessExpression
+		|| parent.kind === SK.ElementAccessExpression
+	) {
+		return (parent as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression === child;
+	}
+	if (parent.kind === SK.CallExpression) {
+		return (parent as ts.CallExpression).expression === child;
+	}
+	if (parent.kind === SK.NonNullExpression) {
+		return (parent as ts.NonNullExpression).expression === child;
+	}
+	return false;
+}
+export function isOutermostOptionalChain(n: ts.Node): boolean {
+	if (
+		n.kind !== SK.PropertyAccessExpression
+		&& n.kind !== SK.ElementAccessExpression
+		&& n.kind !== SK.CallExpression
+	) {
+		return false;
+	}
+	if (!chainHasQuestionDot(n)) return false;
+	if (n.parent && parentExtendsChainOf(n.parent, n)) return false;
+	return true;
+}
+
+// Optional-chain wrapping (mirrors typescript-estree's `convertChainExpression`).
+// Wrap ONLY the outermost link of an optional chain in a ChainExpression; inner
+// links stay plain. `isOutermostOptionalChain` is a pure ts.Node check, so this
+// is build-order independent: a bottom-up `materialize()` of an inner link (e.g.
+// `a?.b` in `a?.b.c`) returns the plain node, never a phantom ChainExpression
+// that the eventual outer build would have to unwrap and re-point.
 function wrapChainIfNeeded(
 	result: LazyNode,
 	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
 	parent: LazyNode | null | undefined,
 ): LazyNode {
-	const r = result as unknown as {
-		type: string;
-		object?: LazyNode;
-		callee?: LazyNode;
-		optional?: boolean;
-		_ctx: ConvertContext;
-	};
-	const isMember = r.type === 'MemberExpression';
-	const child = isMember ? r.object : r.callee;
-	const isOptional = !!r.optional;
-	const isChildChain = (child as { type?: string } | null | undefined)?.type === 'ChainExpression'
-		&& (tsNode as ts.PropertyAccessExpression).expression?.kind !== SK.ParenthesizedExpression;
-	if (!isChildChain && !isOptional) return result;
-	if (isChildChain) {
-		// Unwrap: pull out child.expression, point us at it instead.
-		const inner = (child as unknown as { expression: LazyNode }).expression;
-		const tsChildField = isMember
-			? (tsNode as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression
-			: (tsNode as ts.CallExpression).expression;
-		// Pull cache from the just-built inner result (always non-null);
-		// the dispatch's `parent` may be null at the root, so don't rely
-		// on it.
-		r._ctx.maps.tsNodeToESTreeNodeMap.set(tsChildField, inner);
-		if (isMember) (result as unknown as { _object: LazyNode })._object = inner;
-		else (result as unknown as { _callee: LazyNode })._callee = inner;
-		(inner as { parent: LazyNode }).parent = result;
-	}
+	if (!isOutermostOptionalChain(tsNode)) return result;
+	// Force the inner `object`/`callee` getter before the wrapper claims the TS
+	// slot, so the inner access parents to `result` (the Member/CallExpression),
+	// matching eager — without it a bottom-up `materialize()` of an inner node
+	// resolves its parent up to the cache-claimed wrapper instead.
+	const r = result as unknown as { type: string; object?: LazyNode; callee?: LazyNode };
+	void (r.type === 'MemberExpression' ? r.object : r.callee);
 	return new ChainExpressionWrappingNode(tsNode, parent, result);
 }
 
