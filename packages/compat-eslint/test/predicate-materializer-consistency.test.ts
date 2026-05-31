@@ -46,7 +46,8 @@ const SNIPPETS: Array<{ name: string; code: string; tsx?: boolean }> = [
 	{ name: 'export-after-decorator', code: 'export @dec class C {}' },
 	{
 		name: 'plain-exports',
-		code: 'export class C {}\nexport default function f() {}\nexport const x = 1;\nexport { x };\nexport * from "m";\nexport = x;',
+		code:
+			'export class C {}\nexport default function f() {}\nexport const x = 1;\nexport { x };\nexport * from "m";\nexport = x;',
 	},
 	{ name: 'optional-chains', code: 'a?.b.c; a?.b(); (a?.b).c; a?.b!; a?.b!.c; a?.b?.c; fn?.(); a?.[k];' },
 	{
@@ -70,7 +71,8 @@ const SNIPPETS: Array<{ name: string; code: string; tsx?: boolean }> = [
 	},
 	{
 		name: 'imports',
-		code: 'import d from "m"; import * as ns from "m"; import { a, b as c } from "m"; import type { T } from "m"; import x = require("m");',
+		code:
+			'import d from "m"; import * as ns from "m"; import { a, b as c } from "m"; import type { T } from "m"; import x = require("m");',
 	},
 	{
 		name: 'decls',
@@ -79,7 +81,11 @@ const SNIPPETS: Array<{ name: string; code: string; tsx?: boolean }> = [
 	},
 	{ name: 'templates', code: 'const a = `x${y}z`; const b = tag`p${q}r`; const c = `nosub`;' },
 	{ name: 'operators', code: 'void x; typeof x; delete x.y; -x; !x; ~x; ++x; x--; x ||= 1; x &&= 2; x ??= 3; a ** b;' },
-	{ name: 'jsx', tsx: true, code: 'const e = <Foo.Bar a="1" {...p}>{x}{}<svg:rect /></Foo.Bar>; const f = <></>; const g = <Foo />;' },
+	{
+		name: 'jsx',
+		tsx: true,
+		code: 'const e = <Foo.Bar a="1" {...p}>{x}{}<svg:rect /></Foo.Bar>; const f = <></>; const g = <Foo />;',
+	},
 ];
 
 const seenKinds = new Set<ts.SyntaxKind>();
@@ -102,10 +108,10 @@ function collectTypes(node: any, into: Set<string>, seen: Set<any>): void {
 	if (!node || typeof node !== 'object' || seen.has(node)) return;
 	seen.add(node);
 	if (typeof node.type === 'string') into.add(node.type);
-	const keys = (visitorKeys as Record<string, readonly string[]>)[node.type] ?? [];
+	const keys = visitorKeys[node.type] ?? [];
 	for (const k of keys) {
 		const child = node[k];
-		if (Array.isArray(child)) for (const c of child) collectTypes(c, into, seen);
+		if (Array.isArray(child)) { for (const c of child) collectTypes(c, into, seen); }
 		else if (child && typeof child === 'object') collectTypes(child, into, seen);
 	}
 }
@@ -159,7 +165,9 @@ if (fs.existsSync(corpusDir)) {
 console.log(`  swept ${SNIPPETS.length} snippets + corpus across ${seenKinds.size} distinct TS SyntaxKinds`);
 
 if (failures.length > 0) {
-	console.log(`\n  ${failures.length} INCONSISTENCIES (predicate routes a visit for T, eager produces T, lazy doesn't):`);
+	console.log(
+		`\n  ${failures.length} INCONSISTENCIES (predicate routes a visit for T, eager produces T, lazy doesn't):`,
+	);
 	const seen = new Set<string>();
 	for (const f of failures) {
 		const key = `${f.type}|${f.where}`;

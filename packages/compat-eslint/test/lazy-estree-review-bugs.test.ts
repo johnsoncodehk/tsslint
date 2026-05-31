@@ -27,38 +27,77 @@ const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-yo
 // generic tree walk must drive off visitorKeys (own-keys fallback for the rare
 // node with no visitor-keys entry, e.g. GenericTSNode / plain meta objects).
 function childKeys(n: any): readonly string[] {
-	return (visitorKeys as Record<string, readonly string[]>)[n.type] ?? Object.keys(n);
+	return visitorKeys[n.type] ?? Object.keys(n);
 }
 function sfOf(code: string, tsx = false): ts.SourceFile {
-	return ts.createSourceFile(tsx ? 't.tsx' : 't.ts', code, ts.ScriptTarget.Latest, true, tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+	return ts.createSourceFile(
+		tsx ? 't.tsx' : 't.ts',
+		code,
+		ts.ScriptTarget.Latest,
+		true,
+		tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+	);
 }
 const lazyAst = (code: string, tsx = false) => (lazy.convertLazy(sfOf(code, tsx)) as any).estree;
 function eagerAst(code: string, tsx = false, invalid = false): any {
 	const settings = {
-		allowInvalidAST: invalid, comment: false, errorOnUnknownASTType: false,
-		loc: true, range: true, jsx: tsx, suppressDeprecatedPropertyWarnings: true, tokens: false,
+		allowInvalidAST: invalid,
+		comment: false,
+		errorOnUnknownASTType: false,
+		loc: true,
+		range: true,
+		jsx: tsx,
+		suppressDeprecatedPropertyWarnings: true,
+		tokens: false,
 	};
 	return astConverter(sfOf(code, tsx), settings as any, false).estree;
 }
 function find(root: any, pred: (n: any) => boolean): any {
-	const seen = new Set<any>(); const st = [root];
+	const seen = new Set<any>();
+	const st = [root];
 	while (st.length) {
-		const n = st.pop(); if (!n || typeof n !== 'object' || seen.has(n)) continue; seen.add(n);
+		const n = st.pop();
+		if (!n || typeof n !== 'object' || seen.has(n)) continue;
+		seen.add(n);
 		if (pred(n)) return n;
-		for (const k of childKeys(n)) { if (k === 'parent') continue; const c = n[k]; if (Array.isArray(c)) for (const e of c) st.push(e); else if (c && typeof c === 'object') st.push(c); }
+		for (const k of childKeys(n)) {
+			if (k === 'parent') continue;
+			const c = n[k];
+			if (Array.isArray(c)) { for (const e of c) st.push(e); }
+			else if (c && typeof c === 'object') st.push(c);
+		}
 	}
 }
 function count(root: any, type: string): number {
-	let c = 0; const seen = new Set<any>(); const st = [root];
+	let c = 0;
+	const seen = new Set<any>();
+	const st = [root];
 	while (st.length) {
-		const n = st.pop(); if (!n || typeof n !== 'object' || seen.has(n)) continue; seen.add(n);
+		const n = st.pop();
+		if (!n || typeof n !== 'object' || seen.has(n)) continue;
+		seen.add(n);
 		if (n.type === type) c++;
-		for (const k of childKeys(n)) { if (k === 'parent') continue; const x = n[k]; if (Array.isArray(x)) for (const e of x) st.push(e); else if (x && typeof x === 'object') st.push(x); }
+		for (const k of childKeys(n)) {
+			if (k === 'parent') continue;
+			const x = n[k];
+			if (Array.isArray(x)) { for (const e of x) st.push(e); }
+			else if (x && typeof x === 'object') st.push(x);
+		}
 	}
 	return c;
 }
 function findTs(sf: ts.SourceFile, pred: (n: ts.Node) => boolean): ts.Node {
-	let f: ts.Node | undefined; const w = (n: ts.Node) => { if (f) return; if (pred(n)) { f = n; return; } ts.forEachChild(n, w); }; w(sf); return f!;
+	let f: ts.Node | undefined;
+	const w = (n: ts.Node) => {
+		if (f) return;
+		if (pred(n)) {
+			f = n;
+			return;
+		}
+		ts.forEachChild(n, w);
+	};
+	w(sf);
+	return f!;
 }
 const firstExpr = (e: any) => e.body.find((s: any) => s && s.type === 'ExpressionStatement').expression;
 
@@ -80,45 +119,80 @@ console.log('lazy-estree review — regression + accepted-gap suite\n');
 // ── FIXED ────────────────────────────────────────────────────────────────────
 
 // A — regex d/v (and any) flags preserved (lastIndexOf split, not [gimsuy]).
-for (const [src, p, f] of [['/a/d', 'a', 'd'], ['/a/v', 'a', 'v'], ['/a/dgi', 'a', 'dgi'], ['/a/gi', 'a', 'gi']] as const) {
+for (
+	const [src, p, f] of [['/a/d', 'a', 'd'], ['/a/v', 'a', 'v'], ['/a/dgi', 'a', 'dgi'], ['/a/gi', 'a', 'gi']] as const
+) {
 	const r = firstExpr(lazyAst(src + ';')).regex;
 	fixed(`A regex ${src}`, r.pattern === p && r.flags === f, `got {${r.pattern},${r.flags}}`);
 }
 
 // B — `new Foo` (no parens) → arguments [], not null.
-fixed('B new Foo; arguments []', JSON.stringify(firstExpr(lazyAst('new Foo;')).arguments) === '[]', `got ${JSON.stringify(firstExpr(lazyAst('new Foo;')).arguments)}`);
+fixed(
+	'B new Foo; arguments []',
+	JSON.stringify(firstExpr(lazyAst('new Foo;')).arguments) === '[]',
+	`got ${JSON.stringify(firstExpr(lazyAst('new Foo;')).arguments)}`,
+);
 fixed('B new Foo(); arguments [] (control)', JSON.stringify(firstExpr(lazyAst('new Foo();')).arguments) === '[]');
 
 // C — decorated export gets the ExportNamed/Default wrapper (getModifiers, not modifiers[0]).
 for (const code of ['@dec export class C {}', '@dec export default class C {}', 'export class C {}']) {
-	fixed(`C ${code}`, lazyAst(code).body[0].type === eagerAst(code).body[0].type, `got ${lazyAst(code).body[0].type} want ${eagerAst(code).body[0].type}`);
+	fixed(
+		`C ${code}`,
+		lazyAst(code).body[0].type === eagerAst(code).body[0].type,
+		`got ${lazyAst(code).body[0].type} want ${eagerAst(code).body[0].type}`,
+	);
 }
 
 // D — flattened SequenceExpression operands re-parent to the outer sequence.
-{ const seq = firstExpr(lazyAst('x = (a, b, c);')).right;
-	fixed('D seq operand.parent === outer', seq.expressions.every((e: any) => e.parent === seq), `parent expr-counts [${seq.expressions.map((e: any) => e.parent.expressions.length)}]`); }
+{
+	const seq = firstExpr(lazyAst('x = (a, b, c);')).right;
+	fixed(
+		'D seq operand.parent === outer',
+		seq.expressions.every((e: any) => e.parent === seq),
+		`parent expr-counts [${seq.expressions.map((e: any) => e.parent.expressions.length)}]`,
+	);
+}
 
 // Guard — bottom-up materialize of an inner optional-chain link is plain, not a phantom ChainExpression.
-{ const sf = sfOf('a?.b.c;'); const ctx = (lazy.convertLazy(sf) as any).context;
+{
+	const sf = sfOf('a?.b.c;');
+	const ctx = (lazy.convertLazy(sf) as any).context;
 	const inner = findTs(sf, n => ts.isPropertyAccessExpression(n) && !!n.questionDotToken);
-	fixed('inner a?.b materializes as MemberExpression', (lazy.materialize(inner, ctx) as any).type === 'MemberExpression', `got ${(lazy.materialize(inner, ctx) as any).type}`); }
+	fixed(
+		'inner a?.b materializes as MemberExpression',
+		(lazy.materialize(inner, ctx) as any).type === 'MemberExpression',
+		`got ${(lazy.materialize(inner, ctx) as any).type}`,
+	);
+}
 // control: the whole `a?.b.c` tree has exactly one ChainExpression (outermost only).
 fixed('a?.b.c has exactly one ChainExpression', count(lazyAst('a?.b.c;'), 'ChainExpression') === 1);
 
 // Guard — materialize(catch variableDeclaration) is the param Identifier or throws; never a phantom VariableDeclarator.
-{ const sf = sfOf('try {} catch (e) {}'); const ctx = (lazy.convertLazy(sf) as any).context;
-	const vd = findTs(sf, n => ts.isVariableDeclaration(n) && ts.isCatchClause(n.parent!));
+{
+	const sf = sfOf('try {} catch (e) {}');
+	const ctx = (lazy.convertLazy(sf) as any).context;
+	const vd = findTs(sf, n => ts.isVariableDeclaration(n) && ts.isCatchClause(n.parent));
 	let t: string;
-	try { t = (lazy.materialize(vd, ctx) as any).type; }
-	catch (e) { t = `<threw ${(e as Error).name}>`; }
-	fixed('materialize(catch vd) is Identifier or throws', t === 'Identifier' || t.startsWith('<threw'), `got ${t}`); }
+	try {
+		t = (lazy.materialize(vd, ctx) as any).type;
+	}
+	catch (e) {
+		t = `<threw ${(e as Error).name}>`;
+	}
+	fixed('materialize(catch vd) is Identifier or throws', t === 'Identifier' || t.startsWith('<threw'), `got ${t}`);
+}
 
 // Guard — _extendRange assigns a fresh array, never mutates one a rule may hold.
-{ const sf = sfOf('const x: Foo = 1;'); const ctx = (lazy.convertLazy(sf) as any).context;
+{
+	const sf = sfOf('const x: Foo = 1;');
+	const ctx = (lazy.convertLazy(sf) as any).context;
 	const idTs = findTs(sf, n => ts.isIdentifier(n) && n.text === 'x');
-	const grabbed = (lazy.materialize(idTs, ctx) as any).range; const before = grabbed[1];
-	const vdTs = findTs(sf, n => ts.isVariableDeclaration(n) && !ts.isCatchClause(n.parent!)); void (lazy.materialize(vdTs, ctx) as any).id;
-	fixed('held range array not mutated on annotate', grabbed[1] === before, `range[1] ${before} -> ${grabbed[1]}`); }
+	const grabbed = (lazy.materialize(idTs, ctx) as any).range;
+	const before = grabbed[1];
+	const vdTs = findTs(sf, n => ts.isVariableDeclaration(n) && !ts.isCatchClause(n.parent));
+	void (lazy.materialize(vdTs, ctx) as any).id;
+	fixed('held range array not mutated on annotate', grabbed[1] === before, `range[1] ${before} -> ${grabbed[1]}`);
+}
 
 // ── ACCEPTED GAPS (assert the status quo; XPASS = gap changed, update this list) ──
 
@@ -135,19 +209,25 @@ gap(
 // `with` clause (stays null); only affects type-level import() attribute rules.
 gap(
 	'TSImportType.options not built (stays null)',
-	find(lazyAst('type T = import("x", { with: { type: "json" } }).Y;'), (n: any) => n.type === 'TSImportType').options === null,
+	find(lazyAst('type T = import("x", { with: { type: "json" } }).Y;'), (n: any) => n.type === 'TSImportType').options
+		=== null,
 	'type-position import attributes; rare, type-aware-only',
 );
 
 // import attributes in EXPRESSION position: deprecated `attributes` alias is the
 // frozen EMPTY_ARRAY instead of aliasing the (correctly-built) `options`.
-{ const ie = find(lazyAst('const p = import("x", { with: { type: "json" } });'), (n: any) => n.type === 'ImportExpression');
+{
+	const ie = find(
+		lazyAst('const p = import("x", { with: { type: "json" } });'),
+		(n: any) => n.type === 'ImportExpression',
+	);
 	gap(
 		'ImportExpression.attributes not aliased to options',
 		Array.isArray(ie.attributes) && ie.attributes.length === 0,
 		'deprecated alias; `options` is correct, only the legacy `.attributes` getter diverges',
 		`options=${ie.options?.type}`,
-	); }
+	);
+}
 
 // MetaProperty.meta synthetic Identifier omits the `typeAnnotation` own-key
 // (real Identifier shape has it; this hand-built object doesn't).
@@ -171,22 +251,40 @@ gap(
 // dispatched INSIDE the body wrapper instead of before it → CPA attributes a
 // computed-key call to the method's code path. Intrinsic to single-pass
 // "enter the whole chain up front"; parent pointers stay correct.
-{ const sf = sfOf('class C extends Sup { m(){} }'); const ctx = (lazy.convertLazy(sf) as any).context; const order: string[] = [];
-	scan.tsScanTraverse(sf, scan.predicateAllKinds(), ctx, { enterNode(t: any) { order.push(t.type === 'Identifier' ? `Id(${t.name})` : t.type); }, leaveNode() {} });
+{
+	const sf = sfOf('class C extends Sup { m(){} }');
+	const ctx = (lazy.convertLazy(sf) as any).context;
+	const order: string[] = [];
+	scan.tsScanTraverse(sf, scan.predicateAllKinds(), ctx, {
+		enterNode(t: any) {
+			order.push(t.type === 'Identifier' ? `Id(${t.name})` : t.type);
+		},
+		leaveNode() {},
+	});
 	gap(
 		'superClass dispatched after ClassBody enter',
 		order.indexOf('Id(Sup)') > order.indexOf('ClassBody'),
 		'single-pass body-wrapper ordering; parent pointers correct, only dispatch order differs',
 		`Sup@${order.indexOf('Id(Sup)')} ClassBody@${order.indexOf('ClassBody')}`,
-	); }
-{ const sf = sfOf('class C { [k()]() {} }'); const ctx = (lazy.convertLazy(sf) as any).context; const order: string[] = [];
-	scan.tsScanTraverse(sf, scan.predicateAllKinds(), ctx, { enterNode(t: any) { order.push(t.type); }, leaveNode() {} });
+	);
+}
+{
+	const sf = sfOf('class C { [k()]() {} }');
+	const ctx = (lazy.convertLazy(sf) as any).context;
+	const order: string[] = [];
+	scan.tsScanTraverse(sf, scan.predicateAllKinds(), ctx, {
+		enterNode(t: any) {
+			order.push(t.type);
+		},
+		leaveNode() {},
+	});
 	gap(
 		'computed method key dispatched inside method FunctionExpression',
 		order.indexOf('CallExpression') > order.indexOf('FunctionExpression'),
 		'same body-wrapper ordering; CPA attribution of computed-key call to the method scope',
 		`Call@${order.indexOf('CallExpression')} Fn@${order.indexOf('FunctionExpression')}`,
-	); }
+	);
+}
 
 console.log(`\n${failures.length === 0 ? 'all green (fixes hold, gaps unchanged)' : `${failures.length} FAILURE(S):`}`);
 for (const f of failures) console.log(`  - ${f}`);
