@@ -272,29 +272,12 @@ function isInJSXIdentifierPosition(n: ts.Node): boolean {
 // --- Predicate registry ---------------------------------------------
 
 const PREDICATES: Record<string, Predicate> = {
-	// --- Program root --------------------------------------------------
-	'Program': n => n.kind === SK.SourceFile,
-
-	// --- Statements ----------------------------------------------------
-	'ExpressionStatement': n => n.kind === SK.ExpressionStatement,
-	'BlockStatement': n => n.kind === SK.Block,
-	'IfStatement': n => n.kind === SK.IfStatement,
-	'WhileStatement': n => n.kind === SK.WhileStatement,
-	'DoWhileStatement': n => n.kind === SK.DoStatement,
-	'ForStatement': n => n.kind === SK.ForStatement,
-	'ForInStatement': n => n.kind === SK.ForInStatement,
-	'ForOfStatement': n => n.kind === SK.ForOfStatement,
-	'ReturnStatement': n => n.kind === SK.ReturnStatement,
-	'ThrowStatement': n => n.kind === SK.ThrowStatement,
-	'TryStatement': n => n.kind === SK.TryStatement,
-	'CatchClause': n => n.kind === SK.CatchClause,
-	'SwitchStatement': n => n.kind === SK.SwitchStatement,
-	'SwitchCase': n => n.kind === SK.CaseClause || n.kind === SK.DefaultClause,
-	'BreakStatement': n => n.kind === SK.BreakStatement,
-	'ContinueStatement': n => n.kind === SK.ContinueStatement,
-	'LabeledStatement': n => n.kind === SK.LabeledStatement,
-	'EmptyStatement': n => n.kind === SK.EmptyStatement,
-	'DebuggerStatement': n => n.kind === SK.DebuggerStatement,
+	// Only CONTEXT-SENSITIVE predicates are written in this literal (operator /
+	// modifier / parent / position gating). Every ESTree type whose predicate is
+	// a plain TS-kind membership test (Program, the statement kinds, the TS leaf
+	// keywords, etc.) is derived from SIMPLE_KINDS by the loop right after that
+	// table — its kind list lives there and is written exactly once. So those
+	// simple types do NOT appear here; look in SIMPLE_KINDS below for them.
 
 	// --- Variables -----------------------------------------------------
 	// ESTree flips the names: ESTree's `VariableDeclaration` corresponds
@@ -323,36 +306,6 @@ const PREDICATES: Record<string, Predicate> = {
 	// `declare function foo();` — body-less. lazy-estree's
 	// FunctionDeclarationNode emits TSDeclareFunction in this case.
 	'TSDeclareFunction': n => n.kind === SK.FunctionDeclaration && (n as ts.FunctionDeclaration).body === undefined,
-	// FunctionExpression matches `SK.FunctionExpression` directly AND every
-	// TS kind whose chain expansion exposes a FunctionExpression inner —
-	// class members (MethodDeclaration / Constructor / GetAccessor /
-	// SetAccessor) materialize as MethodDefinition{value: FunctionExpression}
-	// (or TSAbstractMethodDefinition{value: TSEmptyBodyFunctionExpression}).
-	// Object-literal methods/accessors materialize as Property{value:
-	// FunctionExpression}. Without including these source kinds in the
-	// predicate, a rule that only registers `FunctionExpression` (e.g.
-	// no-loop-func, prefer-arrow-callback) gates visit() out and never
-	// fires on object/class method bodies — even though the chain expansion
-	// would emit the FunctionExpression enter event.
-	'FunctionExpression': n =>
-		n.kind === SK.FunctionExpression
-		|| n.kind === SK.MethodDeclaration
-		|| n.kind === SK.Constructor
-		|| n.kind === SK.GetAccessor
-		|| n.kind === SK.SetAccessor,
-	'ArrowFunctionExpression': n => n.kind === SK.ArrowFunction,
-	'ClassDeclaration': n => n.kind === SK.ClassDeclaration,
-	'ClassExpression': n => n.kind === SK.ClassExpression,
-	// ClassBody is a synthetic ESTree wrapper around a class's members
-	// (no own TS kind). Predicate fires for the class itself; unwrapChain
-	// pulls the materialised ClassNode's `.body` into the dispatch chain
-	// so a ClassBody listener fires after the class enters but before its
-	// members are visited.
-	'ClassBody': n => n.kind === SK.ClassDeclaration || n.kind === SK.ClassExpression,
-	// `class C { static {} }` — class static initialiser block.
-	'StaticBlock': n => n.kind === SK.ClassStaticBlockDeclaration,
-	// `new.target`, `import.meta`.
-	'MetaProperty': n => n.kind === SK.MetaProperty,
 	// MethodDeclaration / Constructor / GetAccessor / SetAccessor outside
 	// an object literal materialise as MethodDefinition; inside an object
 	// literal they become Property{method:true} or Property{kind:'get'/'set'}.
@@ -391,9 +344,6 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSParameterProperty': n =>
 		n.kind === SK.Parameter
 		&& hasParameterPropertyModifier(n),
-
-	// --- Decorators ---------------------------------------------------
-	'Decorator': n => n.kind === SK.Decorator,
 
 	// --- Expressions --------------------------------------------------
 	'BinaryExpression': n =>
@@ -462,15 +412,6 @@ const PREDICATES: Record<string, Predicate> = {
 		&& (n as ts.CallExpression).expression.kind === SK.ImportKeyword,
 	// Outermost optional-chain root (lazy-estree wraps only the outermost).
 	'ChainExpression': isOutermostOptionalChain,
-	'NewExpression': n => n.kind === SK.NewExpression,
-	'MemberExpression': n => n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression,
-	'ConditionalExpression': n => n.kind === SK.ConditionalExpression,
-	'AwaitExpression': n => n.kind === SK.AwaitExpression,
-	'YieldExpression': n => n.kind === SK.YieldExpression,
-	'ThisExpression': n => n.kind === SK.ThisKeyword,
-	'Super': n => n.kind === SK.SuperKeyword,
-	'TemplateLiteral': n => n.kind === SK.TemplateExpression || n.kind === SK.NoSubstitutionTemplateLiteral,
-	'TaggedTemplateExpression': n => n.kind === SK.TaggedTemplateExpression,
 
 	// SpreadElement vs RestElement: same TS kinds (SK.SpreadElement /
 	// SpreadAssignment), split by pattern context. SpreadElement only in
@@ -522,31 +463,11 @@ const PREDICATES: Record<string, Predicate> = {
 		|| ((n.kind === SK.SpreadElement || n.kind === SK.SpreadAssignment)
 			&& isInPatternPosition(n)),
 
-	// --- Literals -----------------------------------------------------
-	// typescript-estree collapses these TS kinds into Literal.
-	'Literal': n =>
-		n.kind === SK.NumericLiteral
-		|| n.kind === SK.StringLiteral
-		|| n.kind === SK.RegularExpressionLiteral
-		|| n.kind === SK.BigIntLiteral
-		|| n.kind === SK.NullKeyword
-		|| n.kind === SK.TrueKeyword
-		|| n.kind === SK.FalseKeyword,
-
-	// --- Identifiers --------------------------------------------------
-	'Identifier': n => n.kind === SK.Identifier,
-	'PrivateIdentifier': n => n.kind === SK.PrivateIdentifier,
-
 	// --- Imports / Exports -------------------------------------------
-	'ImportDeclaration': n => n.kind === SK.ImportDeclaration,
-	'ImportSpecifier': n => n.kind === SK.ImportSpecifier,
 	// ImportClause becomes ImportDefaultSpecifier ONLY when it has a
 	// `name` (i.e. `import a from 'x'`). Named-only `import { a } from 'x'`
 	// has no name on the clause — typescript-estree wouldn't emit one.
 	'ImportDefaultSpecifier': n => n.kind === SK.ImportClause && (n as ts.ImportClause).name !== undefined,
-	'ImportNamespaceSpecifier': n => n.kind === SK.NamespaceImport,
-	'ImportAttribute': n => n.kind === SK.ImportAttribute,
-	'ExportSpecifier': n => n.kind === SK.ExportSpecifier,
 
 	// ExportNamedDeclaration sources:
 	//   - SK.ExportDeclaration with `NamedExports` clause
@@ -575,39 +496,7 @@ const PREDICATES: Record<string, Predicate> = {
 		(n.kind === SK.ExportAssignment && !(n as ts.ExportAssignment).isExportEquals)
 		|| (EXPORTABLE_KINDS.has(n.kind) && hasExportModifier(n) && hasDefaultModifier(n)),
 
-	// --- TS leaf keyword types (all 1:1) -------------------------------
-	'TSAnyKeyword': n => n.kind === SK.AnyKeyword,
-	'TSStringKeyword': n => n.kind === SK.StringKeyword,
-	'TSNumberKeyword': n => n.kind === SK.NumberKeyword,
-	'TSBooleanKeyword': n => n.kind === SK.BooleanKeyword,
-	'TSBigIntKeyword': n => n.kind === SK.BigIntKeyword,
-	'TSNullKeyword': n => n.kind === SK.NullKeyword,
-	'TSUndefinedKeyword': n => n.kind === SK.UndefinedKeyword,
-	'TSVoidKeyword': n => n.kind === SK.VoidKeyword,
-	'TSNeverKeyword': n => n.kind === SK.NeverKeyword,
-	'TSUnknownKeyword': n => n.kind === SK.UnknownKeyword,
-	'TSObjectKeyword': n => n.kind === SK.ObjectKeyword,
-	'TSSymbolKeyword': n => n.kind === SK.SymbolKeyword,
-	'TSIntrinsicKeyword': n => n.kind === SK.IntrinsicKeyword,
-	'TSThisType': n => n.kind === SK.ThisType,
-
-	// --- TS expression-flavored types (1:1) ----------------------------
-	'TSAsExpression': n => n.kind === SK.AsExpression,
-	'TSTypeAssertion': n => n.kind === SK.TypeAssertionExpression,
-	'TSNonNullExpression': n => n.kind === SK.NonNullExpression,
-	'TSSatisfiesExpression': n => n.kind === SK.SatisfiesExpression,
-
 	// --- TS type composites (1:1, with one wrapper case) --------------
-	'TSTypeReference': n => n.kind === SK.TypeReference,
-	'TSUnionType': n => n.kind === SK.UnionType,
-	'TSIntersectionType': n => n.kind === SK.IntersectionType,
-	'TSArrayType': n => n.kind === SK.ArrayType,
-	'TSTupleType': n => n.kind === SK.TupleType,
-	'TSConditionalType': n => n.kind === SK.ConditionalType,
-	'TSMappedType': n => n.kind === SK.MappedType,
-	'TSIndexedAccessType': n => n.kind === SK.IndexedAccessType,
-	'TSInferType': n => n.kind === SK.InferType,
-	'TSTypeOperator': n => n.kind === SK.TypeOperator,
 	// TSTypeQuery: regular `typeof X` — and lazy-estree wraps
 	// `typeof import('x')` in TSTypeQuery as well (TSImportType inner).
 	// Match both ts.SyntaxKinds; unwrapChain expands the wrapping case so
@@ -615,39 +504,12 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSTypeQuery': n =>
 		n.kind === SK.TypeQuery
 		|| (n.kind === SK.ImportType && (n as ts.ImportTypeNode).isTypeOf),
-	'TSImportType': n => n.kind === SK.ImportType,
-	'TSLiteralType': n => n.kind === SK.LiteralType,
-	'TSFunctionType': n => n.kind === SK.FunctionType,
-	'TSConstructorType': n => n.kind === SK.ConstructorType,
-	'TSTemplateLiteralType': n => n.kind === SK.TemplateLiteralType,
-	'TSTypePredicate': n => n.kind === SK.TypePredicate,
-	'TSTypeLiteral': n => n.kind === SK.TypeLiteral,
-	'TSQualifiedName': n => n.kind === SK.QualifiedName,
-	'TSOptionalType': n => n.kind === SK.OptionalType,
-	'TSRestType': n => n.kind === SK.RestType,
-	'TSTypeParameter': n => n.kind === SK.TypeParameter,
 
 	// --- TS declarations (1:1, exportable) ----------------------------
-	'TSInterfaceDeclaration': n => n.kind === SK.InterfaceDeclaration,
-	'TSTypeAliasDeclaration': n => n.kind === SK.TypeAliasDeclaration,
-	'TSEnumDeclaration': n => n.kind === SK.EnumDeclaration,
-	'TSEnumMember': n => n.kind === SK.EnumMember,
-	'TSModuleDeclaration': n => n.kind === SK.ModuleDeclaration,
-	'TSModuleBlock': n => n.kind === SK.ModuleBlock,
-	'TSImportEqualsDeclaration': n => n.kind === SK.ImportEqualsDeclaration,
 	// TSExportAssignment: only `export = <expr>` (NOT `export default`).
 	'TSExportAssignment': n =>
 		n.kind === SK.ExportAssignment
 		&& !!(n as ts.ExportAssignment).isExportEquals,
-	'TSExternalModuleReference': n => n.kind === SK.ExternalModuleReference,
-	'TSNamespaceExportDeclaration': n => n.kind === SK.NamespaceExportDeclaration,
-
-	// --- TS interface members ------------------------------------------
-	'TSPropertySignature': n => n.kind === SK.PropertySignature,
-	'TSMethodSignature': n => n.kind === SK.MethodSignature,
-	'TSCallSignatureDeclaration': n => n.kind === SK.CallSignature,
-	'TSConstructSignatureDeclaration': n => n.kind === SK.ConstructSignature,
-	'TSIndexSignature': n => n.kind === SK.IndexSignature,
 
 	// --- ts.ExpressionWithTypeArguments splits 3 ways in ESTree --------
 	// SK.ExpressionWithTypeArguments under a HeritageClause becomes:
@@ -672,39 +534,11 @@ const PREDICATES: Record<string, Predicate> = {
 		&& (n.parent as ts.HeritageClause).token === SK.ExtendsKeyword
 		&& n.parent.parent?.kind === SK.InterfaceDeclaration,
 
-	// --- Synthetic ESTree wrappers driven via WRAPPER_HEAD_TYPES -------
-	// These ESTree types have no own ts.SyntaxKind — they wrap a slot of
-	// their parent. Predicate fires on the head ts.Node; unwrapChain
-	// extends the dispatch chain into the wrapped slot so the listener
-	// gets called.
-	'TSInterfaceBody': n => n.kind === SK.InterfaceDeclaration,
-	'TSEnumBody': n => n.kind === SK.EnumDeclaration,
-
-	// --- Tuples / templates -------------------------------------------
-	'TSNamedTupleMember': n => n.kind === SK.NamedTupleMember,
-
 	// --- JSX -----------------------------------------------------------
-	// JsxElement (regular `<a></a>`) and JsxSelfClosingElement (`<a />`)
-	// both materialize to JSXElement. The self-closing case bundles a
-	// synthetic JSXOpeningElement{selfClosing:true} inside it; non-self-
-	// closing has the JsxOpeningElement as a separate TS node.
-	'JSXElement': n => n.kind === SK.JsxElement || n.kind === SK.JsxSelfClosingElement,
-	'JSXFragment': n => n.kind === SK.JsxFragment,
-	// Self-closing materializes to JSXElement, then unwrapChain drills into
-	// the synthetic openingElement so the listener fires from the chain.
-	// Predicate must match BOTH ts kinds so narrow-trigger mode visits
-	// JsxSelfClosingElement when only JSXOpeningElement is registered.
-	'JSXOpeningElement': n => n.kind === SK.JsxOpeningElement || n.kind === SK.JsxSelfClosingElement,
-	'JSXClosingElement': n => n.kind === SK.JsxClosingElement,
-	'JSXOpeningFragment': n => n.kind === SK.JsxOpeningFragment,
-	'JSXClosingFragment': n => n.kind === SK.JsxClosingFragment,
-	'JSXAttribute': n => n.kind === SK.JsxAttribute,
-	'JSXSpreadAttribute': n => n.kind === SK.JsxSpreadAttribute,
 	// JsxExpression splits by `dotDotDotToken`: `{...x}` → JSXSpreadChild,
 	// `{x}` / `{}` → JSXExpressionContainer.
 	'JSXExpressionContainer': n => n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken === undefined,
 	'JSXSpreadChild': n => n.kind === SK.JsxExpression && (n as ts.JsxExpression).dotDotDotToken !== undefined,
-	'JSXText': n => n.kind === SK.JsxText,
 	// JSXEmptyExpression has no own ts.SyntaxKind — it's synthesized by
 	// JSXExpressionContainer.expression when the JsxExpression has no
 	// expression (`{}` / `{/* comment */}`). Predicate matches the empty
@@ -715,7 +549,6 @@ const PREDICATES: Record<string, Predicate> = {
 	// Context-dependent — see isInJSXIdentifierPosition / chain helpers.
 	'JSXIdentifier': n => n.kind === SK.Identifier && isInJSXIdentifierPosition(n),
 	'JSXMemberExpression': n => n.kind === SK.PropertyAccessExpression && isInJSXMemberExpressionChain(n),
-	'JSXNamespacedName': n => n.kind === SK.JsxNamespacedName,
 };
 
 // Sidecar table: ESTree types whose predicate is EXACTLY a TS-kind check
@@ -751,6 +584,17 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	// models as a ts.VariableDeclaration but ESTree exposes as
 	// `CatchClause.param`. Drop from SIMPLE_KINDS so the conditional
 	// predicate runs.
+	// FunctionExpression matches `SK.FunctionExpression` directly AND every
+	// TS kind whose chain expansion exposes a FunctionExpression inner —
+	// class members (MethodDeclaration / Constructor / GetAccessor /
+	// SetAccessor) materialize as MethodDefinition{value: FunctionExpression}
+	// (or TSAbstractMethodDefinition{value: TSEmptyBodyFunctionExpression}).
+	// Object-literal methods/accessors materialize as Property{value:
+	// FunctionExpression}. Without including these source kinds, a rule that
+	// only registers `FunctionExpression` (e.g. no-loop-func,
+	// prefer-arrow-callback) gates visit() out and never fires on object/class
+	// method bodies — even though the chain expansion emits the
+	// FunctionExpression enter event.
 	'FunctionExpression': [SK.FunctionExpression, SK.MethodDeclaration, SK.Constructor, SK.GetAccessor, SK.SetAccessor],
 	'ArrowFunctionExpression': [SK.ArrowFunction],
 	'ClassDeclaration': [SK.ClassDeclaration],
@@ -860,6 +704,33 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'JSXText': [SK.JsxText],
 	'JSXNamespacedName': [SK.JsxNamespacedName],
 };
+
+// SIMPLE_KINDS is the single source of truth for every ESTree type whose
+// predicate is EXACTLY a TS-kind membership test. Derive those PREDICATES
+// entries from it rather than writing each kind list twice — once above as
+// `n => n.kind === SK.X || ...` and once here as `[SK.X, ...]`. The derived
+// predicate (`n => n.kind === only` / `n => kinds.includes(n.kind)`) is
+// behaviorally identical to the hand-written disjunction. Context-sensitive
+// predicates (operator / modifier / parent / position gating) have NO
+// SIMPLE_KINDS entry and stay hand-written in the PREDICATES literal above;
+// this loop only fills in the simple ones, so each simple kind list is written
+// exactly once.
+//
+// The hot path is unaffected: `predicateForTriggerSet` reads SIMPLE_KINDS
+// directly to build the `__bitmap`, and never calls these derived predicates.
+// They run only via `predicatesMatching` / `hasPredicate` (meta-tests,
+// coverage, dispatch-gap probing), where `includes` over a 1–7 element array
+// is allocation-free and never on the per-node visit path.
+function kindMembershipPredicate(kinds: ts.SyntaxKind[]): Predicate {
+	if (kinds.length === 1) {
+		const only = kinds[0];
+		return n => n.kind === only;
+	}
+	return n => kinds.includes(n.kind);
+}
+for (const estreeType in SIMPLE_KINDS) {
+	PREDICATES[estreeType] = kindMembershipPredicate(SIMPLE_KINDS[estreeType]);
+}
 
 // Throws UnsupportedSelectorError if any requested ESTree type has no TS
 // predicate — same philosophy as decomposeSimple: gaps surface immediately
