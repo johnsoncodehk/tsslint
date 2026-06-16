@@ -3,6 +3,7 @@ import type * as ts from 'typescript';
 
 import core = require('@tsslint/core');
 import path = require('path');
+import url = require('url');
 import ErrorStackParser = require('error-stack-parser');
 
 const languageServiceDecorators = new WeakMap<ts.server.Project, ReturnType<typeof decorateLanguageService>>();
@@ -172,7 +173,7 @@ function decorateLanguageService(
 			};
 
 			try {
-				config = (await import(configFile)).default;
+				config = (await import(url.pathToFileURL(configFile).toString())).default;
 				linter = core.createLinter(projectContext, path.dirname(configFile), config!, (err, stackIndex) => {
 					const stacks = ErrorStackParser.parse(err);
 					if (stacks.length <= stackIndex) {
