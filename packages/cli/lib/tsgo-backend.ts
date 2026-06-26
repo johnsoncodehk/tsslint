@@ -822,6 +822,7 @@ function wrapChecker(
 	const typeArgumentsCache = new WeakMap<object, unknown | null>();
 	const resolvedSignatureCache = new WeakMap<Node, ts.Signature | null>();
 	const returnTypeOfSignatureCache = new WeakMap<object, ts.Type | null>();
+	const widenedTypeCache = new WeakMap<object, ts.Type | null>();
 
 	const rpcCall = <T>(method: string, fn: () => T): T => {
 		if (!rpc) return fn();
@@ -1070,7 +1071,15 @@ function wrapChecker(
 				return args;
 			}, () => rpc?.memoHit('getTypeArguments')) ?? []) as ts.Type[];
 		},
-		getWidenedType: fwd('getWidenedType', fixupType) as any,
+		getWidenedType(type) {
+			if (!type) return type;
+			return memoGet(widenedTypeCache, type as object, () => {
+				const t = rpcCall('getWidenedType', () =>
+					project.checker.getWidenedType(type as any));
+				fixupType(t);
+				return t as unknown as ts.Type;
+			}, () => rpc?.memoHit('getWidenedType')) as ts.Type;
+		},
 		getTypeFromTypeNode(typeNode) {
 			const n = typeNode as unknown as Node;
 			return memoGet(typeFromTypeNodeCache, n, () => {
@@ -1169,11 +1178,14 @@ function wrapChecker(
 	const prefetchTypesForFile = (fileName: string, plan: PrefetchPlan = EMPTY_PREFETCH_PLAN) => {
 		const sf = project.program.getSourceFile(fileName);
 		if (!sf) return;
+		const text = (sf as unknown as { text: string }).text;
 		batchPrefetchTypes(project, sf as unknown as Node, fileName, {
 			astSyntaxKind: ast.SyntaxKind as unknown as Record<string, number>,
 			fixupType,
 			rpcCall,
 			rpc,
+			jsSymbolResolver: jsSymbolResolverRef.current,
+			fileText: text,
 			caches: {
 				nodeTypeCache,
 				typeFromTypeNodeCache,
@@ -1181,6 +1193,7 @@ function wrapChecker(
 				propertiesOfTypeCache,
 				contextualTypeCache,
 				nodeToSymbol,
+				typeOfSymbolCache,
 			},
 		}, plan);
 	};

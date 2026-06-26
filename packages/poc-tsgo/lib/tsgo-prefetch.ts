@@ -30,6 +30,21 @@ export const EMPTY_PREFETCH_PLAN: PrefetchPlan = {
 	propertiesOfType: false,
 };
 
+/** tsgo RPC symbols carry a numeric id; JS-side bind symbols do not. */
+const BATCH_CHUNK = 256;
+
+function isTsgoSymbol(sym: unknown): sym is { id: number } {
+	return Boolean(sym && typeof sym === 'object' && typeof (sym as { id?: unknown }).id === 'number');
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const out: T[][] = [];
+	for (let i = 0; i < items.length; i += size) {
+		out.push(items.slice(i, i + size));
+	}
+	return out;
+}
+
 export type TypePrefetchCaches = {
 	nodeTypeCache: WeakMap<Node, import('typescript').Type | null>;
 	typeFromTypeNodeCache: WeakMap<Node, import('typescript').Type | null>;
@@ -37,6 +52,8 @@ export type TypePrefetchCaches = {
 	propertiesOfTypeCache?: WeakMap<object, unknown | null>;
 	contextualTypeCache?: WeakMap<Node, import('typescript').Type | null>;
 	nodeToSymbol?: WeakMap<Node, unknown>;
+	typeOfSymbolCache?: WeakMap<object, import('typescript').Type | null>;
+	resolvedSignatureCache?: WeakMap<Node, import('typescript').Signature | null>;
 };
 
 export type TypePrefetchDeps = {
@@ -45,27 +62,16 @@ export type TypePrefetchDeps = {
 	rpcCall: <T>(method: string, fn: () => T) => T;
 	rpc?: RpcProfile;
 	caches: TypePrefetchCaches;
+	/** In-process bind resolver — skip RPC for identifiers it can answer. */
+	jsSymbolResolver?: {
+		resolveIdentifier(
+			tsgoNode: { kind: number; pos: number; end: number },
+			fileName: string,
+			text: string,
+		): unknown | undefined;
+	};
+	fileText?: string;
 };
-
-function isSymbolFallbackIdentifier(node: Node, SK: Record<string, number>): boolean {
-	if (node.kind !== SK.Identifier) return false;
-	const parent = node.parent as Node | undefined;
-	if (!parent) return false;
-	const pk = parent.kind;
-	if (pk === SK.ImportSpecifier || pk === SK.ExportSpecifier) {
-		const spec = parent as unknown as { name?: Node; propertyName?: Node };
-		return spec.name === node || spec.propertyName === node;
-	}
-	if (pk === SK.ImportClause) {
-		const clause = parent as unknown as { name?: Node };
-		return clause.name === node;
-	}
-	if (pk === SK.NamespaceImport) {
-		const ns = parent as unknown as { name?: Node };
-		return ns.name === node;
-	}
-	return false;
-}
 
 export function batchPrefetchTypes(
 	project: Project,
@@ -80,6 +86,8 @@ export function batchPrefetchTypes(
 	symbolsAtPosition: number;
 	contextualTypes: number;
 	propertiesOfType: number;
+	typesOfSymbols: number;
+	typeAtLocations: number;
 } {
 	const empty = {
 		typeAtPosition: 0,
@@ -88,6 +96,8 @@ export function batchPrefetchTypes(
 		symbolsAtPosition: 0,
 		contextualTypes: 0,
 		propertiesOfType: 0,
+		typesOfSymbols: 0,
+		typeAtLocations: 0,
 	};
 	if (!plan.memberAccess && !plan.typeAssertions && !plan.symbolFallback
 		&& !plan.contextualCalls && !plan.propertiesOfType) {
@@ -96,11 +106,13 @@ export function batchPrefetchTypes(
 
 	const SK = deps.astSyntaxKind;
 	const { caches, fixupType, rpcCall } = deps;
+	const tsgoSymbolsForTypeBatch = new Set<{ id: number }>();
 
 	const memberAccessNodes: Node[] = [];
 	const typeAnnotationNodes: Node[] = [];
-	const symbolFallbackNodes: Node[] = [];
 	const contextualNodes: Node[] = [];
+	const callLikeNodes: Node[] = [];
+	const unresolvedSymbolNodes: Node[] = [];
 	const seenTypeNodes = new Set<Node>();
 
 	const visit = (node: Node) => {
@@ -109,12 +121,29 @@ export function batchPrefetchTypes(
 			&& (k === SK.PropertyAccessExpression || k === SK.ElementAccessExpression)) {
 			memberAccessNodes.push(node);
 		}
-		if (plan.symbolFallback && isSymbolFallbackIdentifier(node, SK)) {
-			symbolFallbackNodes.push(node);
+		if (plan.contextualCalls || plan.memberAccess) {
+			if (k === SK.CallExpression || k === SK.NewExpression) {
+				callLikeNodes.push(node);
+			}
 		}
 		if (plan.contextualCalls
 			&& (k === SK.CallExpression || k === SK.ArrowFunctionExpression)) {
 			contextualNodes.push(node);
+		}
+		if (plan.symbolFallback && k === SK.Identifier && caches.nodeToSymbol
+			&& deps.jsSymbolResolver && deps.fileText && !caches.nodeToSymbol.has(node)) {
+			const pos = (node as unknown as { pos?: number }).pos ?? node.end;
+			const local = deps.jsSymbolResolver.resolveIdentifier(
+				{ kind: node.kind, pos, end: node.end },
+				fileName,
+				deps.fileText,
+			);
+			if (local) {
+				caches.nodeToSymbol.set(node, local);
+			}
+			else {
+				unresolvedSymbolNodes.push(node);
+			}
 		}
 		if (plan.typeAssertions) {
 			if (
@@ -138,22 +167,53 @@ export function batchPrefetchTypes(
 	let symbolsAtPosition = 0;
 	let contextualTypes = 0;
 	let propertiesOfType = 0;
+	let typesOfSymbols = 0;
+	let typeAtLocations = 0;
 
-	const warmTypeCaches = (raw: unknown) => {
-		if (!raw || typeof raw !== 'object') return;
-		const key = raw as object;
-		if (caches.indexInfosCache && !caches.indexInfosCache.has(key)) {
+	// Symbol batch first — JS bind, then position batch for misses.
+	if (plan.symbolFallback && caches.nodeToSymbol) {
+		for (const nodes of chunk(unresolvedSymbolNodes, BATCH_CHUNK)) {
+			if (nodes.length === 0) continue;
 			try {
-				const infos = rpcCall('getIndexInfosOfType', () =>
-					project.checker.getIndexInfosOfType(raw as any));
-				caches.indexInfosCache.set(key, infos ?? null);
-				indexInfos++;
+				const positions = nodes.map(n => n.end);
+				const syms = rpcCall('getSymbolsAtPositions(batch)', () =>
+					project.checker.getSymbolAtPosition(fileName, positions)) as unknown as unknown[];
+				for (let j = 0; j < nodes.length; j++) {
+					const node = nodes[j];
+					if (caches.nodeToSymbol!.has(node)) continue;
+					const sym = syms[j];
+					caches.nodeToSymbol!.set(node, sym ?? undefined);
+					symbolsAtPosition++;
+					if (isTsgoSymbol(sym)) tsgoSymbolsForTypeBatch.add(sym);
+				}
 			}
-			catch { /* lazy fallback */ }
+			catch { /* lazy fallback at lint time */ }
 		}
-	};
+	}
 
-	const seenTypes = new Set<object>();
+	// Call/New batch getTypeAtLocation — bypasses computeGetTypeAtLocation's
+	// multi-RPC signature dance for the hottest node kinds.
+	if ((plan.contextualCalls || plan.memberAccess) && callLikeNodes.length > 0) {
+		for (const nodes of chunk(callLikeNodes, BATCH_CHUNK)) {
+			const pending = nodes.filter(n => !caches.nodeTypeCache.has(n));
+			if (pending.length === 0) continue;
+			try {
+				const types = rpcCall('getTypeAtLocations(batch)', () =>
+					project.checker.getTypeAtLocation(pending)) as unknown as unknown[];
+				for (let j = 0; j < pending.length; j++) {
+					const node = pending[j];
+					const raw = types[j];
+					if (raw) fixupType(raw);
+					caches.nodeTypeCache.set(
+						node,
+						raw ? raw as unknown as import('typescript').Type : null,
+					);
+					typeAtLocations++;
+				}
+			}
+			catch { /* lazy fallback at lint time */ }
+		}
+	}
 
 	if (memberAccessNodes.length > 0) {
 		try {
@@ -167,13 +227,6 @@ export function batchPrefetchTypes(
 				if (raw) fixupType(raw);
 				caches.nodeTypeCache.set(node, raw ? raw as unknown as import('typescript').Type : null);
 				typeAtPosition++;
-				if (raw && typeof raw === 'object') {
-					const key = raw as object;
-					if (!seenTypes.has(key)) {
-						seenTypes.add(key);
-						warmTypeCaches(raw, plan.propertiesOfType);
-					}
-				}
 			}
 		}
 		catch { /* lazy fallback at lint time */ }
@@ -194,21 +247,6 @@ export function batchPrefetchTypes(
 		catch { /* lazy fallback */ }
 	}
 
-	if (plan.symbolFallback && symbolFallbackNodes.length > 0 && caches.nodeToSymbol) {
-		try {
-			const positions = symbolFallbackNodes.map(n => n.end);
-			const syms = rpcCall('getSymbolsAtPositions(batch)', () =>
-				project.checker.getSymbolAtPosition(fileName, positions)) as unknown as unknown[];
-			for (let j = 0; j < symbolFallbackNodes.length; j++) {
-				const node = symbolFallbackNodes[j];
-				if (caches.nodeToSymbol.has(node)) continue;
-				caches.nodeToSymbol.set(node, syms[j] ?? undefined);
-				symbolsAtPosition++;
-			}
-		}
-		catch { /* lazy fallback at lint time */ }
-	}
-
 	if (plan.contextualCalls && contextualNodes.length > 0 && caches.contextualTypeCache) {
 		for (const node of contextualNodes) {
 			if (caches.contextualTypeCache.has(node)) continue;
@@ -226,6 +264,31 @@ export function batchPrefetchTypes(
 		}
 	}
 
+	if (caches.typeOfSymbolCache && tsgoSymbolsForTypeBatch.size > 0) {
+		const pending = [...tsgoSymbolsForTypeBatch].filter(
+			s => !caches.typeOfSymbolCache!.has(s as object),
+		);
+		for (const symbols of chunk(pending, BATCH_CHUNK)) {
+			if (symbols.length === 0) continue;
+			try {
+				const types = rpcCall('getTypesOfSymbols(batch)', () =>
+					project.checker.getTypeOfSymbol(symbols as any)) as unknown as unknown[];
+				for (let j = 0; j < symbols.length; j++) {
+					const sym = symbols[j];
+					if (caches.typeOfSymbolCache!.has(sym as object)) continue;
+					const raw = types[j];
+					if (raw) fixupType(raw);
+					caches.typeOfSymbolCache!.set(
+						sym as object,
+						raw ? raw as unknown as import('typescript').Type : null,
+					);
+					typesOfSymbols++;
+				}
+			}
+			catch { /* lazy fallback */ }
+		}
+	}
+
 	return {
 		typeAtPosition,
 		typeFromTypeNode,
@@ -233,5 +296,7 @@ export function batchPrefetchTypes(
 		symbolsAtPosition,
 		contextualTypes,
 		propertiesOfType,
+		typesOfSymbols,
+		typeAtLocations,
 	};
 }
