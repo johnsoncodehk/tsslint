@@ -83,6 +83,14 @@ jobs:
       - name: CLI integration
         run: node packages/cli/test/integration.test.js
 
+      # CLI: tsgo backend + PoC smoke (requires @typescript/native-preview).
+      - name: CLI tsgo backend
+        run: |
+          node -e "require.resolve('@typescript/native-preview/unstable/sync')"
+          node packages/cli/test/tsgo-backend.test.js
+          pnpm -C packages/poc-tsgo run build
+          node packages/poc-tsgo/test/poc.test.js
+
       # CLI: layer 2 cross-session affected-file diff.
       - name: CLI incremental state
         run: node packages/cli/test/incremental-state.test.js

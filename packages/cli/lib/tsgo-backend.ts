@@ -1,0 +1,1003 @@
+// tsgo backend — alternative to ts.createProgram for the linter's
+// `ctx.program()` thunk. Activated by `--tsgo`. Spawns the
+// @typescript/native-preview binary, holds a Snapshot/Project, and
+// presents `Project.program` + `Project.checker` as a ts.Program /
+// ts.TypeChecker subset that satisfies the linter's contract.
+//
+// Two non-obvious invariants:
+//
+//   1. Symbol resolution batching. tsgo Checker calls are sync RPCs.
+//      `Checker.getSymbolAtLocation([nodes])` and
+//      `Checker.getSymbolAtPosition(file, [positions])` are array
+//      overloads — N nodes resolved in 1 RPC. We do a per-file prepass:
+//      walk the AST, collect every Identifier, batched-resolve once,
+//      stash in `nodeToSymbol`. Rules then call `getSymbolAtLocation`
+//      synchronously and read from the Map.
+//
+//   2. `getSymbolAtLocation` doesn't resolve identifiers in
+//      import/export specifier position (~76% miss rate on type-heavy
+//      TS files). `getSymbolAtPosition(file, [endOffsets])` does. The
+//      prepass uses the position-based API as primary and falls back
+//      to location-based for the small remainder (mostly object-spread
+//      method names where position is "between siblings").
+//
+// AST node identity is preserved across calls — tsgo's SourceFileCache
+// hands back the same parsed SF object for the same path within a
+// snapshot, and we reuse those Node references as Map keys.
+
+import path = require('path');
+import ts = require('typescript');
+
+import { loadTsgoModules } from './tsgo-load.js';
+
+// `@typescript/native-preview` ships ESM-only. Under Node16 module
+// resolution, type-only imports of an ESM package from this CJS file
+// require the `'resolution-mode': 'import'` attribute. We thread that
+// through once via `import(..., { with: ... })` aliases and reuse them.
+type TsgoSync = typeof import('@typescript/native-preview/unstable/sync', { with: { 'resolution-mode': 'import' } });
+type API = InstanceType<TsgoSync['API']>;
+type Snapshot = InstanceType<TsgoSync['Snapshot']>;
+type Project = InstanceType<TsgoSync['Project']>;
+type TsgoSymbol = InstanceType<TsgoSync['Symbol']>;
+type Node = import('@typescript/native-preview/unstable/ast', { with: { 'resolution-mode': 'import' } }).Node;
+
+export interface TsgoBackend {
+	// ts.Program-shape adapter, fed to LinterContext.program().
+	getProgram(): ts.Program;
+	// Per-file setup before rules run: prototype-patches the tsgo Node
+	// hierarchy on first call, then bind-via-real-ts the file so the
+	// JS-side scope walker can answer in-process Symbol queries.
+	// Idempotent on unchanged text (cached).
+	prepareFile(fileName: string): void;
+	// Drop the JS-side bind + position maps for one file. Call after
+	// the file's lint pass completes so the bound SF doesn't pin in
+	// memory across the rest of the project's lint. Subsequent lint of
+	// the SAME file (rare, e.g. `--fix` rewrite + re-lint) re-binds
+	// from current text via prepareFile.
+	releaseFile(fileName: string): void;
+	// Drop the JS-side bind cache for a file. Call after `--fix`
+	// rewrites file content so the next `prepareFile` re-binds against
+	// the new text.
+	invalidateFile(fileName: string): void;
+	// Tear down child process + free snapshot refs.
+	close(): void;
+}
+
+// Process-level guards. All prototype patches are one-shot per process
+// (tsgo's class shapes are stable per binary version).
+let nodeProtoPatched = false;
+let typeProtoPatched = false;
+let nodeHandleProtoPatched = false;
+let symbolProtoPatched = false;
+let nodeListSpeciesPatched = false;
+let signatureProtoPatched = false;
+
+function patchTsgoNodeListSpecies(sample: object): void {
+	if (nodeListSpeciesPatched) return;
+	const ctor = (sample as { constructor?: any }).constructor;
+	if (!ctor) return;
+	if (ctor[Symbol.species] !== Array) {
+		Object.defineProperty(ctor, Symbol.species, {
+			configurable: true,
+			get: () => Array,
+		});
+	}
+	nodeListSpeciesPatched = true;
+}
+
+// tsgo's Node interface exposes `pos` / `end` (raw parser offsets,
+// leading trivia included), `parent`, `kind`, `forEachChild`,
+// `getSourceFile()`. It does NOT provide ts.Node's instance methods
+// `getStart` / `getEnd` / `getText` — TS adds these on the runtime
+// NodeObject prototype, and rule code (lazy-estree's range computation,
+// plenty of compat-eslint utilities) calls them as if every Node is a
+// ts.Node.
+//
+// Tsgo nodes returned from the API are `RemoteNode` / `RemoteSourceFile`
+// instances (separate class hierarchy from the locally-instantiable
+// `NodeObject` that `/ast/factory` exposes). The Remote classes live at
+// dist paths NOT listed in the package's `exports` map — we can't
+// `require` them by name. Instead we walk up the prototype chain from a
+// live Node sample to the topmost non-Object prototype (RemoteNodeBase)
+// and patch there. One-time; the chain shape is stable per tsgo version.
+//
+// Math: `getStart` = `pos` advanced past leading trivia (whitespace +
+// comments), `getEnd` = `end`, `getText` = `sf.text.slice(getStart, end)`.
+// tsgo's scanner emits standard TS trivia, so reusing real `ts.skipTrivia`
+// gives bit-identical positions to ts.Node.
+function patchTsgoNodeProto(sample: Node): void {
+	if (nodeProtoPatched) return;
+	let proto: any = Object.getPrototypeOf(sample);
+	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
+		proto = Object.getPrototypeOf(proto);
+	}
+	if (!proto) {
+		throw new Error('tsgo backend: could not locate Node prototype to patch');
+	}
+	// `skipTrivia` is technically `@internal` in ts's published .d.ts but
+	// has been runtime-exported since 0.x — every linter / codemod tool
+	// uses it. The runtime check survives if a future ts removes it.
+	const skipTrivia = (ts as unknown as {
+		skipTrivia?: (
+			text: string,
+			pos: number,
+			stopAfterLineBreak?: boolean,
+			stopAtComments?: boolean,
+		) => number;
+	}).skipTrivia;
+	if (!skipTrivia) {
+		throw new Error('tsgo backend: ts.skipTrivia not available — getStart shim cannot be installed');
+	}
+	if (typeof proto.getStart !== 'function') {
+		proto.getStart = function (
+			sf?: { text: string },
+			includeJsDocComments?: boolean,
+		): number {
+			const text = (sf ?? this.getSourceFile()).text;
+			return skipTrivia(text, this.pos, false, includeJsDocComments);
+		};
+	}
+	if (typeof proto.getEnd !== 'function') {
+		proto.getEnd = function (): number {
+			return this.end;
+		};
+	}
+	if (typeof proto.getText !== 'function') {
+		proto.getText = function (sf?: { text: string }): string {
+			const file = sf ?? this.getSourceFile();
+			return file.text.slice(this.getStart(file), this.end);
+		};
+	}
+	if (typeof proto.getFullStart !== 'function') {
+		proto.getFullStart = function (): number {
+			return this.pos;
+		};
+	}
+	if (typeof proto.getFullText !== 'function') {
+		proto.getFullText = function (sf?: { text: string }): string {
+			const file = sf ?? this.getSourceFile();
+			return file.text.slice(this.pos, this.end);
+		};
+	}
+	if (typeof proto.getWidth !== 'function') {
+		proto.getWidth = function (sf?: { text: string }): number {
+			return this.end - this.getStart(sf);
+		};
+	}
+	if (typeof proto.getFullWidth !== 'function') {
+		proto.getFullWidth = function (): number {
+			return this.end - this.pos;
+		};
+	}
+	// `SourceFile.getLineAndCharacterOfPosition(pos)` — used by
+	// compat-eslint (and by ts itself for diagnostic span rendering)
+	// to convert offsets to line/character. Real ts caches `lineMap` on
+	// the SF; tsgo doesn't, so we compute lineStarts lazily and stash
+	// on the SF instance the first time it's asked.
+	if (typeof proto.getLineAndCharacterOfPosition !== 'function') {
+		proto.getLineAndCharacterOfPosition = function (
+			this: { text?: string; getSourceFile(): { text: string }; _lineStarts?: number[] },
+			position: number,
+		): { line: number; character: number } {
+			const text = this.text ?? this.getSourceFile().text;
+			let starts = this._lineStarts;
+			if (!starts) {
+				starts = [0];
+				for (let i = 0; i < text.length; i++) {
+					const c = text.charCodeAt(i);
+					if (c === 10) starts.push(i + 1);
+					else if (c === 13) {
+						if (text.charCodeAt(i + 1) === 10) i++;
+						starts.push(i + 1);
+					}
+				}
+				this._lineStarts = starts;
+			}
+			// Binary search for the largest lineStart ≤ position.
+			let lo = 0, hi = starts.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi + 1) >>> 1;
+				if (starts[mid] <= position) lo = mid; else hi = mid - 1;
+			}
+			return { line: lo, character: position - starts[lo] };
+		};
+	}
+	if (typeof proto.getLineStarts !== 'function') {
+		proto.getLineStarts = function (this: { _lineStarts?: number[]; getLineAndCharacterOfPosition(p: number): unknown }) {
+			// Trigger the lazy build via a no-op call; cache lives on `_lineStarts`.
+			this.getLineAndCharacterOfPosition(0);
+			return this._lineStarts!;
+		};
+	}
+	// Inverse: convert (line, character) → position. compat-eslint's
+	// ESLint→TSSLint report converter calls this to map ESTree's
+	// loc-based descriptors back to file offsets. Without it, the
+	// converter's swallowing try/catch defaults start/end to 0 → all
+	// diagnostics collapse to (line=1, col=1) at file start.
+	if (typeof proto.getPositionOfLineAndCharacter !== 'function') {
+		proto.getPositionOfLineAndCharacter = function (
+			this: { getLineStarts(): number[] },
+			line: number,
+			character: number,
+		): number {
+			const starts = this.getLineStarts();
+			return (starts[line] ?? 0) + character;
+		};
+	}
+	nodeProtoPatched = true;
+}
+
+// `ts.Type` exposes a clutch of flag-based predicates as instance
+// methods (`isLiteral`, `isStringLiteral`, `isUnion`, `getSymbol`, …).
+// Rule code (typescript-eslint's `no-unnecessary-type-assertion`,
+// many compat-eslint paths) calls these. tsgo's TypeObject only has
+// `getSymbol` and the data fields; we patch the missing predicates onto
+// its prototype using tsgo's TypeFlags enum values (different from ts).
+//
+// Located via prototype walk from a sample Type — TypeObject isn't in
+// the package exports map. One-shot per process.
+function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
+	if (typeProtoPatched) return;
+	let proto: any = Object.getPrototypeOf(sample);
+	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
+		proto = Object.getPrototypeOf(proto);
+	}
+	if (!proto) return;
+	const TF = (sync as any).TypeFlags as Record<string, number>;
+	const has = (flag: number) => function (this: { flags: number }) { return (this.flags & flag) !== 0; };
+	if (!proto.isStringLiteral) proto.isStringLiteral = has(TF.StringLiteral);
+	if (!proto.isNumberLiteral) proto.isNumberLiteral = has(TF.NumberLiteral);
+	if (!proto.isBooleanLiteral) proto.isBooleanLiteral = has(TF.BooleanLiteral);
+	if (!proto.isBigIntLiteral) proto.isBigIntLiteral = has(TF.BigIntLiteral);
+	if (!proto.isEnumLiteral) proto.isEnumLiteral = has(TF.EnumLiteral);
+	if (!proto.isLiteral) proto.isLiteral = has(
+		TF.StringLiteral | TF.NumberLiteral | TF.BigIntLiteral | TF.BooleanLiteral,
+	);
+	if (!proto.isUnion) proto.isUnion = has(TF.Union);
+	if (!proto.isIntersection) proto.isIntersection = has(TF.Intersection);
+	if (!proto.isUnionOrIntersection) proto.isUnionOrIntersection = has(TF.UnionOrIntersection ?? (TF.Union | TF.Intersection));
+	if (!proto.isTypeParameter) proto.isTypeParameter = has(TF.TypeParameter);
+	if (!proto.isClassOrInterface) proto.isClassOrInterface = function () { return false; }; // structural; would need objectFlags
+	if (!proto.isClass) proto.isClass = function () { return false; };
+	if (!proto.isIndexType) proto.isIndexType = has(TF.Index);
+	if (!proto.getFlags) proto.getFlags = function (this: { flags: number }) { return this.flags; };
+	if (!proto.isNullableType) proto.isNullableType = has((TF.Null ?? 0) | (TF.Undefined ?? 0));
+	// `types` property — typescript-eslint's ts-api-utils
+	// (`unionConstituents`) reads `type.types` directly on Union /
+	// Intersection types. tsgo exposes the constituents via `getTypes()`
+	// instead. Lazy getter preserves the no-RPC-on-bind contract.
+	if (!Object.getOwnPropertyDescriptor(proto, 'types')) {
+		Object.defineProperty(proto, 'types', {
+			configurable: true,
+			get(this: { getTypes?: () => unknown[] }) {
+				return this.getTypes ? this.getTypes() : undefined;
+			},
+		});
+	}
+	// `getCallSignatures()` / `getConstructSignatures()` — instance shims
+	// that delegate to the Checker. We can't reach the Checker from here
+	// without a closure; install via patchTsgoTypeProtoWithChecker
+	// (separate hook called from wrapChecker).
+	typeProtoPatched = true;
+}
+
+// Type instance methods that need a Checker reference (signatures,
+// properties). Patched once on first checker query that returns a Type.
+let typeCheckerMethodsPatched = false;
+function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, project: Project): void {
+	if (typeCheckerMethodsPatched) return;
+	let proto: any = Object.getPrototypeOf(sample);
+	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
+		proto = Object.getPrototypeOf(proto);
+	}
+	if (!proto) return;
+	const SK = (sync as any).SignatureKind as Record<string, number>;
+	if (!proto.getCallSignatures) {
+		proto.getCallSignatures = function (this: { id: string }) {
+			return currentProjectRef.project!.checker.getSignaturesOfType(this as any, SK.Call);
+		};
+	}
+	if (!proto.getConstructSignatures) {
+		proto.getConstructSignatures = function (this: { id: string }) {
+			return currentProjectRef.project!.checker.getSignaturesOfType(this as any, SK.Construct);
+		};
+	}
+	if (!proto.getProperties) {
+		proto.getProperties = function (this: any) {
+			return currentProjectRef.project!.checker.getPropertiesOfType(this);
+		};
+	}
+	if (!proto.getProperty) {
+		proto.getProperty = function (this: any, name: string) {
+			return this.getProperties().find((p: any) => p.name === name);
+		};
+	}
+	if (!proto.getBaseTypes) {
+		proto.getBaseTypes = function (this: any) {
+			return currentProjectRef.project!.checker.getBaseTypes(this);
+		};
+	}
+	if (!proto.getNonNullableType) {
+		proto.getNonNullableType = function (this: any) {
+			return currentProjectRef.project!.checker.getNonNullableType(this);
+		};
+	}
+	void project;
+	typeCheckerMethodsPatched = true;
+}
+
+// `Signature` on tsgo lacks ts.Signature's accessor methods
+// (`getReturnType`, `getDeclaration`, `getTypeParameters`,
+// `getParameters`). Add thin wrappers — `getReturnType` delegates via
+// the current project's checker; the rest read existing data fields.
+function patchTsgoSignatureProto(sync: TsgoSync): void {
+	if (signatureProtoPatched) return;
+	const Signature = (sync as any).Signature;
+	if (!Signature?.prototype) return;
+	const proto = Signature.prototype;
+	if (!proto.getReturnType) {
+		proto.getReturnType = function (this: { id: string }) {
+			return currentProjectRef.project!.checker.getReturnTypeOfSignature(this as any);
+		};
+	}
+	if (!proto.getDeclaration) {
+		proto.getDeclaration = function (this: { declaration: unknown }) {
+			return this.declaration;
+		};
+	}
+	if (!proto.getTypeParameters) {
+		proto.getTypeParameters = function (this: { typeParameters: unknown[] }) {
+			return this.typeParameters;
+		};
+	}
+	if (!proto.getParameters) {
+		proto.getParameters = function (this: { parameters: unknown[] }) {
+			return this.parameters;
+		};
+	}
+	signatureProtoPatched = true;
+}
+
+// `Symbol` on tsgo carries data fields and a few RPC-backed methods,
+// but is missing ts.Symbol's instance-method facade (`getDeclarations`,
+// `getName`, `getEscapedName`, `getFlags`). Rule code reads those — add
+// thin getters that read the data fields.
+function patchTsgoSymbolProto(sync: TsgoSync): void {
+	if (symbolProtoPatched) return;
+	const Symbol = (sync as any).Symbol;
+	if (!Symbol?.prototype) return;
+	const proto = Symbol.prototype;
+	if (!proto.getDeclarations) {
+		proto.getDeclarations = function (this: { declarations: unknown[] }) {
+			return this.declarations;
+		};
+	}
+	if (!proto.getName) {
+		proto.getName = function (this: { name: string }) {
+			return this.name;
+		};
+	}
+	if (!proto.getEscapedName) {
+		// tsgo doesn't have escapedName / __String distinction the way
+		// ts does; the regular `name` is fine for rule comparisons.
+		proto.getEscapedName = function (this: { name: string }) {
+			return this.name;
+		};
+	}
+	if (!proto.getFlags) {
+		proto.getFlags = function (this: { flags: number }) {
+			return this.flags;
+		};
+	}
+	// Mirror `escapedName` field too — typescript-estree reads it
+	// directly on the symbol object.
+	if (!Object.getOwnPropertyDescriptor(proto, 'escapedName')) {
+		Object.defineProperty(proto, 'escapedName', {
+			configurable: true,
+			get(this: { name: string }) { return this.name; },
+		});
+	}
+	symbolProtoPatched = true;
+}
+
+// `Symbol.declarations` on tsgo is `NodeHandle[]` — lazy stubs with
+// `kind / pos / end / path` and a `resolve(project)` method. Rule code
+// expects real `ts.Node[]` and reads `.parent` / calls `.getSourceFile()`
+// directly. Patch NodeHandle's prototype to upgrade-on-access:
+//
+//   - `getSourceFile()` short-circuits to `project.program.getSourceFile(path)`
+//     — common in scope-manager lib-symbol checks; doesn't need full Node
+//     materialisation since `project.isSourceFileDefaultLibrary(sf)` is
+//     fed straight back to the wrapped Program.
+//
+//   - `parent` getter resolves the handle once via `resolve(project)`, then
+//     reads parent off the resolved Node. Cached on the instance so repeat
+//     reads skip the `findDescendant` walk.
+//
+// Multi-project: `currentProjectRef.project` is rebound in createTsgoBackend()
+// every setup. The prototype patch closes over the holder, not the project
+// instance — so NodeHandles produced under project A but accessed after
+// the worker switches to project B route through B's live API. Safe
+// because lint() processes one file at a time within one project and
+// hands no cross-project handles around.
+const currentProjectRef: { project: Project | undefined } = { project: undefined };
+
+function installNodeHandleHooks(sync: TsgoSync): void {
+	if (nodeHandleProtoPatched) return;
+	const NodeHandle = (sync as any).NodeHandle;
+	if (!NodeHandle?.prototype) return;
+	const proto = NodeHandle.prototype;
+	if (typeof proto.getSourceFile !== 'function') {
+		proto.getSourceFile = function (this: { path: string }) {
+			const project = currentProjectRef.project;
+			if (!project) return undefined;
+			return project.program.getSourceFile(this.path);
+		};
+	}
+	if (!Object.getOwnPropertyDescriptor(proto, 'parent')) {
+		Object.defineProperty(proto, 'parent', {
+			configurable: true,
+			get(this: { _resolvedNode?: Node | null; resolve: (p: Project) => Node | undefined }) {
+				if (this._resolvedNode === undefined) {
+					const project = currentProjectRef.project;
+					this._resolvedNode = project ? this.resolve(project) ?? null : null;
+				}
+				return this._resolvedNode?.parent;
+			},
+		});
+	}
+	nodeHandleProtoPatched = true;
+}
+
+export function createTsgoBackend(tsconfig: string): TsgoBackend {
+	// Lazy require so users without the optional peer dep don't crash on
+	// load. The CLI gates this behind `--tsgo` so non-tsgo users never
+	// reach here.
+	const trace = process.env.TSSLINT_TIME_TSGO === '1';
+	const t0 = Date.now();
+	const { sync, ast } = loadTsgoModules();
+	const { API: APICtor } = sync;
+	const tImport = Date.now();
+	const api: API = new APICtor({});
+	const tApi = Date.now();
+	const snapshot: Snapshot = api.updateSnapshot({ openProject: tsconfig });
+	const tSnap = Date.now();
+	const project = snapshot.getProject(tsconfig);
+	const tProject = Date.now();
+	if (!project) {
+		api.close();
+		throw new Error(`tsgo: project not found for ${tsconfig}`);
+	}
+	if (trace) {
+		console.error(
+			`[tsgo-time] createBackend total=${tProject - t0}ms `
+			+ `(import=${tImport - t0} apiCtor=${tApi - tImport} `
+			+ `updateSnapshot=${tSnap - tApi} getProject=${tProject - tSnap})`,
+		);
+	}
+
+	// Per-fileName Symbol cache, populated by `prepareFile`. Keyed by the
+	// tsgo Node object reference (not its position) — the AST tree is
+	// hydrated client-side and walks return the same Node instances each
+	// time within a snapshot.
+	const nodeToSymbol = new WeakMap<Node, TsgoSymbol | undefined>();
+	// Files prepass'd this snapshot. Skip re-walk on repeat lint() calls.
+	const preparedFiles = new Set<string>();
+
+	// Per-backend JS Symbol resolver. Owns the bound-SF + position-map
+	// caches; releases them on close(). Replaces the module-level singleton
+	// so two backends in the same worker (multi-project lint) don't share
+	// stale caches across snapshots.
+	const jsSymbolResolver: import('./tsgo-js-symbols.js').JsSymbolResolver
+		= require('./tsgo-js-symbols.js').createJsSymbolResolver({
+			tsgoSyntaxKind: ast.SyntaxKind,
+		});
+	jsSymbolResolverRef.current = jsSymbolResolver;
+
+	const program = wrapProgram(project, nodeToSymbol);
+	currentProjectRef.project = project;
+	installNodeHandleHooks(sync);
+
+	let prepareTotalMs = 0;
+	let prepareCount = 0;
+	return {
+		getProgram: () => program,
+		prepareFile(fileName: string) {
+			if (preparedFiles.has(fileName)) return;
+			preparedFiles.add(fileName);
+			const t = Date.now();
+			prepareFile(project, fileName, jsSymbolResolver);
+			prepareTotalMs += Date.now() - t;
+			prepareCount++;
+			if (trace && (prepareCount % 100 === 0 || prepareCount === 1)) {
+				console.error(`[tsgo-time] prepareFile #${prepareCount} cumul=${prepareTotalMs}ms`);
+			}
+		},
+		// Drop the JS-side bind for a single file. Called by the worker
+		// after `--fix` rewrites file content, so the next prepareFile
+		// re-binds against the new text and returns fresh symbols.
+		invalidateFile(fileName: string) {
+			preparedFiles.delete(fileName);
+			jsSymbolResolver.invalidate(fileName);
+			// `nodeToSymbol` is a WeakMap keyed by tsgo Node references;
+			// after the next ensureProgram() rebuild those Node refs are
+			// new, so the stale entries become garbage automatically.
+		},
+		// Drop the JS-side bind for a file after its lint pass is done.
+		// Distinct from invalidateFile: keeps `preparedFiles` membership
+		// (so a stray re-lint of the same file in the same backend
+		// re-binds rather than no-ops), but releases the bound SF +
+		// position maps for GC. Without this, all 5000 Dify files'
+		// bound SFs sit in memory simultaneously across a lint pass.
+		releaseFile(fileName: string) {
+			preparedFiles.delete(fileName);
+			jsSymbolResolver.invalidate(fileName);
+		},
+		close() {
+			if (trace) {
+				const s = getPrepareTimingSnapshot();
+				console.error(
+					`[tsgo-time] final prepareFiles=${prepareCount} `
+					+ `prepareTotal=${prepareTotalMs}ms `
+					+ `(getSF=${s.getSF}ms bind=${s.bind}ms)`,
+				);
+			}
+			jsSymbolResolver.clear();
+			if (jsSymbolResolverRef.current === jsSymbolResolver) {
+				jsSymbolResolverRef.current = undefined;
+			}
+			api.close();
+		},
+	};
+}
+
+// Bridge so wrapChecker.getSymbolAtLocation can reach the active
+// backend's resolver without re-threading the wiring through every
+// adapter method. Set by createTsgoBackend on construction; cleared on
+// close(). Multi-project worker swaps it on each setup.
+const jsSymbolResolverRef: { current: import('./tsgo-js-symbols.js').JsSymbolResolver | undefined } = { current: undefined };
+
+
+// Cumulative timers — printed by createBackend.close() under
+// TSSLINT_TIME_TSGO=1. Negligible cost when the flag is off (single
+// env-var read per call).
+let _prepareGetSF = 0;
+let _prepareBind = 0;
+
+export function getPrepareTimingSnapshot() {
+	return { getSF: _prepareGetSF, bind: _prepareBind };
+}
+
+// Per-file setup before rules run. Two pieces of essential work:
+//
+//   1. Prototype patches on the tsgo Node hierarchy — adds the
+//      ts.Node-shaped instance methods (`getStart` / `getEnd` /
+//      `getText` / `getLineAndCharacterOfPosition` / etc.) that rule
+//      code calls directly. One-shot per process; subsequent calls
+//      short-circuit inside the patch helpers.
+//
+//   2. Real-ts bind of the file. Symbol resolution then runs in-process
+//      via `wrapChecker.getSymbolAtLocation` — JS-side scope walker
+//      first, tsgo IPC fallback only on miss. Replaces the previous
+//      tsgo `getSymbolAtPosition` batched RPC prepass which cost ~11s
+//      on Dify (5000 files); JS-side bind costs ~1.8s for the same
+//      workload and produces real ts.Symbol objects with stable
+//      identity.
+function prepareFile(
+	project: Project,
+	fileName: string,
+	jsSymbolResolver: import('./tsgo-js-symbols.js').JsSymbolResolver,
+): void {
+	const trace = process.env.TSSLINT_TIME_TSGO === '1';
+	const t0 = trace ? Date.now() : 0;
+	const sf = project.program.getSourceFile(fileName);
+	if (trace) _prepareGetSF += Date.now() - t0;
+	if (!sf) return;
+
+	patchTsgoNodeProto(sf);
+	// RemoteNodeList extends Array; without species override, derived
+	// methods (`statements.map(...)` etc.) try to construct a fresh
+	// RemoteNodeList and crash in its binary-view getter. Override to
+	// plain Array.
+	const sample = (sf as unknown as { statements?: object }).statements;
+	if (sample) patchTsgoNodeListSpecies(sample);
+
+	const text = (sf as unknown as { text: string }).text;
+	const tBind = trace ? Date.now() : 0;
+	jsSymbolResolver.prepareFile(fileName, text);
+	if (trace) _prepareBind += Date.now() - tBind;
+}
+
+// Wraps tsgo Program + Checker as a `ts.Program`-shape. Only the methods
+// tsslint actually consumes are populated; the rest throw on access so
+// any caller pulling on a missing capability fails loudly instead of
+// returning silent garbage.
+function wrapProgram(
+	project: Project,
+	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
+): ts.Program {
+	const checker = wrapChecker(project, nodeToSymbol);
+	const cwd = path.dirname(project.configFileName);
+
+	// tsgo's lib files live inside the binary's own bundled stdlib. The
+	// path check looks at whether the SF path traces to a /lib.*.d.ts
+	// inside the tsgo executable's directory, the only place defaultlib
+	// SFs originate.
+	const isLib = (sf: ts.SourceFile) => {
+		const fn = sf.fileName;
+		return /\/lib\.[^/]+\.d\.ts$/.test(fn);
+	};
+
+	const stub = (name: string) => () => {
+		throw new Error(`tsgo backend: ts.Program.${name}() not implemented`);
+	};
+
+	const program: Partial<ts.Program> = {
+		getSourceFile(fileName: string) {
+			return project.program.getSourceFile(fileName) as unknown as ts.SourceFile | undefined;
+		},
+		getSourceFiles() {
+			// tsgo's Program doesn't expose all SFs in one call; pull via
+			// rootFiles plus their transitive deps. For the linter's
+			// purpose (cache-flow / BuilderProgram drain) this is fine —
+			// the hot path is per-file lookup.
+			const out: ts.SourceFile[] = [];
+			for (const fn of project.rootFiles) {
+				const sf = project.program.getSourceFile(fn);
+				if (sf) out.push(sf as unknown as ts.SourceFile);
+			}
+			return out;
+		},
+		getRootFileNames() {
+			return project.rootFiles as readonly string[];
+		},
+		getCurrentDirectory() {
+			return cwd;
+		},
+		getCompilerOptions() {
+			return project.compilerOptions as ts.CompilerOptions;
+		},
+		getTypeChecker() {
+			return checker;
+		},
+		isSourceFileDefaultLibrary: isLib,
+		isSourceFileFromExternalLibrary(sf: ts.SourceFile) {
+			return /\/node_modules\//.test(sf.fileName);
+		},
+		// Methods the linter never calls but ts.Program's interface
+		// declares. Stub them so a stray dynamic-typed access blows up
+		// with a clear message rather than `undefined is not a function`.
+		getSemanticDiagnostics: stub('getSemanticDiagnostics') as any,
+		getSyntacticDiagnostics: stub('getSyntacticDiagnostics') as any,
+		getDeclarationDiagnostics: stub('getDeclarationDiagnostics') as any,
+		getGlobalDiagnostics: stub('getGlobalDiagnostics') as any,
+		getConfigFileParsingDiagnostics: stub('getConfigFileParsingDiagnostics') as any,
+		emit: stub('emit') as any,
+	};
+
+	return program as ts.Program;
+}
+
+function wrapChecker(
+	project: Project,
+	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
+): ts.TypeChecker {
+	const { sync, ast } = loadTsgoModules();
+	const stub = (name: string) => () => {
+		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
+	};
+	const fixupType = (t: unknown) => {
+		if (t && typeof t === 'object') {
+			patchTsgoTypeProto(t, sync);
+			patchTsgoTypeCheckerMethods(t, sync, project);
+		}
+		return t;
+	};
+	patchTsgoSymbolProto(sync);
+	patchTsgoSignatureProto(sync);
+
+	// Forward to tsgo's Checker, casting Node/Symbol/Type shapes (tsgo's
+	// runtime classes are structurally compatible with ts.* for the
+	// methods we proxy — tsgo Symbol carries `name`/`flags`/`declarations`,
+	// tsgo Type carries `flags` plus the prototype shims from
+	// patchTsgoTypeProto). Non-existent methods surface as throw or soft
+	// no-op depending on caller tolerance.
+	const fwd = <K extends string>(name: K, fixup?: (r: unknown) => void) =>
+		(...args: unknown[]) => {
+			const fn = (project.checker as any)[name];
+			if (typeof fn !== 'function') return undefined;
+			const r = fn.apply(project.checker, args);
+			if (fixup) fixup(r);
+			return r;
+		};
+
+	const checker: Partial<ts.TypeChecker> = {
+		getSymbolAtLocation(node: ts.Node) {
+			const tsgoNode = node as unknown as Node;
+			// Cache hit returns synchronously, no further work.
+			if (nodeToSymbol.has(tsgoNode)) {
+				return nodeToSymbol.get(tsgoNode) as unknown as ts.Symbol | undefined;
+			}
+			const tsgoSf = (tsgoNode as unknown as { getSourceFile?: () => { fileName: string; text: string } })
+				.getSourceFile?.();
+			// In-process JS scope walker first. Layer A (variable refs,
+			// declarations, in-file specifiers, in-file type refs)
+			// resolves locally — no IPC. The walker returns a real
+			// ts.Symbol with identity stable across calls.
+			const resolver = jsSymbolResolverRef.current;
+			if (resolver && tsgoSf) {
+				const local = resolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
+				if (local) {
+					nodeToSymbol.set(tsgoNode, local as unknown as TsgoSymbol);
+					return local as unknown as ts.Symbol;
+				}
+			}
+			// Layer C fallback. tsgo has two checker entry points with
+			// different coverage — `getSymbolAtPosition` resolves
+			// declaration-position identifiers (import/export specifier
+			// names) that the node-based API misses; `getSymbolAtLocation`
+			// covers a small remainder (object-spread method names etc.).
+			// Try position first to recover the previous prepass's recall
+			// without paying its eager batched cost.
+			let sym: TsgoSymbol | undefined;
+			if (tsgoSf) {
+				sym = project.checker.getSymbolAtPosition(tsgoSf.fileName, tsgoNode.end);
+			}
+			if (!sym) {
+				sym = project.checker.getSymbolAtLocation(tsgoNode);
+			}
+			nodeToSymbol.set(tsgoNode, sym);
+			return sym as unknown as ts.Symbol | undefined;
+		},
+		getTypeAtLocation(node: ts.Node) {
+			// Semantic divergences between ts and tsgo for
+			// `getTypeAtLocation`. ts returns the type of the expression
+			// AS IT EVALUATES; tsgo's default returns the type of the
+			// node STRUCTURALLY (inner expression's type for assertions,
+			// the function type for calls). typescript-eslint rules
+			// depend on the ts semantic. Route per-kind:
+			//
+			//   AsExpression / TypeAssertion / Satisfies  → getTypeFromTypeNode(.type)
+			//   CallExpression / NewExpression            → getReturnTypeOfSignature(getResolvedSignature(node))
+			//   NonNullExpression                         → getNonNullableType(getTypeAtLocation(.expression))
+			//
+			// All other kinds use tsgo's default (which IS the right
+			// thing for variable references, member accesses, literals,
+			// etc.).
+			const tsgoNode = node as unknown as Node;
+			const k = tsgoNode.kind;
+			const SK = ast.SyntaxKind;
+			if (
+				(k === SK.AsExpression
+					|| k === SK.TypeAssertionExpression
+					|| k === SK.SatisfiesExpression)
+				&& (tsgoNode as unknown as { type?: Node }).type
+			) {
+				const t = project.checker.getTypeFromTypeNode(
+					(tsgoNode as unknown as { type: Node }).type as any,
+				);
+				fixupType(t);
+				return t as unknown as ts.Type;
+			}
+			if (k === SK.CallExpression || k === SK.NewExpression) {
+				// Two attempts to recover the call's RETURN type:
+				//   1) `getResolvedSignature(node)` — the canonical way,
+				//      but tsgo panics on some method-call sites.
+				//   2) Walk via the function type's call signatures —
+				//      uses two `getCallSignatures(funcType)` and one
+				//      `getReturnTypeOfSignature(sig)` calls. Slightly
+				//      less precise (picks the first overload) but
+				//      doesn't trigger the panic.
+				try {
+					const sig = project.checker.getResolvedSignature(tsgoNode);
+					if (sig) {
+						const t = project.checker.getReturnTypeOfSignature(sig);
+						fixupType(t);
+						return t as unknown as ts.Type;
+					}
+				}
+				catch { /* fall through to plan B */ }
+				const sk = (sync as any).SignatureKind as Record<string, number>;
+				try {
+					const funcType = project.checker.getTypeAtLocation(tsgoNode);
+					if (funcType) {
+						const sigs = project.checker.getSignaturesOfType(funcType, sk.Call);
+						if (sigs && sigs.length > 0) {
+							const t = project.checker.getReturnTypeOfSignature(sigs[0]);
+							fixupType(t);
+							return t as unknown as ts.Type;
+						}
+					}
+				}
+				catch { /* try plan C */ }
+				// Plan C: tsgo's getTypeAtLocation(call) sometimes returns
+				// the callee's RECEIVER type rather than the function
+				// type (observed for nested method calls like
+				// `a.b.c()`). Pull the method's symbol off the callee
+				// expression and read its type instead — this resolves
+				// to the function type even in the receiver-collapsed
+				// case.
+				try {
+					const callee = (tsgoNode as unknown as { expression?: Node }).expression;
+					if (callee) {
+						// For property-access callees (`a.b.c()`), tsgo's
+						// `getSymbolAtLocation(propAccess)` returns the
+						// symbol of the LEFT side (`a.b`'s symbol —
+						// e.g. `languageService`). The METHOD's symbol
+						// is on the right (`callee.name`). Probe both
+						// shapes — direct identifier callees use the
+						// node itself.
+						const targetForSymbol =
+							(callee as unknown as { name?: Node }).name ?? callee;
+						const sym = project.checker.getSymbolAtLocation(targetForSymbol);
+						if (sym) {
+							const methodType = project.checker.getTypeOfSymbolAtLocation(sym, callee);
+							if (methodType) {
+								const sigs = project.checker.getSignaturesOfType(methodType, sk.Call);
+								if (sigs && sigs.length > 0) {
+									const t = project.checker.getReturnTypeOfSignature(sigs[0]);
+									fixupType(t);
+									return t as unknown as ts.Type;
+								}
+							}
+						}
+					}
+				}
+				catch { /* fall through to default */ }
+			}
+			if (k === SK.PropertyAccessExpression || k === SK.ElementAccessExpression) {
+				// tsgo's `getTypeAtLocation(propAccess)` returns wrong
+				// types in some real-codebase contexts (e.g. inside
+				// argument lists of generic-typed call expressions —
+				// observed `string[]` / `string` when the declared type
+				// is `string | undefined`). The same property at the
+				// same position via `getTypeAtPosition(file, end)`
+				// returns the correct type. Minimal repros don't
+					// trigger the wrong path; the divergence requires
+				// surrounding-context complexity we haven't isolated.
+				// Position-based query is the workaround.
+				const sfPath = ((tsgoNode as unknown as { getSourceFile?: () => { fileName: string } })
+					.getSourceFile?.() ?? { fileName: '' }).fileName;
+				if (sfPath) {
+					const t = project.checker.getTypeAtPosition(sfPath, tsgoNode.end);
+					if (t) {
+						fixupType(t);
+						return t as unknown as ts.Type;
+					}
+				}
+			}
+			if (k === SK.NonNullExpression) {
+				const inner = (tsgoNode as unknown as { expression: Node }).expression;
+				// Recurse through the adapter so nested CallExpression /
+				// AsExpression / NonNull get their own routing applied
+				// before we strip nullability. e.g. `someMap.get(k)!` —
+				// the inner CallExpression needs Call routing to get the
+				// return type (`T | undefined`), and only then does
+				// `getNonNullableType` produce `T`.
+				const innerT = checker.getTypeAtLocation!(inner as unknown as ts.Node);
+				if (innerT) {
+					const t = project.checker.getNonNullableType(innerT as unknown as any);
+					fixupType(t);
+					return t as unknown as ts.Type;
+				}
+			}
+			const t = project.checker.getTypeAtLocation(tsgoNode);
+			fixupType(t);
+			return t as unknown as ts.Type;
+		},
+		getShorthandAssignmentValueSymbol(node) {
+			if (!node) return undefined;
+			return project.checker.getShorthandAssignmentValueSymbol(node as unknown as Node) as unknown as ts.Symbol | undefined;
+		},
+		getTypeOfSymbolAtLocation(symbol, location) {
+			const t = project.checker.getTypeOfSymbolAtLocation(
+				symbol as unknown as TsgoSymbol,
+				location as unknown as Node,
+			);
+			fixupType(t);
+			return t as unknown as ts.Type;
+		},
+		// Direct forwards — tsgo Checker has these on its surface.
+		getTypeOfSymbol: fwd('getTypeOfSymbol', fixupType) as any,
+		getDeclaredTypeOfSymbol: fwd('getDeclaredTypeOfSymbol', fixupType) as any,
+		getSignaturesOfType: fwd('getSignaturesOfType') as any,
+		getResolvedSignature: fwd('getResolvedSignature') as any,
+		getReturnTypeOfSignature: fwd('getReturnTypeOfSignature', fixupType) as any,
+		getTypePredicateOfSignature: fwd('getTypePredicateOfSignature') as any,
+		getNonNullableType: fwd('getNonNullableType', fixupType) as any,
+		getBaseTypes: fwd('getBaseTypes') as any,
+		getPropertiesOfType: fwd('getPropertiesOfType') as any,
+		getIndexInfosOfType: fwd('getIndexInfosOfType') as any,
+		getTypeArguments: fwd('getTypeArguments') as any,
+		getWidenedType: fwd('getWidenedType', fixupType) as any,
+		getTypeFromTypeNode: fwd('getTypeFromTypeNode', fixupType) as any,
+		getContextualType: fwd('getContextualType', fixupType) as any,
+		typeToString: fwd('typeToString') as any,
+		isArrayLikeType: fwd('isArrayLikeType') as any,
+		// Type-parameter constraint — tsgo only has the type-parameter
+		// variant; for non-TypeParameter inputs ts returns undefined too.
+		getBaseConstraintOfType: ((type: any) => {
+			if ((type?.flags & loadTsgoModules().sync.TypeFlags.TypeParameter) !== 0) {
+				const r = project.checker.getConstraintOfTypeParameter(type);
+				fixupType(r);
+				return r;
+			}
+			return undefined;
+		}) as any,
+		// Apparent type: ts boxes primitives (`5` → Number),
+		// walks type-parameter constraints, and unwraps generic
+		// instantiations for property lookup. tsgo has no direct API.
+		// Compose what tsgo DOES expose:
+		//   1. TypeParameter → its constraint (fall through if absent).
+		//   2. Literal types → their widened primitive base
+		//      (`getWidenedType` exists in tsgo).
+		//   3. Otherwise return the input type.
+		// Imperfect (can't fully box `string` → `String` interface w/o
+		// host symbol resolution we don't have), but materially better
+		// than identity-fallback for rule logic that switches on
+		// "primitive vs object" or "constrained-T vs raw T".
+		getApparentType: ((type: any) => {
+			if (!type) return type;
+			const TF = (sync as any).TypeFlags as Record<string, number>;
+			if ((type.flags & TF.TypeParameter) !== 0) {
+				const c = project.checker.getConstraintOfTypeParameter(type);
+				if (c) { fixupType(c); return c; }
+				return type;
+			}
+			const literalMask = TF.StringLiteral | TF.NumberLiteral
+				| TF.BooleanLiteral | TF.BigIntLiteral | TF.EnumLiteral;
+			if ((type.flags & literalMask) !== 0) {
+				const w = project.checker.getWidenedType(type);
+				if (w) { fixupType(w); return w; }
+			}
+			return type;
+		}) as any,
+		// tsgo's Checker doesn't expose these. compat-eslint's callsites
+		// (parameter-property shadowing, ExportSpecifier alias unwrap)
+		// have fallback paths that handle empty / undefined gracefully —
+		// degrades scope-manager precision in those edge cases but keeps
+		// the rest of the pipeline functional.
+		getSymbolsInScope: ((..._args: unknown[]) => []) as any,
+		getExportSpecifierLocalTargetSymbol: ((..._args: unknown[]) => undefined) as any,
+		// `isTypeAssignableTo` — tsgo doesn't expose subtype checking.
+		// Best-effort structural cover: identity, any/unknown/never
+		// sentinels, union decomposition (∀ on source / ∃ on target),
+		// literal-to-base widening. Returns `false` for the long tail
+		// of structural compatibility (object shape compat, signature
+		// variance, conditional types) that requires the full checker
+		// subtype machinery — sound (no false `true`) over those
+		// branches; consumers should treat unknown answers as "can't
+		// prove" rather than "definitely false".
+		isTypeAssignableTo: ((source: any, target: any): boolean => {
+			if (!source || !target) return false;
+			if (source === target || source.id === target.id) return true;
+			const TF = (sync as any).TypeFlags as Record<string, number>;
+			if ((target.flags & (TF.Any | TF.Unknown)) !== 0) return true;
+			if ((source.flags & TF.Never) !== 0) return true;
+			if ((source.flags & TF.Any) !== 0) return true;
+			const self = (s: any, t: any): boolean => (checker.isTypeAssignableTo as any)(s, t);
+			if ((source.flags & TF.Union) !== 0) {
+				const ts_ = source.getTypes?.() as any[] | undefined;
+				if (ts_) return ts_.every(s => self(s, target));
+			}
+			if ((target.flags & TF.Union) !== 0) {
+				const tt = target.getTypes?.() as any[] | undefined;
+				if (tt) return tt.some(t => self(source, t));
+			}
+			const literalMask = TF.StringLiteral | TF.NumberLiteral
+				| TF.BooleanLiteral | TF.BigIntLiteral;
+			if ((source.flags & literalMask) !== 0) {
+				const widened = project.checker.getWidenedType(source);
+				if (widened && widened.id !== source.id) {
+					return self(widened, target);
+				}
+			}
+			return false;
+		}) as any,
+	};
+	// `stub` is held for future use as gaps surface; reference it here
+	// to satisfy noUnusedLocals without a separate unused-method line.
+	void stub;
+
+	return checker as ts.TypeChecker;
+}

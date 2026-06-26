@@ -355,6 +355,26 @@ function markerLineCount(markerPath: string): number {
 	}
 }
 
+// ── Test 10 (--tsgo): native backend smoke ───────────────
+{
+	const { hasNativePreview } = require('../lib/tsgo-load.js') as typeof import('../lib/tsgo-load.js');
+	const hasTsgo = hasNativePreview();
+
+	if (hasTsgo) {
+		const dir = makeFixture();
+		try {
+			const { stdout } = runCli(dir, '--tsgo');
+			check('--tsgo reports no-console diagnostic', stdout.includes('no-console'));
+		}
+		finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+	else {
+		process.stdout.write('s');
+	}
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

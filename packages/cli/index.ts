@@ -18,6 +18,7 @@ import minimatch = require('minimatch');
 import languagePlugins = require('./lib/languagePlugins.js');
 import colors = require('./lib/colors.js');
 import render = require('./lib/render.js');
+import tsgoMode = require('./lib/tsgo-mode.js');
 
 const HELP = `
 Usage: tsslint [options]
@@ -35,6 +36,9 @@ Options:
   --failures-only               Only print errors and messages (skip warnings and suggestions)
   --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
   --debug-estree                After linting, print the actual ESTree node types converted by @tsslint/compat-eslint and their counts
+  --tsgo                        Use @typescript/native-preview as the type backend (beta; plain --project only)
+  --tsgo-fast                   With --tsgo: always use the fast path (skip cache, eager-prepare)
+  --no-tsgo-fast                With --tsgo: disable auto fast path on multi-file projects
   -h, --help                    Show this help message
 
 Examples:
@@ -160,7 +164,7 @@ class Project {
 		// key includes tsslint version, TS version, tsconfig, languages,
 		// and configFile mtime+size — anything that changes the rule set or
 		// the toolchain mints a fresh file. See packages/cli/lib/cache.ts.
-		if (!process.argv.includes('--force')) {
+		if (!process.argv.includes('--force') && !tsgoMode.shouldTsgoFast(this.fileNames.length)) {
 			this.cacheData = cache.loadCache(
 				this.tsconfig,
 				this.configFile,
@@ -202,6 +206,10 @@ const formatHost: ts.FormatDiagnosticsHost = {
 	let suggestions = 0;
 	let configErrors = 0;
 	const failuresOnly = process.argv.includes('--failures-only');
+
+	if (tsgoMode.isTsgoFastExplicit() && !tsgoMode.isTsgoEnabled()) {
+		fail('--tsgo-fast requires --tsgo.');
+	}
 
 	if (!PROJECT_FLAGS.some(({ flag }) => process.argv.includes(flag))) {
 		renderer.dispose();
@@ -569,14 +577,16 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		// affected files. Falls through to `undefined` on layer-1-only
 		// runs, matching the schema contract.
 		project.cacheData.incrementalState = await linterWorker.buildIncrementalState();
-		cache.saveCache(
-			project.tsconfig,
-			project.configFile!,
-			project.languages,
-			ts.version,
-			project.cacheData,
-			ts.sys.createHash,
-		);
+		if (!tsgoMode.shouldTsgoFast(project.fileNames.length)) {
+			cache.saveCache(
+				project.tsconfig,
+				project.configFile!,
+				project.languages,
+				ts.version,
+				project.cacheData,
+				ts.sys.createHash,
+			);
+		}
 
 		await startWorker(linterWorker);
 	}

@@ -1,0 +1,19 @@
+{
+	"name": "@tsslint/poc-tsgo",
+	"private": true,
+	"version": "0.0.0",
+	"description": "PoC: tsgo backend + TypeScript API shim (extracted from feat/tsgo-backend)",
+	"license": "MIT",
+	"scripts": {
+		"build": "tsc -b",
+		"start": "node run-poc.js",
+		"bench": "node bench.js",
+		"test": "node test/poc.test.js"
+	},
+	"optionalDependencies": {
+		"@typescript/native-preview": "7.0.0-dev.20260624.1"
+	},
+	"peerDependencies": {
+		"typescript": "*"
+	}
+}

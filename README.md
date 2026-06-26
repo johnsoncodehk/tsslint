@@ -65,7 +65,7 @@ TSLint (TS-AST, deprecated 2019) → ESLint took over via `typescript-eslint` �
 |---|---|---|---|---|
 | Runtime | Node, separate process | Node, separate process | Rust, separate process | Node, in `tsserver` |
 | AST | ESTree | TS AST | Native Rust AST | TS AST |
-| Type-aware rules | Yes (its own `Program`) | Yes (its own `Program`) | Yes (via `tsgolint`, alpha) | Yes (shared `TypeChecker`) |
+| Type-aware rules | Yes (its own `Program`) | Yes (its own `Program`) | Yes (via `tsgolint`, alpha) | Yes (shared `TypeChecker`; CLI `--tsgo` beta uses ts-go shim) |
 | Built-in rules | Many | Deprecated | Subset of ESLint (+ JS plugins, alpha) | Zero (imports ESLint / TSLint / TSL) |
 | Status | Active standard | Deprecated 2019 | Active | Active |
 
@@ -211,9 +211,34 @@ Flags:
 | `--fix` | Apply fixes |
 | `--force` | Ignore cache |
 | `--failures-only` | Only print diagnostics that affect exit code |
+| `--tsgo` | Use `@typescript/native-preview` (ts-go) as the type backend — plain `--project` only; see [ts-go backend](#ts-go-backend-cli) |
+| `--tsgo-fast` | With `--tsgo`: always use the fast path (skip disk cache, eager-prepare) |
+| `--no-tsgo-fast` | With `--tsgo`: disable auto fast path on multi-file projects |
 | `-h`, `--help` | |
 
 TSSLint produces diagnostics and edits — it does not format. Run dprint or Prettier after `--fix`.
+
+### ts-go backend (CLI)
+
+The default CLI path uses the Node `typescript` package (**Strada**). For plain TypeScript projects you can opt into the Go-based compiler via [`@typescript/native-preview`](https://www.npmjs.com/package/@typescript/native-preview):
+
+```bash
+npm install @typescript/native-preview --save-dev   # optional peer of @tsslint/cli
+npx tsslint --project tsconfig.json --tsgo
+```
+
+| | Strada (default) | `--tsgo` |
+|---|---|---|
+| Runtime | Node `typescript` in-process | `tsgo` child process + TypeScript API shim |
+| Framework flags | Vue / MDX / Astro / … | Not supported — `--project` only |
+| Multi-file | Layer 1 + 2 disk cache | Auto fast path (skip cache, eager-prepare symbols); `--no-tsgo-fast` to disable |
+| Editor plugin | N/A (CLI) | N/A — `tsserver` plugin still requires Strada today |
+
+On this repo (ts-eslint type-aware, ~37 files in `packages/{cli,core,config}`): Strada ~3.4s, `--tsgo` ~2.1s. Full monorepo (~59 files): within ~10% of Strada with `native-preview@7.0.0-dev.20260624.1+`.
+
+Dogfood (`pnpm run lint` vs `pnpm run lint:tsgo -- --force` on this monorepo): Strada **69 passed** / 26 messages; `--tsgo` **62 passed** / 30 messages. The gap is mostly type-aware rule divergence on tsgo shim sources (`packages/cli/lib/tsgo-*.ts`) — not a performance regression.
+
+Rules still author against the TypeScript compiler API; the shim translates ts-go's checker into `ts.Program` / `ts.TypeChecker` shapes. See `packages/poc-tsgo/` for a minimal parity/benchmark harness (`pnpm run poc:tsgo`, `pnpm run bench:tsgo`).
 
 ## Framework support
 
@@ -336,7 +361,8 @@ Build your own with the `Plugin` type from `@tsslint/types`.
 
 - Node.js **22.6.0+** (uses `--experimental-strip-types` to load `tsslint.config.ts` directly — no transpile step)
 - Any TypeScript version with Language Service Plugin support
-- Not compatible with `typescript-go` (v7), which does not yet support Language Service Plugins
+- **`@tsslint/typescript-plugin` (editor)**: requires the Node `typescript` package — not compatible with `typescript-go` / ts-go, which does not yet support Language Service Plugins
+- **`@tsslint/cli --tsgo` (beta)**: optional `@typescript/native-preview` peer for the Go compiler backend on plain `--project` runs; see [ts-go backend](#ts-go-backend-cli)
 
 ## License
 

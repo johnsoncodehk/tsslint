@@ -1,6 +1,10 @@
+// Capture genuine `typescript` before the tsgo facade hooks require().
+import _realTs = require('./real-ts.js');
+void _realTs;
 import ts = require('typescript');
 import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
+import type { TsgoBackend } from './tsgo-backend.js';
 import url = require('url');
 import path = require('path');
 import fs = require('fs');
@@ -10,6 +14,20 @@ import cacheFlow = require('./cache-flow.js');
 import incrementalState = require('./incremental-state.js');
 import type { FileCache } from './cache.js';
 import type { IncrementalState } from './incremental-state.js';
+
+const useTsgo = process.argv.includes('--tsgo');
+let tsgoBackend: TsgoBackend | undefined;
+// Facade returned by installFacade() — rules must use this, not
+// `require('typescript')` after Strada has cached the real module.
+let tsFacadeForRules: typeof ts | undefined;
+const tsgoLanguageService: ts.LanguageService = {
+	getProgram() {
+		if (!tsgoBackend) {
+			throw new Error('tsgo backend not initialized');
+		}
+		return tsgoBackend.getProgram();
+	},
+} as ts.LanguageService;
 
 // Fallback if `ts.sys.createHash` is undefined on this host (Node ≥ 22.6
 // always provides it via crypto, but the type is optional). sha256 hex.
@@ -95,7 +113,14 @@ const originalHost: ts.LanguageServiceHost = {
 	},
 };
 const linterHost: ts.LanguageServiceHost = { ...originalHost };
-const originalService = ts.createLanguageService(linterHost);
+let stradaLanguageService: ts.LanguageService | undefined;
+
+function ensureStradaLanguageService(): ts.LanguageService {
+	if (!stradaLanguageService) {
+		stradaLanguageService = ts.createLanguageService(linterHost);
+	}
+	return stradaLanguageService;
+}
 
 // Linter is single-threaded by design. The previous version split into a
 // worker_threads worker for TTY mode (so the spinner could update during a
@@ -137,6 +162,25 @@ async function setup(
 	initialTypeAwareRules: readonly string[],
 	prevIncrementalState: IncrementalState | undefined,
 ): Promise<true | string> {
+	tsgoBackend?.close();
+	tsgoBackend = undefined;
+	tsFacadeForRules = undefined;
+
+	if (useTsgo) {
+		if (languages.length > 0) {
+			return '--tsgo does not support framework projects (--vue-project, --mdx-project, --astro-project, --vue-vine-project, --ts-macro-project). Use plain --project only.';
+		}
+		const { hasNativePreview } = require('./tsgo-load.js') as typeof import('./tsgo-load.js');
+		if (!hasNativePreview()) {
+			return '--tsgo requires optional dependency @typescript/native-preview (npm install -D @typescript/native-preview).';
+		}
+		const { installFacade } = require('./tsgo-typescript-facade.js') as typeof import('./tsgo-typescript-facade.js');
+		tsFacadeForRules = installFacade();
+	}
+	else if (process.argv.includes('--tsgo-fast') && !useTsgo) {
+		return '--tsgo-fast requires --tsgo.';
+	}
+
 	let config: config.Config | config.Config[];
 	try {
 		config = (await import(url.pathToFileURL(configFile).toString())).default;
@@ -158,7 +202,9 @@ async function setup(
 			linterHost[key] = originalHost[key];
 		}
 	}
-	linterLanguageService = originalService;
+	if (!useTsgo) {
+		linterLanguageService = ensureStradaLanguageService();
+	}
 	language = undefined;
 
 	// Reset per-project state. Multi-project runs reuse the same worker
@@ -170,6 +216,35 @@ async function setup(
 	versions.clear();
 	affectedFiles = undefined;
 	currentBuilder = undefined;
+
+	if (useTsgo) {
+		const { createTsgoBackend } = require('./tsgo-backend.js') as typeof import('./tsgo-backend.js');
+		try {
+			tsgoBackend = createTsgoBackend(tsconfig);
+		}
+		catch (err) {
+			return err instanceof Error ? (err.stack ?? err.message) : String(err);
+		}
+		const { shouldTsgoFast } = require('./tsgo-mode.js') as typeof import('./tsgo-mode.js');
+		if (shouldTsgoFast(_fileNames.length)) {
+			for (const fileName of _fileNames) {
+				tsgoBackend.prepareFile(fileName);
+			}
+		}
+		// No BuilderProgram on tsgo — layer-2 affected-file diff unavailable.
+		linter = core.createLinter(
+			{
+				languageService: tsgoLanguageService,
+				languageServiceHost: linterHost,
+				typescript: tsFacadeForRules!,
+			},
+			path.dirname(configFile),
+			config,
+			() => [],
+			initialTypeAwareRules,
+		);
+		return true;
+	}
 
 	const plugins = await languagePlugins.load(tsconfig, languages);
 	if (plugins.length) {
@@ -290,7 +365,11 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	//                False in --fix mode — fixes mutate files mid-session
 	//                and invalidate the setup-time affected snapshot for
 	//                downstream files; we'd rather re-run than serve stale.
-	const typeAwareUnaffected = !fix && !affectedFiles!.has(fileName);
+	const typeAwareUnaffected = !fix && affectedFiles != null && !affectedFiles.has(fileName);
+
+	if (useTsgo) {
+		tsgoBackend!.prepareFile(fileName);
+	}
 
 	if (fix) {
 		// Drop cache entries for rules that registered a fix in any prior
@@ -311,7 +390,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 		let pass = 0;
 		let converged = false;
 		for (; pass < MAX_FIX_PASSES; pass++) {
-			const program = linterLanguageService.getProgram()!;
+			const program = useTsgo ? tsgoBackend!.getProgram() : linterLanguageService.getProgram()!;
 			diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
 				incremental: true,
 				typeAwareUnaffected,
@@ -363,6 +442,9 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 		const oldText = ts.sys.readFile(fileName);
 		if (newText !== oldText) {
 			ts.sys.writeFile(fileName, newSnapshot.getText(0, newSnapshot.getLength()));
+			if (useTsgo) {
+				tsgoBackend!.invalidateFile(fileName);
+			}
 			// File content moved — refresh mtime so the next lint pass
 			// invalidates layer-1 cache entries for this file. lintWithCache
 			// compares fileCache.mtime against the fileMtime we pass in.
@@ -372,7 +454,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	}
 
 	if (shouldCheck) {
-		const program = linterLanguageService.getProgram()!;
+		const program = useTsgo ? tsgoBackend!.getProgram() : linterLanguageService.getProgram()!;
 		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
 			incremental: true,
 			typeAwareUnaffected,
@@ -386,7 +468,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	// WithColorAndContext` reads `.file.text` to render code snippets.
 	if (language) {
 		diagnostics = diagnostics
-			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
+			.map(d => transformDiagnostic(language!, d, linterLanguageService.getProgram()!, false))
 			.filter(d => !!d);
 		const fileShim = new Map<string, { fileName: string; text: string }>();
 		const getShim = (fn: string) => {
@@ -410,6 +492,10 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	// `ts.SourceFile` which already shares `lineMap` cache across all
 	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
 	// only computes line starts once per file).
+
+	if (useTsgo) {
+		tsgoBackend!.releaseFile(fileName);
+	}
 
 	return diagnostics;
 }

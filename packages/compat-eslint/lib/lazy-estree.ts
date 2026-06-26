@@ -2971,11 +2971,107 @@ defineShapeRouter(SK.LiteralType, (tsNode, parent) => {
 	return new tsLiteralTypeShape(tsNode, parent);
 });
 
+function collectTokensInNode(node: ts.Node, ast: ts.SourceFile): ts.Node[] {
+	const getTokenAtPosition = (ts as unknown as {
+		getTokenAtPosition?: (sf: ts.SourceFile, pos: number) => ts.Node;
+	}).getTokenAtPosition;
+	if (!getTokenAtPosition) return [];
+	const out: ts.Node[] = [];
+	let pos = node.getStart(ast);
+	while (pos < node.end) {
+		const token = getTokenAtPosition(ast, pos);
+		if (token.pos < pos) {
+			pos++;
+			continue;
+		}
+		if (token.end > node.end) break;
+		out.push(token);
+		pos = token.end;
+	}
+	return out;
+}
+
+// Type-position `import("x", { with: ... })` — upstream wraps the
+// ImportAttributes clause in an ObjectExpression keyed by `with`/`assert`.
+function buildImportTypeOptions(
+	node: ts.ImportTypeNode,
+	parent: LazyNode,
+): object | null {
+	const attrs = (node as ts.ImportTypeNode & { attributes?: ts.ImportAttributes }).attributes;
+	if (!attrs) return null;
+	const ast = parent._ctx.ast;
+
+	const innerProperties = attrs.elements.map((importAttribute: ts.ImportAttribute) => {
+		const range: [number, number] = [importAttribute.getStart(ast), importAttribute.end];
+		return {
+			type: 'Property' as const,
+			range,
+			loc: getLocFor(ast, range[0], range[1]),
+			computed: false,
+			key: convertChild(importAttribute.name, parent),
+			kind: 'init' as const,
+			method: false,
+			optional: false,
+			shorthand: false,
+			value: convertChild(importAttribute.value, parent),
+		};
+	});
+	const innerRange: [number, number] = [attrs.getStart(ast), attrs.end];
+	const innerValue = {
+		type: 'ObjectExpression' as const,
+		range: innerRange,
+		loc: getLocFor(ast, innerRange[0], innerRange[1]),
+		properties: innerProperties,
+	};
+
+	const tokens = collectTokensInNode(node, ast);
+	const commaIdx = tokens.findIndex(t => t.kind === SK.CommaToken && t.pos >= node.argument.end);
+	if (commaIdx === -1) return null;
+	const openBraceToken = tokens[commaIdx + 1];
+	const withOrAssertToken = tokens[commaIdx + 2];
+	const closeBraces = tokens.filter(t => t.kind === SK.CloseBraceToken);
+	const closeBraceToken = tokens.find(t => t.kind === SK.CloseBraceToken && t.pos >= attrs.end)
+		?? closeBraces[closeBraces.length - 1];
+	if (!openBraceToken || !withOrAssertToken || !closeBraceToken) return null;
+
+	const withOrAssertRange: [number, number] = [withOrAssertToken.getStart(ast), withOrAssertToken.end];
+	const withOrAssertName = withOrAssertToken.kind === SK.AssertKeyword ? 'assert' : 'with';
+	const outerRange: [number, number] = [openBraceToken.getStart(ast), closeBraceToken.end];
+	const outerPropertyRange: [number, number] = [withOrAssertRange[0], attrs.end];
+
+	return {
+		type: 'ObjectExpression' as const,
+		range: outerRange,
+		loc: getLocFor(ast, outerRange[0], outerRange[1]),
+		properties: [
+			{
+				type: 'Property' as const,
+				range: outerPropertyRange,
+				loc: getLocFor(ast, outerPropertyRange[0], outerPropertyRange[1]),
+				computed: false,
+				key: {
+					type: 'Identifier' as const,
+					range: withOrAssertRange,
+					loc: getLocFor(ast, withOrAssertRange[0], withOrAssertRange[1]),
+					decorators: [],
+					name: withOrAssertName,
+					optional: false,
+					typeAnnotation: undefined,
+				},
+				kind: 'init' as const,
+				method: false,
+				optional: false,
+				shorthand: false,
+				value: innerValue,
+			},
+		],
+	};
+}
+
 // `typeof import('x')` — wraps a TSImportType in a synthetic
 // TSTypeQuery (the wrapping class re-points the cache to itself).
 const tsImportTypeShape = makeShapeClass<ts.ImportTypeNode>({
 	type: 'TSImportType',
-	defaults: { options: null },
 	range: (tn, ctx) => {
 		// Eager strips the leading `typeof ` from the range when isTypeOf;
 		// otherwise default getStart/getEnd. The generic LazyNode range
@@ -3005,6 +3101,9 @@ const tsImportTypeShape = makeShapeClass<ts.ImportTypeNode>({
 			tsField: 'typeArguments',
 			via: (args, parent) => convertTypeArguments(args, parent) ?? null,
 			whenAbsent: 'null',
+		},
+		options: {
+			compute: (tn: ts.ImportTypeNode, parent) => buildImportTypeOptions(tn, parent),
 		},
 	},
 	init: instance => {

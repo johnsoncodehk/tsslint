@@ -205,13 +205,11 @@ gap(
 	'niche type-query shape; no rule observed to depend on it',
 );
 
-// import attributes in TYPE position: TSImportType.options not built from the
-// `with` clause (stays null); only affects type-level import() attribute rules.
-gap(
-	'TSImportType.options not built (stays null)',
-	find(lazyAst('type T = import("x", { with: { type: "json" } }).Y;'), (n: any) => n.type === 'TSImportType').options
-		=== null,
-	'type-position import attributes; rare, type-aware-only',
+// import attributes in TYPE position: TSImportType.options mirrors eager.
+fixed(
+	'TSImportType.options built from import attributes',
+	find(lazyAst('type T = import("x", { with: { type: "json" } }).Y;'), (n: any) => n.type === 'TSImportType').options?.type
+		=== 'ObjectExpression',
 );
 
 // import attributes in EXPRESSION position: deprecated `attributes` alias is the
