@@ -29,13 +29,21 @@ import path = require('path');
 import ts = require('typescript');
 
 import { loadTsgoModules } from './tsgo-load.js';
+import { acquireSharedTsgoApi, closeSharedTsgoApi } from './tsgo-api-pool.js';
+import {
+	createRpcProfile,
+	isTsgoRpcProfileEnabled,
+	memoGet,
+	memoGet2,
+	type RpcProfile,
+} from './tsgo-rpc-profile.js';
+import { batchPrefetchTypes, EMPTY_PREFETCH_PLAN, type PrefetchPlan } from './tsgo-prefetch.js';
 
 // `@typescript/native-preview` ships ESM-only. Under Node16 module
 // resolution, type-only imports of an ESM package from this CJS file
 // require the `'resolution-mode': 'import'` attribute. We thread that
 // through once via `import(..., { with: ... })` aliases and reuse them.
 type TsgoSync = typeof import('@typescript/native-preview/unstable/sync', { with: { 'resolution-mode': 'import' } });
-type API = InstanceType<TsgoSync['API']>;
 type Snapshot = InstanceType<TsgoSync['Snapshot']>;
 type Project = InstanceType<TsgoSync['Project']>;
 type TsgoSymbol = InstanceType<TsgoSync['Symbol']>;
@@ -48,7 +56,7 @@ export interface TsgoBackend {
 	// hierarchy on first call, then bind-via-real-ts the file so the
 	// JS-side scope walker can answer in-process Symbol queries.
 	// Idempotent on unchanged text (cached).
-	prepareFile(fileName: string): void;
+	prepareFile(fileName: string, prefetchPlan?: PrefetchPlan): void;
 	// Drop the JS-side bind + position maps for one file. Call after
 	// the file's lint pass completes so the bound SF doesn't pin in
 	// memory across the rest of the project's lint. Subsequent lint of
@@ -59,7 +67,9 @@ export interface TsgoBackend {
 	// rewrites file content so the next `prepareFile` re-binds against
 	// the new text.
 	invalidateFile(fileName: string): void;
-	// Tear down child process + free snapshot refs.
+	// Drop per-project adapter state; keep the shared tsgo child alive.
+	dispose(): void;
+	// Tear down adapter + shared tsgo child (tests / explicit shutdown).
 	close(): void;
 }
 
@@ -444,6 +454,7 @@ function patchTsgoSymbolProto(sync: TsgoSync): void {
 // hands no cross-project handles around.
 // Set in wrapChecker so proto `types` getter can fixup union constituents.
 const fixupTypeRef: { fn?: (t: unknown) => unknown } = {};
+const rpcProfileRef: { current: RpcProfile | undefined } = { current: undefined };
 const currentProjectRef: { project: Project | undefined } = { project: undefined };
 
 function installNodeHandleHooks(sync: TsgoSync): void {
@@ -473,32 +484,35 @@ function installNodeHandleHooks(sync: TsgoSync): void {
 	nodeHandleProtoPatched = true;
 }
 
-export function createTsgoBackend(tsconfig: string): TsgoBackend {
+export function createTsgoBackend(
+	tsconfig: string,
+	options?: { deferPerFileRelease?: boolean },
+): TsgoBackend {
 	// Lazy require so users without the optional peer dep don't crash on
 	// load. The CLI gates this behind `--tsgo` so non-tsgo users never
 	// reach here.
 	const trace = process.env.TSSLINT_TIME_TSGO === '1';
 	const t0 = Date.now();
 	const { sync, ast } = loadTsgoModules();
-	const { API: APICtor } = sync;
 	const tImport = Date.now();
-	const api: API = new APICtor({});
+	const api = acquireSharedTsgoApi();
 	const tApi = Date.now();
 	const snapshot: Snapshot = api.updateSnapshot({ openProject: tsconfig });
 	const tSnap = Date.now();
 	const project = snapshot.getProject(tsconfig);
 	const tProject = Date.now();
 	if (!project) {
-		api.close();
 		throw new Error(`tsgo: project not found for ${tsconfig}`);
 	}
 	if (trace) {
 		console.error(
 			`[tsgo-time] createBackend total=${tProject - t0}ms `
-			+ `(import=${tImport - t0} apiCtor=${tApi - tImport} `
+			+ `(import=${tImport - t0} api=${tApi - tImport} `
 			+ `updateSnapshot=${tSnap - tApi} getProject=${tProject - tSnap})`,
 		);
 	}
+
+	const deferPerFileRelease = options?.deferPerFileRelease ?? false;
 
 	// Per-fileName Symbol cache, populated by `prepareFile`. Keyed by the
 	// tsgo Node object reference (not its position) — the AST tree is
@@ -518,19 +532,44 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 		});
 	jsSymbolResolverRef.current = jsSymbolResolver;
 
-	const program = wrapProgram(project, nodeToSymbol);
+	const { program, prefetchTypesForFile } = wrapProgram(project, nodeToSymbol);
 	currentProjectRef.project = project;
 	installNodeHandleHooks(sync);
 
 	let prepareTotalMs = 0;
 	let prepareCount = 0;
+
+	const disposeProject = () => {
+		if (trace) {
+			const s = getPrepareTimingSnapshot();
+			console.error(
+				`[tsgo-time] dispose prepareFiles=${prepareCount} `
+				+ `prepareTotal=${prepareTotalMs}ms `
+				+ `(getSF=${s.getSF}ms bind=${s.bind}ms prefetch=${s.prefetch}ms)`,
+			);
+		}
+		preparedFiles.clear();
+		jsSymbolResolver.clear();
+		if (jsSymbolResolverRef.current === jsSymbolResolver) {
+			jsSymbolResolverRef.current = undefined;
+		}
+		if (currentProjectRef.project === project) {
+			currentProjectRef.project = undefined;
+		}
+		rpcProfileRef.current?.printSummary(path.basename(project.configFileName));
+		rpcProfileRef.current?.reset();
+		rpcProfileRef.current = undefined;
+	};
+
 	return {
 		getProgram: () => program,
-		prepareFile(fileName: string) {
+		prepareFile(fileName: string, prefetchPlan?: PrefetchPlan) {
 			if (preparedFiles.has(fileName)) return;
 			preparedFiles.add(fileName);
 			const t = Date.now();
-			prepareFile(project, fileName, jsSymbolResolver);
+			prepareFile(project, fileName, jsSymbolResolver, () => {
+				prefetchTypesForFile(fileName, prefetchPlan);
+			});
 			prepareTotalMs += Date.now() - t;
 			prepareCount++;
 			if (trace && (prepareCount % 100 === 0 || prepareCount === 1)) {
@@ -554,23 +593,16 @@ export function createTsgoBackend(tsconfig: string): TsgoBackend {
 		// position maps for GC. Without this, all 5000 Dify files'
 		// bound SFs sit in memory simultaneously across a lint pass.
 		releaseFile(fileName: string) {
+			if (deferPerFileRelease) return;
 			preparedFiles.delete(fileName);
 			jsSymbolResolver.invalidate(fileName);
 		},
+		dispose() {
+			disposeProject();
+		},
 		close() {
-			if (trace) {
-				const s = getPrepareTimingSnapshot();
-				console.error(
-					`[tsgo-time] final prepareFiles=${prepareCount} `
-					+ `prepareTotal=${prepareTotalMs}ms `
-					+ `(getSF=${s.getSF}ms bind=${s.bind}ms)`,
-				);
-			}
-			jsSymbolResolver.clear();
-			if (jsSymbolResolverRef.current === jsSymbolResolver) {
-				jsSymbolResolverRef.current = undefined;
-			}
-			api.close();
+			disposeProject();
+			closeSharedTsgoApi();
 		},
 	};
 }
@@ -587,9 +619,10 @@ const jsSymbolResolverRef: { current: import('./tsgo-js-symbols.js').JsSymbolRes
 // env-var read per call).
 let _prepareGetSF = 0;
 let _prepareBind = 0;
+let _preparePrefetch = 0;
 
 export function getPrepareTimingSnapshot() {
-	return { getSF: _prepareGetSF, bind: _prepareBind };
+	return { getSF: _prepareGetSF, bind: _prepareBind, prefetch: _preparePrefetch };
 }
 
 // Per-file setup before rules run. Two pieces of essential work:
@@ -611,6 +644,7 @@ function prepareFile(
 	project: Project,
 	fileName: string,
 	jsSymbolResolver: import('./tsgo-js-symbols.js').JsSymbolResolver,
+	prefetchTypes?: () => void,
 ): void {
 	const trace = process.env.TSSLINT_TIME_TSGO === '1';
 	const t0 = trace ? Date.now() : 0;
@@ -630,6 +664,10 @@ function prepareFile(
 	const tBind = trace ? Date.now() : 0;
 	jsSymbolResolver.prepareFile(fileName, text);
 	if (trace) _prepareBind += Date.now() - tBind;
+
+	const tPrefetch = trace ? Date.now() : 0;
+	prefetchTypes?.();
+	if (trace) _preparePrefetch += Date.now() - tPrefetch;
 }
 
 // Wraps tsgo Program + Checker as a `ts.Program`-shape. Only the methods
@@ -639,8 +677,8 @@ function prepareFile(
 function wrapProgram(
 	project: Project,
 	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
-): ts.Program {
-	const checker = wrapChecker(project, nodeToSymbol);
+): { program: ts.Program; prefetchTypesForFile: (fileName: string, plan?: PrefetchPlan) => void } {
+	const { checker, prefetchTypesForFile } = wrapChecker(project, nodeToSymbol);
 	const cwd = path.dirname(project.configFileName);
 
 	// tsgo's lib files live inside the binary's own bundled stdlib. The
@@ -699,13 +737,13 @@ function wrapProgram(
 		emit: stub('emit') as any,
 	};
 
-	return program as ts.Program;
+	return { program: program as ts.Program, prefetchTypesForFile };
 }
 
 function wrapChecker(
 	project: Project,
 	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
-): ts.TypeChecker {
+): { checker: ts.TypeChecker; prefetchTypesForFile: (fileName: string, plan?: PrefetchPlan) => void } {
 	const { sync, ast } = loadTsgoModules();
 	const stub = (name: string) => () => {
 		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
@@ -769,6 +807,33 @@ function wrapChecker(
 	};
 	fixupTypeRef.fn = fixupType;
 
+	const rpc = isTsgoRpcProfileEnabled() ? createRpcProfile() : undefined;
+	rpcProfileRef.current = rpc;
+
+	const nodeTypeCache = new WeakMap<Node, ts.Type | null>();
+	const typeFromTypeNodeCache = new WeakMap<Node, ts.Type | null>();
+	const contextualTypeCache = new WeakMap<Node, ts.Type | null>();
+	const symbolAtLocationTypeCache = new WeakMap<object, WeakMap<object, ts.Type | null>>();
+	const apparentTypeCache = new WeakMap<object, ts.Type | null>();
+	const indexInfosCache = new WeakMap<object, unknown | null>();
+	const propertiesOfTypeCache = new WeakMap<object, unknown | null>();
+	const signaturesOfTypeCache = new WeakMap<object, Map<number, unknown | null>>();
+	const typeOfSymbolCache = new WeakMap<object, ts.Type | null>();
+	const typeArgumentsCache = new WeakMap<object, unknown | null>();
+	const resolvedSignatureCache = new WeakMap<Node, ts.Signature | null>();
+	const returnTypeOfSignatureCache = new WeakMap<object, ts.Type | null>();
+
+	const rpcCall = <T>(method: string, fn: () => T): T => {
+		if (!rpc) return fn();
+		const t0 = performance.now();
+		try {
+			return fn();
+		}
+		finally {
+			rpc.record(method, performance.now() - t0);
+		}
+	};
+
 	patchTsgoSymbolProto(sync);
 	patchTsgoSignatureProto(sync);
 
@@ -780,26 +845,114 @@ function wrapChecker(
 	// no-op depending on caller tolerance.
 	const fwd = <K extends string>(name: K, fixup?: (r: unknown) => void) =>
 		(...args: unknown[]) => {
-			const fn = (project.checker as any)[name];
-			if (typeof fn !== 'function') return undefined;
-			const r = fn.apply(project.checker, args);
-			if (fixup) fixup(r);
-			return r;
+			return rpcCall(name, () => {
+				const fn = (project.checker as any)[name];
+				if (typeof fn !== 'function') return undefined;
+				const r = fn.apply(project.checker, args);
+				if (fixup) fixup(r);
+				return r;
+			});
 		};
+
+	// Forward reference so computeGetTypeAtLocation can call memo-wrapped
+	// checker methods without raw project.checker RPC bypass.
+	const checkerHolder: { checker?: ts.TypeChecker } = {};
+
+	const computeGetTypeAtLocation = (node: ts.Node): ts.Type | undefined => {
+		const c = checkerHolder.checker!;
+		const tsgoNode = node as unknown as Node;
+		const k = tsgoNode.kind;
+		const SK = ast.SyntaxKind;
+		if (
+			(k === SK.AsExpression
+				|| k === SK.TypeAssertionExpression
+				|| k === SK.SatisfiesExpression)
+			&& (tsgoNode as unknown as { type?: Node }).type
+		) {
+			return c.getTypeFromTypeNode!(
+				(tsgoNode as unknown as { type: Node }).type as unknown as ts.TypeNode,
+			);
+		}
+		if (k === SK.CallExpression || k === SK.NewExpression) {
+			try {
+				const sig = c.getResolvedSignature!(node as any);
+				if (sig) {
+					return c.getReturnTypeOfSignature!(sig);
+				}
+			}
+			catch { /* fall through to plan B */ }
+			const sk = (sync as any).SignatureKind as Record<string, number>;
+			try {
+				// Raw on the call node — must not recurse through getTypeAtLocation memo.
+				const funcType = rpcCall('getTypeAtLocation(raw)', () =>
+					project.checker.getTypeAtLocation(tsgoNode));
+				if (funcType) {
+					fixupType(funcType);
+					const sigs = c.getSignaturesOfType!(funcType as unknown as ts.Type, sk.Call);
+					if (sigs.length > 0) {
+						return c.getReturnTypeOfSignature!(sigs[0]);
+					}
+				}
+			}
+			catch { /* try plan C */ }
+			try {
+				const callee = (tsgoNode as unknown as { expression?: Node }).expression;
+				if (callee) {
+					const targetForSymbol =
+						(callee as unknown as { name?: Node }).name ?? callee;
+					const sym = c.getSymbolAtLocation!(targetForSymbol as unknown as ts.Node);
+					if (sym) {
+						const methodType = c.getTypeOfSymbolAtLocation!(
+							sym,
+							callee as unknown as ts.Node,
+						);
+						const sigs = c.getSignaturesOfType!(methodType, sk.Call);
+						if (sigs.length > 0) {
+							return c.getReturnTypeOfSignature!(sigs[0]);
+						}
+					}
+				}
+			}
+			catch { /* fall through to default */ }
+		}
+		if (k === SK.PropertyAccessExpression || k === SK.ElementAccessExpression) {
+			if (nodeTypeCache.has(tsgoNode)) {
+				const cached = nodeTypeCache.get(tsgoNode)!;
+				return cached === null ? undefined : cached;
+			}
+			const sfPath = ((tsgoNode as unknown as { getSourceFile?: () => { fileName: string } })
+				.getSourceFile?.() ?? { fileName: '' }).fileName;
+			if (sfPath) {
+				const t = rpcCall('getTypeAtPosition', () =>
+					project.checker.getTypeAtPosition(sfPath, tsgoNode.end));
+				if (t) {
+					fixupType(t);
+					return t as unknown as ts.Type;
+				}
+			}
+		}
+		if (k === SK.NonNullExpression) {
+			const inner = (tsgoNode as unknown as { expression: Node }).expression;
+			const innerT = c.getTypeAtLocation!(inner as unknown as ts.Node);
+			if (innerT) {
+				return c.getNonNullableType!(innerT);
+			}
+		}
+		const t = rpcCall('getTypeAtLocation', () =>
+			project.checker.getTypeAtLocation(tsgoNode));
+		fixupType(t);
+		return t as unknown as ts.Type;
+	};
 
 	const checker: Partial<ts.TypeChecker> = {
 		getSymbolAtLocation(node: ts.Node) {
 			const tsgoNode = node as unknown as Node;
-			// Cache hit returns synchronously, no further work.
 			if (nodeToSymbol.has(tsgoNode)) {
+				rpc?.memoHit('getSymbolAtLocation');
 				return nodeToSymbol.get(tsgoNode) as unknown as ts.Symbol | undefined;
 			}
 			const tsgoSf = (tsgoNode as unknown as { getSourceFile?: () => { fileName: string; text: string } })
 				.getSourceFile?.();
-			// In-process JS scope walker first. Layer A (variable refs,
-			// declarations, in-file specifiers, in-file type refs)
-			// resolves locally — no IPC. The walker returns a real
-			// ts.Symbol with identity stable across calls.
 			const resolver = jsSymbolResolverRef.current;
 			if (resolver && tsgoSf) {
 				const local = resolver.resolveIdentifier(tsgoNode, tsgoSf.fileName, tsgoSf.text);
@@ -808,226 +961,162 @@ function wrapChecker(
 					return local as unknown as ts.Symbol;
 				}
 			}
-			// Layer C fallback. tsgo has two checker entry points with
-			// different coverage — `getSymbolAtPosition` resolves
-			// declaration-position identifiers (import/export specifier
-			// names) that the node-based API misses; `getSymbolAtLocation`
-			// covers a small remainder (object-spread method names etc.).
-			// Try position first to recover the previous prepass's recall
-			// without paying its eager batched cost.
 			let sym: TsgoSymbol | undefined;
 			if (tsgoSf) {
-				sym = project.checker.getSymbolAtPosition(tsgoSf.fileName, tsgoNode.end);
+				sym = rpcCall('getSymbolAtPosition', () =>
+					project.checker.getSymbolAtPosition(tsgoSf.fileName, tsgoNode.end));
 			}
 			if (!sym) {
-				sym = project.checker.getSymbolAtLocation(tsgoNode);
+				sym = rpcCall('getSymbolAtLocation', () =>
+					project.checker.getSymbolAtLocation(tsgoNode));
 			}
 			nodeToSymbol.set(tsgoNode, sym);
 			return sym as unknown as ts.Symbol | undefined;
 		},
 		getTypeAtLocation(node: ts.Node) {
-			// Semantic divergences between ts and tsgo for
-			// `getTypeAtLocation`. ts returns the type of the expression
-			// AS IT EVALUATES; tsgo's default returns the type of the
-			// node STRUCTURALLY (inner expression's type for assertions,
-			// the function type for calls). typescript-eslint rules
-			// depend on the ts semantic. Route per-kind:
-			//
-			//   AsExpression / TypeAssertion / Satisfies  → getTypeFromTypeNode(.type)
-			//   CallExpression / NewExpression            → getReturnTypeOfSignature(getResolvedSignature(node))
-			//   NonNullExpression                         → getNonNullableType(getTypeAtLocation(.expression))
-			//
-			// All other kinds use tsgo's default (which IS the right
-			// thing for variable references, member accesses, literals,
-			// etc.).
 			const tsgoNode = node as unknown as Node;
-			const k = tsgoNode.kind;
-			const SK = ast.SyntaxKind;
-			if (
-				(k === SK.AsExpression
-					|| k === SK.TypeAssertionExpression
-					|| k === SK.SatisfiesExpression)
-				&& (tsgoNode as unknown as { type?: Node }).type
-			) {
-				const t = project.checker.getTypeFromTypeNode(
-					(tsgoNode as unknown as { type: Node }).type as any,
-				);
-				fixupType(t);
-				return t as unknown as ts.Type;
-			}
-			if (k === SK.CallExpression || k === SK.NewExpression) {
-				// Two attempts to recover the call's RETURN type:
-				//   1) `getResolvedSignature(node)` — the canonical way,
-				//      but tsgo panics on some method-call sites.
-				//   2) Walk via the function type's call signatures —
-				//      uses two `getCallSignatures(funcType)` and one
-				//      `getReturnTypeOfSignature(sig)` calls. Slightly
-				//      less precise (picks the first overload) but
-				//      doesn't trigger the panic.
-				try {
-					const sig = project.checker.getResolvedSignature(tsgoNode);
-					if (sig) {
-						const t = project.checker.getReturnTypeOfSignature(sig);
-						fixupType(t);
-						return t as unknown as ts.Type;
-					}
-				}
-				catch { /* fall through to plan B */ }
-				const sk = (sync as any).SignatureKind as Record<string, number>;
-				try {
-					const funcType = project.checker.getTypeAtLocation(tsgoNode);
-					if (funcType) {
-						const sigs = project.checker.getSignaturesOfType(funcType, sk.Call);
-						if (sigs && sigs.length > 0) {
-							const t = project.checker.getReturnTypeOfSignature(sigs[0]);
-							fixupType(t);
-							return t as unknown as ts.Type;
-						}
-					}
-				}
-				catch { /* try plan C */ }
-				// Plan C: tsgo's getTypeAtLocation(call) sometimes returns
-				// the callee's RECEIVER type rather than the function
-				// type (observed for nested method calls like
-				// `a.b.c()`). Pull the method's symbol off the callee
-				// expression and read its type instead — this resolves
-				// to the function type even in the receiver-collapsed
-				// case.
-				try {
-					const callee = (tsgoNode as unknown as { expression?: Node }).expression;
-					if (callee) {
-						// For property-access callees (`a.b.c()`), tsgo's
-						// `getSymbolAtLocation(propAccess)` returns the
-						// symbol of the LEFT side (`a.b`'s symbol —
-						// e.g. `languageService`). The METHOD's symbol
-						// is on the right (`callee.name`). Probe both
-						// shapes — direct identifier callees use the
-						// node itself.
-						const targetForSymbol =
-							(callee as unknown as { name?: Node }).name ?? callee;
-						const sym = project.checker.getSymbolAtLocation(targetForSymbol);
-						if (sym) {
-							const methodType = project.checker.getTypeOfSymbolAtLocation(sym, callee);
-							if (methodType) {
-								const sigs = project.checker.getSignaturesOfType(methodType, sk.Call);
-								if (sigs && sigs.length > 0) {
-									const t = project.checker.getReturnTypeOfSignature(sigs[0]);
-									fixupType(t);
-									return t as unknown as ts.Type;
-								}
-							}
-						}
-					}
-				}
-				catch { /* fall through to default */ }
-			}
-			if (k === SK.PropertyAccessExpression || k === SK.ElementAccessExpression) {
-				// tsgo's `getTypeAtLocation(propAccess)` returns wrong
-				// types in some real-codebase contexts (e.g. inside
-				// argument lists of generic-typed call expressions —
-				// observed `string[]` / `string` when the declared type
-				// is `string | undefined`). The same property at the
-				// same position via `getTypeAtPosition(file, end)`
-				// returns the correct type. Minimal repros don't
-					// trigger the wrong path; the divergence requires
-				// surrounding-context complexity we haven't isolated.
-				// Position-based query is the workaround.
-				const sfPath = ((tsgoNode as unknown as { getSourceFile?: () => { fileName: string } })
-					.getSourceFile?.() ?? { fileName: '' }).fileName;
-				if (sfPath) {
-					const t = project.checker.getTypeAtPosition(sfPath, tsgoNode.end);
-					if (t) {
-						fixupType(t);
-						return t as unknown as ts.Type;
-					}
-				}
-			}
-			if (k === SK.NonNullExpression) {
-				const inner = (tsgoNode as unknown as { expression: Node }).expression;
-				// Recurse through the adapter so nested CallExpression /
-				// AsExpression / NonNull get their own routing applied
-				// before we strip nullability. e.g. `someMap.get(k)!` —
-				// the inner CallExpression needs Call routing to get the
-				// return type (`T | undefined`), and only then does
-				// `getNonNullableType` produce `T`.
-				const innerT = checker.getTypeAtLocation!(inner as unknown as ts.Node);
-				if (innerT) {
-					const t = project.checker.getNonNullableType(innerT as unknown as any);
-					fixupType(t);
-					return t as unknown as ts.Type;
-				}
-			}
-			const t = project.checker.getTypeAtLocation(tsgoNode);
-			fixupType(t);
-			return t as unknown as ts.Type;
+			return memoGet(
+				nodeTypeCache,
+				tsgoNode,
+				() => computeGetTypeAtLocation(node),
+				() => rpc?.memoHit('getTypeAtLocation'),
+			) as ts.Type;
 		},
 		getShorthandAssignmentValueSymbol(node) {
 			if (!node) return undefined;
 			return project.checker.getShorthandAssignmentValueSymbol(node as unknown as Node) as unknown as ts.Symbol | undefined;
 		},
 		getTypeOfSymbolAtLocation(symbol, location) {
-			const t = project.checker.getTypeOfSymbolAtLocation(
-				symbol as unknown as TsgoSymbol,
-				location as unknown as Node,
-			);
-			fixupType(t);
-			return t as unknown as ts.Type;
+			const sym = symbol as unknown as object;
+			const loc = location as unknown as object;
+			return memoGet2(symbolAtLocationTypeCache, sym, loc, () => {
+				const t = rpcCall('getTypeOfSymbolAtLocation', () =>
+					project.checker.getTypeOfSymbolAtLocation(
+						symbol as unknown as TsgoSymbol,
+						location as unknown as Node,
+					));
+				fixupType(t);
+				return t as unknown as ts.Type;
+			}, () => rpc?.memoHit('getTypeOfSymbolAtLocation')) as ts.Type;
 		},
 		// Direct forwards — tsgo Checker has these on its surface.
-		getTypeOfSymbol: fwd('getTypeOfSymbol', fixupType) as any,
+		getTypeOfSymbol(symbol) {
+			if (!symbol) return undefined as unknown as ts.Type;
+			return memoGet(typeOfSymbolCache, symbol as object, () => {
+				const t = rpcCall('getTypeOfSymbol', () =>
+					project.checker.getTypeOfSymbol(symbol as unknown as TsgoSymbol));
+				fixupType(t);
+				return t as unknown as ts.Type;
+			}, () => rpc?.memoHit('getTypeOfSymbol')) as ts.Type;
+		},
 		getDeclaredTypeOfSymbol: fwd('getDeclaredTypeOfSymbol', fixupType) as any,
-		getSignaturesOfType: fwd('getSignaturesOfType') as any,
-		getResolvedSignature: fwd('getResolvedSignature') as any,
-		getReturnTypeOfSignature: fwd('getReturnTypeOfSignature', fixupType) as any,
+		getSignaturesOfType(type, kind) {
+			if (!type) return [] as ts.Signature[];
+			const key = type as object;
+			let inner = signaturesOfTypeCache.get(key);
+			if (!inner) {
+				inner = new Map();
+				signaturesOfTypeCache.set(key, inner);
+			}
+			const cached = inner.get(kind as number);
+			if (cached !== undefined) {
+				rpc?.memoHit('getSignaturesOfType');
+				return (cached ?? []) as ts.Signature[];
+			}
+			const r = rpcCall('getSignaturesOfType', () =>
+				project.checker.getSignaturesOfType(type as any, kind as number));
+			inner.set(kind as number, r ?? null);
+			return (r ?? []) as unknown as ts.Signature[];
+		},
+		getResolvedSignature(node) {
+			const n = node as unknown as Node;
+			return memoGet(resolvedSignatureCache, n, () =>
+				rpcCall('getResolvedSignature', () =>
+					project.checker.getResolvedSignature(n)) as ts.Signature | undefined,
+			() => rpc?.memoHit('getResolvedSignature'));
+		},
+		getReturnTypeOfSignature(signature) {
+			if (!signature) return undefined as unknown as ts.Type;
+			return memoGet(returnTypeOfSignatureCache, signature as object, () => {
+				const t = rpcCall('getReturnTypeOfSignature', () =>
+					project.checker.getReturnTypeOfSignature(signature as any));
+				fixupType(t);
+				return t as unknown as ts.Type;
+			}, () => rpc?.memoHit('getReturnTypeOfSignature')) as ts.Type;
+		},
 		getTypePredicateOfSignature: fwd('getTypePredicateOfSignature') as any,
 		getNonNullableType: fwd('getNonNullableType', fixupType) as any,
 		getBaseTypes: fwd('getBaseTypes', fixupType) as any,
-		getPropertiesOfType: fwd('getPropertiesOfType') as any,
-		getIndexInfosOfType: fwd('getIndexInfosOfType') as any,
-		getTypeArguments: fwd('getTypeArguments', fixupType) as any,
+		getPropertiesOfType(type) {
+			if (!type) return [] as ts.Symbol[];
+			return (memoGet(propertiesOfTypeCache, type as object, () =>
+				rpcCall('getPropertiesOfType', () =>
+					project.checker.getPropertiesOfType(type as any)),
+			() => rpc?.memoHit('getPropertiesOfType')) ?? []) as ts.Symbol[];
+		},
+		getIndexInfosOfType(type) {
+			if (!type) return [] as ts.IndexInfo[];
+			return (memoGet(indexInfosCache, type as object, () =>
+				rpcCall('getIndexInfosOfType', () =>
+					project.checker.getIndexInfosOfType(type as any)),
+			() => rpc?.memoHit('getIndexInfosOfType')) ?? []) as ts.IndexInfo[];
+		},
+		getTypeArguments(type) {
+			if (!type) return [] as ts.Type[];
+			return (memoGet(typeArgumentsCache, type as object, () => {
+				const args = rpcCall('getTypeArguments', () =>
+					project.checker.getTypeArguments(type as any));
+				if (args) fixupType(args);
+				return args;
+			}, () => rpc?.memoHit('getTypeArguments')) ?? []) as ts.Type[];
+		},
 		getWidenedType: fwd('getWidenedType', fixupType) as any,
-		getTypeFromTypeNode: fwd('getTypeFromTypeNode', fixupType) as any,
-		getContextualType: fwd('getContextualType', fixupType) as any,
+		getTypeFromTypeNode(typeNode) {
+			const n = typeNode as unknown as Node;
+			return memoGet(typeFromTypeNodeCache, n, () => {
+				const t = fwd('getTypeFromTypeNode', fixupType)(typeNode);
+				return t as ts.Type | undefined;
+			}, () => rpc?.memoHit('getTypeFromTypeNode')) as ts.Type;
+		},
+		getContextualType(node) {
+			const n = node as unknown as Node;
+			return memoGet(contextualTypeCache, n, () => {
+				const t = fwd('getContextualType', fixupType)(node);
+				return t as ts.Type | undefined;
+			}, () => rpc?.memoHit('getContextualType'));
+		},
 		typeToString: fwd('typeToString') as any,
 		isArrayLikeType: fwd('isArrayLikeType') as any,
 		// Type-parameter constraint — tsgo only has the type-parameter
 		// variant; for non-TypeParameter inputs ts returns undefined too.
 		getBaseConstraintOfType: ((type: any) => {
 			if ((type?.flags & loadTsgoModules().sync.TypeFlags.TypeParameter) !== 0) {
-				const r = project.checker.getConstraintOfTypeParameter(type);
+				const r = rpcCall('getConstraintOfTypeParameter', () =>
+					project.checker.getConstraintOfTypeParameter(type));
 				fixupType(r);
 				return r;
 			}
 			return undefined;
 		}) as any,
-		// Apparent type: ts boxes primitives (`5` → Number),
-		// walks type-parameter constraints, and unwraps generic
-		// instantiations for property lookup. tsgo has no direct API.
-		// Compose what tsgo DOES expose:
-		//   1. TypeParameter → its constraint (fall through if absent).
-		//   2. Literal types → their widened primitive base
-		//      (`getWidenedType` exists in tsgo).
-		//   3. Otherwise return the input type.
-		// Imperfect (can't fully box `string` → `String` interface w/o
-		// host symbol resolution we don't have), but materially better
-		// than identity-fallback for rule logic that switches on
-		// "primitive vs object" or "constrained-T vs raw T".
 		getApparentType: ((type: any) => {
 			if (!type) return type;
-			const TF = (sync as any).TypeFlags as Record<string, number>;
-			if ((type.flags & TF.TypeParameter) !== 0) {
-				const c = project.checker.getConstraintOfTypeParameter(type);
-				if (c) { fixupType(c); return c; }
+			return memoGet(apparentTypeCache, type as object, () => {
+				const TF = (sync as any).TypeFlags as Record<string, number>;
+				if ((type.flags & TF.TypeParameter) !== 0) {
+					const c = rpcCall('getConstraintOfTypeParameter', () =>
+						project.checker.getConstraintOfTypeParameter(type));
+					if (c) { fixupType(c); return c; }
+					return type;
+				}
+				const literalMask = TF.StringLiteral | TF.NumberLiteral
+					| TF.BooleanLiteral | TF.BigIntLiteral | TF.EnumLiteral;
+				if ((type.flags & literalMask) !== 0) {
+					const w = checkerHolder.checker!.getWidenedType!(type);
+					if (w) { fixupType(w); return w; }
+				}
+				fixupType(type);
 				return type;
-			}
-			const literalMask = TF.StringLiteral | TF.NumberLiteral
-				| TF.BooleanLiteral | TF.BigIntLiteral | TF.EnumLiteral;
-			if ((type.flags & literalMask) !== 0) {
-				const w = project.checker.getWidenedType(type);
-				if (w) { fixupType(w); return w; }
-			}
-			fixupType(type);
-			return type;
+			}, () => rpc?.memoHit('getApparentType'));
 		}) as any,
 		// tsgo's Checker doesn't expose these. compat-eslint's callsites
 		// (parameter-property shadowing, ExportSpecifier alias unwrap)
@@ -1064,17 +1153,37 @@ function wrapChecker(
 			const literalMask = TF.StringLiteral | TF.NumberLiteral
 				| TF.BooleanLiteral | TF.BigIntLiteral;
 			if ((source.flags & literalMask) !== 0) {
-				const widened = project.checker.getWidenedType(source);
-				if (widened && widened.id !== source.id) {
+				const widened = checkerHolder.checker!.getWidenedType!(source);
+				if (widened && (widened as { id?: string }).id !== (source as { id?: string }).id) {
 					return self(widened, target);
 				}
 			}
 			return false;
 		}) as any,
 	};
+	checkerHolder.checker = checker as ts.TypeChecker;
 	// `stub` is held for future use as gaps surface; reference it here
 	// to satisfy noUnusedLocals without a separate unused-method line.
 	void stub;
 
-	return checker as ts.TypeChecker;
+	const prefetchTypesForFile = (fileName: string, plan: PrefetchPlan = EMPTY_PREFETCH_PLAN) => {
+		const sf = project.program.getSourceFile(fileName);
+		if (!sf) return;
+		batchPrefetchTypes(project, sf as unknown as Node, fileName, {
+			astSyntaxKind: ast.SyntaxKind as unknown as Record<string, number>,
+			fixupType,
+			rpcCall,
+			rpc,
+			caches: {
+				nodeTypeCache,
+				typeFromTypeNodeCache,
+				indexInfosCache,
+				propertiesOfTypeCache,
+				contextualTypeCache,
+				nodeToSymbol,
+			},
+		}, plan);
+	};
+
+	return { checker: checker as ts.TypeChecker, prefetchTypesForFile };
 }
