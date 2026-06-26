@@ -236,7 +236,7 @@ npx tsslint --project tsconfig.json --tsgo
 
 On this repo (ts-eslint type-aware, ~37 files in `packages/{cli,core,config}`): Strada ~3.4s, `--tsgo` ~2.1s. Full monorepo (~59 files): within ~10% of Strada with `native-preview@7.0.0-dev.20260624.1+`.
 
-Dogfood (`pnpm run lint` vs `pnpm run lint:tsgo -- --force` on this monorepo): Strada **69 passed** / 26 messages; `--tsgo` **62 passed** / 30 messages. The gap is mostly type-aware rule divergence on tsgo shim sources (`packages/cli/lib/tsgo-*.ts`) — not a performance regression.
+Dogfood (`pnpm run lint` vs `pnpm run lint:tsgo -- --force` on this monorepo): Strada **76 passed** / 1 message; `--tsgo` **68 passed** / 24 messages. Shim sources (`tsgo-*.ts`) are scoped out of `no-unnecessary-type-assertion` (tsgo vs Strada checker disagree on assertion necessity). Remaining gap is the same rule firing on other files under the tsgo checker only.
 
 Rules still author against the TypeScript compiler API; the shim translates ts-go's checker into `ts.Program` / `ts.TypeChecker` shapes. See `packages/poc-tsgo/` for a minimal parity/benchmark harness (`pnpm run poc:tsgo`, `pnpm run bench:tsgo`).
 

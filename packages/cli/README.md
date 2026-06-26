@@ -28,7 +28,7 @@ npx tsslint --project tsconfig.json --tsgo
 - Plain `--project` only — no Vue / MDX / Astro framework flags.
 - Multi-file projects automatically enable a fast path (skip disk cache, eager-prepare symbols). Override with `--no-tsgo-fast` or force with `--tsgo-fast`.
 - Benchmark on this repo (~37 ts-eslint files): Strada ~3.4s, `--tsgo` ~2.1s; full repo (~59 files): within ~10% of Strada.
-- Dogfood parity: `pnpm run lint:tsgo` — 62/69 files clean vs Strada (type-aware divergence on `tsgo-*` shim sources).
+- Dogfood parity: `pnpm run lint:tsgo` — 68/76 files clean vs Strada (shim sources exempt from `no-unnecessary-type-assertion`; remaining gap is tsgo checker divergence on other files).
 
 ```bash
 pnpm run lint:tsgo    # same projects as lint, with --tsgo --force
