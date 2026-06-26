@@ -66,7 +66,7 @@ export interface TsgoBackend {
 // Process-level guards. All prototype patches are one-shot per process
 // (tsgo's class shapes are stable per binary version).
 let nodeProtoPatched = false;
-let typeProtoPatched = false;
+const patchedTypeProtos = new WeakSet<object>();
 let nodeHandleProtoPatched = false;
 let symbolProtoPatched = false;
 let nodeListSpeciesPatched = false;
@@ -236,32 +236,51 @@ function patchTsgoNodeProto(sample: Node): void {
 //
 // Located via prototype walk from a sample Type — TypeObject isn't in
 // the package exports map. One-shot per process.
-function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
-	if (typeProtoPatched) return;
+function getTypePrototype(sample: object): any {
 	let proto: any = Object.getPrototypeOf(sample);
 	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
 		proto = Object.getPrototypeOf(proto);
 	}
-	if (!proto) return;
+	return proto ?? undefined;
+}
+
+function installTypePredicateShims(target: { flags?: number }, sync: TsgoSync): void {
+	if (typeof (target as { isUnionOrIntersection?: unknown }).isUnionOrIntersection === 'function') {
+		return;
+	}
+	if (typeof target.flags !== 'number') return;
 	const TF = (sync as any).TypeFlags as Record<string, number>;
 	const has = (flag: number) => function (this: { flags: number }) { return (this.flags & flag) !== 0; };
-	if (!proto.isStringLiteral) proto.isStringLiteral = has(TF.StringLiteral);
-	if (!proto.isNumberLiteral) proto.isNumberLiteral = has(TF.NumberLiteral);
-	if (!proto.isBooleanLiteral) proto.isBooleanLiteral = has(TF.BooleanLiteral);
-	if (!proto.isBigIntLiteral) proto.isBigIntLiteral = has(TF.BigIntLiteral);
-	if (!proto.isEnumLiteral) proto.isEnumLiteral = has(TF.EnumLiteral);
-	if (!proto.isLiteral) proto.isLiteral = has(
+	const t = target as Record<string, unknown>;
+	if (!t.isStringLiteral) t.isStringLiteral = has(TF.StringLiteral);
+	if (!t.isNumberLiteral) t.isNumberLiteral = has(TF.NumberLiteral);
+	if (!t.isBooleanLiteral) t.isBooleanLiteral = has(TF.BooleanLiteral);
+	if (!t.isBigIntLiteral) t.isBigIntLiteral = has(TF.BigIntLiteral);
+	if (!t.isEnumLiteral) t.isEnumLiteral = has(TF.EnumLiteral);
+	if (!t.isLiteral) t.isLiteral = has(
 		TF.StringLiteral | TF.NumberLiteral | TF.BigIntLiteral | TF.BooleanLiteral,
 	);
-	if (!proto.isUnion) proto.isUnion = has(TF.Union);
-	if (!proto.isIntersection) proto.isIntersection = has(TF.Intersection);
-	if (!proto.isUnionOrIntersection) proto.isUnionOrIntersection = has(TF.UnionOrIntersection ?? (TF.Union | TF.Intersection));
-	if (!proto.isTypeParameter) proto.isTypeParameter = has(TF.TypeParameter);
-	if (!proto.isClassOrInterface) proto.isClassOrInterface = function () { return false; }; // structural; would need objectFlags
-	if (!proto.isClass) proto.isClass = function () { return false; };
-	if (!proto.isIndexType) proto.isIndexType = has(TF.Index);
-	if (!proto.getFlags) proto.getFlags = function (this: { flags: number }) { return this.flags; };
-	if (!proto.isNullableType) proto.isNullableType = has((TF.Null ?? 0) | (TF.Undefined ?? 0));
+	if (!t.isUnion) t.isUnion = has(TF.Union);
+	if (!t.isIntersection) t.isIntersection = has(TF.Intersection);
+	if (!t.isUnionOrIntersection) {
+		t.isUnionOrIntersection = has(TF.UnionOrIntersection ?? (TF.Union | TF.Intersection));
+	}
+	if (!t.isTypeParameter) t.isTypeParameter = has(TF.TypeParameter);
+	if (!t.isClassOrInterface) t.isClassOrInterface = () => false;
+	if (!t.isClass) t.isClass = () => false;
+	if (!t.isIndexType) t.isIndexType = has(TF.Index);
+	if (!t.getFlags) t.getFlags = function (this: { flags: number }) { return this.flags; };
+	if (!t.isNullableType) t.isNullableType = has((TF.Null ?? 0) | (TF.Undefined ?? 0));
+}
+
+function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
+	const proto = getTypePrototype(sample);
+	if (!proto || patchedTypeProtos.has(proto)) {
+		installTypePredicateShims(sample as { flags?: number }, sync);
+		return;
+	}
+	patchedTypeProtos.add(proto);
+	installTypePredicateShims(proto, sync);
 	// `types` property — typescript-eslint's ts-api-utils
 	// (`unionConstituents`) reads `type.types` directly on Union /
 	// Intersection types. tsgo exposes the constituents via `getTypes()`
@@ -270,7 +289,21 @@ function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
 		Object.defineProperty(proto, 'types', {
 			configurable: true,
 			get(this: { getTypes?: () => unknown[] }) {
-				return this.getTypes ? this.getTypes() : undefined;
+				const types = this.getTypes ? this.getTypes() : undefined;
+				if (types && fixupTypeRef.fn) {
+					for (const child of types) fixupTypeRef.fn(child);
+				}
+				return types;
+			},
+		});
+	}
+	if (!Object.getOwnPropertyDescriptor(proto, 'aliasTypeArguments')) {
+		Object.defineProperty(proto, 'aliasTypeArguments', {
+			configurable: true,
+			get(this: { getAliasTypeArguments?: () => unknown[] }) {
+				const args = this.getAliasTypeArguments ? this.getAliasTypeArguments() : [];
+				if (args && fixupTypeRef.fn) fixupTypeRef.fn(args);
+				return args;
 			},
 		});
 	}
@@ -278,19 +311,15 @@ function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
 	// that delegate to the Checker. We can't reach the Checker from here
 	// without a closure; install via patchTsgoTypeProtoWithChecker
 	// (separate hook called from wrapChecker).
-	typeProtoPatched = true;
 }
 
 // Type instance methods that need a Checker reference (signatures,
-// properties). Patched once on first checker query that returns a Type.
-let typeCheckerMethodsPatched = false;
-function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, project: Project): void {
-	if (typeCheckerMethodsPatched) return;
-	let proto: any = Object.getPrototypeOf(sample);
-	while (proto && Object.getPrototypeOf(proto) !== Object.prototype) {
-		proto = Object.getPrototypeOf(proto);
-	}
-	if (!proto) return;
+// properties). Patched per prototype chain as types are fixup'd.
+const patchedTypeCheckerProtos = new WeakSet<object>();
+function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, _project: Project): void {
+	const proto = getTypePrototype(sample);
+	if (!proto || patchedTypeCheckerProtos.has(proto)) return;
+	patchedTypeCheckerProtos.add(proto);
 	const SK = (sync as any).SignatureKind as Record<string, number>;
 	if (!proto.getCallSignatures) {
 		proto.getCallSignatures = function (this: { id: string }) {
@@ -322,8 +351,6 @@ function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, project: Pr
 			return currentProjectRef.project!.checker.getNonNullableType(this);
 		};
 	}
-	void project;
-	typeCheckerMethodsPatched = true;
 }
 
 // `Signature` on tsgo lacks ts.Signature's accessor methods
@@ -337,7 +364,9 @@ function patchTsgoSignatureProto(sync: TsgoSync): void {
 	const proto = Signature.prototype;
 	if (!proto.getReturnType) {
 		proto.getReturnType = function (this: { id: string }) {
-			return currentProjectRef.project!.checker.getReturnTypeOfSignature(this as any);
+			const t = currentProjectRef.project!.checker.getReturnTypeOfSignature(this as any);
+			if (fixupTypeRef.fn) fixupTypeRef.fn(t);
+			return t;
 		};
 	}
 	if (!proto.getDeclaration) {
@@ -420,6 +449,8 @@ function patchTsgoSymbolProto(sync: TsgoSync): void {
 // the worker switches to project B route through B's live API. Safe
 // because lint() processes one file at a time within one project and
 // hands no cross-project handles around.
+// Set in wrapChecker so proto `types` getter can fixup union constituents.
+const fixupTypeRef: { fn?: (t: unknown) => unknown } = {};
 const currentProjectRef: { project: Project | undefined } = { project: undefined };
 
 function installNodeHandleHooks(sync: TsgoSync): void {
@@ -687,12 +718,55 @@ function wrapChecker(
 		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
 	};
 	const fixupType = (t: unknown) => {
+		if (Array.isArray(t)) {
+			for (const item of t) fixupType(item);
+			return t;
+		}
 		if (t && typeof t === 'object') {
+			const obj = t as {
+				flags?: number;
+				aliasTypeArguments?: unknown[];
+				getTypes?: () => unknown[];
+				getAliasTypeArguments?: () => unknown[];
+				__tsslintFixupGetTypes?: boolean;
+				__tsslintFixupAliasArgs?: boolean;
+			};
+			// tsgo stores unresolved type handles on the instance; drop so
+			// the proto getter resolves full TypeObjects via RPC.
+			if (Array.isArray(obj.aliasTypeArguments) && obj.aliasTypeArguments.length > 0
+				&& typeof (obj.aliasTypeArguments[0] as { flags?: number })?.flags !== 'number') {
+				delete obj.aliasTypeArguments;
+			}
 			patchTsgoTypeProto(t, sync);
 			patchTsgoTypeCheckerMethods(t, sync, project);
+			installTypePredicateShims(obj, sync);
+			if (typeof obj.getTypes === 'function' && !obj.__tsslintFixupGetTypes) {
+				obj.__tsslintFixupGetTypes = true;
+				const origGetTypes = obj.getTypes.bind(obj);
+				obj.getTypes = () => {
+					const types = origGetTypes();
+					if (types) {
+						for (const child of types) fixupType(child);
+					}
+					return types;
+				};
+			}
+			if (typeof obj.getAliasTypeArguments === 'function' && !obj.__tsslintFixupAliasArgs) {
+				obj.__tsslintFixupAliasArgs = true;
+				const orig = obj.getAliasTypeArguments.bind(obj);
+				obj.getAliasTypeArguments = () => {
+					const args = orig();
+					if (args) {
+						for (const child of args) fixupType(child);
+					}
+					return args;
+				};
+			}
 		}
 		return t;
 	};
+	fixupTypeRef.fn = fixupType;
+
 	patchTsgoSymbolProto(sync);
 	patchTsgoSignatureProto(sync);
 
@@ -905,10 +979,10 @@ function wrapChecker(
 		getReturnTypeOfSignature: fwd('getReturnTypeOfSignature', fixupType) as any,
 		getTypePredicateOfSignature: fwd('getTypePredicateOfSignature') as any,
 		getNonNullableType: fwd('getNonNullableType', fixupType) as any,
-		getBaseTypes: fwd('getBaseTypes') as any,
+		getBaseTypes: fwd('getBaseTypes', fixupType) as any,
 		getPropertiesOfType: fwd('getPropertiesOfType') as any,
 		getIndexInfosOfType: fwd('getIndexInfosOfType') as any,
-		getTypeArguments: fwd('getTypeArguments') as any,
+		getTypeArguments: fwd('getTypeArguments', fixupType) as any,
 		getWidenedType: fwd('getWidenedType', fixupType) as any,
 		getTypeFromTypeNode: fwd('getTypeFromTypeNode', fixupType) as any,
 		getContextualType: fwd('getContextualType', fixupType) as any,
@@ -950,6 +1024,7 @@ function wrapChecker(
 				const w = project.checker.getWidenedType(type);
 				if (w) { fixupType(w); return w; }
 			}
+			fixupType(type);
 			return type;
 		}) as any,
 		// tsgo's Checker doesn't expose these. compat-eslint's callsites

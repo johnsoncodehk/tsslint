@@ -468,7 +468,10 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	// WithColorAndContext` reads `.file.text` to render code snippets.
 	if (language) {
 		diagnostics = diagnostics
-			.map(d => transformDiagnostic(language!, d, linterLanguageService.getProgram()!, false))
+			.map(d => {
+				const program = linterLanguageService.getProgram();
+				return program ? transformDiagnostic(language!, d, program, false) : d;
+			})
 			.filter(d => !!d);
 		const fileShim = new Map<string, { fileName: string; text: string }>();
 		const getShim = (fn: string) => {
