@@ -231,10 +231,11 @@ npx tsslint --project tsconfig.json --tsgo
 |---|---|---|
 | Runtime | Node `typescript` in-process | `tsgo` child process + TypeScript API shim |
 | Framework flags | Vue / MDX / Astro / … | Not supported — `--project` only |
-| Multi-file | Layer 1 + 2 disk cache | Auto fast path (skip cache, eager-prepare symbols); `--no-tsgo-fast` to disable |
+| Multi-file | Layer 1 + 2 disk cache | Skip layer-1 cache; **one tsgo child** reused across `--project` entries via `updateSnapshot` |
+| `--tsgo-fast` | — | Also eager-prepare all files at setup (opt-in; can regress type-heavy runs) |
 | Editor plugin | N/A (CLI) | N/A — `tsserver` plugin still requires Strada today |
 
-On this repo (ts-eslint type-aware, ~37 files in `packages/{cli,core,config}`): Strada ~3.4s, `--tsgo` ~2.1s. Full monorepo (~59 files): within ~10% of Strada with `native-preview@7.0.0-dev.20260624.1+`.
+On this repo (ts-eslint type-aware, ~37 files in `packages/{cli,core,config}`): Strada ~1.6–3s, `--tsgo` ~1.8–2s. Full monorepo (~59 files, 8 tsconfigs): Strada ~4–8s, `--tsgo` ~6–11s (IPC-bound on compat-eslint); shared child + lazy prepare helps multi-`--project` runs.
 
 Dogfood (`pnpm run lint` vs `pnpm run lint:tsgo -- --force` on this monorepo): Strada **76 passed** / 1 message; `--tsgo` **68 passed** / 24 messages. Shim sources (`tsgo-*.ts`) are scoped out of `no-unnecessary-type-assertion` (tsgo vs Strada checker disagree on assertion necessity). Remaining gap is the same rule firing on other files under the tsgo checker only.
 

@@ -14,9 +14,12 @@ import cacheFlow = require('./cache-flow.js');
 import incrementalState = require('./incremental-state.js');
 import type { FileCache } from './cache.js';
 import type { IncrementalState } from './incremental-state.js';
+import type { PrefetchPlan } from './tsgo-prefetch.js';
+import { EMPTY_PREFETCH_PLAN } from './tsgo-prefetch.js';
 
 const useTsgo = process.argv.includes('--tsgo');
 let tsgoBackend: TsgoBackend | undefined;
+let tsgoDeferFileRelease = false;
 // Facade returned by installFacade() — rules must use this, not
 // `require('typescript')` after Strada has cached the real module.
 let tsFacadeForRules: typeof ts | undefined;
@@ -54,6 +57,18 @@ let affectedFiles: Set<string> | undefined;
 // The current session's BP — held until end-of-project so we can
 // capture its updated buildinfo text for next session's persistence.
 let currentBuilder: ts.SemanticDiagnosticsBuilderProgram | undefined;
+
+function getPrefetchPlan(fileName: string): PrefetchPlan {
+	try {
+		const { mergePrefetchHints } = require('@tsslint/compat-eslint') as typeof import('@tsslint/compat-eslint');
+		return mergePrefetchHints(linter.getRules(fileName), {
+			typeAwareRuleIds: linter.getTypeAwareRules(),
+		});
+	}
+	catch {
+		return EMPTY_PREFETCH_PLAN;
+	}
+}
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
@@ -150,6 +165,12 @@ export function create() {
 		buildIncrementalState() {
 			return buildIncrementalState();
 		},
+		shutdown() {
+			tsgoBackend?.dispose();
+			tsgoBackend = undefined;
+			const { closeSharedTsgoApi } = require('./tsgo-api-pool.js') as typeof import('./tsgo-api-pool.js');
+			closeSharedTsgoApi();
+		},
 	};
 }
 
@@ -162,7 +183,7 @@ async function setup(
 	initialTypeAwareRules: readonly string[],
 	prevIncrementalState: IncrementalState | undefined,
 ): Promise<true | string> {
-	tsgoBackend?.close();
+	tsgoBackend?.dispose();
 	tsgoBackend = undefined;
 	tsFacadeForRules = undefined;
 
@@ -219,17 +240,15 @@ async function setup(
 
 	if (useTsgo) {
 		const { createTsgoBackend } = require('./tsgo-backend.js') as typeof import('./tsgo-backend.js');
+		const tsgoMode = require('./tsgo-mode.js') as typeof import('./tsgo-mode.js');
+		tsgoDeferFileRelease = tsgoMode.shouldTsgoDeferFileRelease(_fileNames.length);
 		try {
-			tsgoBackend = createTsgoBackend(tsconfig);
+			tsgoBackend = createTsgoBackend(tsconfig, {
+				deferPerFileRelease: tsgoDeferFileRelease,
+			});
 		}
 		catch (err) {
 			return err instanceof Error ? (err.stack ?? err.message) : String(err);
-		}
-		const { shouldTsgoFast } = require('./tsgo-mode.js') as typeof import('./tsgo-mode.js');
-		if (shouldTsgoFast(_fileNames.length)) {
-			for (const fileName of _fileNames) {
-				tsgoBackend.prepareFile(fileName);
-			}
 		}
 		// No BuilderProgram on tsgo — layer-2 affected-file diff unavailable.
 		linter = core.createLinter(
@@ -243,6 +262,11 @@ async function setup(
 			() => [],
 			initialTypeAwareRules,
 		);
+		if (tsgoMode.shouldTsgoEagerPrepare(_fileNames.length)) {
+			for (const fileName of _fileNames) {
+				tsgoBackend.prepareFile(fileName, getPrefetchPlan(fileName));
+			}
+		}
 		return true;
 	}
 
@@ -368,7 +392,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	const typeAwareUnaffected = !fix && affectedFiles != null && !affectedFiles.has(fileName);
 
 	if (useTsgo) {
-		tsgoBackend!.prepareFile(fileName);
+		tsgoBackend!.prepareFile(fileName, getPrefetchPlan(fileName));
 	}
 
 	if (fix) {
@@ -496,7 +520,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
 	// only computes line starts once per file).
 
-	if (useTsgo) {
+	if (useTsgo && !tsgoDeferFileRelease) {
 		tsgoBackend!.releaseFile(fileName);
 	}
 

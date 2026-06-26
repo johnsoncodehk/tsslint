@@ -118,22 +118,24 @@ function benchScenario(scenario) {
     const cliTsgo = (0, engine_js_1.hasNativePreview)()
         ? timeCli(runs, [...scenario.cliArgs, '--tsgo'])
         : undefined;
-    const cliTsgoNoFast = (0, engine_js_1.hasNativePreview)() && scenario.fileCount > 1
-        ? timeCli(runs, [...scenario.cliArgs, '--tsgo', '--no-tsgo-fast'])
+    const cliTsgoFast = (0, engine_js_1.hasNativePreview)() && scenario.fileCount > 1
+        ? timeCli(runs, [...scenario.cliArgs, '--tsgo', '--tsgo-fast'])
         : undefined;
     console.log('── 原版 CLI（完整 pipeline）──');
     console.log(`  Strada (default):  ${fmt(cliStrada)}`);
     if (cliTsgo) {
-        const autoFast = scenario.fileCount > 1;
-        console.log(`  --tsgo${autoFast ? ' (auto-fast)' : ''}:  ${fmt(cliTsgo)}`);
+        const skipCache = scenario.fileCount > 1;
+        console.log(`  --tsgo${skipCache ? ' (skip cache)' : ''}:  ${fmt(cliTsgo)}`);
         console.log(`  --tsgo / Strada:   ${(cliTsgo.med / cliStrada.med).toFixed(2)}×`);
     }
     else {
         console.log('  --tsgo:            skip (no @typescript/native-preview)');
     }
-    if (cliTsgoNoFast) {
-        console.log(`  --tsgo --no-fast:  ${fmt(cliTsgoNoFast)}`);
-        console.log(`  auto-fast savings: ${(cliTsgoNoFast.med / cliTsgo.med).toFixed(2)}×`);
+    if (cliTsgoFast) {
+        console.log(`  --tsgo --tsgo-fast:  ${fmt(cliTsgoFast)} (eager-prepare)`);
+        if (cliTsgo) {
+            console.log(`  --tsgo-fast overhead: ${(cliTsgoFast.med / cliTsgo.med).toFixed(2)}× vs default --tsgo`);
+        }
     }
     if (!scenario.pocEngine) {
         console.log('\n  (PoC engine 僅適用 micro 場景 — 不同 workload 略過)');

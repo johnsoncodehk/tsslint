@@ -37,8 +37,8 @@ Options:
   --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
   --debug-estree                After linting, print the actual ESTree node types converted by @tsslint/compat-eslint and their counts
   --tsgo                        Use @typescript/native-preview as the type backend (beta; plain --project only)
-  --tsgo-fast                   With --tsgo: always use the fast path (skip cache, eager-prepare)
-  --no-tsgo-fast                With --tsgo: disable auto fast path on multi-file projects
+  --tsgo-fast                   With --tsgo: skip disk cache + eager-prepare all files at setup
+  --no-tsgo-fast                With --tsgo: keep disk cache on multi-file runs (default prepare is lazy)
   -h, --help                    Show this help message
 
 Examples:
@@ -289,7 +289,9 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		process.exit(1);
 	}
 
-	await startWorker(worker.create());
+	const linterWorker = worker.create();
+	await startWorker(linterWorker);
+	linterWorker.shutdown();
 
 	const summaryLines: string[] = [];
 

@@ -7,10 +7,12 @@ import { convertLazy, LISTENER_PRE_MATERIALIZE } from './lib/lazy-estree';
 // Debug surface — see lib/lazy-estree.ts. Gated by env TSSLINT_DEBUG_ESTREE=1
 // (set by the CLI's --debug-estree flag, or directly by external callers).
 export { getNodeTypeCounts, resetNodeTypeCounts } from './lib/lazy-estree';
+export { mergePrefetchHints, type PrefetchPlan } from './lib/prefetch-hints';
 import { LazySourceCode } from './lib/lazy-source-code';
 import { decomposeSimple, isCodePathListener } from './lib/selector-analysis';
 import { convertComments, convertTokens } from './lib/tokens';
 import { predicateAllKinds, predicateForTriggerSet, tsScanTraverse } from './lib/ts-ast-scan';
+import { computePrefetchHints } from './lib/prefetch-hints';
 import { applyEslintGlobals, TsScopeManager } from './lib/ts-scope-manager';
 import { visitorKeys } from './lib/visitor-keys';
 
@@ -280,6 +282,7 @@ export function convertRule(
 		}
 	};
 	(tsslintRule as any).meta = eslintRule.meta;
+	(tsslintRule as any).prefetchHints = computePrefetchHints(eslintRule, id);
 	return tsslintRule;
 }
 
