@@ -42,6 +42,56 @@ function resolveByScope(jsNode: ts.Identifier): ts.Symbol | undefined {
 	return undefined;
 }
 
+// Look up a member symbol on a resolved left-side symbol. Namespace imports
+// and local namespace declarations carry their members on `.exports`; class/
+// interface/enum declarations carry them on `.members`. Import aliases point
+// at the real entity via `.target`. Try all reachable tables — misses fall
+// through to the RPC fallback (no correctness risk).
+function memberOf(sym: ts.Symbol | undefined, name: string): ts.Symbol | undefined {
+	if (!sym) return undefined;
+	const s = sym as unknown as {
+		exports?: ts.SymbolTable; members?: ts.SymbolTable;
+		target?: ts.Symbol; alias?: ts.Symbol;
+	};
+	const key = name as ts.__String;
+	return s.exports?.get(key)
+		?? s.members?.get(key)
+		?? memberOf(s.target, name)
+		?? memberOf(s.alias, name);
+}
+
+// Resolve any JS AST node to a binder symbol: declaration name, import/export
+// specifier, qualified-name / property-access member (recurse on the left),
+// or identifier scope walk. Used both for the entry identifier and for the
+// left side of qualified names.
+function resolveJsNodeSymbol(jsNode: ts.Node): ts.Symbol | undefined {
+	const parent = jsNode.parent;
+	if (parent && (parent as any).name === jsNode && (parent as any).symbol) {
+		return (parent as any).symbol;
+	}
+	if (parent && (parent.kind === ts.SyntaxKind.ImportSpecifier
+		|| parent.kind === ts.SyntaxKind.ExportSpecifier)) {
+		return (parent as any).symbol;
+	}
+	// Qualified-name / property-access member: resolve the left side, then
+	// look the member up in the left symbol's exports/members table.
+	if (parent && (parent.kind === ts.SyntaxKind.QualifiedName
+		|| parent.kind === ts.SyntaxKind.PropertyAccessExpression)
+		&& (parent as any).name === jsNode) {
+		const left: ts.Node | undefined = (parent as any).left ?? (parent as any).expression;
+		if (left) {
+			const leftSym = resolveJsNodeSymbol(left);
+			const found = memberOf(leftSym, (jsNode as ts.Identifier).text);
+			if (found) return found;
+		}
+		return undefined;
+	}
+	if (jsNode.kind === ts.SyntaxKind.Identifier) {
+		return resolveByScope(jsNode as ts.Identifier);
+	}
+	return undefined;
+}
+
 export interface JsSymbolResolverOptions {
 	tsgoSyntaxKind: Record<string, string | number>;
 }
@@ -155,21 +205,7 @@ export function createJsSymbolResolver(opts: JsSymbolResolverOptions) {
 				jsNode = positionMapsFallback.get(sf.fileName)!.get(tsgoNode.pos + ':' + tsgoNode.end);
 			}
 			if (!jsNode) return undefined;
-			// Declaration name: parent has the symbol directly.
-			const parent = jsNode.parent;
-			if (parent && (parent as any).name === jsNode && (parent as any).symbol) {
-				return (parent as any).symbol;
-			}
-			// Specifier (import/export): parent has the symbol.
-			if (parent && (parent.kind === ts.SyntaxKind.ImportSpecifier
-				|| parent.kind === ts.SyntaxKind.ExportSpecifier)) {
-				return (parent as any).symbol;
-			}
-			// Otherwise: scope walk for value/type references.
-			if (jsNode.kind === ts.SyntaxKind.Identifier) {
-				return resolveByScope(jsNode as ts.Identifier);
-			}
-			return undefined;
+			return resolveJsNodeSymbol(jsNode);
 		},
 		// Drop a single file's bind + maps. Used by the worker after
 		// --fix writes new content, so the next prepareFile re-binds

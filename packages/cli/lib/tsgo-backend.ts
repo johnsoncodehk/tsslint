@@ -382,13 +382,22 @@ function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, _project: P
 	if (!proto || patchedTypeCheckerProtos.has(proto)) return;
 	patchedTypeCheckerProtos.add(proto);
 	const SK = (sync as any).SignatureKind as Record<string, number>;
+	const TF = (sync as any).TypeFlags as Record<string, number>;
+	// Primitive/literal/never-like types can never carry call/construct signatures.
+	const noSigMask =
+		(TF.Never ?? 0) | (TF.Undefined ?? 0) | (TF.Null ?? 0) | (TF.Void ?? 0) |
+		(TF.StringLiteral ?? 0) | (TF.NumberLiteral ?? 0) | (TF.BooleanLiteral ?? 0) |
+		(TF.BigIntLiteral ?? 0) | (TF.EnumLiteral ?? 0) | (TF.TemplateLiteral ?? 0) |
+		(TF.StringMapping ?? 0) | (TF.UniqueESSymbol ?? 0) | (TF.Enum ?? 0);
 	if (!proto.getCallSignatures) {
-		proto.getCallSignatures = function (this: { id: string }) {
+		proto.getCallSignatures = function (this: { id: string; flags: number }) {
+			if (typeof this.flags === 'number' && (this.flags & noSigMask) !== 0) return [];
 			return wrappedCheckerRef.checker!.getSignaturesOfType(this as any, SK.Call as any);
 		};
 	}
 	if (!proto.getConstructSignatures) {
-		proto.getConstructSignatures = function (this: { id: string }) {
+		proto.getConstructSignatures = function (this: { id: string; flags: number }) {
+			if (typeof this.flags === 'number' && (this.flags & noSigMask) !== 0) return [];
 			return wrappedCheckerRef.checker!.getSignaturesOfType(this as any, SK.Construct as any);
 		};
 	}
@@ -966,6 +975,7 @@ function wrapChecker(
 	const resolvedSignatureCache = new Map<Node, ts.Signature | null>();
 	const returnTypeOfSignatureCache = new Map<object, ts.Type | null>();
 	const widenedTypeCache = new Map<object, ts.Type | null>();
+	const shorthandValueSymbolCache = new Map<Node, ts.Symbol | null>();
 
 	// Initialise per-session Type/Symbol method memo tables. The prototype
 	// patches (patchTsgoTypeProto / patchTsgoSymbolProto) close over these
@@ -980,6 +990,7 @@ function wrapChecker(
 		typeFromTypeNodeCache.clear();
 		contextualTypeCache.clear();
 		resolvedSignatureCache.clear();
+		shorthandValueSymbolCache.clear();
 	};
 
 	const clearAllCheckerMemoCaches = () => {
@@ -1160,7 +1171,11 @@ function wrapChecker(
 		},
 		getShorthandAssignmentValueSymbol(node) {
 			if (!node) return undefined;
-			return project.checker.getShorthandAssignmentValueSymbol(node as unknown as Node) as unknown as ts.Symbol | undefined;
+			const n = node as unknown as Node;
+			return (memoGet(shorthandValueSymbolCache, n, () =>
+				rpcCall('getShorthandAssignmentValueSymbol', () =>
+					project.checker.getShorthandAssignmentValueSymbol(n)) as unknown as ts.Symbol | undefined,
+			() => rpc?.memoHit('getShorthandAssignmentValueSymbol')) ?? undefined) as ts.Symbol | undefined;
 		},
 		getTypeOfSymbolAtLocation(symbol, location) {
 			const sym = symbol as unknown as object;

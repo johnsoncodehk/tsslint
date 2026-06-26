@@ -31,7 +31,44 @@ export const EMPTY_PREFETCH_PLAN: PrefetchPlan = {
 };
 
 /** tsgo RPC symbols carry a numeric id; JS-side bind symbols do not. */
-const BATCH_CHUNK = 256;
+const BATCH_CHUNK = 2048;
+
+/**
+ * Skip identifiers that the scope manager's `_classifyIdentifier` would
+ * return 0 for (never queried via `getSymbolAtLocation`). This avoids
+ * prefetching symbols for property names, declaration names, labels, etc.
+ * that are never looked up during lint — the largest source of wasted
+ * batch RPC positions.
+ */
+function shouldPrefetchSymbol(node: Node, SK: Record<string, number>): boolean {
+	const parent = (node as unknown as { parent?: { kind: number; name?: Node; right?: Node; propertyName?: Node; label?: Node } }).parent;
+	if (!parent) return true;
+	const k = parent.kind;
+	// Property access name: `obj.x` — x is never a reference.
+	if (k === SK.PropertyAccessExpression && parent.name === node) return false;
+	// Qualified name right: `A.B` — B is never a reference.
+	if (k === SK.QualifiedName && parent.right === node) return false;
+	// MetaProperty: `new.target` / `import.meta`.
+	if (k === SK.MetaProperty && parent.name === node) return false;
+	// Label identifiers.
+	if (k === SK.LabeledStatement && parent.label === node) return false;
+	if ((k === SK.BreakStatement || k === SK.ContinueStatement) && parent.label === node) return false;
+	// Import specifier names (declaration, not reference).
+	if (k === SK.ImportSpecifier && (parent.name === node || parent.propertyName === node)) return false;
+	// Name-slot declaration kinds — the identifier is a declaration name,
+	// not a reference. The scope manager reads `parent.symbol` directly.
+	const nameSlotKinds = [
+		SK.PropertyDeclaration, SK.PropertySignature, SK.PropertyAssignment,
+		SK.MethodDeclaration, SK.MethodSignature, SK.GetAccessor, SK.SetAccessor,
+		SK.EnumMember, SK.FunctionDeclaration, SK.FunctionExpression,
+		SK.ClassDeclaration, SK.ClassExpression, SK.EnumDeclaration,
+		SK.ModuleDeclaration, SK.TypeAliasDeclaration, SK.InterfaceDeclaration,
+		SK.TypeParameter, SK.ImportClause, SK.NamespaceImport,
+		SK.ImportEqualsDeclaration, SK.NamedTupleMember, SK.JsxAttribute,
+	];
+	if (nameSlotKinds.includes(k) && parent.name === node) return false;
+	return true;
+}
 
 function isTsgoSymbol(sym: unknown): sym is { id: number } {
 	return Boolean(sym && typeof sym === 'object' && typeof (sym as { id?: unknown }).id === 'number');
@@ -131,7 +168,8 @@ export function batchPrefetchTypes(
 			contextualNodes.push(node);
 		}
 		if (plan.symbolFallback && k === SK.Identifier && caches.nodeToSymbol
-			&& deps.jsSymbolResolver && deps.fileText && !caches.nodeToSymbol.has(node)) {
+			&& deps.jsSymbolResolver && deps.fileText && !caches.nodeToSymbol.has(node)
+			&& shouldPrefetchSymbol(node, SK)) {
 			const pos = (node as unknown as { pos?: number }).pos ?? node.end;
 			const local = deps.jsSymbolResolver.resolveIdentifier(
 				{ kind: node.kind, pos, end: node.end },
