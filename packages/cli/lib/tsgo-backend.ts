@@ -297,16 +297,9 @@ function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
 			},
 		});
 	}
-	if (!Object.getOwnPropertyDescriptor(proto, 'aliasTypeArguments')) {
-		Object.defineProperty(proto, 'aliasTypeArguments', {
-			configurable: true,
-			get(this: { getAliasTypeArguments?: () => unknown[] }) {
-				const args = this.getAliasTypeArguments ? this.getAliasTypeArguments() : [];
-				if (args && fixupTypeRef.fn) fixupTypeRef.fn(args);
-				return args;
-			},
-		});
-	}
+	// Do NOT add an `aliasTypeArguments` getter — tsgo's
+	// `getAliasTypeArguments()` reads `this.aliasTypeArguments` as a
+	// handle cache, so a getter that calls the method loops forever.
 	// `getCallSignatures()` / `getConstructSignatures()` — instance shims
 	// that delegate to the Checker. We can't reach the Checker from here
 	// without a closure; install via patchTsgoTypeProtoWithChecker
@@ -731,11 +724,20 @@ function wrapChecker(
 				__tsslintFixupGetTypes?: boolean;
 				__tsslintFixupAliasArgs?: boolean;
 			};
-			// tsgo stores unresolved type handles on the instance; drop so
-			// the proto getter resolves full TypeObjects via RPC.
-			if (Array.isArray(obj.aliasTypeArguments) && obj.aliasTypeArguments.length > 0
-				&& typeof (obj.aliasTypeArguments[0] as { flags?: number })?.flags !== 'number') {
+			// Drop tsgo's handle cache so rules fall through to
+			// `checker.getTypeArguments()` (fixup'd) instead of reading
+			// unresolved handles via the own property.
+			if ('aliasTypeArguments' in obj) {
 				delete obj.aliasTypeArguments;
+			}
+			if (typeof (obj as { getSymbol?: () => unknown }).getSymbol === 'function'
+				&& !(obj as { __tsslintFixupSymbol?: boolean }).__tsslintFixupSymbol) {
+				(obj as { __tsslintFixupSymbol?: boolean }).__tsslintFixupSymbol = true;
+				try {
+					const sym = (obj as { getSymbol: () => unknown }).getSymbol();
+					if (sym) (obj as { symbol?: unknown }).symbol = sym;
+				}
+				catch { /* best-effort */ }
 			}
 			patchTsgoTypeProto(t, sync);
 			patchTsgoTypeCheckerMethods(t, sync, project);
