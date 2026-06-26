@@ -2,7 +2,7 @@
 //
 // During prepareFile, walk the file AST and batch-resolve types that
 // enabled rules are likely to request — before the sync rule loop.
-// Fills the same WeakMap caches wrapChecker reads.
+// Fills the same per-file Map caches wrapChecker reads (cleared in releaseFile).
 //
 // When a PrefetchPlan is supplied (from compat-eslint selector hints),
 // only the flagged buckets run. Syntactic-only files skip prefetch RPC.
@@ -46,14 +46,14 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 }
 
 export type TypePrefetchCaches = {
-	nodeTypeCache: WeakMap<Node, import('typescript').Type | null>;
-	typeFromTypeNodeCache: WeakMap<Node, import('typescript').Type | null>;
-	indexInfosCache?: WeakMap<object, unknown | null>;
-	propertiesOfTypeCache?: WeakMap<object, unknown | null>;
-	contextualTypeCache?: WeakMap<Node, import('typescript').Type | null>;
-	nodeToSymbol?: WeakMap<Node, unknown>;
-	typeOfSymbolCache?: WeakMap<object, import('typescript').Type | null>;
-	resolvedSignatureCache?: WeakMap<Node, import('typescript').Signature | null>;
+	nodeTypeCache: Map<Node, import('typescript').Type | null>;
+	typeFromTypeNodeCache: Map<Node, import('typescript').Type | null>;
+	indexInfosCache?: Map<object, unknown | null>;
+	propertiesOfTypeCache?: Map<object, unknown | null>;
+	contextualTypeCache?: Map<Node, import('typescript').Type | null>;
+	nodeToSymbol?: Map<Node, unknown>;
+	typeOfSymbolCache?: Map<object, import('typescript').Type | null>;
+	resolvedSignatureCache?: Map<Node, import('typescript').Signature | null>;
 };
 
 export type TypePrefetchDeps = {

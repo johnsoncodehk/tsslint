@@ -27,7 +27,7 @@ npx tsslint --project tsconfig.json --tsgo
 - Requires optional peer `@typescript/native-preview` (pinned in this package).
 - Plain `--project` only — no Vue / MDX / Astro framework flags.
 - Multi-file `--tsgo` skips layer-1 disk cache and reuses **one tsgo child** across `--project` entries. `--tsgo-fast` additionally eager-prepares all files at setup (opt-in).
-- Benchmark on this repo (~37 ts-eslint files): Strada ~1.6–3s, `--tsgo` ~1.8–2s; full repo (~59 files, 8 tsconfigs): Strada ~1.9–2.0s, `--tsgo` ~5.4–5.5s (~2.7–2.8× Strada).
+- Benchmark on this repo (~37 ts-eslint files): Strada ~1.6–3s, `--tsgo` ~1.8–2s; full repo (~59 files, 8 tsconfigs): Strada ~1.8–1.9s, `--tsgo` ~2.2–2.3s (~1.15× Strada).
 - Dogfood parity: `pnpm run lint:tsgo` — 68/76 files clean vs Strada (shim sources exempt from `no-unnecessary-type-assertion`; remaining gap is tsgo checker divergence on other files).
 
 ```bash

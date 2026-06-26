@@ -67,9 +67,9 @@ export function createRpcProfile(): RpcProfile {
 	};
 }
 
-/** Memo table: undefined results stored as null. */
-export function memoGet<K extends object, V>(
-	cache: WeakMap<K, V | null>,
+/** Memo table: undefined results stored as null. Per-file Map — cleared after each lint. */
+export function memoGet<K, V>(
+	cache: Map<K, V | null>,
 	key: K,
 	compute: () => V | undefined,
 	onHit?: () => void,
@@ -84,8 +84,8 @@ export function memoGet<K extends object, V>(
 	return v;
 }
 
-export function memoGet2<K1 extends object, K2 extends object, V>(
-	cache: WeakMap<K1, WeakMap<K2, V | null>>,
+export function memoGet2<K1, K2, V>(
+	cache: Map<K1, Map<K2, V | null>>,
 	k1: K1,
 	k2: K2,
 	compute: () => V | undefined,
@@ -93,7 +93,7 @@ export function memoGet2<K1 extends object, K2 extends object, V>(
 ): V | undefined {
 	let inner = cache.get(k1);
 	if (!inner) {
-		inner = new WeakMap();
+		inner = new Map();
 		cache.set(k1, inner);
 	}
 	return memoGet(inner, k2, compute, onHit);

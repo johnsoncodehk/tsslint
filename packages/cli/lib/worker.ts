@@ -520,7 +520,7 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
 	// only computes line starts once per file).
 
-	if (useTsgo && !tsgoDeferFileRelease) {
+	if (useTsgo) {
 		tsgoBackend!.releaseFile(fileName);
 	}
 

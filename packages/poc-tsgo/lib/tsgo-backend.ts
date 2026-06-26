@@ -82,6 +82,37 @@ let symbolProtoPatched = false;
 let nodeListSpeciesPatched = false;
 let signatureProtoPatched = false;
 
+// ── Per-session memo for Type/Symbol object methods ──────────────────
+// tsgo's TypeObject / Symbol methods (getSymbol, getTarget, getTypes,
+// getMembers, getExports, …) each issue an `apiRequest` IPC on first
+// access. The object registry caches the *resulting objects* by id, but
+// the method call itself still round-trips every time the method is
+// invoked — even when the same caller asks repeatedly. These maps add a
+// result-level memo keyed by the owning object's numeric id, so the
+// second+ call for the same id is a Map lookup, not a sync IPC.
+// Cleared in clearAllCheckerMemoCaches (session/snapshot boundary).
+let typeMethodMemo: Map<string, unknown> | undefined;
+let symbolMethodMemo: Map<string, unknown> | undefined;
+
+function memoTypeMethod<T>(this: { id: number }, key: string, fn: () => T): T {
+	const k = this.id + ':' + key;
+	const cache = typeMethodMemo!;
+	const cached = cache.get(k);
+	if (cached !== undefined) return cached as T;
+	const v = fn();
+	cache.set(k, v ?? (null as unknown as T));
+	return v;
+}
+function memoSymbolMethod<T>(this: { id: number }, key: string, fn: () => T): T {
+	const k = this.id + ':' + key;
+	const cache = symbolMethodMemo!;
+	const cached = cache.get(k);
+	if (cached !== undefined) return cached as T;
+	const v = fn();
+	cache.set(k, v ?? (null as unknown as T));
+	return v;
+}
+
 function patchTsgoNodeListSpecies(sample: object): void {
 	if (nodeListSpeciesPatched) return;
 	const ctor = (sample as { constructor?: any }).constructor;
@@ -314,6 +345,33 @@ function patchTsgoTypeProto(sample: object, sync: TsgoSync): void {
 	// that delegate to the Checker. We can't reach the Checker from here
 	// without a closure; install via patchTsgoTypeProtoWithChecker
 	// (separate hook called from wrapChecker).
+
+	// ── Memoize IPC-backed Type object methods ──────────────────────
+	// tsgo's TypeObject.getSymbol/getTarget/getTypes/etc. each issue an
+	// `apiRequest` on first access. Wrap them with a per-id result cache
+	// so repeat calls are Map lookups, not sync IPC.
+	const wrap0 = (name: string) => {
+		const desc = Object.getOwnPropertyDescriptor(proto, name);
+		if (!desc || typeof desc.value !== 'function') return;
+		const orig = desc.value;
+		proto[name] = function (this: { id: number }) {
+			return memoTypeMethod.call(this, name, () => {
+				const r = orig.call(this);
+				if (r && fixupTypeRef.fn) {
+					if (Array.isArray(r)) for (const c of r) fixupTypeRef.fn(c);
+					else fixupTypeRef.fn(r);
+				}
+				return r;
+			});
+		};
+	};
+	for (const m of [
+		'getSymbol', 'getTarget', 'getFreshType', 'getRegularType',
+		'getTypes', 'getTypeParameters', 'getOuterTypeParameters',
+		'getLocalTypeParameters', 'getAliasTypeArguments',
+		'getObjectType', 'getIndexType', 'getCheckType', 'getExtendsType',
+		'getBaseType', 'getConstraint',
+	]) wrap0(m);
 }
 
 // Type instance methods that need a Checker reference (signatures,
@@ -326,17 +384,17 @@ function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, _project: P
 	const SK = (sync as any).SignatureKind as Record<string, number>;
 	if (!proto.getCallSignatures) {
 		proto.getCallSignatures = function (this: { id: string }) {
-			return currentProjectRef.project!.checker.getSignaturesOfType(this as any, SK.Call);
+			return wrappedCheckerRef.checker!.getSignaturesOfType(this as any, SK.Call as any);
 		};
 	}
 	if (!proto.getConstructSignatures) {
 		proto.getConstructSignatures = function (this: { id: string }) {
-			return currentProjectRef.project!.checker.getSignaturesOfType(this as any, SK.Construct);
+			return wrappedCheckerRef.checker!.getSignaturesOfType(this as any, SK.Construct as any);
 		};
 	}
 	if (!proto.getProperties) {
 		proto.getProperties = function (this: any) {
-			return currentProjectRef.project!.checker.getPropertiesOfType(this);
+			return wrappedCheckerRef.checker!.getPropertiesOfType(this);
 		};
 	}
 	if (!proto.getProperty) {
@@ -346,12 +404,12 @@ function patchTsgoTypeCheckerMethods(sample: object, sync: TsgoSync, _project: P
 	}
 	if (!proto.getBaseTypes) {
 		proto.getBaseTypes = function (this: any) {
-			return currentProjectRef.project!.checker.getBaseTypes(this);
+			return wrappedCheckerRef.checker!.getBaseTypes(this);
 		};
 	}
 	if (!proto.getNonNullableType) {
 		proto.getNonNullableType = function (this: any) {
-			return currentProjectRef.project!.checker.getNonNullableType(this);
+			return wrappedCheckerRef.checker!.getNonNullableType(this);
 		};
 	}
 }
@@ -367,7 +425,7 @@ function patchTsgoSignatureProto(sync: TsgoSync): void {
 	const proto = Signature.prototype;
 	if (!proto.getReturnType) {
 		proto.getReturnType = function (this: { id: string }) {
-			const t = currentProjectRef.project!.checker.getReturnTypeOfSignature(this as any);
+			const t = wrappedCheckerRef.checker!.getReturnTypeOfSignature(this as any);
 			if (fixupTypeRef.fn) fixupTypeRef.fn(t);
 			return t;
 		};
@@ -429,6 +487,27 @@ function patchTsgoSymbolProto(sync: TsgoSync): void {
 			get(this: { name: string }) { return this.name; },
 		});
 	}
+	// ── Memoize IPC-backed Symbol object methods ────────────────────
+	// getMembers / getExports / getParent / getExportSymbol each issue
+	// an `apiRequest` on first access. Wrap with per-id result cache.
+	const wrapSym = (name: string) => {
+		const desc = Object.getOwnPropertyDescriptor(proto, name);
+		if (!desc || typeof desc.value !== 'function') return;
+		const orig = desc.value;
+		proto[name] = function (this: { id: number }) {
+			return memoSymbolMethod.call(this, name, () => {
+				const r = orig.call(this);
+				if (r && fixupTypeRef.fn) {
+					if (Array.isArray(r)) for (const c of r) fixupTypeRef.fn(c);
+					else fixupTypeRef.fn(r);
+				}
+				return r;
+			});
+		};
+	};
+	for (const m of ['getMembers', 'getExports', 'getParent', 'getExportSymbol']) {
+		wrapSym(m);
+	}
 	symbolProtoPatched = true;
 }
 
@@ -456,6 +535,11 @@ function patchTsgoSymbolProto(sync: TsgoSync): void {
 const fixupTypeRef: { fn?: (t: unknown) => unknown } = {};
 const rpcProfileRef: { current: RpcProfile | undefined } = { current: undefined };
 const currentProjectRef: { project: Project | undefined } = { project: undefined };
+// The wrapped, memoized checker — set in wrapChecker so that
+// patchTsgoTypeCheckerMethods can route type.getProperties() etc.
+// through the memo layer instead of the raw project.checker (which
+// would issue a fresh IPC per call with no caching).
+const wrappedCheckerRef: { checker: ts.TypeChecker | undefined } = { checker: undefined };
 
 function installNodeHandleHooks(sync: TsgoSync): void {
 	if (nodeHandleProtoPatched) return;
@@ -518,7 +602,7 @@ export function createTsgoBackend(
 	// tsgo Node object reference (not its position) — the AST tree is
 	// hydrated client-side and walks return the same Node instances each
 	// time within a snapshot.
-	const nodeToSymbol = new WeakMap<Node, TsgoSymbol | undefined>();
+	const nodeToSymbol = new Map<Node, TsgoSymbol | undefined>();
 	// Files prepass'd this snapshot. Skip re-walk on repeat lint() calls.
 	const preparedFiles = new Set<string>();
 
@@ -532,9 +616,52 @@ export function createTsgoBackend(
 		});
 	jsSymbolResolverRef.current = jsSymbolResolver;
 
-	const { program, prefetchTypesForFile } = wrapProgram(project, nodeToSymbol);
+	const { program, prefetchTypesForFile, clearCheckerMemoCaches, clearAllCheckerMemoCaches } = wrapProgram(
+		project,
+		nodeToSymbol,
+	);
 	currentProjectRef.project = project;
 	installNodeHandleHooks(sync);
+
+	// ── Debug: instrument ALL apiRequest calls ──────────────────────
+	if (trace) {
+		const client = (project as any).client;
+		if (client && typeof client.apiRequest === 'function' && !client.__tsslintInstrumented) {
+			client.__tsslintInstrumented = true;
+			const origReq = client.apiRequest.bind(client);
+			const allStats = new Map<string, { calls: number; ms: number }>();
+			client.apiRequest = function (method: string, params: unknown) {
+				const t0 = performance.now();
+				try { return origReq(method, params); }
+				finally {
+					const e = allStats.get(method) ?? { calls: 0, ms: 0 };
+					e.calls++; e.ms += performance.now() - t0;
+					allStats.set(method, e);
+				}
+			};
+			const origBin = client.apiRequestBinary?.bind(client);
+			if (origBin) {
+				client.apiRequestBinary = function (method: string, params: unknown) {
+					const t0 = performance.now();
+					try { return origBin(method, params); }
+					finally {
+						const e = allStats.get(method + '(bin)') ?? { calls: 0, ms: 0 };
+						e.calls++; e.ms += performance.now() - t0;
+						allStats.set(method + '(bin)', e);
+					}
+				};
+			}
+			(project as any).__tsslintPrintAllRpc = () => {
+				const rows = [...allStats.entries()].sort((a, b) => b[1].ms - a[1].ms);
+				const total = rows.reduce((n, [, e]) => n + e.calls, 0);
+				const totalMs = rows.reduce((n, [, e]) => n + e.ms, 0);
+				console.error(`[tsgo-all-rpc] TOTAL: ${total} calls, ${totalMs.toFixed(0)}ms`);
+				for (const [m, e] of rows) {
+					console.error(`[tsgo-all-rpc]   ${m}: ${e.calls} calls, ${e.ms.toFixed(1)}ms`);
+				}
+			};
+		}
+	}
 
 	let prepareTotalMs = 0;
 	let prepareCount = 0;
@@ -549,6 +676,7 @@ export function createTsgoBackend(
 			);
 		}
 		preparedFiles.clear();
+		clearAllCheckerMemoCaches();
 		jsSymbolResolver.clear();
 		if (jsSymbolResolverRef.current === jsSymbolResolver) {
 			jsSymbolResolverRef.current = undefined;
@@ -557,6 +685,7 @@ export function createTsgoBackend(
 			currentProjectRef.project = undefined;
 		}
 		rpcProfileRef.current?.printSummary(path.basename(project.configFileName));
+		(project as any).__tsslintPrintAllRpc?.();
 		rpcProfileRef.current?.reset();
 		rpcProfileRef.current = undefined;
 	};
@@ -582,19 +711,15 @@ export function createTsgoBackend(
 		invalidateFile(fileName: string) {
 			preparedFiles.delete(fileName);
 			jsSymbolResolver.invalidate(fileName);
-			// `nodeToSymbol` is a WeakMap keyed by tsgo Node references;
-			// after the next ensureProgram() rebuild those Node refs are
-			// new, so the stale entries become garbage automatically.
+			clearAllCheckerMemoCaches();
 		},
-		// Drop the JS-side bind for a file after its lint pass is done.
-		// Distinct from invalidateFile: keeps `preparedFiles` membership
-		// (so a stray re-lint of the same file in the same backend
-		// re-binds rather than no-ops), but releases the bound SF +
-		// position maps for GC. Without this, all 5000 Dify files'
-		// bound SFs sit in memory simultaneously across a lint pass.
+		// Drop per-file memo + JS bind after lint. Memo Maps are cleared
+		// every time (lint is sequential); JS bind is kept when deferring
+		// release on large monorepos to cap re-bind cost.
 		releaseFile(fileName: string) {
-			if (deferPerFileRelease) return;
+			clearCheckerMemoCaches();
 			preparedFiles.delete(fileName);
+			if (deferPerFileRelease) return;
 			jsSymbolResolver.invalidate(fileName);
 		},
 		dispose() {
@@ -676,9 +801,17 @@ function prepareFile(
 // returning silent garbage.
 function wrapProgram(
 	project: Project,
-	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
-): { program: ts.Program; prefetchTypesForFile: (fileName: string, plan?: PrefetchPlan) => void } {
-	const { checker, prefetchTypesForFile } = wrapChecker(project, nodeToSymbol);
+	nodeToSymbol: Map<Node, TsgoSymbol | undefined>,
+): {
+	program: ts.Program;
+	prefetchTypesForFile: (fileName: string, plan?: PrefetchPlan) => void;
+	clearCheckerMemoCaches: () => void;
+	clearAllCheckerMemoCaches: () => void;
+} {
+	const { checker, prefetchTypesForFile, clearCheckerMemoCaches, clearAllCheckerMemoCaches } = wrapChecker(
+		project,
+		nodeToSymbol,
+	);
 	const cwd = path.dirname(project.configFileName);
 
 	// tsgo's lib files live inside the binary's own bundled stdlib. The
@@ -737,13 +870,23 @@ function wrapProgram(
 		emit: stub('emit') as any,
 	};
 
-	return { program: program as ts.Program, prefetchTypesForFile };
+	return {
+		program: program as ts.Program,
+		prefetchTypesForFile,
+		clearCheckerMemoCaches,
+		clearAllCheckerMemoCaches,
+	};
 }
 
 function wrapChecker(
 	project: Project,
-	nodeToSymbol: WeakMap<Node, TsgoSymbol | undefined>,
-): { checker: ts.TypeChecker; prefetchTypesForFile: (fileName: string, plan?: PrefetchPlan) => void } {
+	nodeToSymbol: Map<Node, TsgoSymbol | undefined>,
+): {
+	checker: ts.TypeChecker;
+	prefetchTypesForFile: (fileName: string, plan?: PrefetchPlan) => void;
+	clearCheckerMemoCaches: () => void;
+	clearAllCheckerMemoCaches: () => void;
+} {
 	const { sync, ast } = loadTsgoModules();
 	const stub = (name: string) => () => {
 		throw new Error(`tsgo backend: ts.TypeChecker.${name}() not implemented`);
@@ -810,19 +953,51 @@ function wrapChecker(
 	const rpc = isTsgoRpcProfileEnabled() ? createRpcProfile() : undefined;
 	rpcProfileRef.current = rpc;
 
-	const nodeTypeCache = new WeakMap<Node, ts.Type | null>();
-	const typeFromTypeNodeCache = new WeakMap<Node, ts.Type | null>();
-	const contextualTypeCache = new WeakMap<Node, ts.Type | null>();
-	const symbolAtLocationTypeCache = new WeakMap<object, WeakMap<object, ts.Type | null>>();
-	const apparentTypeCache = new WeakMap<object, ts.Type | null>();
-	const indexInfosCache = new WeakMap<object, unknown | null>();
-	const propertiesOfTypeCache = new WeakMap<object, unknown | null>();
-	const signaturesOfTypeCache = new WeakMap<object, Map<number, unknown | null>>();
-	const typeOfSymbolCache = new WeakMap<object, ts.Type | null>();
-	const typeArgumentsCache = new WeakMap<object, unknown | null>();
-	const resolvedSignatureCache = new WeakMap<Node, ts.Signature | null>();
-	const returnTypeOfSignatureCache = new WeakMap<object, ts.Type | null>();
-	const widenedTypeCache = new WeakMap<object, ts.Type | null>();
+	const nodeTypeCache = new Map<Node, ts.Type | null>();
+	const typeFromTypeNodeCache = new Map<Node, ts.Type | null>();
+	const contextualTypeCache = new Map<Node, ts.Type | null>();
+	const symbolAtLocationTypeCache = new Map<object, Map<object, ts.Type | null>>();
+	const apparentTypeCache = new Map<object, ts.Type | null>();
+	const indexInfosCache = new Map<object, unknown | null>();
+	const propertiesOfTypeCache = new Map<object, unknown | null>();
+	const signaturesOfTypeCache = new Map<object, Map<number, unknown | null>>();
+	const typeOfSymbolCache = new Map<object, ts.Type | null>();
+	const typeArgumentsCache = new Map<object, unknown | null>();
+	const resolvedSignatureCache = new Map<Node, ts.Signature | null>();
+	const returnTypeOfSignatureCache = new Map<object, ts.Type | null>();
+	const widenedTypeCache = new Map<object, ts.Type | null>();
+
+	// Initialise per-session Type/Symbol method memo tables. The prototype
+	// patches (patchTsgoTypeProto / patchTsgoSymbolProto) close over these
+	// via the module-level `typeMethodMemo` / `symbolMethodMemo` refs.
+	typeMethodMemo = new Map();
+	symbolMethodMemo = new Map();
+
+	const clearCheckerMemoCaches = () => {
+		// Node-keyed — tsgo Node refs are per SourceFile; drop after each lint.
+		nodeToSymbol.clear();
+		nodeTypeCache.clear();
+		typeFromTypeNodeCache.clear();
+		contextualTypeCache.clear();
+		resolvedSignatureCache.clear();
+	};
+
+	const clearAllCheckerMemoCaches = () => {
+		clearCheckerMemoCaches();
+		// Type/symbol-keyed — tsgo object ids are stable for the snapshot.
+		symbolAtLocationTypeCache.clear();
+		apparentTypeCache.clear();
+		indexInfosCache.clear();
+		propertiesOfTypeCache.clear();
+		signaturesOfTypeCache.clear();
+		typeOfSymbolCache.clear();
+		typeArgumentsCache.clear();
+		returnTypeOfSignatureCache.clear();
+		widenedTypeCache.clear();
+		// Type/Symbol object-method memo (getSymbol/getTarget/getTypes/…).
+		typeMethodMemo?.clear();
+		symbolMethodMemo?.clear();
+	};
 
 	const rpcCall = <T>(method: string, fn: () => T): T => {
 		if (!rpc) return fn();
@@ -1198,5 +1373,12 @@ function wrapChecker(
 		}, plan);
 	};
 
-	return { checker: checker as ts.TypeChecker, prefetchTypesForFile };
+	wrappedCheckerRef.checker = checker as ts.TypeChecker;
+
+	return {
+		checker: checker as ts.TypeChecker,
+		prefetchTypesForFile,
+		clearCheckerMemoCaches,
+		clearAllCheckerMemoCaches,
+	};
 }
