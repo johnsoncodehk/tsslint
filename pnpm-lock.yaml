@@ -20,6 +20,9 @@ importers:
       '@typescript-eslint/eslint-plugin':
         specifier: latest
         version: 8.61.1(@typescript-eslint/parser@8.59.0(eslint@10.2.1(jiti@2.6.1))(typescript@6.0.3))(eslint@10.2.1(jiti@2.6.1))(typescript@6.0.3)
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260624.1
+        version: 7.0.0-dev.20260624.1
       dprint:
         specifier: latest
         version: 0.54.0
@@ -4606,7 +4609,6 @@ snapshots:
       '@typescript/native-preview-linux-x64': 7.0.0-dev.20260624.1
       '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260624.1
       '@typescript/native-preview-win32-x64': 7.0.0-dev.20260624.1
-    optional: true
 
   '@typespec/ts-http-runtime@0.3.5':
     dependencies:

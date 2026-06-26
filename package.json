@@ -22,6 +22,7 @@
 		"@lerna-lite/publish": "latest",
 		"@types/node": "latest",
 		"@typescript-eslint/eslint-plugin": "latest",
+		"@typescript/native-preview": "7.0.0-dev.20260624.1",
 		"dprint": "latest",
 		"eslint-plugin-react-x": "^4.2.3",
 		"typescript": "latest"

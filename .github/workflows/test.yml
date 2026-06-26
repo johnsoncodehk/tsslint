@@ -86,7 +86,7 @@ jobs:
       # CLI: tsgo backend + PoC smoke (requires @typescript/native-preview).
       - name: CLI tsgo backend
         run: |
-          node -e "require.resolve('@typescript/native-preview/unstable/sync')"
+          node -e "const {hasNativePreview}=require('./packages/cli/lib/tsgo-load.js'); if(!hasNativePreview()){console.error('@typescript/native-preview not installed'); process.exit(1)}"
           node packages/cli/test/tsgo-backend.test.js
           pnpm -C packages/poc-tsgo run build
           node packages/poc-tsgo/test/poc.test.js
