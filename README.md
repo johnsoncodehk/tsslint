@@ -202,11 +202,6 @@ Flags:
 | Flag | |
 |---|---|
 | `--project <glob...>` | TypeScript projects to lint |
-| `--vue-project <glob...>` | Vue projects |
-| `--vue-vine-project <glob...>` | Vue Vine projects |
-| `--mdx-project <glob...>` | MDX projects |
-| `--astro-project <glob...>` | Astro projects |
-| `--ts-macro-project <glob...>` | TS Macro projects |
 | `--filter <glob...>` | Restrict to matching files |
 | `--fix` | Apply fixes |
 | `--force` | Ignore cache |
@@ -217,28 +212,7 @@ TSSLint produces diagnostics and edits — it does not format. Run dprint or Pre
 
 ## Framework support
 
-The `--*-project` flags wire in [Volar](https://volarjs.dev/) language plugins so framework files (Vue SFCs, MDX, Astro components, etc.) are virtualized as TypeScript before linting. Anything `tsserver` can see, TSSLint can lint.
-
-```
-   .vue  ──┐
-   .mdx  ──┤    ┌──────────────┐    ┌──────────────────┐
-   .astro──┼───▶│  Framework   │───▶│     tsserver     │───▶  diagnostics
-   .ts   ──┘    │   adapters   │    │                  │      in editor
-                │              │    │  TypeChecker     │
-                │  ─▶ virtual  │    │       +          │
-                │     TS file  │    │  TSSLint plugin  │
-                └──────────────┘    └──────────────────┘
-```
-
-Each flag resolves the language plugin from your project's `node_modules`, so you must install the corresponding package:
-
-| Flag | Required package(s) |
-|---|---|
-| `--vue-project` | `@vue/language-core` or `vue-tsc` |
-| `--vue-vine-project` | `@vue-vine/language-service` or `vue-vine-tsc` |
-| `--mdx-project` | `@mdx-js/language-service` |
-| `--astro-project` | `@astrojs/ts-plugin` |
-| `--ts-macro-project` | `@ts-macro/language-plugin` or `@ts-macro/tsc` |
+Since v4, meta-framework support is provided by the TS 7.1 content mapper (tsconfig `contentMappers`); see the release notes for the migration guide.
 
 ## Importing ESLint, TSLint, or TSL rules
 

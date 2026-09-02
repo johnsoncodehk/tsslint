@@ -8,7 +8,7 @@ TSSLint is a high-performance, project-centric linter that runs directly as a Ty
 
 *   **Instant Diagnostics**: Violations from your custom TSSLint rules are reported instantly as you type.
 *   **Auto Fix on Save**: Supports quick fixes and automatic application of fixes upon saving the file.
-*   **Framework Support**: Seamlessly lints TypeScript code within virtual files created by extensions like **Vue Official (Volar)**, **Astro**, and **MDX**.
+*   **Framework Support**: Seamlessly lints TypeScript code within virtual files created by framework extensions such as **Vue Official**, **Astro**, and **MDX**.
 
 ## Installation
 

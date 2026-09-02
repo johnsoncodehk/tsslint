@@ -24,12 +24,7 @@
 		"@tsslint/config": "3.1.4",
 		"@tsslint/core": "3.1.4",
 		"@tsslint/types": "3.1.4",
-		"@volar/language-core": "~2.4.0",
-		"@volar/language-hub": "0.0.1",
-		"@volar/typescript": "~2.4.0",
-		"minimatch": "^10.0.1"
-	},
-	"peerDependencies": {
-		"typescript": "*"
+		"minimatch": "^10.0.1",
+		"typescript-native-bridge": "6.0.3-bridge.15.tsgo.7.0.2"
 	}
 }

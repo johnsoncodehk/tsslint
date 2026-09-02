@@ -1,6 +1,6 @@
 # @tsslint/cli
 
-Command-line runner for TSSLint. Lints TypeScript projects — and Vue / Vue Vine / MDX / Astro / TS Macro projects via Volar language plugins — in CI or from the terminal.
+Command-line runner for TSSLint. Lints TypeScript projects in CI or from the terminal.
 
 ## Usage
 
@@ -16,4 +16,4 @@ npx tsslint --project 'packages/*/tsconfig.json' --filter 'src/**/*.ts'
 
 Run `tsslint --help` for the full flag list.
 
-See the [root README](../../README.md) for framework project flags (`--vue-project`, `--mdx-project`, …), caching behavior, and how diagnostics are emitted.
+See the [root README](../../README.md) for caching behavior and how diagnostics are emitted.
