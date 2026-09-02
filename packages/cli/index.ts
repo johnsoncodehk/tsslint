@@ -9,13 +9,12 @@ if (process.argv.includes('--debug-estree')) {
 	process.env.TSSLINT_DEBUG_ESTREE = '1';
 }
 
-import ts = require('typescript');
+import ts = require('typescript-native-bridge');
 import path = require('path');
 import worker = require('./lib/worker.js');
 import cache = require('./lib/cache.js');
 import fs = require('fs');
 import minimatch = require('minimatch');
-import languagePlugins = require('./lib/languagePlugins.js');
 import colors = require('./lib/colors.js');
 import render = require('./lib/render.js');
 
@@ -24,11 +23,6 @@ Usage: tsslint [options]
 
 Options:
   --project <glob...>           Lint TypeScript/JavaScript projects
-  --vue-project <glob...>       Lint Vue projects
-  --vue-vine-project <glob...>  Lint Vue Vine projects
-  --mdx-project <glob...>       Lint MDX projects
-  --astro-project <glob...>     Lint Astro projects
-  --ts-macro-project <glob...>  Lint TS Macro projects
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
   --force                       Ignore cache (re-lint every file)
@@ -47,9 +41,6 @@ Examples:
   # Multiple projects with brace expansion
   tsslint --project {tsconfig.json,packages/*/tsconfig.json}
 
-  # Mixed framework projects
-  tsslint --project packages/*/tsconfig.json --vue-project apps/web/tsconfig.json
-
   # With filter and fix
   tsslint --project tsconfig.json --filter "src/**/*.ts" --fix
 `;
@@ -60,20 +51,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 }
 
 const PROJECT_FLAGS = [
-	{ flag: '--project', language: undefined },
-	{ flag: '--vue-project', language: 'vue' },
-	{ flag: '--vue-vine-project', language: 'vue-vine' },
-	{ flag: '--mdx-project', language: 'mdx' },
-	{ flag: '--astro-project', language: 'astro' },
-	{ flag: '--ts-macro-project', language: 'ts-macro' },
-] as const;
-
-const LANGUAGE_LABELS = [
-	{ key: 'ts-macro', label: 'TS Macro', color: colors.tsMacroColor },
-	{ key: 'vue', label: 'Vue', color: colors.vueColor },
-	{ key: 'vue-vine', label: 'Vue Vine', color: colors.vueVineColor },
-	{ key: 'mdx', label: 'MDX', color: colors.mdxColor },
-	{ key: 'astro', label: 'Astro', color: colors.astroColor },
+	{ flag: '--project' },
 ] as const;
 
 class Project {
@@ -94,26 +72,12 @@ class Project {
 
 	constructor(
 		public tsconfig: string,
-		public languages: string[],
 	) {}
 
 	async init(renderer: render.Renderer, filesFilter: string[]) {
 		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
 
-		const labels: string[] = [];
-
-		if (this.languages.length === 0) {
-			labels.push(colors.tsColor('TS'));
-		}
-		else {
-			for (const { key, label, color } of LANGUAGE_LABELS) {
-				if (this.languages.includes(key)) {
-					labels.push(color(label));
-				}
-			}
-		}
-
-		const label = labels.join(colors.gray(' | '));
+		const label = colors.tsColor('TS');
 		const relPath = path.relative(process.cwd(), this.tsconfig);
 
 		if (!this.configFile) {
@@ -123,7 +87,7 @@ class Project {
 			return this;
 		}
 
-		const commonLine = await parseCommonLine(this.tsconfig, this.languages);
+		const commonLine = await parseCommonLine(this.tsconfig);
 
 		this.rawFileNames = commonLine.fileNames;
 		this.options = commonLine.options;
@@ -164,7 +128,7 @@ class Project {
 			this.cacheData = cache.loadCache(
 				this.tsconfig,
 				this.configFile,
-				this.languages,
+				[],
 				ts.version,
 				ts.sys.createHash,
 			);
@@ -182,7 +146,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 
 (async () => {
 	const renderer = render.createRenderer();
-	const tsconfigAndLanguages = new Map<string, string[]>();
+	const tsconfigs = new Set<string>();
 
 	function fail(msg: string): never {
 		renderer.error(colors.red(msg));
@@ -209,7 +173,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		process.exit(1);
 	}
 
-	for (const { flag, language } of PROJECT_FLAGS) {
+	for (const { flag } of PROJECT_FLAGS) {
 		if (!process.argv.includes(flag)) {
 			continue;
 		}
@@ -221,18 +185,12 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			}
 			foundArg = true;
 			const searchGlob = process.argv[i];
-			const tsconfigs = fs.globSync(searchGlob);
-			if (!tsconfigs.length) {
+			const matches = fs.globSync(searchGlob);
+			if (!matches.length) {
 				fail(`No projects found for ${flag} ${searchGlob}.`);
 			}
-			for (let tsconfig of tsconfigs) {
-				tsconfig = resolvePath(tsconfig);
-				if (!tsconfigAndLanguages.has(tsconfig)) {
-					tsconfigAndLanguages.set(tsconfig, []);
-				}
-				if (language) {
-					tsconfigAndLanguages.get(tsconfig)!.push(language);
-				}
+			for (const tsconfig of matches) {
+				tsconfigs.add(resolvePath(tsconfig));
 			}
 		}
 		if (!foundArg) {
@@ -265,8 +223,8 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		}
 	}
 
-	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(await new Project(tsconfig, languages).init(renderer, filters));
+	for (const tsconfig of tsconfigs) {
+		projects.push(await new Project(tsconfig).init(renderer, filters));
 	}
 
 	projects = projects.filter(project => project.configFile && project.fileNames.length);
@@ -450,8 +408,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		}
 
 		const setupResult = await linterWorker.setup(
-			project.tsconfig,
-			project.languages,
 			project.configFile!,
 			project.rawFileNames,
 			project.options,
@@ -572,7 +528,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		cache.saveCache(
 			project.tsconfig,
 			project.configFile!,
-			project.languages,
+			[],
 			ts.version,
 			project.cacheData,
 			ts.sys.createHash,
@@ -618,17 +574,13 @@ function formatConfigError(configFile: string, errorText: string): string {
 	return out.join('\n');
 }
 
-async function parseCommonLine(tsconfig: string, languages: string[]) {
+async function parseCommonLine(tsconfig: string) {
 	const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-	const plugins = await languagePlugins.load(tsconfig, languages);
-	const extraFileExtensions = plugins.flatMap(plugin => plugin.typescript?.extraFileExtensions ?? []).flat();
 	return ts.parseJsonSourceFileConfigFileContent(
 		jsonConfigFile,
 		ts.sys,
 		path.dirname(tsconfig),
 		{},
 		tsconfig,
-		undefined,
-		extraFileExtensions,
 	);
 }
