@@ -13,7 +13,6 @@ export const DOGFOOD_FILES = [
 	'packages/cli/lib/cache.ts',
 	'packages/cli/lib/colors.ts',
 	'packages/cli/lib/fs-cache.ts',
-	'packages/cli/lib/languagePlugins.ts',
 	'packages/cli/lib/render.ts',
 	'packages/cli/lib/worker.ts',
 	'packages/compat-eslint/index.ts',

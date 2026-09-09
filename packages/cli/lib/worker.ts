@@ -1,31 +1,29 @@
-import ts = require('typescript');
+import ts = require('typescript-native-bridge');
 import type config = require('@tsslint/config');
 import core = require('@tsslint/core');
 import url = require('url');
 import path = require('path');
 import fs = require('fs');
 import crypto = require('crypto');
-import languagePlugins = require('./languagePlugins.js');
 import cacheFlow = require('./cache-flow.js');
 import incrementalState = require('./incremental-state.js');
 import type { FileCache } from './cache.js';
 import type { IncrementalState } from './incremental-state.js';
 
+// @tsslint/core typings are declared against stock `typescript`; the two
+// modules are nominally distinct types. TNB is a drop-in with the same API
+// surface.
+const tsStock = ts as unknown as typeof import('typescript');
+
 // Fallback if `ts.sys.createHash` is undefined on this host (Node ≥ 22.6
 // always provides it via crypto, but the type is optional). sha256 hex.
 const defaultHash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
-
-import { createLanguage, FileMap, isCodeActionsEnabled, type Language } from '@volar/language-core';
-import { createProxyLanguageService, decorateLanguageServiceHost, resolveFileLanguageId } from '@volar/typescript';
-import { transformDiagnostic, transformFileTextChanges } from '@volar/typescript/lib/node/transform';
 
 let projectVersion = 0;
 let typeRootsVersion = 0;
 let options: ts.CompilerOptions = {};
 let fileNames: string[] = [];
-let language: Language<string> | undefined;
 let linter: core.Linter;
-let linterLanguageService!: ts.LanguageService;
 // Layer 2 state. We wrap the LS program in a SemanticDiagnostics-
 // BuilderProgram (with the prev session's BP fed back via TS's internal
 // `tsBuildInfoText` round-trip) and walk affected files once. cache-
@@ -39,7 +37,7 @@ let currentBuilder: ts.SemanticDiagnosticsBuilderProgram | undefined;
 
 const snapshots = new Map<string, ts.IScriptSnapshot>();
 const versions = new Map<string, number>();
-const originalHost: ts.LanguageServiceHost = {
+const languageServiceHost: ts.LanguageServiceHost = {
 	...ts.sys,
 	useCaseSensitiveFileNames() {
 		return ts.sys.useCaseSensitiveFileNames;
@@ -75,27 +73,25 @@ const originalHost: ts.LanguageServiceHost = {
 		return snapshots.get(fileName);
 	},
 	getScriptKind(fileName) {
-		const languageId = resolveFileLanguageId(fileName);
-		switch (languageId) {
-			case 'javascript':
+		switch (path.extname(fileName).toLowerCase()) {
+			case '.js':
+			case '.mjs':
+			case '.cjs':
 				return ts.ScriptKind.JS;
-			case 'javascriptreact':
+			case '.jsx':
 				return ts.ScriptKind.JSX;
-			case 'typescript':
-				return ts.ScriptKind.TS;
-			case 'typescriptreact':
+			case '.tsx':
 				return ts.ScriptKind.TSX;
-			case 'json':
+			case '.json':
 				return ts.ScriptKind.JSON;
 		}
-		return ts.ScriptKind.Unknown;
+		return ts.ScriptKind.TS;
 	},
 	getDefaultLibFileName(options) {
 		return ts.getDefaultLibFilePath(options);
 	},
 };
-const linterHost: ts.LanguageServiceHost = { ...originalHost };
-const originalService = ts.createLanguageService(linterHost);
+const languageService = ts.createLanguageService(languageServiceHost);
 
 // Linter is single-threaded by design. The previous version split into a
 // worker_threads worker for TTY mode (so the spinner could update during a
@@ -129,8 +125,6 @@ export function create() {
 }
 
 async function setup(
-	tsconfig: string,
-	languages: string[],
 	configFile: string,
 	_fileNames: string[],
 	_options: ts.CompilerOptions,
@@ -148,19 +142,6 @@ async function setup(
 		return String(err);
 	}
 
-	for (let key in linterHost) {
-		if (!(key in originalHost)) {
-			// @ts-ignore
-			delete linterHost[key];
-		}
-		else {
-			// @ts-ignore
-			linterHost[key] = originalHost[key];
-		}
-	}
-	linterLanguageService = originalService;
-	language = undefined;
-
 	// Reset per-project state. Multi-project runs reuse the same worker
 	// (in-process) — without this, cross-project file paths accumulate in
 	// `snapshots` / `versions` (memory leak) and `affectedFiles` from a
@@ -171,29 +152,6 @@ async function setup(
 	affectedFiles = undefined;
 	currentBuilder = undefined;
 
-	const plugins = await languagePlugins.load(tsconfig, languages);
-	if (plugins.length) {
-		const { getScriptSnapshot } = originalHost;
-		language = createLanguage<string>(
-			[
-				...plugins,
-				{ getLanguageId: fileName => resolveFileLanguageId(fileName) },
-			],
-			new FileMap(ts.sys.useCaseSensitiveFileNames),
-			fileName => {
-				const snapshot = getScriptSnapshot(fileName);
-				if (snapshot) {
-					language!.scripts.set(fileName, snapshot);
-				}
-			},
-		);
-		decorateLanguageServiceHost(ts, language, linterHost);
-
-		const proxy = createProxyLanguageService(linterLanguageService);
-		proxy.initialize(language);
-		linterLanguageService = proxy.proxy;
-	}
-
 	projectVersion++;
 	typeRootsVersion++;
 	fileNames = _fileNames;
@@ -203,17 +161,15 @@ async function setup(
 	// The synthetic path is never written to disk — captured via
 	// writeFile callback at end of session.
 	options = {
-		...(plugins.some(plugin => plugin.typescript?.extraFileExtensions.length)
-			? { ..._options, allowNonTsExtensions: true }
-			: _options),
+		..._options,
 		incremental: true,
 		tsBuildInfoFile: incrementalState.SYNTHETIC_BUILD_INFO_PATH,
 	};
 	linter = core.createLinter(
 		{
-			languageService: linterLanguageService,
-			languageServiceHost: linterHost,
-			typescript: ts,
+			languageService,
+			languageServiceHost,
+			typescript: tsStock,
 		},
 		path.dirname(configFile),
 		config,
@@ -222,10 +178,10 @@ async function setup(
 	);
 
 	{
-		const program = linterLanguageService.getProgram()!;
+		const program = languageService.getProgram()!;
 		// Reconstruct the prev session's BP from cached buildinfo text,
 		// fall through to undefined on any failure (cold-start path).
-		const oldBuilder = incrementalState.reconstructOldBuilder(ts, prevIncrementalState, {
+		const oldBuilder = incrementalState.reconstructOldBuilder(tsStock, prevIncrementalState, {
 			useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
 			getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
 		});
@@ -311,22 +267,15 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 		let pass = 0;
 		let converged = false;
 		for (; pass < MAX_FIX_PASSES; pass++) {
-			const program = linterLanguageService.getProgram()!;
+			const program = languageService.getProgram()!;
 			diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
 				incremental: true,
 				typeAwareUnaffected,
 			});
 
-			let fixes = linter
+			const fixes = linter
 				.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
 				.filter(fix => fix.fixId === 'tsslint');
-
-			if (language) {
-				fixes = fixes.map(fix => {
-					fix.changes = transformFileTextChanges(language!, fix.changes, false, isCodeActionsEnabled);
-					return fix;
-				});
-			}
 
 			const textChanges = core.combineCodeFixes(fileName, fixes);
 			if (!textChanges.length) {
@@ -372,50 +321,18 @@ function lint(fileName: string, fix: boolean, fileCache: FileCache, fileMtime: n
 	}
 
 	if (shouldCheck) {
-		const program = linterLanguageService.getProgram()!;
+		const program = languageService.getProgram()!;
 		diagnostics = cacheFlow.lintWithCache(linter, fileName, fileCache, fileMtime, program, {
 			incremental: true,
 			typeAwareUnaffected,
 		});
 	}
 
-	// Language-transform path (Vue/MDX/etc.): diagnostics map back from
-	// the transformed file to the original source. The original file
-	// might not be in the language service's program, so we substitute a
-	// SourceFile-shaped POJO with the real source text — `formatDiagnostics-
-	// WithColorAndContext` reads `.file.text` to render code snippets.
-	if (language) {
-		diagnostics = diagnostics
-			.map(d => transformDiagnostic(language!, d, (originalService as any).getCurrentProgram(), false))
-			.filter(d => !!d);
-		const fileShim = new Map<string, { fileName: string; text: string }>();
-		const getShim = (fn: string) => {
-			let s = fileShim.get(fn);
-			if (!s) {
-				s = { fileName: fn, text: getFileText(fn) };
-				fileShim.set(fn, s);
-			}
-			return s;
-		};
-		diagnostics = diagnostics.map<ts.DiagnosticWithLocation>(d => ({
-			...d,
-			file: getShim(d.file.fileName) as any,
-			relatedInformation: d.relatedInformation?.map(info => ({
-				...info,
-				file: info.file ? getShim(info.file.fileName) as any : undefined,
-			})),
-		}));
-	}
-	// Plain-TS path: leave diagnostics as-is. `.file` is the program's real
-	// `ts.SourceFile` which already shares `lineMap` cache across all
-	// diagnostics on the same file (so `formatDiagnosticsWithColorAndContext`
-	// only computes line starts once per file).
-
+	// Diagnostics are already in the original file's coordinates — the
+	// program's real `ts.SourceFile`, which shares its `lineMap` cache
+	// across all diagnostics on the same file (so `formatDiagnosticsWith-
+	// ColorAndContext` only computes line starts once per file).
 	return diagnostics;
-}
-
-function getFileText(fileName: string) {
-	return originalHost.getScriptSnapshot(fileName)!.getText(0, Number.MAX_VALUE);
 }
 
 function hasCodeFixes(fileName: string) {

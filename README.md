@@ -202,11 +202,6 @@ Flags:
 | Flag | |
 |---|---|
 | `--project <glob...>` | TypeScript projects to lint |
-| `--vue-project <glob...>` | Vue projects |
-| `--vue-vine-project <glob...>` | Vue Vine projects |
-| `--mdx-project <glob...>` | MDX projects |
-| `--astro-project <glob...>` | Astro projects |
-| `--ts-macro-project <glob...>` | TS Macro projects |
 | `--filter <glob...>` | Restrict to matching files |
 | `--fix` | Apply fixes |
 | `--force` | Ignore cache |
@@ -217,28 +212,21 @@ TSSLint produces diagnostics and edits — it does not format. Run dprint or Pre
 
 ## Framework support
 
-The `--*-project` flags wire in [Volar](https://volarjs.dev/) language plugins so framework files (Vue SFCs, MDX, Astro components, etc.) are virtualized as TypeScript before linting. Anything `tsserver` can see, TSSLint can lint.
+Since v4, framework files (`.vue`, `.astro`, `.mdx`, `.svelte`, …) are checked through TypeScript 7.1's **content mapper** — the same mechanism `tsc` uses — instead of Volar language plugins. Declare the mappers in `tsconfig.json`; TSSLint picks them up with the project:
 
-```
-   .vue  ──┐
-   .mdx  ──┤    ┌──────────────┐    ┌──────────────────┐
-   .astro──┼───▶│  Framework   │───▶│     tsserver     │───▶  diagnostics
-   .ts   ──┘    │   adapters   │    │                  │      in editor
-                │              │    │  TypeChecker     │
-                │  ─▶ virtual  │    │       +          │
-                │     TS file  │    │  TSSLint plugin  │
-                └──────────────┘    └──────────────────┘
+```jsonc
+{
+  "contentMappers": [
+    { "package": "vue-content-mapper", "extensions": [".vue"] }
+  ]
+}
 ```
 
-Each flag resolves the language plugin from your project's `node_modules`, so you must install the corresponding package:
+Rules run against the transformed TypeScript, and diagnostics and fixes are mapped back to the original file through the mapper's span map. Fixes are only offered on exact (verbatim) spans — the same restriction `tsc` applies to edits.
 
-| Flag | Required package(s) |
-|---|---|
-| `--vue-project` | `@vue/language-core` or `vue-tsc` |
-| `--vue-vine-project` | `@vue-vine/language-service` or `vue-vine-tsc` |
-| `--mdx-project` | `@mdx-js/language-service` |
-| `--astro-project` | `@astrojs/ts-plugin` |
-| `--ts-macro-project` | `@ts-macro/language-plugin` or `@ts-macro/tsc` |
+The v3 flags `--vue-project`, `--vue-vine-project`, `--mdx-project`, `--astro-project`, and `--ts-macro-project` are gone; the mapper configuration in `tsconfig.json` replaces them. See [docs/migration-v4.md](docs/migration-v4.md).
+
+> **Availability**: content mapper support activates once `typescript-native-bridge` moves to tsgo 7.1. Until then the CLI checks plain TypeScript files only.
 
 ## Importing ESLint, TSLint, or TSL rules
 
@@ -335,8 +323,9 @@ Build your own with the `Plugin` type from `@tsslint/types`.
 ## Requirements
 
 - Node.js **22.6.0+** (uses `--experimental-strip-types` to load `tsslint.config.ts` directly — no transpile step)
-- Any TypeScript version with Language Service Plugin support
-- Not compatible with `typescript-go` (v7), which does not yet support Language Service Plugins
+- The CLI bundles its own TypeScript engine ([`typescript-native-bridge`](https://github.com/johnsoncodehk/typescript-native-bridge), TS 7 / tsgo) — you no longer install or pin `typescript` to lint
+- Not supported on musl-based systems (Alpine) — the bundled engine links a glibc native binary
+- `@tsslint/typescript-plugin` still runs against a classic TypeScript tsserver; the TS 7 language server path is being rebuilt (see [docs/migration-v4.md](docs/migration-v4.md))
 
 ## License
 
