@@ -7,7 +7,7 @@
 //   - tsslint version (segment) → bumping the package invalidates everything
 //   - typescript version (segment) → .tsbuildinfo format / TS internals can
 //     change across TS majors, so segregate per TS version
-//   - hash of (configFilePath, tsconfig, languages, configFile mtime+size)
+//   - hash of (configFilePath, tsconfig, configFile mtime+size)
 //     → editing tsslint.config.ts mints a fresh cache file
 //
 // Cache file shape — see packages/cli/CACHE.md "Cache file format" section.
@@ -72,11 +72,10 @@ export type SerializedRelatedInfo = Omit<ts.DiagnosticRelatedInformation, 'file'
 export function loadCache(
 	tsconfig: string,
 	configFilePath: string,
-	languages: string[],
 	tsVersion: string,
 	createHash: (s: string) => string = defaultHash,
 ): CacheData {
-	const filePath = getCacheFilePath(tsconfig, configFilePath, languages, tsVersion, createHash);
+	const filePath = getCacheFilePath(tsconfig, configFilePath, tsVersion, createHash);
 	if (!fs.statSync(filePath, { throwIfNoEntry: false })?.isFile()) {
 		return emptyCache();
 	}
@@ -106,12 +105,11 @@ export function loadCache(
 export function saveCache(
 	tsconfig: string,
 	configFilePath: string,
-	languages: string[],
 	tsVersion: string,
 	cache: CacheData,
 	createHash: (s: string) => string = defaultHash,
 ): void {
-	const filePath = getCacheFilePath(tsconfig, configFilePath, languages, tsVersion, createHash);
+	const filePath = getCacheFilePath(tsconfig, configFilePath, tsVersion, createHash);
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tmpPath = filePath + '.tmp';
 	fs.writeFileSync(tmpPath, JSON.stringify(cache));
@@ -154,7 +152,6 @@ function isCacheData(x: unknown): x is CacheData {
 function getCacheFilePath(
 	tsconfig: string,
 	configFilePath: string,
-	languages: string[],
 	tsVersion: string,
 	createHash: (s: string) => string,
 ): string {
@@ -162,7 +159,6 @@ function getCacheFilePath(
 	const cacheKey = [
 		configFilePath,
 		tsconfig,
-		languages.sort().join(','),
 		configStat?.mtimeMs ?? 0,
 		configStat?.size ?? 0,
 	].join('\0');

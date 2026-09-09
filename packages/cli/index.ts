@@ -121,14 +121,13 @@ class Project {
 		}`;
 
 		// Load layer-1 cache unless --force was passed. The cache file path
-		// key includes tsslint version, TS version, tsconfig, languages,
-		// and configFile mtime+size — anything that changes the rule set or
-		// the toolchain mints a fresh file. See packages/cli/lib/cache.ts.
+		// key includes tsslint version, TS version, tsconfig, and configFile
+		// mtime+size — anything that changes the rule set or the toolchain
+		// mints a fresh file. See packages/cli/lib/cache.ts.
 		if (!process.argv.includes('--force')) {
 			this.cacheData = cache.loadCache(
 				this.tsconfig,
 				this.configFile,
-				[],
 				ts.version,
 				ts.sys.createHash,
 			);
@@ -528,7 +527,6 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		cache.saveCache(
 			project.tsconfig,
 			project.configFile!,
-			[],
 			ts.version,
 			project.cacheData,
 			ts.sys.createHash,
