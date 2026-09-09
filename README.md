@@ -212,7 +212,21 @@ TSSLint produces diagnostics and edits — it does not format. Run dprint or Pre
 
 ## Framework support
 
-Since v4, meta-framework support is provided by the TS 7.1 content mapper (tsconfig `contentMappers`); see the release notes for the migration guide.
+Since v4, framework files (`.vue`, `.astro`, `.mdx`, `.svelte`, …) are checked through TypeScript 7.1's **content mapper** — the same mechanism `tsc` uses — instead of Volar language plugins. Declare the mappers in `tsconfig.json`; TSSLint picks them up with the project:
+
+```jsonc
+{
+  "contentMappers": [
+    { "package": "vue-content-mapper", "extensions": [".vue"] }
+  ]
+}
+```
+
+Rules run against the transformed TypeScript, and diagnostics and fixes are mapped back to the original file through the mapper's span map. Fixes are only offered on exact (verbatim) spans — the same restriction `tsc` applies to edits.
+
+The v3 flags `--vue-project`, `--vue-vine-project`, `--mdx-project`, `--astro-project`, and `--ts-macro-project` are gone; the mapper configuration in `tsconfig.json` replaces them. See [docs/migration-v4.md](docs/migration-v4.md).
+
+> **Availability**: content mapper support activates once `typescript-native-bridge` moves to tsgo 7.1. Until then the CLI checks plain TypeScript files only.
 
 ## Importing ESLint, TSLint, or TSL rules
 
@@ -309,8 +323,9 @@ Build your own with the `Plugin` type from `@tsslint/types`.
 ## Requirements
 
 - Node.js **22.6.0+** (uses `--experimental-strip-types` to load `tsslint.config.ts` directly — no transpile step)
-- Any TypeScript version with Language Service Plugin support
-- Not compatible with `typescript-go` (v7), which does not yet support Language Service Plugins
+- The CLI bundles its own TypeScript engine ([`typescript-native-bridge`](https://github.com/johnsoncodehk/typescript-native-bridge), TS 7 / tsgo) — you no longer install or pin `typescript` to lint
+- Not supported on musl-based systems (Alpine) — the bundled engine links a glibc native binary
+- `@tsslint/typescript-plugin` still runs against a classic TypeScript tsserver; the TS 7 language server path is being rebuilt (see [docs/migration-v4.md](docs/migration-v4.md))
 
 ## License
 
