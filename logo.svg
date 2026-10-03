@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>TSSLint Logo</title>
+  <defs>
+    <linearGradient id="bg" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3ff0f0"/>
+      <stop offset="0.35" stop-color="#1fa8d8"/>
+      <stop offset="0.7" stop-color="#2d4fae"/>
+      <stop offset="1" stop-color="#2a2580"/>
+    </linearGradient>
+    <linearGradient id="waveDark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a2a8c" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#4b3fb0" stop-opacity="0.6"/>
+    </linearGradient>
+    <linearGradient id="waveLight" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8ffcff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3cc8ea" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="shine" cx="0.75" cy="0.2" r="0.6">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.75  0 0 0 0 0.95  0 0 0 0 1  0 0 0 0.6 0" result="halo"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="letter" gradientUnits="userSpaceOnUse" x1="90" y1="120" x2="420" y2="390">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d9f6ff"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="0" y="0" width="512" height="512" rx="112"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+    <g filter="url(#soft)">
+      <path d="M-20 60 C 60 20, 140 60, 120 160 C 100 250, 20 260, 40 360 C 60 450, 160 470, 240 540 L -20 540 Z" fill="url(#waveDark)"/>
+      <path d="M200 540 C 240 470, 330 430, 420 450 C 480 465, 520 420, 540 380 L 540 540 Z" fill="url(#waveDark)" opacity="0.8"/>
+      <path d="M190 -20 C 210 60, 300 110, 400 80 C 470 60, 500 120, 540 140 L 540 -20 Z" fill="url(#waveLight)"/>
+      <path d="M260 200 C 340 170, 420 220, 470 300 C 500 350, 520 360, 540 360 L 540 230 C 470 170, 360 150, 260 200 Z" fill="url(#waveLight)" opacity="0.7"/>
+      <path d="M60 300 C 140 250, 240 300, 280 400 C 300 450, 260 500, 200 540 L 60 540 Z" fill="#232070" opacity="0.5"/>
+      <path d="M120 180 C 200 160, 250 220, 240 300 C 232 360, 300 380, 340 420 C 300 470, 200 470, 120 420 Z" fill="#1d2a78" opacity="0.45"/>
+    </g>
+    <rect width="512" height="512" fill="url(#shine)"/>
+  </g>
+
+  <g filter="url(#glow)" fill="none" stroke="url(#letter)" stroke-width="56">
+    <path d="M90 152 H 300" stroke-linecap="butt"/>
+    <path d="M184 152 V 388" stroke-linecap="butt"/>
+    <path d="M404 156 C 378 128, 296 122, 280 176 C 266 224, 332 238, 362 254 C 414 280, 412 362, 330 372 C 290 377, 252 364, 228 346" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
