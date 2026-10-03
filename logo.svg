@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>TSSLint Logo</title>
+  <defs>
+    <clipPath id="frame"><rect y="1" width="512" height="511" rx="112"/></clipPath>
+    <filter id="soft" color-interpolation-filters="sRGB" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="0.8"/></filter>
+    <filter id="hl" color-interpolation-filters="sRGB" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="rimBlur" color-interpolation-filters="sRGB" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="halo" color-interpolation-filters="sRGB" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="coreBlur" color-interpolation-filters="sRGB" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="11"/></filter>
+    <filter id="edgeSoft" color-interpolation-filters="sRGB" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="grain" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="3"/>
+      <feColorMatrix values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 0.0"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+    <linearGradient id="w0" gradientUnits="userSpaceOnUse" x1="-163" y1="185" x2="155" y2="-175"><stop offset="0" stop-color="#403982"/><stop offset="1" stop-color="#39ffff"/></linearGradient>
+    <linearGradient id="w1" gradientUnits="userSpaceOnUse" x1="143" y1="116" x2="321" y2="261"><stop offset="0" stop-color="#4ac1e3"/><stop offset="1" stop-color="#41f8f6"/></linearGradient>
+    <linearGradient id="w2" gradientUnits="userSpaceOnUse" x1="25" y1="-2" x2="167" y2="-15"><stop offset="0" stop-color="#4069ac"/><stop offset="1" stop-color="#4e9fd6"/></linearGradient>
+    <linearGradient id="w3" gradientUnits="userSpaceOnUse" x1="19" y1="384" x2="9" y2="183"><stop offset="0" stop-color="#3c4290"/><stop offset="1" stop-color="#3e90bf"/></linearGradient>
+    <linearGradient id="w4" gradientUnits="userSpaceOnUse" x1="-168" y1="137" x2="-19" y2="16"><stop offset="0" stop-color="#100734"/><stop offset="1" stop-color="#2f528d"/></linearGradient>
+    <linearGradient id="w5" gradientUnits="userSpaceOnUse" x1="-26" y1="463" x2="-18" y2="317"><stop offset="0" stop-color="#140946"/><stop offset="1" stop-color="#6a92db"/></linearGradient>
+    <linearGradient id="w6" gradientUnits="userSpaceOnUse" x1="192" y1="421" x2="237" y2="520"><stop offset="0" stop-color="#221a56"/><stop offset="1" stop-color="#363e91"/></linearGradient>
+    <linearGradient id="w7" gradientUnits="userSpaceOnUse" x1="122" y1="-99" x2="173" y2="-141"><stop offset="0" stop-color="#3db0dc"/><stop offset="1" stop-color="#3cb8dd"/></linearGradient>
+    <linearGradient id="w8" gradientUnits="userSpaceOnUse" x1="264" y1="558" x2="183" y2="387"><stop offset="0" stop-color="#4455ae"/><stop offset="1" stop-color="#4ca7de"/></linearGradient>
+    <linearGradient id="w9" gradientUnits="userSpaceOnUse" x1="232" y1="-81" x2="417" y2="-146"><stop offset="0" stop-color="#5477c0"/><stop offset="1" stop-color="#47f0f2"/></linearGradient>
+    <path id="p1" d="M196 37C200 28 208 19 215 14C222 9 230 15 239 8C248 1 220 -24 270 -30C320 -36 495 -77 540 -30C585 17 546 203 540 250C534 297 514 258 506 250C498 242 496 218 491 200C486 182 479 159 477 143C475 127 481 115 479 102C477 89 474 76 466 65C458 54 444 41 431 35C418 29 401 28 386 28C371 28 354 30 341 35C328 40 320 50 311 60C302 70 295 85 286 95C277 105 266 112 256 118C246 124 236 130 228 128C220 126 211 115 205 105C199 95 194 81 192 70C190 59 192 46 196 37Z"/><clipPath id="c1"><use href="#p1"/></clipPath>
+    <path id="p2" d="M90 17C105 16 135 30 147 34C159 38 158 39 164 43C170 47 176 52 180 57C184 62 186 66 187 70C188 74 189 78 189 82C189 86 188 90 186 95C184 100 180 105 174 114C168 123 161 141 150 150C139 159 121 164 110 168C99 172 91 172 83 172C75 172 67 168 60 166C53 164 45 163 40 159C35 155 33 149 31 143C29 137 28 131 27 124C26 117 26 108 28 99C30 90 33 82 38 72C43 62 49 47 58 38C67 29 75 18 90 17Z"/><clipPath id="c2"><use href="#p2"/></clipPath>
+    <path id="p3" d="M150 165C161 154 197 166 211 175C225 184 220 197 236 217C252 237 292 275 308 295C324 315 334 331 333 335C332 339 310 321 300 318C290 315 286 314 276 316C266 318 255 322 242 333C229 344 211 368 200 380C189 392 185 402 177 404C169 406 156 402 150 390C144 378 144 355 143 330C142 305 142 268 143 240C144 212 139 176 150 165Z"/><clipPath id="c3"><use href="#p3"/></clipPath>
+    <path id="p4" d="M83 172C92 172 110 166 120 168C130 170 136 173 140 185C144 197 142 225 143 240C144 255 143 255 143 276C143 297 141 347 143 366C145 385 150 382 156 388C162 394 176 393 176 399C176 405 161 416 153 422C145 428 137 430 126 432C115 434 102 433 89 432C76 431 58 433 49 428C40 423 36 412 33 403C30 394 29 383 30 373C31 363 33 358 38 345C43 332 56 307 61 294C66 281 66 276 67 267C68 258 69 254 67 239C65 224 57 190 57 178C57 166 61 171 65 170C69 169 74 172 83 172Z"/><clipPath id="c4"><use href="#p4"/></clipPath>
+    <path id="p5" d="M-30 400C-22 380 7 413 20 418C33 423 38 426 49 428C60 430 76 431 89 432C102 433 115 434 126 432C137 430 144 427 153 422C162 417 162 419 177 404C192 389 226 348 242 333C258 318 266 313 276 316C286 319 294 336 300 350C306 364 306 388 313 397C320 406 338 398 345 401C352 404 355 412 358 417C361 422 361 423 361 429C361 435 361 444 359 451C357 458 354 463 350 469C346 475 339 481 334 485C329 489 330 490 320 493C310 496 288 497 273 505C258 513 278 534 227 540C176 546 13 563 -30 540C-73 517 -38 420 -30 400Z"/><clipPath id="c5"><use href="#p5"/></clipPath>
+    <path id="p6" d="M60 468C71 457 86 473 96 475C106 477 108 480 117 480C126 480 129 483 148 477C167 471 213 451 231 444C249 437 246 439 258 437C270 435 283 431 300 432C317 433 351 439 359 445C367 451 354 462 350 469C346 476 339 481 334 485C329 489 330 490 320 493C310 496 288 497 273 505C258 513 268 534 227 540C186 546 58 552 30 540C2 528 49 479 60 468Z"/><clipPath id="c6"><use href="#p6"/></clipPath>
+    <path id="p7" d="M396 184C403 177 418 187 430 192C442 197 458 207 466 212C474 217 474 220 477 224C480 228 482 232 483 237C484 242 484 249 484 254C484 259 480 259 480 267C480 275 486 301 482 303C478 305 466 286 456 280C446 274 432 274 421 266C410 258 394 249 390 235C386 221 389 191 396 184Z"/><clipPath id="c7"><use href="#p7"/></clipPath>
+    <path id="p8" d="M421 266C434 266 446 274 456 280C466 286 475 294 482 303C489 312 495 327 499 337C503 347 503 353 504 362C505 371 506 379 504 390C502 401 498 419 494 430C490 441 485 449 478 458C471 467 460 478 451 484C442 490 433 493 421 497C409 501 397 507 380 506C363 505 328 496 320 493C312 490 329 489 334 485C339 481 346 475 350 469C354 463 357 458 359 451C361 444 361 435 361 429C361 423 361 422 358 417C355 412 350 404 345 401C340 398 332 397 327 396C322 395 311 408 313 397C315 386 329 350 340 330C351 310 366 291 380 280C394 269 408 266 421 266Z"/><clipPath id="c8"><use href="#p8"/></clipPath>
+    <path id="p9" d="M479 102C475 114 478 132 477 143C476 154 470 158 470 168C470 178 476 186 480 200C484 214 488 227 491 250C494 273 497 318 499 337C501 356 503 353 504 362C505 371 506 379 504 390C502 401 498 419 494 430C490 441 485 449 478 458C471 467 460 478 451 484C442 490 430 488 421 497C412 506 380 533 400 540C420 547 517 617 540 540C563 463 547 158 540 80C533 2 510 66 500 70C490 74 483 90 479 102Z"/><clipPath id="c9"><use href="#p9"/></clipPath>
+    <linearGradient id="letterCore" gradientUnits="userSpaceOnUse" x1="0" y1="108" x2="0" y2="391"><stop offset="0.08" stop-color="#e7fafa"/><stop offset="0.25" stop-color="#effbfb"/><stop offset="0.42" stop-color="#edf9fa"/><stop offset="0.59" stop-color="#edf8fa"/><stop offset="0.76" stop-color="#eff6f9"/><stop offset="0.93" stop-color="#ebf3f9"/></linearGradient>
+    <linearGradient id="letterEdge" gradientUnits="userSpaceOnUse" x1="0" y1="108" x2="0" y2="391"><stop offset="0.08" stop-color="#a6eff2"/><stop offset="0.25" stop-color="#bcf2f4"/><stop offset="0.42" stop-color="#c0f0f4"/><stop offset="0.59" stop-color="#c2edf3"/><stop offset="0.76" stop-color="#c1e3f1"/><stop offset="0.93" stop-color="#c3d8ed"/></linearGradient>
+    <g id="ts"><rect x="89.9" y="119.1" width="165.9" height="49.5" rx="20.0"/><rect x="154.2" y="119.1" width="49.4" height="265.9" rx="24.7"/><path d="M394.0 151.2C378.9 148.5 364.1 141.6 348.7 143.0C333.4 144.4 312.3 149.3 301.9 159.7C291.5 170.0 284.7 191.7 286.4 205.1C288.0 218.5 294.3 227.5 311.6 240.1C328.9 252.6 376.3 264.2 390.1 280.6C403.8 297.0 402.1 323.9 394.3 338.4C386.6 352.9 363.3 364.9 343.4 367.7C323.6 370.5 297.9 359.4 275.2 355.2" fill="none" stroke-width="48.4" stroke-linecap="round"/></g>
+    <mask id="tsMask" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><use href="#ts" fill="#fff" stroke="#fff"/></mask>
+  </defs>
+  <g clip-path="url(#frame)">
+    <g filter="url(#soft)">
+      <rect width="512" height="512" fill="url(#w0)"/>
+      <use href="#p1" fill="url(#w1)"/>
+      <g clip-path="url(#c1)"><use href="#p1" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/></g>
+      <use href="#p2" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/>
+      <use href="#p2" fill="url(#w2)"/>
+      <use href="#p3" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/>
+      <use href="#p3" fill="url(#w3)"/>
+      <use href="#p4" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/>
+      <use href="#p4" fill="url(#w4)"/>
+      <use href="#p5" fill="url(#w5)"/>
+      <g clip-path="url(#c5)"><use href="#p5" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/></g>
+      <use href="#p6" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/>
+      <use href="#p6" fill="url(#w6)"/>
+      <use href="#p7" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/>
+      <use href="#p7" fill="url(#w7)"/>
+      <use href="#p8" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/>
+      <use href="#p8" fill="url(#w8)"/>
+      <use href="#p9" fill="url(#w9)"/>
+      <g clip-path="url(#c9)"><use href="#p9" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="18" filter="url(#hl)"/></g>
+    </g>
+    <rect y="1" width="512" height="511" rx="112" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="20" filter="url(#rimBlur)"/>
+    
+  </g>
+  <use href="#ts" fill="#e6f8ff" stroke="#e6f8ff" opacity=".5" filter="url(#halo)"/>
+  <g mask="url(#tsMask)">
+    <use href="#ts" fill="url(#letterEdge)" stroke="url(#letterEdge)"/>
+    <use href="#ts" fill="url(#letterCore)" stroke="url(#letterCore)" filter="url(#coreBlur)"/>
+  </g>
+</svg>
