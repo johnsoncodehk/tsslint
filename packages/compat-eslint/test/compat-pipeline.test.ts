@@ -2340,6 +2340,41 @@ type D = Awaited<Promise<number>>;
 	check('JSX rule: report points at the first <img />', reports[0]?.line === 2);
 }
 
+// Pass-through parens / computed keys around a wrapper head: every-kind
+// scans (CPA, wildcard) must enter the wrapper once, not once for the
+// parens and again for the inner node.
+{
+	const code = `
+declare const a: any;
+(a?.b)!;
+((a?.c));
+const o = { [a?.d]: 1 };
+type T = (typeof import('./x'));
+`;
+	const { program, file, checker } = buildProgram(code);
+	const hits: string[] = [];
+	const rule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
+		create: () =>
+			({
+				onCodePathStart() {},
+				ChainExpression(n: any) {
+					hits.push(`Chain@${n.range}`);
+				},
+				TSTypeQuery(n: any) {
+					hits.push(`TypeQuery@${n.range}`);
+				},
+			}) as any,
+	};
+	const { threw } = runRule(rule, program, file, checker);
+	check('CPA pass-through: dispatch did not throw', threw === undefined, String(threw ?? ''));
+	check(
+		'CPA pass-through: each wrapper head enters once',
+		hits.length === 4 && new Set(hits).size === 4,
+		hits.join(' '),
+	);
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');
