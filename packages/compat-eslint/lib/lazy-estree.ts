@@ -2025,10 +2025,17 @@ defineShape<ts.ConditionalExpression>(SK.ConditionalExpression, {
 		alternate: { tsField: 'whenFalse' },
 	},
 });
-defineShape<ts.NonNullExpression>(SK.NonNullExpression, {
+// `a?.b!` is itself the outermost chain link, so it runs through
+// wrapChainIfNeeded like Member/CallExpression.
+const nonNullExpressionShape = makeShapeClass<ts.NonNullExpression>({
 	type: 'TSNonNullExpression',
 	slots: { expression: { tsField: 'expression' } },
 });
+defineShapeRouter(
+	SK.NonNullExpression,
+	(tsNode, parent) =>
+		wrapChainIfNeeded(new nonNullExpressionShape(tsNode, parent), tsNode as ts.NonNullExpression, parent),
+);
 defineShape<ts.ExternalModuleReference>(SK.ExternalModuleReference, {
 	type: 'TSExternalModuleReference',
 	slots: { expression: { tsField: 'expression' } },
@@ -4152,6 +4159,7 @@ export function isOutermostOptionalChain(n: ts.Node): boolean {
 		n.kind !== SK.PropertyAccessExpression
 		&& n.kind !== SK.ElementAccessExpression
 		&& n.kind !== SK.CallExpression
+		&& n.kind !== SK.NonNullExpression
 	) {
 		return false;
 	}
@@ -4168,16 +4176,16 @@ export function isOutermostOptionalChain(n: ts.Node): boolean {
 // that the eventual outer build would have to unwrap and re-point.
 function wrapChainIfNeeded(
 	result: LazyNode,
-	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
+	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression | ts.NonNullExpression,
 	parent: LazyNode | null | undefined,
 ): LazyNode {
 	if (!isOutermostOptionalChain(tsNode)) return result;
-	// Force the inner `object`/`callee` getter before the wrapper claims the TS
-	// slot, so the inner access parents to `result` (the Member/CallExpression),
-	// matching eager — without it a bottom-up `materialize()` of an inner node
-	// resolves its parent up to the cache-claimed wrapper instead.
-	const r = result as unknown as { type: string; object?: LazyNode; callee?: LazyNode };
-	void (r.type === 'MemberExpression' ? r.object : r.callee);
+	// Force the inner `object`/`callee`/`expression` getter before the wrapper
+	// claims the TS slot, so the inner access parents to `result`, matching
+	// eager — without it a bottom-up `materialize()` of an inner node resolves
+	// its parent up to the cache-claimed wrapper instead.
+	const r = result as unknown as { type: string; object?: LazyNode; callee?: LazyNode; expression?: LazyNode };
+	void (r.type === 'MemberExpression' ? r.object : r.type === 'CallExpression' ? r.callee : r.expression);
 	return new ChainExpressionWrappingNode(tsNode, parent, result);
 }
 

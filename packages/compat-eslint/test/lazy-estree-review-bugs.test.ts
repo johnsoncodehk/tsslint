@@ -173,6 +173,68 @@ for (const code of ['@dec export class C {}', '@dec export default class C {}', 
 // control: the whole `a?.b.c` tree has exactly one ChainExpression (outermost only).
 fixed('a?.b.c has exactly one ChainExpression', count(lazyAst('a?.b.c;'), 'ChainExpression') === 1);
 
+// E — a non-null assertion that ends an optional chain (`a?.b!`) is the chain's
+// outermost link: typescript-estree wraps it in ChainExpression
+// (no-non-null-asserted-optional-chain's `ChainExpression > TSNonNullExpression`).
+{
+	const shape = (n: any): unknown => {
+		if (!n || typeof n !== 'object') return n;
+		if (Array.isArray(n)) return n.map(shape);
+		const out: Record<string, unknown> = { type: n.type, range: n.range };
+		if ('optional' in n) out.optional = n.optional;
+		for (const k of childKeys(n)) if (k !== 'parent' && n[k] != null) out[k] = shape(n[k]);
+		return out;
+	};
+	for (
+		const code of [
+			'a?.b!;',
+			'a?.()!;',
+			'a?.[0]!;',
+			'a?.b.c!;',
+			'a?.b!!;',
+			'(a?.b!);',
+			'a?.b!.c;',
+			'a?.b!();',
+			'a?.b![0];',
+			'(a?.b)!;',
+			'a!?.b;',
+			'a?.b!?.c!;',
+			'a!;',
+		]
+	) {
+		const got = JSON.stringify(shape(firstExpr(lazyAst(code))));
+		const want = JSON.stringify(shape(firstExpr(eagerAst(code))));
+		fixed(`E ${code} shape matches typescript-estree`, got === want, got === want ? '' : `got ${got} want ${want}`);
+	}
+	const chain = firstExpr(lazyAst('a?.b!;'));
+	fixed(
+		'E a?.b! wrapper links parent both ways',
+		chain.type === 'ChainExpression' && chain.expression.parent === chain
+			&& chain.expression.expression.parent === chain.expression,
+	);
+	const sf = sfOf('a?.b!;');
+	const ctx = (lazy.convertLazy(sf) as any).context;
+	const inner = lazy.materialize(findTs(sf, n => ts.isPropertyAccessExpression(n)), ctx) as any;
+	fixed(
+		'E bottom-up a?.b in a?.b! parents through TSNonNullExpression to ChainExpression',
+		inner.type === 'MemberExpression' && inner.parent?.type === 'TSNonNullExpression'
+			&& inner.parent.parent?.type === 'ChainExpression',
+		`got ${inner.type} > ${inner.parent?.type} > ${inner.parent?.parent?.type}`,
+	);
+	const order: string[] = [];
+	scan.tsScanTraverse(sf, scan.predicateAllKinds(), ctx, {
+		enterNode(t: any) {
+			order.push(t.type);
+		},
+		leaveNode() {},
+	});
+	fixed(
+		'E a?.b! dispatches ChainExpression > TSNonNullExpression > MemberExpression',
+		order.join(' ').includes('ChainExpression TSNonNullExpression MemberExpression'),
+		order.join(' '),
+	);
+}
+
 // Guard — materialize(catch variableDeclaration) is the param Identifier or throws; never a phantom VariableDeclarator.
 {
 	const sf = sfOf('try {} catch (e) {}');

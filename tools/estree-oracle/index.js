@@ -12,6 +12,9 @@ module.exports = {
 	get typescriptEstreeInternals() {
 		return require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
 	},
+	get eslintPlugin() {
+		return require('@typescript-eslint/eslint-plugin');
+	},
 	get parser() {
 		return require('@typescript-eslint/parser');
 	},

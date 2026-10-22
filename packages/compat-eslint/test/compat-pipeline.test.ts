@@ -2375,6 +2375,48 @@ type T = (typeof import('./x'));
 	);
 }
 
+// typescript-eslint's no-non-null-asserted-optional-chain listens on
+// `ChainExpression > TSNonNullExpression` (`a?.b!`) and
+// `TSNonNullExpression > ChainExpression` (`(a?.b)!`). Reports must match
+// ESLint running the same rule on typescript-eslint's parser.
+{
+	const oracle = require('@tsslint/estree-oracle') as typeof import('@tsslint/estree-oracle');
+	const rule = oracle.eslintPlugin.rules['no-non-null-asserted-optional-chain'] as unknown as ESLint.Rule.RuleModule;
+	const code = `
+declare const maybe: { a?: { b: number } } | undefined;
+declare const fn: (() => { b: number }) | undefined;
+maybe?.a!;
+maybe?.a?.b!;
+fn?.()!;
+maybe?.["a"]!;
+(maybe?.a)!;
+(fn?.())!;
+maybe?.a!.b;
+maybe!.a;
+`;
+	const linter = new oracle.eslint.Linter({ configType: 'flat' });
+	const lines = code.split('\n');
+	const offsetOf = (line: number, column: number) =>
+		lines.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0) + column - 1;
+	const want = linter.verify(code, [{
+		files: ['**/*.ts'],
+		languageOptions: { parser: oracle.parser as any },
+		plugins: { ts: { rules: { r: rule as any } } },
+		rules: { 'ts/r': 'error' },
+	}], 'test.ts').map(m => `${offsetOf(m.line, m.column)}-${offsetOf(m.endLine!, m.endColumn!)}`).sort();
+
+	const { program, file, checker } = buildProgram(code);
+	const { reports, threw } = runRule(rule, program, file, checker);
+	const got = reports.map(r => `${r.start}-${r.end}`).sort();
+	check('no-non-null-asserted-optional-chain: dispatch did not throw', threw === undefined, String(threw ?? ''));
+	check('no-non-null-asserted-optional-chain: ESLint reports all six', want.length === 6, `ESLint got ${want.length}`);
+	check(
+		'no-non-null-asserted-optional-chain: reports match ESLint',
+		JSON.stringify(got) === JSON.stringify(want),
+		`got ${JSON.stringify(got)} want ${JSON.stringify(want)}`,
+	);
+}
+
 console.log();
 if (failures.length) {
 	console.log('FAILURES:');
