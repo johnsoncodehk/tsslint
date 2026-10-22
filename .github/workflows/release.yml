@@ -6,8 +6,13 @@
 #   this file from the default branch, with access to secrets and OIDC, so the
 #   job is gated to the owner and to PRs whose head lives in this repository.
 # - stable: the repo owner runs this workflow from the Actions tab on master.
-#   It publishes with dist-tag `latest`, then pushes the `vX.Y.Z` commit and
-#   tag to master.
+#   It pushes the `vX.Y.Z` commit and tag to master, then publishes with
+#   dist-tag `latest`.
+#
+# lerna-lite only bumps versions. Publishing goes through `pnpm publish`, which
+# packs each package and hands the tarball to the npm CLI: npm >= 11.5.1 is
+# the client that npm trusted publishing accepts (lerna-lite's own OIDC
+# exchange is not). No npm token is configured anywhere.
 
 name: release
 
@@ -89,7 +94,6 @@ jobs:
           node-version: 24
           # No dependency cache: this job runs PR code in the default
           # branch's cache scope.
-          registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
 
@@ -99,7 +103,6 @@ jobs:
         id: version
         env:
           BASE: ${{ steps.command.outputs.base }}
-          NODE_AUTH_TOKEN: ''
         # Inline rather than a script file: the checkout is the PR head, which
         # may not contain files from the default branch.
         run: |
@@ -146,19 +149,17 @@ jobs:
       - name: Publish
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          # Fallback when trusted publishing is not configured; lerna-lite
-          # exchanges the GitHub OIDC token for an npm token when it is.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
-        run: >-
-          pnpm exec lerna publish "$VERSION"
-          --dist-tag alpha
-          --exact
-          --force-publish
-          --no-git-tag-version
-          --no-push
-          --no-changelog
-          --yes
+          NPM_CONFIG_LOGLEVEL: verbose # shows the OIDC token exchange result
+        run: |
+          pnpm exec lerna version "$VERSION" \
+            --exact \
+            --force-publish \
+            --no-git-tag-version \
+            --no-push \
+            --no-changelog \
+            --yes
+          pnpm -r publish --tag alpha --no-git-checks
 
       - name: Report success
         env:
@@ -213,29 +214,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm run build
 
-      # Same flags as `npm run release`. lerna bumps every package, syncs
-      # pnpm-lock.yaml, commits and tags `vX.Y.Z`, pushes to master, then
-      # publishes. A failed push stops before anything is published.
+      # Same version flags as `npm run release`. lerna bumps every package,
+      # syncs pnpm-lock.yaml, commits and tags `vX.Y.Z` and pushes to master;
+      # a failed push stops before anything is published.
       - name: Publish
         env:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
+          NPM_CONFIG_LOGLEVEL: verbose # shows the OIDC token exchange result
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git config http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          pnpm exec lerna publish "$VERSION" \
-            --dist-tag latest \
+          pnpm exec lerna version "$VERSION" \
             --exact \
             --force-publish \
             --sync-workspace-lock \
             --yes
+          pnpm -r publish --tag latest --no-git-checks
           echo "Published \`$(node -p "require('./lerna.json').version")\` with dist-tag \`latest\`." >> "$GITHUB_STEP_SUMMARY"
