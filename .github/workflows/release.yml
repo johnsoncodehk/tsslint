@@ -2,12 +2,15 @@
 # is bound to a single workflow filename.
 #
 # - alpha: the repo owner comments `/release alpha` (or `/release alpha X.Y.Z`
-#   to pick the base version) on a pull request. `issue_comment` always runs
-#   this file from the default branch, with access to secrets and OIDC, so the
-#   job is gated to the owner and to PRs whose head lives in this repository.
-# - stable: the repo owner runs this workflow from the Actions tab on master.
-#   It pushes the `vX.Y.Z` commit and tag to master, then publishes with
-#   dist-tag `latest`.
+#   to pick the base version) on a pull request. npm rejects trusted
+#   publishing tokens from `issue_comment` runs, so the `dispatch` job only
+#   parses the command and starts this workflow again via `workflow_dispatch`
+#   with the `pr` input; the `alpha` job publishes from that run. The owner
+#   can also start an alpha from the Actions tab by filling in `pr`. Only PRs
+#   whose head lives in this repository are published.
+# - stable: the repo owner runs this workflow from the Actions tab on master,
+#   with `pr` left empty. It pushes the `vX.Y.Z` commit and tag to master,
+#   then publishes with dist-tag `latest`.
 #
 # lerna-lite only bumps versions. Publishing goes through `pnpm publish`, which
 # packs each package and hands the tarball to the npm CLI: npm >= 11.5.1 is
@@ -22,29 +25,31 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'patch, minor, major, or an exact X.Y.Z'
+        description: 'Stable release: patch, minor, major, or an exact X.Y.Z'
         required: true
         default: patch
+      pr:
+        description: 'Alpha release: pull request number (leave empty for a stable release)'
+        required: false
+        default: ''
+      base:
+        description: 'Alpha release: base version X.Y.Z (empty for the next patch)'
+        required: false
+        default: ''
 
 permissions: {}
 
 jobs:
-  alpha:
+  dispatch:
     if: >-
       github.event_name == 'issue_comment'
       && github.event.issue.pull_request
       && startsWith(github.event.comment.body, '/release alpha')
       && (github.event.comment.author_association == 'OWNER' || github.event.comment.user.login == 'johnsoncodehk')
-    # Job-level, so unrelated comments (skipped runs) never displace a
-    # queued release. Shared with `stable` so versions are computed serially.
-    concurrency:
-      group: release
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: write # reaction + reply comment
-      id-token: write # npm trusted publishing / provenance
+      actions: write # start the workflow_dispatch run
+      pull-requests: write # reaction + failure comment
     env:
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.issue.number }}
@@ -69,6 +74,48 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: gh api --method POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=rocket > /dev/null
+
+      - name: Dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.command.outputs.base }}
+        run: gh workflow run release.yml --repo "$REPO" --ref master -f pr="$PR_NUMBER" -f base="$BASE"
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="Alpha release failed, see $RUN_URL" > /dev/null
+
+  alpha:
+    # Started by the `dispatch` job (as github-actions[bot]) or by the owner.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.pr != ''
+      && github.ref == 'refs/heads/master'
+      && (github.triggering_actor == 'johnsoncodehk' || github.triggering_actor == 'github-actions[bot]')
+    # Shared with `stable` so versions are computed serially.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # reply comment
+      id-token: write # npm trusted publishing / provenance
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr }}
+    steps:
+      - name: Validate inputs
+        env:
+          BASE: ${{ inputs.base }}
+        run: |
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ || ! "$BASE" =~ ^([0-9]+\.[0-9]+\.[0-9]+)?$ ]]; then
+            echo "::error::Expected a PR number and an optional X.Y.Z base; got pr='$PR_NUMBER' base='$BASE'"
+            exit 1
+          fi
 
       - name: Resolve PR head
         id: pr
@@ -102,7 +149,7 @@ jobs:
       - name: Compute version
         id: version
         env:
-          BASE: ${{ steps.command.outputs.base }}
+          BASE: ${{ inputs.base }}
         # Inline rather than a script file: the checkout is the PR head, which
         # may not contain files from the default branch.
         run: |
@@ -146,6 +193,22 @@ jobs:
           console.log(`version=${version}`);
           EOF
 
+      # The claims npm matches against the trusted publisher. Only the decoded
+      # payload is printed, never the token.
+      - name: Show OIDC claims
+        run: |
+          node - <<'EOF'
+          const { ACTIONS_ID_TOKEN_REQUEST_URL: url, ACTIONS_ID_TOKEN_REQUEST_TOKEN: auth } = process.env;
+          fetch(`${url}&audience=npm%3Aregistry.npmjs.org`, { headers: { authorization: `bearer ${auth}` } })
+            .then(res => res.json())
+            .then(({ value }) => {
+              const claims = JSON.parse(Buffer.from(value.split('.')[1], 'base64url'));
+              for (const key of ['sub', 'repository', 'repository_owner', 'event_name', 'ref', 'workflow_ref', 'job_workflow_ref', 'environment', 'actor', 'runner_environment']) {
+                console.log(`${key}: ${claims[key] ?? '(none)'}`);
+              }
+            });
+          EOF
+
       - name: Publish
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -185,6 +248,7 @@ jobs:
   stable:
     if: >-
       github.event_name == 'workflow_dispatch'
+      && inputs.pr == ''
       && github.ref == 'refs/heads/master'
       && github.triggering_actor == 'johnsoncodehk'
     concurrency:
