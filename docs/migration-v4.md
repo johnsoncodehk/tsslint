@@ -6,10 +6,11 @@ through TypeScript's own content mapper instead of Volar language plugins.
 
 ## Breaking changes
 
-### 1. TypeScript 7 is a peer dependency
+### 1. TypeScript 7 is bundled as a dependency
 
-Install `typescript@^7.1.0-beta` next to TSSLint. There is no TypeScript 5/6
-code path and no compatibility layer.
+TSSLint depends on TypeScript 7 directly, so there is nothing extra to
+install, and it does not use the `typescript` your project compiles with.
+There is no TypeScript 5/6 code path and no compatibility layer.
 
 - Node.js **22.12.0+** is required (the `typescript` 7 package needs it).
 - Diagnostics come from the TypeScript 7 checker. Output can differ from
