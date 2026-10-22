@@ -1,91 +1,131 @@
 # Migrating to TSSLint v4
 
-v4 moves the lint engine onto TypeScript 7 and replaces the Volar-based
-framework support with TypeScript's own content mapper.
+v4 runs on TypeScript 7 only. Rules see the TypeScript 7 AST (`typescript/ast`)
+and the TypeScript 7 checker (`typescript/sync`), and framework files are linted
+through TypeScript's own content mapper instead of Volar language plugins.
 
 ## Breaking changes
 
-### 1. The CLI bundles its own TypeScript engine
+### 1. TypeScript 7 is a peer dependency
 
-`@tsslint/cli` no longer declares `typescript` as a peer dependency. It depends
-on [`typescript-native-bridge`](https://github.com/johnsoncodehk/typescript-native-bridge)
-(exact-pinned), which keeps the classic `typescript` API surface but runs the
-TS 7 (tsgo) checker in-process.
+Install `typescript@^7.1.0-beta` next to TSSLint. There is no TypeScript 5/6
+code path and no compatibility layer.
 
-- You no longer need to install or pin `typescript` for linting, and package
-  manager overrides that redirected `typescript` to the bridge are no longer
-  required for TSSLint itself.
-- Diagnostics come from the tsgo checker. On a real project the output can
-  differ from TS 6.x in edge cases — that difference is the engine, not a
-  TSSLint regression.
-- The bridge does not support custom module resolvers or JS custom transformers.
-  If your setup remaps imports to different files on disk, those remappings are
-  not honoured.
+- Node.js **22.12.0+** is required (the `typescript` 7 package needs it).
+- Diagnostics come from the TypeScript 7 checker. Output can differ from
+  TypeScript 5/6 in edge cases; that difference is the engine, not a TSSLint
+  regression.
 
-### 2. Framework flags are gone
+### 2. Rule context
 
-The Volar integration — and with it the five project flags — has been removed:
+| v3 | v4 |
+|---|---|
+| `typescript` — the classic `typescript` module | `typescript` — the `typescript/ast` module (`SyntaxKind`, `is*` guards, AST utilities) |
+| `program` — `ts.Program` | `program` — `Program` from `typescript/sync` |
+| `program.getTypeChecker()` | `checker` — `Checker` from `typescript/sync` |
+| `ts.forEachChild(node, cb)` | `node.forEachChild(cb)` |
+| `ts.sys`, `ts.findConfigFile`, … | use `node:fs` / `node:path` |
+
+```ts
+import { defineRule } from '@tsslint/config';
+
+export default defineRule(({ typescript: ts, file, report }) => {
+  file.forEachChild(function visit(node): void {
+    if (node.kind === ts.SyntaxKind.DebuggerStatement) {
+      report('Debugger statement is not allowed.', node.getStart(file), node.getEnd());
+    }
+    node.forEachChild(visit);
+  });
+});
+```
+
+Reading `program` or `checker` classifies a rule as type-aware (see
+[Caching](#5-caching)).
+
+`Diagnostic`, `CodeFixAction`, `FileTextChanges`, and the other result types are
+now defined in `@tsslint/types`. A TSSLint diagnostic's `code` is the rule id.
+
+### 3. Removed packages and importers
+
+- `@tsslint/typescript-plugin` and the VS Code extension are removed. TypeScript 7
+  has no tsserver plugin API.
+- `importTSLintRules` and `fromTSLRules` are removed. Both depend on the classic
+  `typescript` API.
+
+### 4. Framework flags are replaced by `contentMappers`
 
 | v3 | v4 |
 |---|---|
 | `tsslint --project tsconfig.json --vue-project tsconfig.json` | declare `contentMappers` in `tsconfig.json`, then `tsslint --project tsconfig.json` |
 | `--vue-vine-project`, `--mdx-project`, `--astro-project`, `--ts-macro-project` | same — mapper entries in `tsconfig.json` |
 
-There is no replacement flag; the tsconfig is the single source of truth.
+See [Framework projects](#framework-projects).
 
-### 3. Platform requirements
+### 5. Caching
 
-- Node.js **22.6.0+** (unchanged) — the bridge itself needs ≥ 20.19.
-- **musl-based systems (Alpine) are not supported.** The bridge links a glibc
-  native binary; run the lint step in a glibc image and copy results into your
-  Alpine deploy stage.
-- Peak memory on checker-heavy runs rises to roughly 1.9× the previous engine.
+The cache format is bumped, so the first v4 run re-lints everything.
+
+Layer 2 (type-aware rules) is now keyed on a program fingerprint: compiler
+options plus every source file's name, mtime, and size. Any change to a file in
+the program re-runs type-aware rules on every file. v3 used TypeScript's
+`BuilderProgram` affected-file diff, which TypeScript 7 does not expose.
+
+### 6. ESLint interop
+
+`importESLintRules` still works for ESLint core rules and for plugins that
+don't import `typescript`.
+
+`@typescript-eslint/eslint-plugin` does not load with `typescript@7`: its
+dependencies read the classic `typescript` API at module load. Remove
+`@typescript-eslint/*` rules from the config until typescript-eslint supports
+TypeScript 7.
+
+### 7. `@tsslint/core` API
+
+Only relevant if you embed the linter directly:
+
+- `createLinter(ctx, rootDir, config, …)` takes
+  `ctx: { typescript: typeof import('typescript/ast'), getProgram(): Program }`.
+- `linter.lint(target, …)` takes `target: { program, checker, file }` instead of a
+  file name.
+- `applyTextChanges(text, changes)` works on strings.
 
 ## Framework projects
 
-Framework files are checked through TypeScript 7.1's content mapper. Add the
-mapper package for your framework to `tsconfig.json`:
+Framework files are linted through TypeScript 7.1's content mapper. Add the
+mapper for your framework to `tsconfig.json`:
 
 ```jsonc
 {
   "compilerOptions": { },
   "contentMappers": [
-    { "package": "vue-content-mapper", "extensions": [".vue"], "options": { } }
+    { "package": "@vue/content-mapper", "extensions": [".vue"], "options": { } }
   ],
   "include": ["src"]
 }
 ```
 
-The mapper package declares how it runs in its own `package.json`:
+`package` is resolved through `node_modules`. The mapper package declares how it
+runs in its own `package.json`:
 
 ```jsonc
 {
   "typescript": {
     "contentMapper": {
-      "exec": ["node", "dist/server.js"],
-      "compilerOptions": ["module", "jsx", "jsxImportSource"]
+      "exec": ["node", "server.js"],
+      "dynamicConfig": true
     }
   }
 }
 ```
 
-Notes that affect what you can lint:
+What this means for rules:
 
-- Rules run on the transformed TypeScript. Diagnostics and fixes are mapped back
-  to the original file through the mapper's span map; **fixes are only offered
-  on exact (verbatim) spans**, matching the edit-safety rule `tsc` applies.
-- The protocol has no per-diagnostic-code filtering and does not drop diagnostics
-  on unmapped (synthetic) regions — both are deliberate design choices upstream.
-- `tsc` requires `--runExternalCode` to execute mappers; TSSLint runs them as
-  part of loading the project.
-
-**Availability**: content mapper support activates once `typescript-native-bridge`
-rebases onto tsgo 7.1. Until then the CLI checks plain TypeScript files only.
-Mapper packages per framework follow their own ecosystems' adoption.
-
-## Editors
-
-`@tsslint/typescript-plugin` still targets a classic TypeScript tsserver and is
-unaffected by the CLI change. The TS 7 language server path (LSP middleware plus
-content mapper registration) is being rebuilt on the TS 7.1 APIs; until that
-lands, editor diagnostics for framework files keep using the previous setup.
+- Rules run on the transformed TypeScript (`file.text`); `file.fileName` is the
+  original file. Report positions in the transformed text.
+- Diagnostics are mapped back to the original file through the mapper's span map.
+  Diagnostics that only cover generated code are dropped.
+- `--fix` applies a fix only when every edit in it maps exactly onto original
+  text. Other fixes are skipped.
+- TSSLint runs mappers as part of loading the project; there is no equivalent of
+  `tsc --runExternalCode` to pass.

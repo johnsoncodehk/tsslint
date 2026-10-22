@@ -5,7 +5,7 @@ Command-line runner for TSSLint. Lints TypeScript projects in CI or from the ter
 ## Usage
 
 ```bash
-npm install @tsslint/cli --save-dev
+npm install @tsslint/cli typescript@^7.1.0-beta --save-dev
 ```
 
 ```bash
