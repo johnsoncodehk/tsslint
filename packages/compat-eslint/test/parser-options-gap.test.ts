@@ -11,7 +11,7 @@
 //   tsc --build && node packages/compat-eslint/test/parser-options-gap.test.js
 
 import type * as ESLint from 'eslint';
-import * as ts from 'typescript';
+import { createProject } from './ts7';
 
 const compat = require('../index.js') as typeof import('../index.js');
 
@@ -26,65 +26,20 @@ function expect(name: string, actual: unknown, predicate: (v: unknown) => boolea
 	}
 }
 
-// In-memory ts.Program. Same shape as compat-pipeline.test.ts; kept
-// inline to avoid cross-test dep on a non-exported helper.
-function buildProgram(
-	code: string,
-	kind: ts.ScriptKind,
-): { program: ts.Program; file: ts.SourceFile } {
-	const isJs = kind === ts.ScriptKind.JS || kind === ts.ScriptKind.JSX;
-	const fileName = kind === ts.ScriptKind.TSX
-		? '/test.tsx'
-		: kind === ts.ScriptKind.JSX
-		? '/test.jsx'
-		: kind === ts.ScriptKind.JS
-		? '/test.js'
-		: '/test.ts';
-	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, kind);
-	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
-	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
-	const realLib = ts.createSourceFile(
-		realLibPath,
-		realLibContent,
-		ts.ScriptTarget.Latest,
-		true,
-		ts.ScriptKind.TS,
-	);
-	const host: ts.CompilerHost = {
-		getSourceFile: n => n === fileName ? sf : (n === realLibPath ? realLib : undefined),
-		getDefaultLibFileName: () => realLibName,
-		getDefaultLibLocation: () => realLibPath.replace('/' + realLibName, ''),
-		writeFile: () => {},
-		getCurrentDirectory: () => '/',
-		getDirectories: () => [],
-		fileExists: n => n === fileName || n === realLibPath,
-		readFile: n => n === fileName ? code : (n === realLibPath ? realLibContent : undefined),
-		getCanonicalFileName: n => n,
-		useCaseSensitiveFileNames: () => true,
-		getNewLine: () => '\n',
-	};
-	const program = ts.createProgram({
-		rootNames: [fileName],
-		options: {
-			target: ts.ScriptTarget.Latest,
-			lib: [realLibName],
-			noEmit: true,
-			allowJs: isJs || undefined,
-			jsx: kind === ts.ScriptKind.TSX || kind === ts.ScriptKind.JSX
-				? ts.JsxEmit.Preserve
-				: undefined,
-		},
-		host,
+type FileKind = 'ts' | 'tsx' | 'js' | 'jsx';
+
+function buildProgram(code: string, kind: FileKind) {
+	return createProject(`test.${kind}`, code, {
+		allowJs: kind === 'js' || kind === 'jsx' || undefined,
+		jsx: kind === 'tsx' || kind === 'jsx' ? 'preserve' : undefined,
 	});
-	return { program, file: sf };
 }
 
 // Run a probe rule that just snapshots `context.parserOptions` and
 // `context.languageOptions` at create-time. Rule never reports.
 function captureContext(
 	code: string,
-	kind: ts.ScriptKind,
+	kind: FileKind,
 ): {
 	parserOptions: any;
 	languageOptions: any;
@@ -127,14 +82,14 @@ function captureContext(
 		};
 		return chain;
 	};
-	const { program, file } = buildProgram(code, kind);
-	tsslintRule({ file, report: reportFn, program } as any);
+	const { program, file, checker } = buildProgram(code, kind);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	return captured;
 }
 
 // === Test 1: ecmaFeatures.jsx must be true on .tsx ===
 {
-	const ctx = captureContext(`const x = <div/>;`, ts.ScriptKind.TSX);
+	const ctx = captureContext(`const x = <div/>;`, 'tsx');
 	expect(
 		'parserOptions.ecmaFeatures.jsx is true on .tsx',
 		ctx.parserOptions?.ecmaFeatures?.jsx,
@@ -151,7 +106,7 @@ function captureContext(
 
 // === Test 2: ecmaFeatures.jsx must be falsy on .ts (non-JSX) ===
 {
-	const ctx = captureContext(`const x = 1;`, ts.ScriptKind.TS);
+	const ctx = captureContext(`const x = 1;`, 'ts');
 	expect(
 		'parserOptions.ecmaFeatures.jsx is falsy on .ts',
 		ctx.parserOptions?.ecmaFeatures?.jsx,
@@ -164,7 +119,7 @@ function captureContext(
 //   Per ECMAScript spec modules are strict-by-default. ESLint configs
 //   that gate strict-mode-only checks read this field.
 {
-	const ctx = captureContext(`export const x = 1;`, ts.ScriptKind.TS);
+	const ctx = captureContext(`export const x = 1;`, 'ts');
 	expect(
 		'parserOptions.ecmaFeatures.impliedStrict is true on module file',
 		ctx.parserOptions?.ecmaFeatures?.impliedStrict,
@@ -179,7 +134,7 @@ function captureContext(
 //   `return`. Files with no module syntax under a `module: CommonJS`
 //   tsconfig are 'script' in our classification.
 {
-	const ctx = captureContext(`var a = 1; console.log(a);`, ts.ScriptKind.TS);
+	const ctx = captureContext(`var a = 1; console.log(a);`, 'ts');
 	// We classify this as 'script' (no externalModuleIndicator,
 	// no commonJsModuleIndicator). globalReturn should follow.
 	expect(
@@ -192,7 +147,7 @@ function captureContext(
 
 // === Test 5: ecmaFeatures.globalReturn must be falsy on module files ===
 {
-	const ctx = captureContext(`export {};`, ts.ScriptKind.TS);
+	const ctx = captureContext(`export {};`, 'ts');
 	expect(
 		'parserOptions.ecmaFeatures.globalReturn is falsy on module file',
 		ctx.parserOptions?.ecmaFeatures?.globalReturn,
@@ -206,7 +161,7 @@ function captureContext(
 //   `context.languageOptions.parserOptions` (modern flat-config). Both
 //   surfaces must agree to avoid intra-rule disagreement.
 {
-	const ctx = captureContext(`const x = <div/>;`, ts.ScriptKind.TSX);
+	const ctx = captureContext(`const x = <div/>;`, 'tsx');
 	const top = ctx.parserOptions?.ecmaFeatures;
 	const lang = ctx.languageOptions?.parserOptions?.ecmaFeatures;
 	expect(

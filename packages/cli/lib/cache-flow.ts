@@ -8,32 +8,32 @@
 // CLI's responsibility — serialization, mtime invalidation, sticky
 // type-aware cleanup.
 
-import { type Linter, NO_CACHE } from '@tsslint/core';
-import type * as ts from 'typescript';
+import { type Linter, type LintTarget, NO_CACHE } from '@tsslint/core';
+import type { Diagnostic } from '@tsslint/types';
 import type { FileCache, SerializedDiagnostic } from './cache.js';
 
 export function lintWithCache(
 	linter: Linter,
-	fileName: string,
+	target: LintTarget,
 	fileCache: FileCache,
 	fileMtime: number,
-	program: ts.Program,
 	options?: {
-		// Layer 2 master switch. Driven by the CLI's `--incremental` flag.
+		// Layer 2 master switch. Always on under the CLI.
 		// When false / undefined (mode A), type-aware rules are never
 		// cached: their entries are deleted after each run. When true
 		// (mode B), type-aware rules' fresh results get persisted so the
 		// next session can reuse them.
 		incremental?: boolean;
-		// File-level signal: the caller's affected-file tracker says this
-		// file's type-relevant inputs (own text, transitive deps incl.
-		// ambient `.d.ts` and lib) haven't moved since the prior session.
+		// Caller signal: this file's type-relevant inputs (every file in
+		// the program, plus compiler options) haven't moved since the
+		// prior session.
 		// Only meaningful in mode B. When true, type-aware rule cache
 		// entries are also cache-hit-eligible (skipped via the run's
 		// skipRules set).
 		typeAwareUnaffected?: boolean;
 	},
-): ts.DiagnosticWithLocation[] {
+): Diagnostic[] {
+	const fileName = target.file.fileName;
 	// File mtime is the layer-1 invalidation key. Anything that touched
 	// the file's text drops every cached rule entry — those rules will
 	// re-run because they vanish from the skip set.
@@ -71,16 +71,16 @@ export function lintWithCache(
 	// it would on a cold pass — without this, skipped rules' diagnostics
 	// are missing during plugin filtering and every successful suppression
 	// turns into a warm-only unused-comment false positive.
-	const restored: ts.DiagnosticWithLocation[] = [];
+	const restored: Diagnostic[] = [];
 	for (const ruleId of skipRules) {
 		const entry = fileCache.rules[ruleId];
 		if (!entry) continue;
 		for (const sd of entry.diagnostics) {
-			restored.push(deserializeDiagnostic(sd, fileName, program));
+			restored.push(deserializeDiagnostic(sd, target));
 		}
 	}
 
-	const fresh = linter.lint(fileName, { skipRules, prevDiagnostics: restored });
+	const fresh = linter.lint(target, { skipRules, prevDiagnostics: restored });
 
 	// Cache writes key off the PRE-suppression rule output (`getRawLintResult`),
 	// not the post-plugin `fresh`. Otherwise a diagnostic the ignore plugin
@@ -88,7 +88,7 @@ export function lintWithCache(
 	// warm pass would have nothing to feed back in via `prevDiagnostics`
 	// — re-creating the very FP this is fixing.
 	const raw = linter.getRawLintResult(fileName);
-	const byRule = new Map<string, ts.DiagnosticWithLocation[]>();
+	const byRule = new Map<string, Diagnostic[]>();
 	for (const diag of raw) {
 		const ruleId = String(diag.code);
 		let bucket = byRule.get(ruleId);
@@ -134,7 +134,7 @@ export function lintWithCache(
 	return fresh;
 }
 
-function serializeDiagnostic(d: ts.DiagnosticWithLocation): SerializedDiagnostic {
+function serializeDiagnostic(d: Diagnostic): SerializedDiagnostic {
 	const { file, relatedInformation, ...rest } = d;
 	void file;
 	return {
@@ -148,12 +148,11 @@ function serializeDiagnostic(d: ts.DiagnosticWithLocation): SerializedDiagnostic
 
 function deserializeDiagnostic(
 	sd: SerializedDiagnostic,
-	fileName: string,
-	program: ts.Program,
-): ts.DiagnosticWithLocation {
+	{ program, file }: LintTarget,
+): Diagnostic {
 	return {
 		...sd,
-		file: program.getSourceFile(fileName)!,
+		file,
 		relatedInformation: sd.relatedInformation?.map(info => ({
 			...info,
 			file: info.file ? program.getSourceFile(info.file.fileName) : undefined,

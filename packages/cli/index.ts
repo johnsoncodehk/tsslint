@@ -9,26 +9,22 @@ if (process.argv.includes('--debug-estree')) {
 	process.env.TSSLINT_DEBUG_ESTREE = '1';
 }
 
-import ts = require('typescript');
+import { version as tsVersion } from 'typescript';
+import { DiagnosticCategory } from 'typescript/sync';
 import path = require('path');
 import worker = require('./lib/worker.js');
 import cache = require('./lib/cache.js');
 import fs = require('fs');
 import minimatch = require('minimatch');
-import languagePlugins = require('./lib/languagePlugins.js');
 import colors = require('./lib/colors.js');
 import render = require('./lib/render.js');
+import format = require('./lib/format.js');
 
 const HELP = `
 Usage: tsslint [options]
 
 Options:
   --project <glob...>           Lint TypeScript/JavaScript projects
-  --vue-project <glob...>       Lint Vue projects
-  --vue-vine-project <glob...>  Lint Vue Vine projects
-  --mdx-project <glob...>       Lint MDX projects
-  --astro-project <glob...>     Lint Astro projects
-  --ts-macro-project <glob...>  Lint TS Macro projects
   --filter <glob...>            Filter files to lint
   --fix                         Apply automatic fixes
   --force                       Ignore cache (re-lint every file)
@@ -47,9 +43,6 @@ Examples:
   # Multiple projects with brace expansion
   tsslint --project {tsconfig.json,packages/*/tsconfig.json}
 
-  # Mixed framework projects
-  tsslint --project packages/*/tsconfig.json --vue-project apps/web/tsconfig.json
-
   # With filter and fix
   tsslint --project tsconfig.json --filter "src/**/*.ts" --fix
 `;
@@ -60,33 +53,19 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 }
 
 const PROJECT_FLAGS = [
-	{ flag: '--project', language: undefined },
-	{ flag: '--vue-project', language: 'vue' },
-	{ flag: '--vue-vine-project', language: 'vue-vine' },
-	{ flag: '--mdx-project', language: 'mdx' },
-	{ flag: '--astro-project', language: 'astro' },
-	{ flag: '--ts-macro-project', language: 'ts-macro' },
-] as const;
-
-const LANGUAGE_LABELS = [
-	{ key: 'ts-macro', label: 'TS Macro', color: colors.tsMacroColor },
-	{ key: 'vue', label: 'Vue', color: colors.vueColor },
-	{ key: 'vue-vine', label: 'Vue Vine', color: colors.vueVineColor },
-	{ key: 'mdx', label: 'MDX', color: colors.mdxColor },
-	{ key: 'astro', label: 'Astro', color: colors.astroColor },
+	{ flag: '--project' },
 ] as const;
 
 class Project {
-	worker: ReturnType<typeof worker.create> | undefined;
+	started = false;
 	/**
-	 * file names for passing to ts language service host (getScriptFileNames)
+	 * all file names of the tsconfig, including content-mapped files
 	 */
-	rawFileNames: string[] = [];
+	rawFileNames: readonly string[] = [];
 	/**
 	 * file names after filter, for linting process
 	 */
-	fileNames: string[] = [];
-	options: ts.CompilerOptions = {};
+	fileNames: readonly string[] = [];
 	configFile: string | undefined;
 	currentFileIndex = 0;
 	cacheData: cache.CacheData = cache.emptyCache();
@@ -94,26 +73,12 @@ class Project {
 
 	constructor(
 		public tsconfig: string,
-		public languages: string[],
-	) {}
+	) {
+		this.configFile = findConfigFile(path.dirname(tsconfig));
+	}
 
-	async init(renderer: render.Renderer, filesFilter: string[]) {
-		this.configFile = ts.findConfigFile(path.dirname(this.tsconfig), ts.sys.fileExists, 'tsslint.config.ts');
-
-		const labels: string[] = [];
-
-		if (this.languages.length === 0) {
-			labels.push(colors.tsColor('TS'));
-		}
-		else {
-			for (const { key, label, color } of LANGUAGE_LABELS) {
-				if (this.languages.includes(key)) {
-					labels.push(color(label));
-				}
-			}
-		}
-
-		const label = labels.join(colors.gray(' | '));
+	init(renderer: render.Renderer, filesFilter: string[]) {
+		const label = colors.tsColor('TS');
 		const relPath = path.relative(process.cwd(), this.tsconfig);
 
 		if (!this.configFile) {
@@ -123,10 +88,7 @@ class Project {
 			return this;
 		}
 
-		const commonLine = await parseCommonLine(this.tsconfig, this.languages);
-
-		this.rawFileNames = commonLine.fileNames;
-		this.options = commonLine.options;
+		this.rawFileNames = worker.getProjectFileNames(this.tsconfig);
 
 		if (!this.rawFileNames.length) {
 			renderer.info(`${label} ${colors.gray(relPath)} ${colors.gray('(0)')}`);
@@ -157,37 +119,33 @@ class Project {
 		}`;
 
 		// Load layer-1 cache unless --force was passed. The cache file path
-		// key includes tsslint version, TS version, tsconfig, languages,
-		// and configFile mtime+size — anything that changes the rule set or
-		// the toolchain mints a fresh file. See packages/cli/lib/cache.ts.
+		// key includes tsslint version, TS version, tsconfig, and configFile
+		// mtime+size — anything that changes the rule set or the toolchain
+		// mints a fresh file. See packages/cli/lib/cache.ts.
 		if (!process.argv.includes('--force')) {
-			this.cacheData = cache.loadCache(
-				this.tsconfig,
-				this.configFile,
-				this.languages,
-				ts.version,
-				ts.sys.createHash,
-			);
+			this.cacheData = cache.loadCache(this.tsconfig, this.configFile, tsVersion);
 		}
 
 		return this;
 	}
 }
 
-const formatHost: ts.FormatDiagnosticsHost = {
-	getCurrentDirectory: ts.sys.getCurrentDirectory,
-	getCanonicalFileName: ts.sys.useCaseSensitiveFileNames ? x => x : x => x.toLowerCase(),
-	getNewLine: () => ts.sys.newLine,
-};
-
 (async () => {
 	const renderer = render.createRenderer();
-	const tsconfigAndLanguages = new Map<string, string[]>();
+	const tsconfigs = new Set<string>();
+
+	function exit(code: number): never {
+		renderer.dispose();
+		try {
+			worker.close();
+		}
+		catch {}
+		process.exit(code);
+	}
 
 	function fail(msg: string): never {
 		renderer.error(colors.red(msg));
-		renderer.dispose();
-		process.exit(1);
+		exit(1);
 	}
 
 	let projects: Project[] = [];
@@ -209,7 +167,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		process.exit(1);
 	}
 
-	for (const { flag, language } of PROJECT_FLAGS) {
+	for (const { flag } of PROJECT_FLAGS) {
 		if (!process.argv.includes(flag)) {
 			continue;
 		}
@@ -221,18 +179,12 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			}
 			foundArg = true;
 			const searchGlob = process.argv[i];
-			const tsconfigs = fs.globSync(searchGlob);
-			if (!tsconfigs.length) {
+			const matches = fs.globSync(searchGlob);
+			if (!matches.length) {
 				fail(`No projects found for ${flag} ${searchGlob}.`);
 			}
-			for (let tsconfig of tsconfigs) {
-				tsconfig = resolvePath(tsconfig);
-				if (!tsconfigAndLanguages.has(tsconfig)) {
-					tsconfigAndLanguages.set(tsconfig, []);
-				}
-				if (language) {
-					tsconfigAndLanguages.get(tsconfig)!.push(language);
-				}
+			for (const tsconfig of matches) {
+				tsconfigs.add(resolvePath(tsconfig));
 			}
 		}
 		if (!foundArg) {
@@ -245,7 +197,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		if (fs.statSync(filterPath, { throwIfNoEntry: false })?.isDirectory()) {
 			filterPath = path.join(filterPath, '**/*');
 		}
-		return ts.server.toNormalizedPath(filterPath);
+		return filterPath.replace(/\\/g, '/');
 	}
 
 	const filters: string[] = [];
@@ -265,8 +217,13 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		}
 	}
 
-	for (const [tsconfig, languages] of tsconfigAndLanguages) {
-		projects.push(await new Project(tsconfig, languages).init(renderer, filters));
+	projects = [...tsconfigs].map(tsconfig => new Project(tsconfig));
+	const configured = projects.filter(project => project.configFile).map(project => project.tsconfig);
+	if (configured.length) {
+		worker.openProjects(configured);
+	}
+	for (const project of projects) {
+		project.init(renderer, filters);
 	}
 
 	projects = projects.filter(project => project.configFile && project.fileNames.length);
@@ -277,11 +234,10 @@ const formatHost: ts.FormatDiagnosticsHost = {
 
 	if (allFilesNum === 0) {
 		renderer.info(colors.yellow('No input files.'));
-		renderer.dispose();
-		process.exit(1);
+		exit(1);
 	}
 
-	await startWorker(worker.create());
+	await startWorker();
 
 	const summaryLines: string[] = [];
 
@@ -429,40 +385,35 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		}
 	}
 
-	renderer.dispose();
+	exit((errors || messages || configErrors) ? 1 : 0);
 
-	process.exit((errors || messages || configErrors) ? 1 : 0);
-
-	async function startWorker(linterWorker: ReturnType<typeof worker.create>) {
+	async function startWorker() {
 		const unfinishedProjects = projects.filter(project => project.currentFileIndex < project.fileNames.length);
 		if (!unfinishedProjects.length) {
 			return;
 		}
-		const project = unfinishedProjects.find(project => !project.worker);
+		const project = unfinishedProjects.find(project => !project.started);
 		if (!project) {
 			return;
 		}
-		project.worker = linterWorker;
+		project.started = true;
 
 		if (project.pendingHeader) {
 			renderer.info(project.pendingHeader);
 			project.pendingHeader = undefined;
 		}
 
-		const setupResult = await linterWorker.setup(
-			project.tsconfig,
-			project.languages,
+		const setupResult = await worker.setup(
 			project.configFile!,
-			project.rawFileNames,
-			project.options,
+			project.tsconfig,
 			Object.keys(project.cacheData.ruleModes),
-			project.cacheData.incrementalState,
+			project.cacheData.programFingerprint,
 		);
 		if (setupResult !== true) {
 			renderer.diagnostic(formatConfigError(project.configFile!, setupResult));
 			configErrors++;
 			projects = projects.filter(p => p !== project);
-			await startWorker(linterWorker);
+			await startWorker();
 			return;
 		}
 
@@ -482,14 +433,14 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			else if (fileCache.mtime === fileStat.mtimeMs && Object.keys(fileCache.rules).length) {
 				// File text untouched since the prev session AND we have at
 				// least one rule's diagnostics cached for it — treat as a
-				// warm hit for the `--force` summary hint. Layer 2's BP
-				// might still re-run type-aware rules if their deps moved,
+				// warm hit for the `--force` summary hint. Layer 2 might
+				// still re-run type-aware rules if the program moved,
 				// but the user-visible signal here is just "cache had
 				// something for this file."
 				cached++;
 			}
 
-			const diagnostics = await linterWorker.lint(
+			const diagnostics = worker.lint(
 				fileName,
 				process.argv.includes('--fix'),
 				fileCache,
@@ -497,7 +448,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 			);
 
 			if (diagnostics.length) {
-				hasFix ||= await linterWorker.hasCodeFixes(fileName);
+				hasFix ||= worker.hasCodeFixes(fileName);
 
 				for (const diagnostic of diagnostics) {
 					// Cache-hit diagnostics come back without their rule
@@ -506,37 +457,22 @@ const formatHost: ts.FormatDiagnosticsHost = {
 					// per-rule `hasFix` flag for the diagnostic's rule.
 					hasFix ||= !!fileCache.rules[String(diagnostic.code)]?.hasFix;
 
-					let output: string;
-
-					if (diagnostic.category === ts.DiagnosticCategory.Suggestion) {
-						output = ts.formatDiagnosticsWithColorAndContext([{
-							...diagnostic,
-							category: ts.DiagnosticCategory.Message,
-						}], formatHost);
-						output = output.replace(/\[94mmessage/, '[90msuggestion');
-						output = output.replace(/\[94m/g, '[90m');
-					}
-					else {
-						output = ts.formatDiagnosticsWithColorAndContext([diagnostic], formatHost);
+					const output = format.formatDiagnostic(diagnostic, worker.getApi());
+					if (output === undefined) {
+						continue;
 					}
 
-					output = output.trimEnd();
-
-					if (typeof diagnostic.code === 'string') {
-						output = output.replace(`TS${diagnostic.code}`, diagnostic.code);
-					}
-
-					if (diagnostic.category === ts.DiagnosticCategory.Error) {
+					if (diagnostic.category === DiagnosticCategory.Error) {
 						errors++;
 						renderer.diagnostic(output);
 					}
-					else if (diagnostic.category === ts.DiagnosticCategory.Warning) {
+					else if (diagnostic.category === DiagnosticCategory.Warning) {
 						warnings++;
 						if (!failuresOnly) {
 							renderer.diagnostic(output);
 						}
 					}
-					else if (diagnostic.category === ts.DiagnosticCategory.Message) {
+					else if (diagnostic.category === DiagnosticCategory.Message) {
 						messages++;
 						renderer.diagnostic(output);
 					}
@@ -548,7 +484,7 @@ const formatHost: ts.FormatDiagnosticsHost = {
 					}
 				}
 			}
-			else if (await linterWorker.hasRules(fileName)) {
+			else if (worker.hasRules(fileName)) {
 				passed++;
 			}
 			processed++;
@@ -558,27 +494,15 @@ const formatHost: ts.FormatDiagnosticsHost = {
 		// file's `ruleModes`. Next session reads this and seeds the linter
 		// via `initialTypeAwareRules` so rules are classified correctly
 		// from the first invocation, before the runtime probe re-runs.
-		const typeAware = await linterWorker.getTypeAwareRules();
+		const typeAware = worker.getTypeAwareRules();
 		project.cacheData.ruleModes = {};
 		for (const ruleId of typeAware) {
 			project.cacheData.ruleModes[ruleId] = 'type-aware';
 		}
-		// Layer 2: harvest content hashes + transitive deps from a fresh
-		// BuilderProgram pass over the LS program. Persists alongside the
-		// per-rule cache so the next `--incremental` session can compute
-		// affected files. Falls through to `undefined` on layer-1-only
-		// runs, matching the schema contract.
-		project.cacheData.incrementalState = await linterWorker.buildIncrementalState();
-		cache.saveCache(
-			project.tsconfig,
-			project.configFile!,
-			project.languages,
-			ts.version,
-			project.cacheData,
-			ts.sys.createHash,
-		);
+		project.cacheData.programFingerprint = worker.getFingerprint();
+		cache.saveCache(project.tsconfig, project.configFile!, tsVersion, project.cacheData);
 
-		await startWorker(linterWorker);
+		await startWorker();
 	}
 
 	function resolvePath(p: string) {
@@ -618,17 +542,16 @@ function formatConfigError(configFile: string, errorText: string): string {
 	return out.join('\n');
 }
 
-async function parseCommonLine(tsconfig: string, languages: string[]) {
-	const jsonConfigFile = ts.readJsonConfigFile(tsconfig, ts.sys.readFile);
-	const plugins = await languagePlugins.load(tsconfig, languages);
-	const extraFileExtensions = plugins.flatMap(plugin => plugin.typescript?.extraFileExtensions ?? []).flat();
-	return ts.parseJsonSourceFileConfigFileContent(
-		jsonConfigFile,
-		ts.sys,
-		path.dirname(tsconfig),
-		{},
-		tsconfig,
-		undefined,
-		extraFileExtensions,
-	);
+function findConfigFile(dir: string): string | undefined {
+	while (true) {
+		const configFile = path.join(dir, 'tsslint.config.ts');
+		if (fs.statSync(configFile, { throwIfNoEntry: false })?.isFile()) {
+			return configFile;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return undefined;
+		}
+		dir = parent;
+	}
 }

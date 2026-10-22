@@ -11,41 +11,13 @@
   <a href="https://deepwiki.com/johnsoncodehk/tsslint"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
-A linter that runs as a `tsserver` plugin. It reuses the TypeChecker your editor already has — no second process, no AST conversion, no duplicated type-checking.
+A linter for TypeScript 7. Rules are plain functions over the TypeScript AST, with the TypeScript 7 checker available for type information.
 
-Zero built-in rules. Rules are plain functions over the TypeScript compiler API.
-
-## Why?
-
-ESLint runs in its own process and builds its own type information. On large projects this makes "Auto Fix on Save" slow.
-
-TSSLint piggybacks on `tsserver`. Diagnostics show up in the same path TypeScript errors do, using the same `Program` instance.
-
-```
-   Traditional                       TSSLint
-   ───────────                       ───────
-
-      ┌─────┐                            ┌─────┐
-      │ IDE │                            │ IDE │
-      └──┬──┘                            └──┬──┘
-         │                                  │
-     ┌───┴────┐                             ▼
-     ▼        ▼                    ┌─────────────────┐
-  ┌──────┐ ┌──────┐                │    tsserver     │
-  │ ts-  │ │linter│                │  ┌───────────┐  │
-  │server│ │      │                │  │TypeChecker│  │
-  │      │ │      │                │  └─────┬─────┘  │
-  │ Type │ │ Type │                │        │        │
-  │ Chk. │ │ Chk. │                │  ┌─────▼─────┐  │
-  └──────┘ └──────┘                │  │  TSSLint  │  │
-                                   │  └───────────┘  │
-   ✗ two type-checkers             └─────────────────┘
-     two parses                     ✓ one shared pass
-```
+Zero built-in rules.
 
 ## How it compares
 
-TSLint (TS-AST, deprecated 2019) → ESLint took over via `typescript-eslint` → TSSLint revives the in-process TS-AST approach as a `tsserver` plugin (2023).
+TSLint (TS-AST, deprecated 2019) → ESLint took over via `typescript-eslint` → TSSLint revives the TS-AST approach (2023), on the TypeScript 7 API since v4.
 
 ```
              2013        2019                2023
@@ -57,24 +29,24 @@ TSLint (TS-AST, deprecated 2019) → ESLint took over via `typescript-eslint` �
   ESLint ─────●━━━━━━━━━━━━━━━━╲━━━━━━━━━━━━━━━━━━━▶ (active)
                                 ╲              │
                                  ╲             │
-  TSSLint                         ╲────────────●━━▶  (tsserver plugin,
-                                                     revives TS-AST)
+  TSSLint                         ╲────────────●━━▶  (revives TS-AST,
+                                                     TypeScript 7 since v4)
 ```
 
 | | ESLint | TSLint | Oxlint | TSSLint |
 |---|---|---|---|---|
-| Runtime | Node, separate process | Node, separate process | Rust, separate process | Node, in `tsserver` |
+| Runtime | Node, separate process | Node, separate process | Rust, separate process | Node + TypeScript 7 |
 | AST | ESTree | TS AST | Native Rust AST | TS AST |
-| Type-aware rules | Yes (its own `Program`) | Yes (its own `Program`) | Yes (via `tsgolint`, alpha) | Yes (shared `TypeChecker`) |
-| Built-in rules | Many | Deprecated | Subset of ESLint (+ JS plugins, alpha) | Zero (imports ESLint / TSLint / TSL) |
+| Type-aware rules | Yes (its own `Program`) | Yes (its own `Program`) | Yes (via `tsgolint`, alpha) | Yes (TypeScript 7 checker) |
+| Built-in rules | Many | Deprecated | Subset of ESLint (+ JS plugins, alpha) | Zero (imports ESLint rules) |
 | Status | Active standard | Deprecated 2019 | Active | Active |
 
-**Pick by need.** Largest ecosystem → ESLint. Fastest standalone runtime → Oxlint. Type-aware without duplicate type-checking → TSSLint.
+**Pick by need.** Largest ecosystem → ESLint. Fastest standalone runtime → Oxlint. Rules on the TypeScript 7 AST and checker → TSSLint.
 
 ## Setup
 
 ```bash
-npm install @tsslint/config --save-dev
+npm install @tsslint/cli @tsslint/config --save-dev
 ```
 
 `tsslint.config.ts`:
@@ -89,40 +61,28 @@ export default defineConfig({
 });
 ```
 
-**VSCode**: install [the extension](https://marketplace.visualstudio.com/items?itemName=johnsoncodehk.vscode-tsslint).
+Then run `npx tsslint --project tsconfig.json` (see [CLI](#cli)).
 
-**Other editors**: install the plugin and register it in `tsconfig.json`:
-
-```bash
-npm install @tsslint/typescript-plugin --save-dev
-```
-
-```json
-{
-  "compilerOptions": {
-    "plugins": [{ "name": "@tsslint/typescript-plugin" }]
-  }
-}
-```
+There is no editor integration in v4: TypeScript 7 has no tsserver plugin API.
 
 ## Writing rules
 
-A rule is a function. It receives the TypeScript module, the current `Program`, the `SourceFile`, and a `report()` callback.
+A rule is a function. It receives the `typescript/ast` module, the current `Program` and `Checker` (from `typescript/sync`), the `SourceFile`, and a `report()` callback.
 
 ```ts
 import { defineRule } from '@tsslint/config';
 
 export default defineRule(({ typescript: ts, file, report }) => {
-  ts.forEachChild(file, function visit(node) {
+  file.forEachChild(function visit(node): void {
     if (node.kind === ts.SyntaxKind.DebuggerStatement) {
       report('Debugger statement is not allowed.', node.getStart(file), node.getEnd());
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   });
 });
 ```
 
-Touch `program` only when you need type information — rules that don't are cached aggressively (see [Caching](#caching)).
+Touch `program` / `checker` only when you need type information — rules that don't are cached aggressively (see [Caching](#caching)).
 
 ### Severity, fixes, refactors
 
@@ -139,7 +99,7 @@ report('No console.', node.getStart(file), node.getEnd())
   .withRefactor('Wrap in if (DEBUG)', () => [/* ... */]);
 ```
 
-`withFix` runs automatically as a quick fix; `withRefactor` shows up under the editor's refactor menu (user-initiated).
+`withFix` is applied by `tsslint --fix`; `withRefactor` registers a user-initiated edit for hosts that expose refactors.
 
 ### Real-world example
 
@@ -165,24 +125,24 @@ defineConfig({
 
 Diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/` in two layers, picked per rule:
 
-- **Layer 1** — invalidated by the linted file's mtime. Used for rules that don't read `ctx.program` (purely syntactic).
-- **Layer 2** — invalidated by TypeScript's `BuilderProgram` affected-file diff (transitive, includes ambient `.d.ts`). Used for rules that touch `ctx.program`. The first time a rule reads `ctx.program` it's classified type-aware and stays type-aware across sessions.
+- **Layer 1** — invalidated by the linted file's mtime. Used for rules that don't read `ctx.program` or `ctx.checker` (purely syntactic).
+- **Layer 2** — invalidated by a program fingerprint (compiler options plus the name, mtime, and size of every file in the program, including `.d.ts`). Any change re-runs type-aware rules on every file. Used for rules that touch `ctx.program` or `ctx.checker`. The first time a rule reads either it's classified type-aware and stays type-aware across sessions.
 
 A diagnostic whose correctness depends on inputs neither layer tracks — external resources, env vars, sibling files the rule reads directly via `fs` — should opt out per-diagnostic via `.withoutCache()` on the reporter. The diagnostic still surfaces on the current run; it just isn't written to disk, so the next warm hit on this file won't replay it (the rule has to re-run to surface it again).
 
-For diagnostics that depend on cross-file types, prefer reading `ctx.program` once instead — that re-classifies the rule type-aware and layer 2 handles invalidation properly.
+For diagnostics that depend on cross-file types, prefer reading `ctx.checker` once instead — that re-classifies the rule type-aware and layer 2 handles invalidation properly.
 
 Pass `--force` to the CLI to ignore the cache. `--list-rules` prints each rule's classification (type-aware vs syntactic) after the run.
 
 ### Debugging
 
-Every `report()` captures a stack trace. The diagnostic carries a "Related Information" link back to the exact line in your rule that triggered it — ⌘-click in the editor to jump there:
+Every `report()` captures a stack trace. The diagnostic carries a "Related Information" entry pointing at the exact line in your rule that triggered it:
 
 ```
 src/index.ts:3:1
   3 │ debugger;
     │ ~~~~~~~~~ Debugger statement is not allowed. (tsslint)
-    │             ↳ rules/no-debugger.ts:5:7   ⌘-click to open
+    │             ↳ rules/no-debugger.ts:5:7
 ```
 
 ## CLI
@@ -202,51 +162,35 @@ Flags:
 | Flag | |
 |---|---|
 | `--project <glob...>` | TypeScript projects to lint |
-| `--vue-project <glob...>` | Vue projects |
-| `--vue-vine-project <glob...>` | Vue Vine projects |
-| `--mdx-project <glob...>` | MDX projects |
-| `--astro-project <glob...>` | Astro projects |
-| `--ts-macro-project <glob...>` | TS Macro projects |
 | `--filter <glob...>` | Restrict to matching files |
 | `--fix` | Apply fixes |
 | `--force` | Ignore cache |
 | `--failures-only` | Only print diagnostics that affect exit code |
+| `--list-rules` | Print each rule's classification (syntactic / type-aware) |
 | `-h`, `--help` | |
 
 TSSLint produces diagnostics and edits — it does not format. Run dprint or Prettier after `--fix`.
 
 ## Framework support
 
-The `--*-project` flags wire in [Volar](https://volarjs.dev/) language plugins so framework files (Vue SFCs, MDX, Astro components, etc.) are virtualized as TypeScript before linting. Anything `tsserver` can see, TSSLint can lint.
+Since v4, framework files (`.vue`, `.astro`, `.mdx`, `.svelte`, …) are linted through TypeScript 7.1's **content mapper** — the same mechanism `tsc` uses — instead of Volar language plugins. Declare the mappers in `tsconfig.json`; TSSLint picks them up with the project:
 
-```
-   .vue  ──┐
-   .mdx  ──┤    ┌──────────────┐    ┌──────────────────┐
-   .astro──┼───▶│  Framework   │───▶│     tsserver     │───▶  diagnostics
-   .ts   ──┘    │   adapters   │    │                  │      in editor
-                │              │    │  TypeChecker     │
-                │  ─▶ virtual  │    │       +          │
-                │     TS file  │    │  TSSLint plugin  │
-                └──────────────┘    └──────────────────┘
+```jsonc
+{
+  "contentMappers": [
+    { "package": "@vue/content-mapper", "extensions": [".vue"] }
+  ]
+}
 ```
 
-Each flag resolves the language plugin from your project's `node_modules`, so you must install the corresponding package:
+Rules run against the transformed TypeScript, and diagnostics are mapped back to the original file through the mapper's span map. Diagnostics that only cover generated code are dropped, and `--fix` only applies fixes whose edits all map exactly onto original text.
 
-| Flag | Required package(s) |
-|---|---|
-| `--vue-project` | `@vue/language-core` or `vue-tsc` |
-| `--vue-vine-project` | `@vue-vine/language-service` or `vue-vine-tsc` |
-| `--mdx-project` | `@mdx-js/language-service` |
-| `--astro-project` | `@astrojs/ts-plugin` |
-| `--ts-macro-project` | `@ts-macro/language-plugin` or `@ts-macro/tsc` |
+The v3 flags `--vue-project`, `--vue-vine-project`, `--mdx-project`, `--astro-project`, and `--ts-macro-project` are gone; the mapper configuration in `tsconfig.json` replaces them. See [docs/migration-v4.md](docs/migration-v4.md).
 
-## Importing ESLint, TSLint, or TSL rules
-
-### ESLint
+## Importing ESLint rules
 
 ```bash
 npm install @tsslint/compat-eslint --save-dev
-npm install @typescript-eslint/eslint-plugin --save-dev   # for @typescript-eslint/* rules
 npx tsslint-docgen                                        # generates JSDoc for IDE autocomplete
 ```
 
@@ -259,43 +203,13 @@ export default defineConfig({
   rules: {
     ...await importESLintRules({
       'no-unused-vars': true,
-      '@typescript-eslint/no-explicit-any': 'warn',
+      'eqeqeq': 'warn',
     }),
   },
 });
 ```
 
-### TSLint
-
-```bash
-npm install tslint --save-dev      # required for built-in rules
-npx tsslint-docgen
-```
-
-```ts
-import { defineConfig, importTSLintRules } from '@tsslint/config';
-
-export default defineConfig({
-  rules: await importTSLintRules({
-    'no-console': true,
-  }),
-});
-```
-
-### TSL
-
-```bash
-npm install tsl --save-dev
-```
-
-```ts
-import { defineConfig, fromTSLRules } from '@tsslint/config';
-import { core } from 'tsl';
-
-export default defineConfig({
-  rules: fromTSLRules(core.all()),
-});
-```
+`@typescript-eslint/eslint-plugin` does not load with `typescript@7` yet (its dependencies read the classic `typescript` API at load time), so `@typescript-eslint/*` rules are unavailable until typescript-eslint supports TypeScript 7.
 
 ## Plugins
 
@@ -307,9 +221,8 @@ import {
   createIgnorePlugin,
   createCategoryPlugin,
   createDiagnosticsPlugin,
-  isCLI,
 } from '@tsslint/config';
-import ts from 'typescript';
+import { DiagnosticCategory } from 'typescript/sync';
 
 export default defineConfig({
   rules: { /* ... */ },
@@ -319,13 +232,11 @@ export default defineConfig({
 
     // Override severity by rule-id pattern
     createCategoryPlugin({
-      'style/*': ts.DiagnosticCategory.Warning,
+      'style/*': DiagnosticCategory.Warning,
     }),
 
     // Forward TypeScript's own diagnostics through the same pipeline.
-    // Guard with `isCLI()` — tsserver already surfaces these in editors,
-    // so emitting them again from the plugin would double-report there.
-    ...(isCLI() ? [createDiagnosticsPlugin('semantic')] : []),
+    createDiagnosticsPlugin('semantic'),
   ],
 });
 ```
@@ -334,9 +245,8 @@ Build your own with the `Plugin` type from `@tsslint/types`.
 
 ## Requirements
 
-- Node.js **22.6.0+** (uses `--experimental-strip-types` to load `tsslint.config.ts` directly — no transpile step)
-- Any TypeScript version with Language Service Plugin support
-- Not compatible with `typescript-go` (v7), which does not yet support Language Service Plugins
+- Node.js **22.12.0+** (`tsslint.config.ts` is loaded with `--experimental-strip-types` — no transpile step)
+- TypeScript 7 comes bundled as a dependency, separate from the `typescript` your project compiles with. TypeScript 5/6 are not supported; see [docs/migration-v4.md](docs/migration-v4.md)
 
 ## License
 

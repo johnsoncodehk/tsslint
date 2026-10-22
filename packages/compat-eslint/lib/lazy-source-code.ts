@@ -25,9 +25,9 @@
 // method that's missing here, throw a clear error rather than silently
 // returning undefined.
 
-import * as ts from 'typescript';
 import { materialize } from './lazy-estree';
 import { buildCommentObject, walkInnerCommentsOf } from './tokens';
+import * as ts from './ts';
 
 const SK = ts.SyntaxKind;
 
@@ -132,7 +132,9 @@ interface LazyConfig {
 	text: string;
 	ast: any; // LazyESTree Program
 	tsFile: ts.SourceFile;
-	scopeManager: any;
+	// Scope analysis walks the whole ESTree, so it only runs once a rule
+	// actually asks for scopes.
+	createScopeManager: () => any;
 	parserServices: any;
 	visitorKeys: any;
 }
@@ -140,7 +142,6 @@ interface LazyConfig {
 export class LazySourceCode {
 	readonly text: string;
 	readonly ast: any;
-	readonly scopeManager: any;
 	readonly parserServices: any;
 	readonly visitorKeys: any;
 	readonly hasBOM: boolean;
@@ -154,15 +155,21 @@ export class LazySourceCode {
 	private _lines?: string[];
 	private _lineStartIndices?: number[];
 	private _scopeCache?: WeakMap<object, any>;
+	private _scopeManager: any;
+	private _createScopeManager: () => any;
 
 	constructor(config: LazyConfig) {
 		this.text = config.text;
 		this.ast = config.ast;
 		this._tsFile = config.tsFile;
-		this.scopeManager = config.scopeManager ?? null;
+		this._createScopeManager = config.createScopeManager;
 		this.parserServices = config.parserServices ?? {};
 		this.visitorKeys = config.visitorKeys;
 		this.hasBOM = config.text.charCodeAt(0) === 0xfeff;
+	}
+
+	get scopeManager(): any {
+		return this._scopeManager ??= this._createScopeManager();
 	}
 
 	// ─── Lazy collections ──────────────────────────────────────────────────
@@ -460,11 +467,7 @@ export class LazySourceCode {
 		const out: Comment[] = [];
 		const text = this.text;
 		const ast = this._tsFile;
-		const scanner = this._innerScanner ??= ts.createScanner(
-			ast.languageVersion,
-			/*skipTrivia*/ true,
-			ast.languageVariant,
-		);
+		const scanner = this._innerScanner ??= ts.createScanner(/*skipTrivia*/ true, ast.languageVariant);
 		scanner.setText(text);
 		const collect = (pos: number, end: number, kind: ts.CommentKind): void => {
 			out.push(buildCommentObject(text, pos, end, kind, ast));
@@ -485,7 +488,7 @@ export class LazySourceCode {
 		else {
 			const start = tsNode.getStart(ast);
 			if (start >= tsNode.end) return out;
-			scanner.setTextPos(start);
+			scanner.resetTokenState(start);
 			scanner.scan();
 			innerStart = scanner.getTokenEnd();
 		}

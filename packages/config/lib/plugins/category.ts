@@ -1,10 +1,10 @@
 import type { Plugin } from '@tsslint/types';
-import type * as ts from 'typescript';
+import type { DiagnosticCategory } from 'typescript/sync';
 
 import minimatch = require('minimatch');
 
-export function create(config: Record<string, ts.DiagnosticCategory>, source = 'tsslint'): Plugin {
-	const matchCache = new Map<string | number, ts.DiagnosticCategory | undefined>();
+export function create(config: Record<string, DiagnosticCategory>, source = 'tsslint'): Plugin {
+	const matchCache = new Map<string | number, DiagnosticCategory | undefined>();
 	return () => ({
 		resolveDiagnostics(_file, diagnostics) {
 			for (const diagnostic of diagnostics) {

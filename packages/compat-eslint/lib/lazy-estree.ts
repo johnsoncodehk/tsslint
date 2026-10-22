@@ -50,7 +50,7 @@
 // findWrapperRoute as needed. Adding a new "real ESTree class" goes through
 // `defineShape` — see the table starting around the SHAPE_CLASSES const.
 
-import * as ts from 'typescript';
+import * as ts from './ts';
 import { xhtmlEntities } from './xhtml-entities';
 
 const SK = ts.SyntaxKind;
@@ -1587,7 +1587,7 @@ function maybeFixExports(
 	// `@dec export class` has `modifiers[0]` = the Decorator. getModifiers
 	// excludes decorators (matching typescript-estree's fixExports), so the
 	// `export` keyword is first whatever the decorator position.
-	const modifiers = ts.canHaveModifiers(tsNode) ? ts.getModifiers(tsNode) : undefined;
+	const modifiers = ts.getModifiers(tsNode);
 	if (!modifiers?.length || modifiers[0].kind !== SK.ExportKeyword) return inner;
 	const exportKeyword = modifiers[0];
 	const next = modifiers[1];
@@ -1897,13 +1897,28 @@ defineShape<ts.IndexedAccessTypeNode>(SK.IndexedAccessType, {
 });
 // SK.LiteralType NOT migrated: convertLiteralType has a special case
 // for `null` (wraps NullKeyword as bare TSNullKeyword to match eager).
-defineShape<ts.QualifiedName>(SK.QualifiedName, {
+const qualifiedNameShape = makeShapeClass<ts.QualifiedName>({
 	type: 'TSQualifiedName',
 	slots: {
 		left: { tsField: 'left' },
 		right: { tsField: 'right' },
 	},
 });
+const heritageQualifiedNameShape = makeShapeClass<ts.QualifiedName>({
+	type: 'MemberExpression',
+	defaults: { computed: false, optional: false },
+	slots: {
+		object: { tsField: 'left' },
+		property: { tsField: 'right' },
+	},
+});
+defineShapeRouter(
+	SK.QualifiedName,
+	(tsNode, parent) =>
+		ts.isHeritageQualifiedName(tsNode)
+			? new heritageQualifiedNameShape(tsNode, parent)
+			: new qualifiedNameShape(tsNode, parent),
+);
 defineShape<ts.TypeAssertion>(SK.TypeAssertionExpression, {
 	type: 'TSTypeAssertion',
 	slots: {
@@ -2010,10 +2025,17 @@ defineShape<ts.ConditionalExpression>(SK.ConditionalExpression, {
 		alternate: { tsField: 'whenFalse' },
 	},
 });
-defineShape<ts.NonNullExpression>(SK.NonNullExpression, {
+// `a?.b!` is itself the outermost chain link, so it runs through
+// wrapChainIfNeeded like Member/CallExpression.
+const nonNullExpressionShape = makeShapeClass<ts.NonNullExpression>({
 	type: 'TSNonNullExpression',
 	slots: { expression: { tsField: 'expression' } },
 });
+defineShapeRouter(
+	SK.NonNullExpression,
+	(tsNode, parent) =>
+		wrapChainIfNeeded(new nonNullExpressionShape(tsNode, parent), tsNode as ts.NonNullExpression, parent),
+);
 defineShape<ts.ExternalModuleReference>(SK.ExternalModuleReference, {
 	type: 'TSExternalModuleReference',
 	slots: { expression: { tsField: 'expression' } },
@@ -2036,7 +2058,7 @@ defineShape<ts.TypeParameterDeclaration>(SK.TypeParameter, {
 	slots: {
 		name: { tsField: 'name' },
 		constraint: { tsField: 'constraint' },
-		default: { tsField: 'default' },
+		default: { tsField: 'defaultType' },
 	},
 });
 defineShape<ts.YieldExpression>(SK.YieldExpression, {
@@ -2090,13 +2112,30 @@ defineShape<ts.TypeOfExpression>(SK.TypeOfExpression, {
 });
 // Shapes that use custom converter funcs + whenAbsent='undefined' for
 // type-position slots:
-defineShape<ts.TypeReferenceNode>(SK.TypeReference, {
+const typeReferenceShape = makeShapeClass<ts.TypeReferenceNode>({
 	type: 'TSTypeReference',
 	slots: {
 		typeName: { tsField: 'typeName' },
 		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
 	},
 });
+// TS 7 parses `implements A.B<T>` and interface `extends A.B<T>` as
+// TypeReferences; typescript-estree reads them as expressions.
+const heritageTypeReferenceShape = makeShapeClass<ts.TypeReferenceNode>({
+	type: tn =>
+		(tn.parent as ts.HeritageClause).token === SK.ImplementsKeyword ? 'TSClassImplements' : 'TSInterfaceHeritage',
+	slots: {
+		expression: { tsField: 'typeName' },
+		typeArguments: { tsField: 'typeArguments', via: convertTypeArguments, whenAbsent: 'undefined' },
+	},
+});
+defineShapeRouter(
+	SK.TypeReference,
+	(tsNode, parent) =>
+		ts.isHeritageTypeReference(tsNode)
+			? new heritageTypeReferenceShape(tsNode, parent)
+			: new typeReferenceShape(tsNode, parent),
+);
 defineShape<ts.ConstructorTypeNode>(SK.ConstructorType, {
 	type: 'TSConstructorType',
 	consts: tn => ({
@@ -2112,7 +2151,7 @@ defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 	type: 'TSModuleDeclaration',
 	consts: tn => ({
 		declare: hasMod(tn, SK.DeclareKeyword),
-		global: !!(tn.flags & ts.NodeFlags.GlobalAugmentation),
+		global: ts.isGlobalAugmentation(tn, tn.getSourceFile().text),
 		// `declare global { ... }` is `kind: 'global'` per typescript-estree.
 		// Distinct from `namespace` and `module` — scope-manager's
 		// Referencer.TSModuleDeclaration skips defineIdentifier for
@@ -2124,9 +2163,9 @@ defineShape<ts.ModuleDeclaration>(SK.ModuleDeclaration, {
 		// declaration selector that would have marked inner var/fn
 		// declarations as used. Caught on prisma matched-type-aware
 		// (4 false fires across runtime/getPrismaClient.ts and friends).
-		kind: tn.flags & ts.NodeFlags.GlobalAugmentation
+		kind: ts.isGlobalAugmentation(tn, tn.getSourceFile().text)
 			? 'global'
-			: tn.flags & ts.NodeFlags.Namespace
+			: tn.keyword === SK.NamespaceKeyword
 			? 'namespace'
 			: 'module',
 	}),
@@ -2399,12 +2438,12 @@ defineShape<ts.RegularExpressionLiteral>(SK.RegularExpressionLiteral, {
 		void tn;
 	},
 });
-defineShape<ts.PropertySignature>(SK.PropertySignature, {
+defineShape<ts.PropertySignatureDeclaration>(SK.PropertySignature, {
 	type: 'TSPropertySignature',
 	defaults: { accessibility: undefined, static: false },
 	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
-		optional: !!tn.questionToken,
+		optional: ts.hasQuestionToken(tn),
 		readonly: hasMod(tn, SK.ReadonlyKeyword),
 	}),
 	slots: {
@@ -2412,12 +2451,12 @@ defineShape<ts.PropertySignature>(SK.PropertySignature, {
 		typeAnnotation: { tsField: 'type', via: convertTypeAnnotation, whenAbsent: 'undefined' },
 	},
 });
-defineShape<ts.MethodSignature>(SK.MethodSignature, {
+defineShape<ts.MethodSignatureDeclaration>(SK.MethodSignature, {
 	type: 'TSMethodSignature',
 	defaults: { accessibility: undefined, kind: 'method', static: false },
 	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
-		optional: !!tn.questionToken,
+		optional: ts.hasQuestionToken(tn),
 		readonly: hasMod(tn, SK.ReadonlyKeyword),
 	}),
 	slots: {
@@ -2581,7 +2620,7 @@ defineShape<ts.ArrayBindingPattern>(SK.ArrayBindingPattern, {
 		elements: {
 			tsField: 'elements',
 			via: (els, parent) =>
-				els.map((e: ts.ArrayBindingElement) => e.kind === SK.OmittedExpression ? null : convertChild(e, parent)),
+				els.map((e: ts.ArrayBindingElement) => isArrayBindingHole(e) ? null : convertChild(e, parent)),
 		},
 	},
 });
@@ -3437,7 +3476,7 @@ const classShape = makeShapeClass<ts.ClassDeclaration | ts.ClassExpression>({
 		superClass: {
 			compute: (tn: ts.ClassDeclaration | ts.ClassExpression, parent) => {
 				const ext = tn.heritageClauses?.find(c => c.token === SK.ExtendsKeyword);
-				return ext ? convertChild(ext.types[0]?.expression, parent) : null;
+				return ext ? convertChild(ext.types[0] && ts.heritageElementExpression(ext.types[0]), parent) : null;
 			},
 		},
 		superTypeArguments: {
@@ -3451,7 +3490,11 @@ const classShape = makeShapeClass<ts.ClassDeclaration | ts.ClassExpression>({
 			compute: (tn: ts.ClassDeclaration | ts.ClassExpression, parent) => {
 				const impl = tn.heritageClauses?.find(c => c.token === SK.ImplementsKeyword);
 				if (!impl) return [];
-				return impl.types.map(t => new classImplementsShape(t, parent));
+				return impl.types.map(t =>
+					t.kind === SK.TypeReference
+						? new heritageTypeReferenceShape(t, parent)
+						: new classImplementsShape(t, parent)
+				);
 			},
 		},
 		decorators: { compute: (tn, parent) => convertDecorators(tn, parent) },
@@ -3517,8 +3560,8 @@ defineShape<ts.PropertyDeclaration>(SK.PropertyDeclaration, {
 			declare: hasMod(tn, SK.DeclareKeyword),
 			accessibility: accessibilityOf(tn),
 			computed: tn.name.kind === SK.ComputedPropertyName,
-			optional: !!tn.questionToken,
-			definite: !!tn.exclamationToken,
+			optional: ts.hasQuestionToken(tn),
+			definite: ts.hasExclamationToken(tn),
 		};
 	},
 	slots: {
@@ -3581,7 +3624,7 @@ const objectMethodShape = makeShapeClass<ts.MethodDeclaration>({
 	defaults: { kind: 'init', method: true, shorthand: false },
 	consts: tn => ({
 		computed: tn.name.kind === SK.ComputedPropertyName,
-		optional: !!tn.questionToken,
+		optional: ts.hasQuestionToken(tn),
 	}),
 	slots: {
 		key: { tsField: 'name' },
@@ -3629,7 +3672,7 @@ const methodDefinitionShape = makeShapeClass<
 			computed: tn.kind !== SK.Constructor
 				&& !!(tn as ts.MethodDeclaration).name
 				&& (tn as ts.MethodDeclaration).name.kind === SK.ComputedPropertyName,
-			optional: !!(tn as ts.MethodDeclaration).questionToken,
+			optional: ts.hasQuestionToken(tn as ts.MethodDeclaration),
 		};
 	},
 	slots: {
@@ -3705,7 +3748,7 @@ defineShapeRouter(SK.JsxSelfClosingElement, (tsNode, parent) => new jsxElementSh
 
 defineShape<ts.ImportDeclaration>(SK.ImportDeclaration, {
 	type: 'ImportDeclaration',
-	consts: tn => ({ importKind: tn.importClause?.isTypeOnly ? 'type' : 'value' }),
+	consts: tn => ({ importKind: ts.isTypeOnlyImportClause(tn.importClause) ? 'type' : 'value' }),
 	slots: {
 		source: { tsField: 'moduleSpecifier' },
 		specifiers: {
@@ -3905,21 +3948,11 @@ const NO_COUNTERPART_NODE_KINDS = new Set<ts.SyntaxKind>([
 	SK.JsxAttributes, // → JSXOpeningElement.attributes
 	SK.CaseBlock, // → SwitchStatement.cases
 	SK.HeritageClause, // → ClassDeclaration.superClass / implements
-	// SK.AssertClause === SK.ImportAttributes (kind 301) — the import-
-	// attributes CONTAINER. Upstream's `convertImportAttributes` flattens
-	// `assertClause.elements` directly into `ImportDeclaration.attributes`
-	// without a wrapper node — so the container has no standalone ESTree
-	// type. Distinct from SK.ImportAttribute (kind 302, the individual
-	// `key: value` entry) which DOES have a defineShape and emits
-	// `'ImportAttribute'`. Confusion potential because TS renamed both at
-	// the same time (4.5: AssertClause/AssertEntry; 5.x:
-	// ImportAttributes/ImportAttribute).
-	SK.AssertClause,
+	SK.ImportAttributes, // flattened into ImportDeclaration.attributes
 	SK.OmittedExpression, // sparse array hole — represented as null
 	SK.TemplateSpan, // wrapped in TemplateExpression
 	SK.TemplateLiteralTypeSpan, // wrapped in TSTemplateLiteralType
 	SK.MissingDeclaration, // parse error
-	SK.Bundle, // multi-file container
 	// (UnparsedSource / InputFiles existed in older TS; removed in 5.x —
 	// not listed because the SyntaxKind enum no longer has them)
 	// (SK.SourceFile is intentionally NOT here — `convertLazy` pre-
@@ -4016,7 +4049,7 @@ export function hasNoEstreeCounterpart(kind: ts.SyntaxKind): boolean {
 	// Trivia (comments, whitespace, shebang, conflict markers).
 	if (kind >= SK.FirstTriviaToken && kind <= SK.LastTriviaToken) return true;
 	// File boundary token.
-	if (kind === SK.EndOfFileToken) return true;
+	if (kind === SK.EndOfFile) return true;
 	// Punctuators / operators (`+`, `?`, `===`, `?.`, `&&`, `=>`, etc.).
 	// ESLint's SourceCode exposes these as Token objects (`{type:
 	// 'Punctuator', value, loc, range}`) — they're NOT ESTree nodes.
@@ -4126,6 +4159,7 @@ export function isOutermostOptionalChain(n: ts.Node): boolean {
 		n.kind !== SK.PropertyAccessExpression
 		&& n.kind !== SK.ElementAccessExpression
 		&& n.kind !== SK.CallExpression
+		&& n.kind !== SK.NonNullExpression
 	) {
 		return false;
 	}
@@ -4142,16 +4176,16 @@ export function isOutermostOptionalChain(n: ts.Node): boolean {
 // that the eventual outer build would have to unwrap and re-point.
 function wrapChainIfNeeded(
 	result: LazyNode,
-	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
+	tsNode: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression | ts.NonNullExpression,
 	parent: LazyNode | null | undefined,
 ): LazyNode {
 	if (!isOutermostOptionalChain(tsNode)) return result;
-	// Force the inner `object`/`callee` getter before the wrapper claims the TS
-	// slot, so the inner access parents to `result` (the Member/CallExpression),
-	// matching eager — without it a bottom-up `materialize()` of an inner node
-	// resolves its parent up to the cache-claimed wrapper instead.
-	const r = result as unknown as { type: string; object?: LazyNode; callee?: LazyNode };
-	void (r.type === 'MemberExpression' ? r.object : r.callee);
+	// Force the inner `object`/`callee`/`expression` getter before the wrapper
+	// claims the TS slot, so the inner access parents to `result`, matching
+	// eager — without it a bottom-up `materialize()` of an inner node resolves
+	// its parent up to the cache-claimed wrapper instead.
+	const r = result as unknown as { type: string; object?: LazyNode; callee?: LazyNode; expression?: LazyNode };
+	void (r.type === 'MemberExpression' ? r.object : r.type === 'CallExpression' ? r.callee : r.expression);
 	return new ChainExpressionWrappingNode(tsNode, parent, result);
 }
 
@@ -4256,7 +4290,8 @@ const ProgramNode = makeShapeClass<ts.SourceFile>({
 		comments: [],
 		tokens: [],
 	}),
-	range: (tn, ctx) => [tn.getStart(ctx.ast), tn.endOfFileToken.end],
+	// typescript-estree's Program starts at 0, leading trivia included.
+	range: tn => [tn.pos, tn.endOfFileToken.end],
 	slots: {
 		body: {
 			tsField: 'statements',
@@ -4469,7 +4504,7 @@ const BindingAssignmentPatternNode = makeShapeClass<ts.BindingElement>({
 	type: 'AssignmentPattern',
 	defaults: { decorators: EMPTY_ARRAY, optional: false, typeAnnotation: undefined },
 	registersInMaps: () => false,
-	range: (tn, ctx) => [tn.name.getStart(ctx.ast), tn.initializer!.end],
+	range: (tn, ctx) => [tn.name!.getStart(ctx.ast), tn.initializer!.end],
 	slots: {
 		left: { tsField: 'name', via: 'convertChildAsPattern' },
 		right: { tsField: 'initializer' },
@@ -4501,6 +4536,11 @@ const TSEnumBodyNode = makeShapeClass<ts.EnumDeclaration>({
 // Pull `@dec` decorators out of a node's `modifiers` array. TS folds
 // decorators and modifiers into one list since 4.8; typescript-estree
 // emits them as a separate `decorators` slot on the owning ESTree node.
+// TS 7 parses a hole in an array binding pattern (`[, a]`) as a nameless
+// BindingElement rather than an OmittedExpression.
+function isArrayBindingHole(e: ts.Node): boolean {
+	return e.kind === SK.OmittedExpression || (e.kind === SK.BindingElement && !(e as ts.BindingElement).name);
+}
 function hasMod(tsNode: ts.Node, kind: ts.SyntaxKind): boolean {
 	const ms = (tsNode as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
 	return !!ms?.some(m => m.kind === kind);

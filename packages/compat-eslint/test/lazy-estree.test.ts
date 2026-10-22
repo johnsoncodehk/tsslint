@@ -7,10 +7,12 @@
 // MVP only handles a few SyntaxKinds; fixtures stay narrow on purpose. As
 // classes get added in lazy-estree.ts, broaden the fixtures here.
 
-import * as ts from 'typescript';
+import * as oracle from '@tsslint/estree-oracle';
+import * as ts from '../lib/ts';
+import { parse, parseTs, parseTsx } from './ts7';
 
 const lazy = require('../lib/lazy-estree.js') as typeof import('../lib/lazy-estree.js');
-const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
+const { astConverter } = oracle.typescriptEstreeInternals;
 
 const PARSE_SETTINGS = {
 	allowInvalidAST: false,
@@ -22,16 +24,39 @@ const PARSE_SETTINGS = {
 	tokens: true,
 };
 
-function parseTs(code: string): ts.SourceFile {
-	return ts.createSourceFile('/test.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+// The reference side: typescript-estree's eager Converter over a
+// TypeScript 6 parse of the same text.
+function parseTs6(code: string, fileName = '/test.ts') {
+	const ts6 = oracle.ts;
+	const kind = fileName.endsWith('x') ? ts6.ScriptKind.TSX : ts6.ScriptKind.TS;
+	return ts6.createSourceFile(fileName, code, ts6.ScriptTarget.Latest, true, kind);
 }
 
-function parseTsx(code: string): ts.SourceFile {
-	return ts.createSourceFile('/test.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-}
-
-function eagerConvert(sf: ts.SourceFile): any {
+function eagerConvert(sf: ReturnType<typeof parseTs6>): any {
 	return astConverter(sf, PARSE_SETTINGS as any, true).estree;
+}
+
+// The eager side runs on a TypeScript 6 tree, so node identity can't be
+// shared with the TypeScript 7 tree the lazy side converts. Bridge the
+// two by kind name + text range.
+function eagerConvertWithMaps(code: string, fileName: string): {
+	estree: any;
+	astMaps: { tsNodeToESTreeNodeMap: { get(n: ts.Node): any } };
+} {
+	const ts6 = oracle.ts;
+	const sf6 = parseTs6(code, fileName);
+	const r = astConverter(sf6, PARSE_SETTINGS as any, true);
+	const byRange = new Map<string, any>();
+	const visit = (n: any) => {
+		const e = r.astMaps.tsNodeToESTreeNodeMap.get(n);
+		if (e) byRange.set(`${ts6.SyntaxKind[n.kind]}@${n.pos}-${n.end}`, e);
+		ts6.forEachChild(n, visit);
+	};
+	visit(sf6);
+	return {
+		estree: r.estree,
+		astMaps: { tsNodeToESTreeNodeMap: { get: n => byRange.get(`${ts.SyntaxKind[n.kind]}@${n.pos}-${n.end}`) } },
+	};
 }
 
 const failures: string[] = [];
@@ -104,7 +129,7 @@ function runFixture(name: string, code: string) {
 	console.log(`\n[${name}] ${code.replace(/\n/g, ' \\n ').slice(0, 60)}`);
 	const sf = parseTs(code);
 	const lazyResult = lazy.convertLazy(sf);
-	const eagerResult = eagerConvert(parseTs(code));
+	const eagerResult = eagerConvert(parseTs6(code));
 	compare(lazyResult.estree, eagerResult, 'Program');
 }
 
@@ -150,6 +175,19 @@ runFixture('arrow fn with type', 'let f = (x: number): number => x;');
 runFixture('function expression', 'let f = function g() { return 1; };');
 runFixture('async arrow', 'let f = async () => 1;');
 runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any): any { return y; }');
+
+// TypeScript 7 AST shapes that differ from the classic parser
+runFixture('implements qualified', 'class C implements A.B<T>, D {}');
+runFixture('interface extends qualified', 'interface I extends A.B.C<T>, D {}');
+runFixture('declare global', 'declare global { var x: number; }');
+runFixture('namespace', 'namespace A { export const x = 1; }');
+runFixture('module keyword', 'declare module M {} declare module "m" {}');
+runFixture('optional / definite members', 'class C { a?: number; b!: string; m?(): void; }');
+runFixture('signature members', 'interface I { a?: number; m?(): void; }');
+runFixture('type-only import', 'import type T from "x"; import { type U } from "y";');
+runFixture('array binding hole', 'const [, a, , b] = c;');
+runFixture('type parameter default', 'type T<A = string> = A;');
+runFixture('leading comments', '// c\n/** d */\nfunction f() {}');
 
 // --- Lazy invariants ----------------------------------------------------
 
@@ -423,7 +461,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const sf = parseTs('let x;');
 	const { estree } = lazy.convertLazy(sf);
 	const declarator = (estree.body as any)[0].declarations[0];
-	const eager = eagerConvert(parseTs('let x;'));
+	const eager = eagerConvert(parseTs6('let x;'));
 	const eagerDeclarator = eager.body[0].declarations[0];
 	check('null/undefined: lazy missing init === null', declarator.init === null);
 	check('null/undefined: matches eager (both null or both undefined)', declarator.init === eagerDeclarator.init);
@@ -599,7 +637,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const code = 'let x = 1 as number;';
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
-	const eager = eagerConvert(parseTs(code));
+	const eager = eagerConvert(parseTs6(code));
 	const lazyAs = (estree.body as any)[0].declarations[0].init;
 	const eagerAs = eager.body[0].declarations[0].init;
 	check('AsExpression range: lazy [0]', lazyAs.range[0] === eagerAs.range[0]);
@@ -641,7 +679,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const code = 'let a = 1;\r\nlet b = 2;\r\n';
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
-	const eager = eagerConvert(parseTs(code));
+	const eager = eagerConvert(parseTs6(code));
 	const lazyB = (estree.body as any)[1].declarations[0].id;
 	const eagerB = eager.body[1].declarations[0].id;
 	check('CRLF: line numbers match eager', lazyB.loc.start.line === eagerB.loc.start.line);
@@ -654,7 +692,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const code = 'let xyz = 1';
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
-	const eager = eagerConvert(parseTs(code));
+	const eager = eagerConvert(parseTs6(code));
 	const lazyId = (estree.body as any)[0].declarations[0].id;
 	const eagerId = eager.body[0].declarations[0].id;
 	check(
@@ -668,7 +706,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 {
 	const sf = parseTs('');
 	const { estree } = lazy.convertLazy(sf);
-	const eager = eagerConvert(parseTs(''));
+	const eager = eagerConvert(parseTs6(''));
 	check('empty source: lazy body length 0', (estree.body as any).length === 0);
 	check('empty source: range [0,0]', estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1]);
 	check(
@@ -685,7 +723,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	const code = '   \n  ';
 	const sf = parseTs(code);
 	const { estree } = lazy.convertLazy(sf);
-	const eager = eagerConvert(parseTs(code));
+	const eager = eagerConvert(parseTs6(code));
 	check(
 		'whitespace-only: range matches eager',
 		estree.range[0] === eager.range[0] && estree.range[1] === eager.range[1],
@@ -794,7 +832,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	for (const rel of targets) {
 		const realFile = path.resolve(packagesRoot, rel);
 		const source = fs.readFileSync(realFile, 'utf8');
-		const sf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		const sf = parse(realFile, source);
 		try {
 			const { estree } = lazy.convertLazy(sf);
 			walkAll(estree);
@@ -818,11 +856,11 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	for (const rel of targets) {
 		const realFile = path.resolve(packagesRoot, rel);
 		const source = fs.readFileSync(realFile, 'utf8');
-		const sf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		const sf = parse(realFile, source);
 		const beforeFails = failures.length;
 		try {
 			const { estree: lazyEstree } = lazy.convertLazy(sf);
-			const eagerSf = ts.createSourceFile(realFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+			const eagerSf = parseTs6(source, realFile);
 			const eagerEstree = eagerConvert(eagerSf);
 			compare(lazyEstree, eagerEstree, `parity:${rel}`);
 		}
@@ -970,7 +1008,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 
 	const runFixture = (fx: { name: string; code: string }): { matched: boolean; first?: string } => {
 		const sf = parseTs(fx.code);
-		const eagerSf = parseTs(fx.code);
+		const eagerSf = parseTs6(fx.code);
 		try {
 			const { estree: lazyEstree } = lazy.convertLazy(sf);
 			const eagerEstree = eagerConvert(eagerSf);
@@ -1076,7 +1114,7 @@ runFixture('the no-explicit-any fixture', 'let x: any = 1; function foo(y: any):
 	];
 	const runJsxFixture = (fx: { name: string; code: string }): { matched: boolean; first?: string } => {
 		const sf = parseTsx(fx.code);
-		const eagerSf = parseTsx(fx.code);
+		const eagerSf = parseTs6(fx.code, '/test.tsx');
 		try {
 			const { estree: lazyEstree } = lazy.convertLazy(sf);
 			const eagerEstree = eagerConvert(eagerSf);
@@ -1560,11 +1598,8 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		}
 	}
 
-	const eagerWithMaps = (sf: ts.SourceFile) => {
-		const r = astConverter(sf, PARSE_SETTINGS as any, true) as {
-			estree: any;
-			astMaps: { tsNodeToESTreeNodeMap: { get(n: ts.Node): any } };
-		};
+	const eagerWithMaps = (code: string, fileName: string) => {
+		const r = eagerConvertWithMaps(code, fileName);
 		setEagerParents(r.estree);
 		return r;
 	};
@@ -1610,7 +1645,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		// across both maps.
 		let eagerMap: { get(n: ts.Node): any };
 		try {
-			eagerMap = eagerWithMaps(sf).astMaps.tsNodeToESTreeNodeMap;
+			eagerMap = eagerWithMaps(fx.code, fx.tsx ? '/test.tsx' : '/test.ts').astMaps.tsNodeToESTreeNodeMap;
 		}
 		catch (err) {
 			fixtureFailures.push([fx.name, `eager threw: ${(err as Error).message}`]);
@@ -1990,7 +2025,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		// them, so they're not actually in any user-visible tree.
 		const eagerMap = (() => {
 			try {
-				return astConverter(sf, PARSE_SETTINGS as any, true).astMaps.tsNodeToESTreeNodeMap;
+				return eagerConvertWithMaps(fx.code, fx.tsx ? '/test.tsx' : '/test.ts').astMaps.tsNodeToESTreeNodeMap;
 			}
 			catch {
 				return null;
@@ -2112,7 +2147,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		['EqualsEqualsEqualsToken', ts.SyntaxKind.EqualsEqualsEqualsToken, true],
 		['QuestionDotToken', ts.SyntaxKind.QuestionDotToken, true],
 		// File / trivia boundaries
-		['EndOfFileToken', ts.SyntaxKind.EndOfFileToken, true],
+		['EndOfFile', ts.SyntaxKind.EndOfFile, true],
 		// Container kinds without standalone ESTree shape
 		['SyntaxList', ts.SyntaxKind.SyntaxList, true],
 		['HeritageClause', ts.SyntaxKind.HeritageClause, true],
@@ -2121,8 +2156,8 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		['TemplateSpan', ts.SyntaxKind.TemplateSpan, true],
 		['OmittedExpression', ts.SyntaxKind.OmittedExpression, true],
 		// JSDoc — entire family routed through range check
-		['JSDocComment', ts.SyntaxKind.JSDocComment, true],
-		['JSDocTag', ts.SyntaxKind.JSDocTag, true],
+		['JSDoc', ts.SyntaxKind.JSDoc, true],
+		['JSDocUnknownTag', ts.SyntaxKind.JSDocUnknownTag, true],
 	];
 	for (const [name, kind, expected] of cases) {
 		const actual = lazy.hasNoEstreeCounterpart(kind);
@@ -2186,7 +2221,7 @@ function findTsJsxExpr(sf: ts.SourceFile, attrName?: string): ts.JsxExpression |
 		['punctuator: PlusToken', ts.SyntaxKind.PlusToken],
 		['punctuator: SemicolonToken', ts.SyntaxKind.SemicolonToken],
 		['punctuator: OpenBraceToken', ts.SyntaxKind.OpenBraceToken],
-		['EndOfFileToken', ts.SyntaxKind.EndOfFileToken],
+		['EndOfFileToken', ts.SyntaxKind.EndOfFile],
 		['reserved keyword: ReturnKeyword', ts.SyntaxKind.ReturnKeyword],
 		['reserved keyword: FunctionKeyword', ts.SyntaxKind.FunctionKeyword],
 	];
@@ -2244,12 +2279,12 @@ function runChild(env: NodeJS.ProcessEnv, code: string): { stdout: string; stder
 // the eager Program node), then read getNodeTypeCounts on the next
 // microtask so the deferred queueMicrotask bumps have landed.
 const childCommon = `
-const ts = require('typescript');
+const { parse } = require(${JSON.stringify(require.resolve('./ts7.js'))});
 const lazy = require(${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/lazy-estree.js'))});
 const visitorKeys = require(${
 	JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/visitor-keys.js'))
 }).visitorKeys;
-const sf = ts.createSourceFile('/t.tsx', 'let _ = <Foo a={x} b={y} />;', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const sf = parse('/t.tsx', 'let _ = <Foo a={x} b={y} />;');
 const { estree } = lazy.convertLazy(sf);
 const seen = new WeakSet();
 function walk(n) {
@@ -2296,14 +2331,14 @@ Promise.resolve().then(() => {
 // ── 10: globalThis-shared counter — second require() instance sees it ──
 {
 	const childTwoInstances = `
-const ts = require('typescript');
+const { parse } = require(${JSON.stringify(require.resolve('./ts7.js'))});
 // Load lazy-estree TWICE via different require paths to mimic the
 // CLI-vs-project module-resolution split. delete from cache between
 // to force a fresh module instance, then check that counts populated by
 // the first instance are visible from the second's getNodeTypeCounts().
 const path1 = ${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/lazy-estree.js'))};
 const lazy1 = require(path1);
-const sf = ts.createSourceFile('/t.tsx', 'let _ = <Foo a={x} />;', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const sf = parse('/t.tsx', 'let _ = <Foo a={x} />;');
 lazy1.convertLazy(sf);
 delete require.cache[require.resolve(path1)];
 const lazy2 = require(path1);
@@ -2329,9 +2364,9 @@ Promise.resolve().then(() => {
 // ── 11: resetNodeTypeCounts() clears the counter ───────────────────────
 {
 	const code = `
-const ts = require('typescript');
+const { parse } = require(${JSON.stringify(require.resolve('./ts7.js'))});
 const lazy = require(${JSON.stringify(repoCompatEslint.replace(/index\.js$/, 'lib/lazy-estree.js'))});
-lazy.convertLazy(ts.createSourceFile('/t.tsx', 'let _ = <Foo a={x} />;', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+lazy.convertLazy(parse('/t.tsx', 'let _ = <Foo a={x} />;'));
 Promise.resolve().then(() => {
   const before = lazy.getNodeTypeCounts().size;
   lazy.resetNodeTypeCounts();

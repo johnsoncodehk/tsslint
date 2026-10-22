@@ -49,7 +49,7 @@ function configWithMarker(marker: string): string {
 {
 	const tsconfig = tmpFile('tsconfig1.json', '{}');
 	const config = configWithMarker('t1-' + Date.now());
-	const data = cache.loadCache(tsconfig, config, [], '6.0.0');
+	const data = cache.loadCache(tsconfig, config, '6.0.0');
 	check('empty cache when file missing', data.files !== undefined && Object.keys(data.files).length === 0);
 	check('ruleModes empty', Object.keys(data.ruleModes).length === 0);
 	check('version present', typeof data.version === 'string');
@@ -60,7 +60,7 @@ function configWithMarker(marker: string): string {
 	const tsconfig = tmpFile('tsconfig2.json', '{}');
 	const config = configWithMarker('t2-' + Date.now());
 	const original: import('../lib/cache.js').CacheData = {
-		version: 'v2',
+		version: 'v3',
 		ruleModes: { 'no-undef': 'type-aware' },
 		files: {
 			'/abs/foo.ts': {
@@ -71,8 +71,8 @@ function configWithMarker(marker: string): string {
 			},
 		},
 	};
-	cache.saveCache(tsconfig, config, [], '6.0.0', original);
-	const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+	cache.saveCache(tsconfig, config, '6.0.0', original);
+	const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 	check('round-trip: ruleModes preserved', loaded.ruleModes['no-undef'] === 'type-aware');
 	check('round-trip: file mtime preserved', loaded.files['/abs/foo.ts']?.mtime === 1234567890);
 	check('round-trip: rule entry preserved', !!loaded.files['/abs/foo.ts']?.rules['semi']);
@@ -82,7 +82,7 @@ function configWithMarker(marker: string): string {
 {
 	const tsconfig = tmpFile('tsconfig3.json', '{}');
 	const config = configWithMarker('t3-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	cache.saveCache(tsconfig, config, '6.0.0', cache.emptyCache());
 
 	// Find the cache file and corrupt it.
 	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
@@ -106,7 +106,7 @@ function configWithMarker(marker: string): string {
 						const parsed = JSON.parse(content);
 						// Find the one we just wrote (heuristic: empty data).
 						if (
-							parsed.version === 'v2'
+							parsed.version === 'v3'
 							&& Object.keys(parsed.ruleModes).length === 0
 							&& Object.keys(parsed.files).length === 0
 						) {
@@ -123,7 +123,7 @@ function configWithMarker(marker: string): string {
 	check('found newly-written cache file', !!cacheFile);
 	if (cacheFile) {
 		fs.writeFileSync(cacheFile, '{not valid json');
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 		check('corrupted JSON → empty cache', Object.keys(loaded.files).length === 0);
 	}
 }
@@ -138,8 +138,8 @@ function configWithMarker(marker: string): string {
 		files: { '/x': { mtime: 1, rules: {} } },
 	};
 	// Manually write a stale-version file
-	cache.saveCache(tsconfig, config, [], '6.0.0', stale as any);
-	const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+	cache.saveCache(tsconfig, config, '6.0.0', stale as any);
+	const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 	check('version mismatch → empty', Object.keys(loaded.ruleModes).length === 0);
 }
 
@@ -147,7 +147,7 @@ function configWithMarker(marker: string): string {
 {
 	const tsconfig = tmpFile('tsconfig5.json', '{}');
 	const config = configWithMarker('t5-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	cache.saveCache(tsconfig, config, '6.0.0', cache.emptyCache());
 	// Corrupt to a valid-JSON-but-wrong-shape value. Find the file we
 	// just wrote (heuristic: empty cache contents).
 	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
@@ -174,7 +174,7 @@ function configWithMarker(marker: string): string {
 		try {
 			const o = JSON.parse(fs.readFileSync(f, 'utf8'));
 			if (
-				o.version === 'v2' && Object.keys(o.files).length === 0
+				o.version === 'v3' && Object.keys(o.files).length === 0
 				&& Object.keys(o.ruleModes).length === 0
 			) {
 				// Could be from a previous test; pick first.
@@ -186,7 +186,7 @@ function configWithMarker(marker: string): string {
 	}
 	if (target) {
 		fs.writeFileSync(target, '"just a string"');
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 		check('shape mismatch → empty', Object.keys(loaded.files).length === 0);
 	}
 }
@@ -196,13 +196,13 @@ function configWithMarker(marker: string): string {
 	const tsconfig = tmpFile('tsconfig6.json', '{}');
 	const config = configWithMarker('t6-' + Date.now());
 	const data: import('../lib/cache.js').CacheData = {
-		version: 'v2',
+		version: 'v3',
 		ruleModes: { 'rule6a': 'type-aware' },
 		files: {},
 	};
-	cache.saveCache(tsconfig, config, [], '6.0.0', data);
-	const loadedSameVersion = cache.loadCache(tsconfig, config, [], '6.0.0');
-	const loadedDifferentVersion = cache.loadCache(tsconfig, config, [], '7.0.0');
+	cache.saveCache(tsconfig, config, '6.0.0', data);
+	const loadedSameVersion = cache.loadCache(tsconfig, config, '6.0.0');
+	const loadedDifferentVersion = cache.loadCache(tsconfig, config, '7.0.0');
 
 	check(
 		'same ts version finds the cache',
@@ -223,11 +223,11 @@ function configWithMarker(marker: string): string {
 	const config = configWithMarker('t7-' + Date.now());
 
 	const data: import('../lib/cache.js').CacheData = {
-		version: 'v2',
+		version: 'v3',
 		ruleModes: { 'rule7': 'type-aware' },
 		files: {},
 	};
-	cache.saveCache(tsconfig, config, [], '6.0.0', data);
+	cache.saveCache(tsconfig, config, '6.0.0', data);
 
 	// Bump config size + mtime.
 	fs.writeFileSync(config, '// changed content');
@@ -236,7 +236,7 @@ function configWithMarker(marker: string): string {
 	const newTime = new Date(Date.now() + 60_000);
 	fs.utimesSync(config, newTime, newTime);
 
-	const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+	const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 	check(
 		'config edit invalidates cache (different path key)',
 		!loaded.ruleModes['rule7'],
@@ -252,7 +252,7 @@ function configWithMarker(marker: string): string {
 {
 	const tsconfig = tmpFile('tsconfig8.json', '{}');
 	const config = configWithMarker('t8-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	cache.saveCache(tsconfig, config, '6.0.0', cache.emptyCache());
 
 	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
 	let tmpLeaked = false;
@@ -283,7 +283,7 @@ function configWithMarker(marker: string): string {
 {
 	const tsconfig = tmpFile('tsconfig9.json', '{}');
 	const config = configWithMarker('t9-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	cache.saveCache(tsconfig, config, '6.0.0', cache.emptyCache());
 	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
 	let target: string | null = null;
 	const stack = [cacheRoot];
@@ -302,7 +302,7 @@ function configWithMarker(marker: string): string {
 			else if (e.isFile() && full.endsWith('.cache.json')) {
 				try {
 					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
-					if (o.version === 'v2' && Object.keys(o.files).length === 0) {
+					if (o.version === 'v3' && Object.keys(o.files).length === 0) {
 						target = full;
 						break;
 					}
@@ -315,36 +315,36 @@ function configWithMarker(marker: string): string {
 	if (target) {
 		// mtime is a string, not a number — must reject.
 		const corrupt = {
-			version: 'v2',
+			version: 'v3',
 			ruleModes: {},
 			files: { '/x': { mtime: 'not-a-number', rules: {} } },
 		};
 		fs.writeFileSync(target, JSON.stringify(corrupt));
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 		check('inner mtime mismatch → empty cache', Object.keys(loaded.files).length === 0);
 
 		// rules is null — must also reject.
 		const corrupt2 = {
-			version: 'v2',
+			version: 'v3',
 			ruleModes: {},
 			files: { '/x': { mtime: 1, rules: null } },
 		};
 		fs.writeFileSync(target, JSON.stringify(corrupt2));
-		const loaded2 = cache.loadCache(tsconfig, config, [], '6.0.0');
+		const loaded2 = cache.loadCache(tsconfig, config, '6.0.0');
 		check('inner rules null → empty cache', Object.keys(loaded2.files).length === 0);
 	}
 }
 
-// ── Test 10: incrementalState shape gate ────────────────────────────────
+// ── Test 10: programFingerprint shape gate ──────────────────────────────
 //
-// `incrementalState` is optional, but if present must be a
-// `{version, tsBuildInfoText}` object. A stray `incrementalState: 42`
-// would otherwise sneak past and crash later when reconstructOldBuilder
-// reads `.tsBuildInfoText`.
+// `programFingerprint` is optional, but if present must be a string. A
+// stray `programFingerprint: 42` must not be compared against a real
+// fingerprint as if it were one.
 {
 	const tsconfig = tmpFile('tsconfig10.json', '{}');
-	const config = configWithMarker('t10-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
+	const marker = 't10-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', { ...cache.emptyCache(), programFingerprint: marker });
 	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
 	let target: string | null = null;
 	const stack = [cacheRoot];
@@ -363,7 +363,7 @@ function configWithMarker(marker: string): string {
 			else if (e.isFile() && full.endsWith('.cache.json')) {
 				try {
 					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
-					if (o.version === 'v2' && Object.keys(o.files).length === 0) {
+					if (o.programFingerprint === marker) {
 						target = full;
 						break;
 					}
@@ -373,21 +373,17 @@ function configWithMarker(marker: string): string {
 		}
 		if (target) break;
 	}
+	check('test 10 cache file found', !!target);
 	if (target) {
-		const corrupt = { version: 'v2', ruleModes: {}, files: {}, incrementalState: 42 };
+		const corrupt = { version: 'v3', ruleModes: {}, files: {}, programFingerprint: 42 };
 		fs.writeFileSync(target, JSON.stringify(corrupt));
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('incrementalState wrong type → empty cache', loaded.incrementalState === undefined);
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+		check('programFingerprint wrong type → empty cache', loaded.programFingerprint === undefined);
 
-		const corrupt2 = {
-			version: 'v2',
-			ruleModes: {},
-			files: {},
-			incrementalState: { version: 'v3' /* tsBuildInfoText missing */ },
-		};
-		fs.writeFileSync(target, JSON.stringify(corrupt2));
-		const loaded2 = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('incrementalState missing field → empty cache', loaded2.incrementalState === undefined);
+		const valid = { version: 'v3', ruleModes: {}, files: {}, programFingerprint: 'abc' };
+		fs.writeFileSync(target, JSON.stringify(valid));
+		const loaded2 = cache.loadCache(tsconfig, config, '6.0.0');
+		check('programFingerprint string round-trips', loaded2.programFingerprint === 'abc');
 	}
 }
 

@@ -1,5 +1,19 @@
-import type { Config, LinterContext, Reporter, Rule, RuleContext, Rules } from '@tsslint/types';
-import type * as ts from 'typescript';
+import type {
+	CodeFixAction,
+	Config,
+	Diagnostic,
+	FileTextChanges,
+	LinterContext,
+	RefactorAction,
+	Reporter,
+	Rule,
+	RuleContext,
+	Rules,
+	TextChange,
+} from '@tsslint/types';
+import type { SourceFile } from 'typescript/ast';
+import type { Checker, Program } from 'typescript/sync';
+import { DiagnosticCategory } from 'typescript/sync';
 
 import path = require('path');
 import minimatch = require('minimatch');
@@ -13,11 +27,16 @@ export type Linter = ReturnType<typeof createLinter>;
 // to `{...spread}` so it doesn't leak into the serialised cache.
 export const NO_CACHE = Symbol.for('@tsslint/no-cache');
 
+export interface LintTarget {
+	program: Program;
+	checker: Checker;
+	file: SourceFile;
+}
+
 export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
-	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
 	// Rule IDs already known to be type-aware from a prior session (via
 	// the cache file's `ruleModes` map). Pre-seeding lets us treat those
 	// rules as type-aware on their first invocation in this session,
@@ -25,21 +44,20 @@ export function createLinter(
 	// the cold-session-with-stale-cache hole 3.0.4 had.
 	initialTypeAwareRules?: Iterable<string>,
 ) {
-	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
 	const fileConfigs = new Map<string, typeof configs>();
 	const lintResults = new Map<
 		/* fileName */ string,
 		[
-			file: ts.SourceFile,
-			diagnostic2Fixes: Map<ts.DiagnosticWithLocation, {
+			file: SourceFile,
+			diagnostic2Fixes: Map<Diagnostic, {
 				title: string;
-				getEdits: () => ts.FileTextChanges[];
+				getEdits: () => FileTextChanges[];
 			}[]>,
 			refactors: {
 				title: string;
-				diagnostic: ts.DiagnosticWithLocation;
-				getEdits: () => ts.FileTextChanges[];
+				diagnostic: Diagnostic;
+				getEdits: () => FileTextChanges[];
 			}[],
 		]
 	>();
@@ -53,7 +71,7 @@ export function createLinter(
 	// ignore plugin can no longer match disable comments to rule output —
 	// turning every successful suppression into a warm-only unused-comment
 	// false positive.
-	const rawDiagnosticsByFile = new Map<string, ts.DiagnosticWithLocation[]>();
+	const rawDiagnosticsByFile = new Map<string, Diagnostic[]>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
 			include: config.include,
@@ -83,21 +101,19 @@ export function createLinter(
 		// which decides "is this disable comment used?" by matching against
 		// fired diagnostics.
 		lint(
-			fileName: string,
+			{ program, checker, file }: LintTarget,
 			options?: {
 				skipRules?: ReadonlySet<string>;
-				prevDiagnostics?: readonly ts.DiagnosticWithLocation[];
+				prevDiagnostics?: readonly Diagnostic[];
 			},
-		): ts.DiagnosticWithLocation[] {
+		): Diagnostic[] {
 			let currentRuleId: string;
 			const skipRules = options?.skipRules;
+			const fileName = file.fileName;
 
 			const rules = getRulesForFile(fileName);
-			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName);
 
-			const program = ctx.languageService.getProgram()!;
-			const file = program.getSourceFile(fileName)!;
 			let touchedProgram = false;
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
@@ -105,6 +121,10 @@ export function createLinter(
 				get program() {
 					touchedProgram = true;
 					return program;
+				},
+				get checker() {
+					touchedProgram = true;
+					return checker;
 				},
 				report,
 			};
@@ -114,10 +134,6 @@ export function createLinter(
 			const lintResult = lintResults.get(fileName)!;
 
 			for (const [ruleId, rule] of Object.entries(rules)) {
-				if (token?.isCancellationRequested()) {
-					break;
-				}
-
 				currentRuleId = ruleId;
 
 				if (skipRules?.has(currentRuleId)) {
@@ -146,7 +162,7 @@ export function createLinter(
 			// re-issued here — they live in the caller's cache.
 			rawDiagnosticsByFile.set(fileName, [...lintResult[1].keys()]);
 
-			let diagnostics: ts.DiagnosticWithLocation[] = [
+			let diagnostics: Diagnostic[] = [
 				...(options?.prevDiagnostics ?? []),
 				...lintResult[1].keys(),
 			];
@@ -171,23 +187,15 @@ export function createLinter(
 			return diagnostics;
 
 			function report(message: string, start: number, end: number): Reporter {
-				const error: ts.DiagnosticWithLocation = {
-					category: ts.DiagnosticCategory.Message,
-					code: currentRuleId as any,
+				const error: Diagnostic = {
+					category: DiagnosticCategory.Message,
+					code: currentRuleId,
 					messageText: message,
 					file: rulesContext.file,
 					start,
 					length: end - start,
 					source: 'tsslint',
-					get relatedInformation() {
-						return relatedInformation ??= getRelatedInformations(location[0], location[1]);
-					},
-					set relatedInformation(value) {
-						relatedInformation = value;
-					},
 				};
-				let location: [Error, number] = [new Error(), 1];
-				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
@@ -199,20 +207,19 @@ export function createLinter(
 				const fixes = diagnostic2Fixes.get(error)!;
 
 				return {
-					at(err, stack) {
-						location = [err, stack];
+					at() {
 						return this;
 					},
 					asWarning() {
-						error.category = ts.DiagnosticCategory.Warning;
+						error.category = DiagnosticCategory.Warning;
 						return this;
 					},
 					asError() {
-						error.category = ts.DiagnosticCategory.Error;
+						error.category = DiagnosticCategory.Error;
 						return this;
 					},
 					asSuggestion() {
-						error.category = ts.DiagnosticCategory.Suggestion;
+						error.category = DiagnosticCategory.Suggestion;
 						return this;
 					},
 					withDeprecated() {
@@ -257,7 +264,7 @@ export function createLinter(
 		// Per-diagnostic fix presence — used by the CLI cache layer to
 		// snapshot `hasFix` for a rule's cache entry without reaching
 		// into core's internal `diagnostic2Fixes` map.
-		hasFixForDiagnostic(fileName: string, diagnostic: ts.DiagnosticWithLocation): boolean {
+		hasFixForDiagnostic(fileName: string, diagnostic: Diagnostic): boolean {
 			const lintResult = lintResults.get(fileName);
 			if (!lintResult) return false;
 			const fixes = lintResult[1].get(diagnostic);
@@ -267,7 +274,7 @@ export function createLinter(
 			fileName: string,
 			start: number,
 			end: number,
-			diagnostics?: ts.Diagnostic[],
+			diagnostics?: Diagnostic[],
 		) {
 			const lintResult = lintResults.get(fileName);
 			if (!lintResult) {
@@ -276,7 +283,7 @@ export function createLinter(
 
 			const file = lintResult[0];
 			const configs = getConfigsForFile(fileName);
-			const result: ts.CodeFixAction[] = [];
+			const result: CodeFixAction[] = [];
 
 			for (const [diagnostic, actions] of lintResult[1]) {
 				if (diagnostics?.length && !diagnostics.includes(diagnostic)) {
@@ -290,7 +297,7 @@ export function createLinter(
 					|| (start >= diagStart && start <= diagEnd)
 					|| (end >= diagStart && end <= diagEnd)
 				) {
-					let codeFixes: ts.CodeFixAction[] = [];
+					let codeFixes: CodeFixAction[] = [];
 					for (const action of actions) {
 						codeFixes.push({
 							fixName: `tsslint:${diagnostic.code}`,
@@ -319,7 +326,7 @@ export function createLinter(
 				return [];
 			}
 
-			const result: ts.RefactorActionInfo[] = [];
+			const result: RefactorAction[] = [];
 
 			for (let i = 0; i < lintResult[2].length; i++) {
 				const refactor = lintResult[2][i];
@@ -366,7 +373,7 @@ export function createLinter(
 		// Pre-suppression rule output from the most recent `lint(fileName)`.
 		// Cache layer keys writes off this so suppressed-but-fired
 		// diagnostics survive into the next session's `prevDiagnostics`.
-		getRawLintResult(fileName: string): readonly ts.DiagnosticWithLocation[] {
+		getRawLintResult(fileName: string): readonly Diagnostic[] {
 			return rawDiagnosticsByFile.get(fileName) ?? [];
 		},
 	};
@@ -410,7 +417,7 @@ export function createLinter(
 		function _minimatch(pattern: string) {
 			let normalized = normalizedPath.get(pattern);
 			if (!normalized) {
-				normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
+				normalized = path.resolve(rootDir, pattern).replace(/\\/g, '/');
 				normalizedPath.set(pattern, normalized);
 			}
 			return minimatch.minimatch(fileName, normalized, { dot: true });
@@ -428,7 +435,7 @@ export function createLinter(
 	}
 }
 
-export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
+export function combineCodeFixes(fileName: string, fixes: CodeFixAction[]) {
 	// Match ESLint's `compareMessagesByFixRange` order so overlap resolution
 	// agrees with applyFixes: sort ASC by start, tie-break ASC by end. The
 	// earliest-starting fix wins; later overlapping fixes are dropped. (e.g.
@@ -448,7 +455,7 @@ export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
 		});
 
 	let lastChangeEndAt = -1;
-	let finalTextChanges: ts.TextChange[] = [];
+	let finalTextChanges: TextChange[] = [];
 
 	for (const change of changes) {
 		const textChanges = [...change.textChanges].sort((a, b) => a.span.start - b.span.start);
@@ -463,21 +470,10 @@ export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
 	return finalTextChanges;
 }
 
-export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: ts.TextChange[]): ts.IScriptSnapshot {
-	textChanges = [...textChanges].sort((a, b) => b.span.start - a.span.start);
-	let text = baseSnapshot.getText(0, baseSnapshot.getLength());
-	for (const change of textChanges) {
+export function applyTextChanges(text: string, textChanges: readonly TextChange[]): string {
+	const sorted = [...textChanges].sort((a, b) => b.span.start - a.span.start);
+	for (const change of sorted) {
 		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
 	}
-	return {
-		getText(start, end) {
-			return text.substring(start, end);
-		},
-		getLength() {
-			return text.length;
-		},
-		getChangeRange() {
-			return undefined;
-		},
-	};
+	return text;
 }

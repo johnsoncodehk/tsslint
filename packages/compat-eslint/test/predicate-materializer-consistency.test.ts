@@ -28,14 +28,16 @@
 //
 // Run: tsc --build && node packages/compat-eslint/test/predicate-materializer-consistency.test.js
 
+import * as oracle from '@tsslint/estree-oracle';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as ts from 'typescript';
+import * as ts from '../lib/ts';
+import { parse } from './ts7';
 
 const lazy = require('../lib/lazy-estree.js') as typeof import('../lib/lazy-estree.js');
 const scan = require('../lib/ts-ast-scan.js') as typeof import('../lib/ts-ast-scan.js');
 const { visitorKeys } = require('../lib/visitor-keys.js') as typeof import('../lib/visitor-keys.js');
-const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
+const { astConverter } = oracle.typescriptEstreeInternals;
 
 // Curated snippets covering divergence-prone constructs (where the two
 // descriptions are most likely to drift). The walk hits every ts.Node, so one
@@ -118,16 +120,17 @@ function collectTypes(node: any, into: Set<string>, seen: Set<any>): void {
 
 function sweep(code: string, tsx: boolean, where: string): void {
 	const fileName = tsx ? 't.tsx' : 't.ts';
-	const kind = tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+	const ts6 = oracle.ts;
+	const kind = tsx ? ts6.ScriptKind.TSX : ts6.ScriptKind.TS;
 
 	// lazyProduced: every ESTree type in the canonical top-down lazy tree.
 	const lazyProduced = new Set<string>();
-	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, kind);
+	const sf = parse(fileName, code);
 	collectTypes((lazy.convertLazy(sf) as any).estree, lazyProduced, new Set());
 
 	// eagerProduced: the same for typescript-estree's eager converter (oracle).
 	const eagerProduced = new Set<string>();
-	const sfE = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, kind);
+	const sfE = ts6.createSourceFile(fileName, code, ts6.ScriptTarget.Latest, true, kind);
 	collectTypes(astConverter(sfE, EAGER_SETTINGS as any, false).estree, eagerProduced, new Set());
 
 	// predicated: every ESTree type any predicate fires for, over all ts.Nodes.

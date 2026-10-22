@@ -17,7 +17,6 @@
 // already lazy-builds the parent chain when a rule reads `.parent`, so we
 // don't pre-build ancestors either.
 
-import * as ts from 'typescript';
 import {
 	type ConvertContext,
 	GENERIC_TS_NODE_MARKER,
@@ -26,6 +25,7 @@ import {
 	NoESTreeCounterpartError,
 } from './lazy-estree';
 import { UnsupportedSelectorError } from './selector-analysis';
+import * as ts from './ts';
 
 const SK = ts.SyntaxKind;
 // `import * as ts` lowers to a namespace object guarded by a getter on
@@ -522,14 +522,15 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSInstantiationExpression': n =>
 		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind !== SK.HeritageClause,
+	// TS 7 parses `implements X` / interface `extends X` as a TypeReference.
 	'TSClassImplements': n =>
-		n.kind === SK.ExpressionWithTypeArguments
+		(n.kind === SK.ExpressionWithTypeArguments || n.kind === SK.TypeReference)
 		&& n.parent?.kind === SK.HeritageClause
 		&& (n.parent as ts.HeritageClause).token === SK.ImplementsKeyword
 		&& (n.parent.parent?.kind === SK.ClassDeclaration
 			|| n.parent.parent?.kind === SK.ClassExpression),
 	'TSInterfaceHeritage': n =>
-		n.kind === SK.ExpressionWithTypeArguments
+		(n.kind === SK.ExpressionWithTypeArguments || n.kind === SK.TypeReference)
 		&& n.parent?.kind === SK.HeritageClause
 		&& (n.parent as ts.HeritageClause).token === SK.ExtendsKeyword
 		&& n.parent.parent?.kind === SK.InterfaceDeclaration,
@@ -549,6 +550,10 @@ const PREDICATES: Record<string, Predicate> = {
 	// Context-dependent — see isInJSXIdentifierPosition / chain helpers.
 	'JSXIdentifier': n => n.kind === SK.Identifier && isInJSXIdentifierPosition(n),
 	'JSXMemberExpression': n => n.kind === SK.PropertyAccessExpression && isInJSXMemberExpressionChain(n),
+	'MemberExpression': n =>
+		n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression || ts.isHeritageQualifiedName(n),
+	'TSTypeReference': n => n.kind === SK.TypeReference && !ts.isHeritageTypeReference(n),
+	'TSQualifiedName': n => n.kind === SK.QualifiedName && !ts.isHeritageQualifiedName(n),
 };
 
 // Sidecar table: ESTree types whose predicate is EXACTLY a TS-kind check
@@ -600,7 +605,6 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'ClassDeclaration': [SK.ClassDeclaration],
 	'ClassExpression': [SK.ClassExpression],
 	'NewExpression': [SK.NewExpression],
-	'MemberExpression': [SK.PropertyAccessExpression, SK.ElementAccessExpression],
 	'ConditionalExpression': [SK.ConditionalExpression],
 	'AwaitExpression': [SK.AwaitExpression],
 	'YieldExpression': [SK.YieldExpression],
@@ -647,7 +651,6 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSTypeAssertion': [SK.TypeAssertionExpression],
 	'TSNonNullExpression': [SK.NonNullExpression],
 	'TSSatisfiesExpression': [SK.SatisfiesExpression],
-	'TSTypeReference': [SK.TypeReference],
 	'TSUnionType': [SK.UnionType],
 	'TSIntersectionType': [SK.IntersectionType],
 	'TSArrayType': [SK.ArrayType],
@@ -664,7 +667,6 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSTemplateLiteralType': [SK.TemplateLiteralType],
 	'TSTypePredicate': [SK.TypePredicate],
 	'TSTypeLiteral': [SK.TypeLiteral],
-	'TSQualifiedName': [SK.QualifiedName],
 	'TSOptionalType': [SK.OptionalType],
 	'TSRestType': [SK.RestType],
 	'TSTypeParameter': [SK.TypeParameter],
@@ -843,12 +845,8 @@ export function tsScanTraverse(
 	const enterCb = (target: unknown) => visitor.enterNode(target);
 	const leaveCb = (target: unknown) => visitor.leaveNode(target);
 	// `parentTarget` is the most recent ESTree target we entered on the
-	// way down. ParenthesizedExpression / ComputedPropertyName / ParenthesizedType
-	// are pass-through in convertChildInner — materialise on those returns
-	// the INNER ESTree, not a wrapper. Visit then recurses into the
-	// parens' child (the same inner) and would fire enter/leave a second
-	// time on the same target. Skip when materialise yields the same
-	// ESTree we just entered.
+	// way down. A node whose materialise yields that same target (a TS
+	// kind that maps back onto its parent's ESTree) is not re-entered.
 	// `embedAfter`: an extra TS child to visit INSIDE this node's enter/
 	// leave bracket, just before leaving. Used to inject typeAnnotation
 	// from a parent ts.ParameterDeclaration / ts.VariableDeclaration into
@@ -895,6 +893,16 @@ export function tsScanTraverse(
 			// Recurse through with the CatchClause as parentTarget so the
 			// inner Identifier visit lands with the right ESTree parent.
 			|| (k === SK.VariableDeclaration && node.parent?.kind === SK.CatchClause)
+			// Pass-through in convertChildInner: materialise returns the
+			// INNER ESTree, which the child visit enters anyway. When that
+			// inner is a wrapper head (`(a?.b)` → ChainExpression,
+			// `(typeof import('x'))` → TSTypeQuery) this level would enter
+			// the whole chain and leave its tail as parentTarget, so the
+			// child's own visit — same head, different tail — entered the
+			// chain a second time.
+			|| k === SK.ParenthesizedExpression
+			|| k === SK.ParenthesizedType
+			|| k === SK.ComputedPropertyName
 		) {
 			tsForEachChild(node, child => visit(child, parentTarget));
 			return;

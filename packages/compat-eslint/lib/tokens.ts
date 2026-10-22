@@ -8,7 +8,7 @@
 // `getTokenBefore` etc. gets the same data ESLint+typescript-estree would
 // produce.
 
-import * as ts from 'typescript';
+import * as ts from './ts';
 
 const SK = ts.SyntaxKind;
 
@@ -56,9 +56,7 @@ function isComment(node: ts.Node): boolean {
 	return node.kind === SK.SingleLineCommentTrivia || node.kind === SK.MultiLineCommentTrivia;
 }
 function isJSDocComment(node: ts.Node): boolean {
-	// JSDocComment was added in TS 4.7; alias as JSDoc for older versions.
-	return node.kind === SK.JSDocComment
-		|| (node as { kind: number }).kind === (SK as unknown as { JSDoc?: number }).JSDoc;
+	return node.kind === SK.JSDoc;
 }
 function isJSXToken(node: ts.Node): boolean {
 	return node.kind >= SK.JsxElement && node.kind <= SK.JsxAttribute;
@@ -153,19 +151,15 @@ function buildToken(token: ts.Node, start: number, end: number, ast: ts.SourceFi
 export function convertTokens(ast: ts.SourceFile): Token[] {
 	const result: Token[] = [];
 	const text = ast.text;
-	const scanner = ts.createScanner(
-		ast.languageVersion,
-		/*skipTrivia*/ true,
-		ast.languageVariant,
-	);
+	const scanner = ts.createScanner(/*skipTrivia*/ true, ast.languageVariant);
 	scanner.setText(text);
 	let pos = 0;
 
 	function emitScanned(targetEnd: number): void {
 		while (pos < targetEnd) {
-			scanner.setTextPos(pos);
+			scanner.resetTokenState(pos);
 			const k = scanner.scan();
-			if (k === SK.EndOfFileToken) break;
+			if (k === SK.EndOfFile) break;
 			const start = scanner.getTokenStart();
 			if (start >= targetEnd) break;
 			pos = scanner.getTokenEnd();
@@ -185,7 +179,7 @@ export function convertTokens(ast: ts.SourceFile): Token[] {
 		const nodeStart = node.kind === SK.JsxText ? node.getFullStart() : node.getStart(ast);
 		// Scanner sweeps through trivia / punctuators preceding this node.
 		emitScanned(nodeStart);
-		if (isToken(node) && node.kind !== SK.EndOfFileToken) {
+		if (isToken(node) && node.kind !== SK.EndOfFile) {
 			result.push(convertToken(node, ast));
 			pos = node.getEnd();
 			return;
@@ -280,7 +274,7 @@ export function walkInnerCommentsOf(
 	emitCommentsFrom: (scanFrom: number) => void,
 ): void {
 	if (isComment(node) || isJSDocComment(node)) return;
-	if (isToken(node) && node.kind !== SK.EndOfFileToken) return;
+	if (isToken(node) && node.kind !== SK.EndOfFile) return;
 	let firstSeen = false;
 	let lastEnd = -1;
 	ts.forEachChild(node, child => {
@@ -298,7 +292,7 @@ export function walkInnerCommentsOf(
 	else {
 		const start = node.getStart(ast);
 		if (start >= node.end) return;
-		scanner.setTextPos(start);
+		scanner.resetTokenState(start);
 		scanner.scan();
 		tailFrom = scanner.getTokenEnd();
 	}
@@ -328,11 +322,7 @@ export function convertComments(ast: ts.SourceFile): Comment[] {
 	const collect = (pos: number, end: number, kind: ts.CommentKind): void => {
 		out.push(buildCommentObject(text, pos, end, kind, ast));
 	};
-	const scanner = ts.createScanner(
-		ast.languageVersion,
-		/*skipTrivia*/ true,
-		ast.languageVariant,
-	);
+	const scanner = ts.createScanner(/*skipTrivia*/ true, ast.languageVariant);
 	scanner.setText(text);
 	const emitCommentsFrom = (scanFrom: number): void => {
 		if (scanFrom > 0) {

@@ -2,7 +2,7 @@ import type * as TSSLint from '@tsslint/types';
 import type * as ESLint from 'eslint';
 import * as fs from 'fs';
 import * as path from 'path';
-import type * as ts from 'typescript';
+import { DiagnosticCategory } from 'typescript/sync';
 import type { ESLintRulesConfig } from './eslint-types.js';
 import { normalizeRuleSeverity, type RuleSeverity } from './utils.js';
 
@@ -185,10 +185,10 @@ export async function importESLintRules(
 			options,
 			{ id: rule, ...context },
 			severity === 'error'
-				? 1 satisfies ts.DiagnosticCategory.Error
+				? DiagnosticCategory.Error
 				: severity === 'warn'
-				? 0 satisfies ts.DiagnosticCategory.Warning
-				: 3 satisfies ts.DiagnosticCategory.Message,
+				? DiagnosticCategory.Warning
+				: DiagnosticCategory.Message,
 		);
 	}
 	return rules;

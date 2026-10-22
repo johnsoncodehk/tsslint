@@ -1,10 +1,10 @@
 {
 	"compilerOptions": {
-		"target": "ES2021",
+		"target": "ES2022",
 		"lib": [
-			"ES2021"
+			"ES2022"
 		],
-		"module": "Node16",
+		"module": "nodenext",
 		"sourceMap": true,
 		"composite": true,
 		"strict": true,

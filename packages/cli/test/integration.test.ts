@@ -10,6 +10,7 @@
 import path = require('path');
 import fs = require('fs');
 import os = require('os');
+import url = require('url');
 import { spawnSync } from 'child_process';
 
 const failures: string[] = [];
@@ -26,6 +27,13 @@ function check(name: string, cond: boolean, detail?: string) {
 const repoRoot = path.resolve(__dirname, '../../..');
 const tsslintBin = path.join(repoRoot, 'packages/cli/bin/tsslint.js');
 const noConsoleRule = path.join(repoRoot, 'fixtures/noConsoleRule.ts');
+const configModule = path.join(repoRoot, 'packages/config/index.js');
+
+// Module specifier for an absolute path; a bare `C:\...` path is not a
+// valid ESM import on Windows.
+function importPath(fileName: string): string {
+	return JSON.stringify(url.pathToFileURL(fileName).href);
+}
 
 function makeFixture(): string {
 	// Resolve symlinks (macOS' /var → /private/var) so paths line up with
@@ -46,10 +54,10 @@ function makeFixture(): string {
 	);
 	fs.writeFileSync(
 		path.join(dir, 'tsslint.config.ts'),
-		`import { defineConfig } from '${repoRoot}/packages/config/index.js';\n`
+		`import { defineConfig } from ${importPath(configModule)};\n`
 			+ `export default defineConfig({\n`
 			+ `  rules: {\n`
-			+ `    'no-console': (await import('${noConsoleRule}')),\n`
+			+ `    'no-console': (await import(${importPath(noConsoleRule)})),\n`
 			+ `  },\n`
 			+ `});\n`,
 	);
@@ -204,7 +212,7 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	}
 }
 
-// ── Test 6: incrementalState always persisted (layer 2 default-on) ─────
+// ── Test 6: programFingerprint always persisted (layer 2 default-on) ───
 {
 	const dir = makeFixture();
 	try {
@@ -213,9 +221,8 @@ function readCacheForFixture(fixtureDir: string): unknown {
 		const data = readCacheForFixture(dir) as any;
 		check('cache written', !!data);
 		check(
-			'incrementalState persisted to cache file',
-			!!data?.incrementalState && typeof data.incrementalState.tsBuildInfoText === 'string'
-				&& data.incrementalState.tsBuildInfoText.length > 0,
+			'programFingerprint persisted to cache file',
+			typeof data?.programFingerprint === 'string' && data.programFingerprint.length > 0,
 		);
 	}
 	finally {
@@ -234,10 +241,10 @@ function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: str
 	const rulePath = path.join(dir, 'type-aware-rule.ts');
 	fs.writeFileSync(
 		rulePath,
-		`import { defineRule } from '${repoRoot}/packages/config/index.js';\n`
+		`import { defineRule } from ${importPath(configModule)};\n`
 			+ `import * as fs from 'fs';\n`
-			+ `export default defineRule(({ file, program, report }) => {\n`
-			+ `  void program.getTypeChecker();\n`
+			+ `export default defineRule(({ file, checker, report }) => {\n`
+			+ `  void checker;\n`
 			+ `  fs.appendFileSync(${JSON.stringify(markerPath)}, file.fileName + '\\n');\n`
 			+ `  report('type-aware ran', 0, 1);\n`
 			+ `});\n`,
@@ -257,10 +264,10 @@ function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: str
 	);
 	fs.writeFileSync(
 		path.join(dir, 'tsslint.config.ts'),
-		`import { defineConfig } from '${repoRoot}/packages/config/index.js';\n`
+		`import { defineConfig } from ${importPath(configModule)};\n`
 			+ `export default defineConfig({\n`
 			+ `  include: ['fixture.ts'],\n`
-			+ `  rules: { 'type-aware': (await import('${rulePath}')) },\n`
+			+ `  rules: { 'type-aware': (await import(${importPath(rulePath)})) },\n`
 			+ `});\n`,
 	);
 	const ambient = path.join(dir, 'ambient.d.ts');
@@ -300,8 +307,8 @@ function markerLineCount(markerPath: string): number {
 //
 // The killer case for layer 2: ambient declaration edits don't move the
 // dependent file's mtime, so layer 1 alone would silently serve stale
-// type-aware results. The cross-session affected-file diff (content hash
-// + transitive deps) must catch this.
+// type-aware results. The program fingerprint covers every file the
+// program loaded, so it must catch this.
 {
 	const { dir, markerPath, ambient } = makeTypeAwareFixture();
 	try {
@@ -349,6 +356,130 @@ function markerLineCount(markerPath: string): number {
 			markerLineCount(markerPath) === 2,
 			`expected 2 marker lines, got ${markerLineCount(markerPath)} — --force should bypass layer 2`,
 		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// A project whose `.vue` files go through a minimal tsconfig content
+// mapper: the `<script lang="ts">` body is copied verbatim (one exact
+// segment) and `export {};` is appended as unmapped generated code.
+const MAPPER_SERVER = `
+let input = Buffer.alloc(0);
+process.stdin.on('data', chunk => {
+	input = Buffer.concat([input, chunk]);
+	while (true) {
+		const headerEnd = input.indexOf('\\r\\n\\r\\n');
+		if (headerEnd < 0) return;
+		const length = Number(/Content-Length:\\s*(\\d+)/i.exec(input.subarray(0, headerEnd).toString('ascii'))[1]);
+		const start = headerEnd + 4;
+		if (input.length < start + length) return;
+		const message = JSON.parse(input.subarray(start, start + length).toString('utf8'));
+		input = input.subarray(start + length);
+		respond(message.id, handle(message.method, message.params));
+	}
+});
+function handle(method, params) {
+	if (method === 'initialize') return { positionEncoding: 'utf-16', diagnosticSource: 'test' };
+	if (method === 'openProject') return { configIdentity: 'test' };
+	if (method === 'transform') {
+		const open = '<script lang="ts">';
+		const start = params.content.indexOf(open) + open.length;
+		const body = params.content.slice(start, params.content.indexOf('</script>'));
+		return { text: body + '\\nexport {};\\n', extension: '.ts', mappings: [[0, body.length, start, body.length, 0, 1048575]] };
+	}
+	return null;
+}
+function respond(id, result) {
+	const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }));
+	process.stdout.write('Content-Length: ' + body.length + '\\r\\n\\r\\n');
+	process.stdout.write(body);
+}
+`;
+
+function makeContentMapperFixture(newLine: string): { dir: string; vue: string } {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	const mapperDir = path.join(dir, 'node_modules', 'test-mapper');
+	fs.mkdirSync(mapperDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(mapperDir, 'package.json'),
+		JSON.stringify({
+			name: 'test-mapper',
+			version: '1.0.0',
+			typescript: { contentMapper: { exec: ['node', 'server.js'], dynamicConfig: true } },
+		}),
+	);
+	fs.writeFileSync(path.join(mapperDir, 'server.js'), MAPPER_SERVER);
+	fs.writeFileSync(
+		path.join(dir, 'tsconfig.json'),
+		JSON.stringify({
+			compilerOptions: { target: 'es2020', strict: true, skipLibCheck: true },
+			contentMappers: [{ package: 'test-mapper', extensions: ['.vue'] }],
+			include: ['*.vue'],
+		}),
+	);
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig, defineRule } from ${importPath(configModule)};\n`
+			+ `export default defineConfig({\n`
+			+ `  rules: {\n`
+			+ `    'no-console': (await import(${importPath(noConsoleRule)})),\n`
+			+ `    'generated': defineRule(({ file, report }) => {\n`
+			+ `      const start = file.text.lastIndexOf('export {}');\n`
+			+ `      report('in generated code', start, start + 9).withFix('rewrite generated code', () => [{\n`
+			+ `        fileName: file.fileName,\n`
+			+ `        textChanges: [{ span: { start, length: 9 }, newText: 'void 0;' }],\n`
+			+ `      }]);\n`
+			+ `    }),\n`
+			+ `  },\n`
+			+ `});\n`,
+	);
+	const vue = path.join(dir, 'App.vue');
+	fs.writeFileSync(
+		vue,
+		['<template>', '  <div></div>', '</template>', '<script lang="ts">', `console.log('hi');`, '</script>', ''].join(
+			newLine,
+		),
+	);
+	return { dir, vue };
+}
+
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+// ── Test 10 (content mapper): diagnostics land on the original file ────
+{
+	const { dir } = makeContentMapperFixture('\n');
+	try {
+		const out = stripAnsi(runCli(dir).stdout);
+		check('mapped diagnostic points at App.vue:5:1', out.includes('App.vue:5:1'), out);
+		check('diagnostic in unmapped generated code is dropped', !out.includes('in generated code'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 11 (content mapper): --fix edits the original text, exactly ───
+//
+// CRLF line endings: positions must stay in original-file coordinates.
+// The fix touching generated code has no exact original span and must be
+// skipped without blocking the exact one.
+{
+	const { dir, vue } = makeContentMapperFixture('\r\n');
+	try {
+		const before = fs.readFileSync(vue, 'utf8');
+		runCli(dir, '--fix');
+		const after = fs.readFileSync(vue, 'utf8');
+		check(
+			'--fix rewrote the mapped span in App.vue',
+			after === before.replace(`console.log('hi')`, '/* deleted */'),
+			JSON.stringify(after),
+		);
+		const out = stripAnsi(runCli(dir).stdout);
+		check('no diagnostics after --fix', !out.includes('no-console'), out);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
