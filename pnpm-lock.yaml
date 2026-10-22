@@ -27,22 +27,22 @@ importers:
   fixtures/compat-eslint:
     devDependencies:
       '@tsslint/compat-eslint':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../../packages/compat-eslint
       '@tsslint/config':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../../packages/config
 
   packages/cli:
     dependencies:
       '@tsslint/config':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../config
       '@tsslint/core':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../core
       '@tsslint/types':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../types
       minimatch:
         specifier: ^10.0.1
@@ -55,7 +55,7 @@ importers:
   packages/compat-eslint:
     dependencies:
       '@tsslint/types':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../types
       '@typescript-eslint/scope-manager':
         specifier: ^8.72.0
@@ -80,14 +80,14 @@ importers:
   packages/config:
     dependencies:
       '@tsslint/types':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../types
       minimatch:
         specifier: ^10.0.1
         version: 10.2.5
     devDependencies:
       '@tsslint/compat-eslint':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../compat-eslint
       typescript:
         specifier: 7.1.0-beta
@@ -96,7 +96,7 @@ importers:
   packages/core:
     dependencies:
       '@tsslint/types':
-        specifier: 3.1.4
+        specifier: 4.0.0-alpha.0
         version: link:../types
       minimatch:
         specifier: ^10.0.1
