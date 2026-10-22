@@ -2,7 +2,8 @@
 // Run via:
 //   node --experimental-strip-types --no-warnings packages/compat-eslint/test/ts-ast-scan.test.ts
 
-import * as ts from 'typescript';
+import * as ts from '../lib/ts';
+import { parseTs as parseTs7 } from './ts7';
 
 const lazy = require('../lib/lazy-estree.js') as typeof import('../lib/lazy-estree.js');
 const { predicateForTriggerSet, hasPredicate, tsScanTraverse } = require(
@@ -21,7 +22,7 @@ function check(name: string, cond: boolean, detail?: string) {
 }
 
 function parseTs(code: string): ts.SourceFile {
-	return ts.createSourceFile('/test.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	return parseTs7(code);
 }
 
 // Collect the same `{phase, target}` shape tests previously got back from

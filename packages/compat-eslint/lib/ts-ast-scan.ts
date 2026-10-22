@@ -17,7 +17,7 @@
 // already lazy-builds the parent chain when a rule reads `.parent`, so we
 // don't pre-build ancestors either.
 
-import * as ts from 'typescript';
+import * as ts from './ts';
 import {
 	type ConvertContext,
 	GENERIC_TS_NODE_MARKER,
@@ -522,14 +522,15 @@ const PREDICATES: Record<string, Predicate> = {
 	'TSInstantiationExpression': n =>
 		n.kind === SK.ExpressionWithTypeArguments
 		&& n.parent?.kind !== SK.HeritageClause,
+	// TS 7 parses `implements X` / interface `extends X` as a TypeReference.
 	'TSClassImplements': n =>
-		n.kind === SK.ExpressionWithTypeArguments
+		(n.kind === SK.ExpressionWithTypeArguments || n.kind === SK.TypeReference)
 		&& n.parent?.kind === SK.HeritageClause
 		&& (n.parent as ts.HeritageClause).token === SK.ImplementsKeyword
 		&& (n.parent.parent?.kind === SK.ClassDeclaration
 			|| n.parent.parent?.kind === SK.ClassExpression),
 	'TSInterfaceHeritage': n =>
-		n.kind === SK.ExpressionWithTypeArguments
+		(n.kind === SK.ExpressionWithTypeArguments || n.kind === SK.TypeReference)
 		&& n.parent?.kind === SK.HeritageClause
 		&& (n.parent as ts.HeritageClause).token === SK.ExtendsKeyword
 		&& n.parent.parent?.kind === SK.InterfaceDeclaration,
@@ -549,6 +550,10 @@ const PREDICATES: Record<string, Predicate> = {
 	// Context-dependent — see isInJSXIdentifierPosition / chain helpers.
 	'JSXIdentifier': n => n.kind === SK.Identifier && isInJSXIdentifierPosition(n),
 	'JSXMemberExpression': n => n.kind === SK.PropertyAccessExpression && isInJSXMemberExpressionChain(n),
+	'MemberExpression': n =>
+		n.kind === SK.PropertyAccessExpression || n.kind === SK.ElementAccessExpression || ts.isHeritageQualifiedName(n),
+	'TSTypeReference': n => n.kind === SK.TypeReference && !ts.isHeritageTypeReference(n),
+	'TSQualifiedName': n => n.kind === SK.QualifiedName && !ts.isHeritageQualifiedName(n),
 };
 
 // Sidecar table: ESTree types whose predicate is EXACTLY a TS-kind check
@@ -600,7 +605,6 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'ClassDeclaration': [SK.ClassDeclaration],
 	'ClassExpression': [SK.ClassExpression],
 	'NewExpression': [SK.NewExpression],
-	'MemberExpression': [SK.PropertyAccessExpression, SK.ElementAccessExpression],
 	'ConditionalExpression': [SK.ConditionalExpression],
 	'AwaitExpression': [SK.AwaitExpression],
 	'YieldExpression': [SK.YieldExpression],
@@ -647,7 +651,6 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSTypeAssertion': [SK.TypeAssertionExpression],
 	'TSNonNullExpression': [SK.NonNullExpression],
 	'TSSatisfiesExpression': [SK.SatisfiesExpression],
-	'TSTypeReference': [SK.TypeReference],
 	'TSUnionType': [SK.UnionType],
 	'TSIntersectionType': [SK.IntersectionType],
 	'TSArrayType': [SK.ArrayType],
@@ -664,7 +667,6 @@ const SIMPLE_KINDS: Record<string, ts.SyntaxKind[]> = {
 	'TSTemplateLiteralType': [SK.TemplateLiteralType],
 	'TSTypePredicate': [SK.TypePredicate],
 	'TSTypeLiteral': [SK.TypeLiteral],
-	'TSQualifiedName': [SK.QualifiedName],
 	'TSOptionalType': [SK.OptionalType],
 	'TSRestType': [SK.RestType],
 	'TSTypeParameter': [SK.TypeParameter],

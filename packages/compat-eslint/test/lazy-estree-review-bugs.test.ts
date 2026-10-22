@@ -16,12 +16,14 @@
 // `.js`, oracle = typescript-estree's eager `astConverter`.
 // Run: tsc --build && node packages/compat-eslint/test/lazy-estree-review-bugs.test.js
 
-import * as ts from 'typescript';
+import * as oracle from '@tsslint/estree-oracle';
+import * as ts from '../lib/ts';
+import { parse } from './ts7';
 
 const lazy = require('../lib/lazy-estree.js') as typeof import('../lib/lazy-estree.js');
 const scan = require('../lib/ts-ast-scan.js') as typeof import('../lib/ts-ast-scan.js');
 const { visitorKeys } = require('../lib/visitor-keys.js') as typeof import('../lib/visitor-keys.js');
-const { astConverter } = require('@typescript-eslint/typescript-estree/use-at-your-own-risk');
+const { astConverter } = oracle.typescriptEstreeInternals;
 
 // Lazy child slots are PROTOTYPE getters, so Object.keys can't see them — a
 // generic tree walk must drive off visitorKeys (own-keys fallback for the rare
@@ -30,12 +32,16 @@ function childKeys(n: any): readonly string[] {
 	return visitorKeys[n.type] ?? Object.keys(n);
 }
 function sfOf(code: string, tsx = false): ts.SourceFile {
-	return ts.createSourceFile(
+	return parse(tsx ? '/t.tsx' : '/t.ts', code);
+}
+function sf6Of(code: string, tsx = false) {
+	const ts6 = oracle.ts;
+	return ts6.createSourceFile(
 		tsx ? 't.tsx' : 't.ts',
 		code,
-		ts.ScriptTarget.Latest,
+		ts6.ScriptTarget.Latest,
 		true,
-		tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+		tsx ? ts6.ScriptKind.TSX : ts6.ScriptKind.TS,
 	);
 }
 const lazyAst = (code: string, tsx = false) => (lazy.convertLazy(sfOf(code, tsx)) as any).estree;
@@ -50,7 +56,7 @@ function eagerAst(code: string, tsx = false, invalid = false): any {
 		suppressDeprecatedPropertyWarnings: true,
 		tokens: false,
 	};
-	return astConverter(sfOf(code, tsx), settings as any, false).estree;
+	return astConverter(sf6Of(code, tsx), settings as any, false).estree;
 }
 function find(root: any, pred: (n: any) => boolean): any {
 	const seen = new Set<any>();

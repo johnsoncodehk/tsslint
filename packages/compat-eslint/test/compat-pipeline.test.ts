@@ -12,7 +12,10 @@
 //   node --experimental-strip-types --no-warnings packages/compat-eslint/test/compat-pipeline.test.ts
 
 import type * as ESLint from 'eslint';
-import * as ts from 'typescript';
+import type { SourceFile } from 'typescript/ast';
+import { type Checker, type Program } from 'typescript/sync';
+import { createIdentifier } from 'typescript/ast/factory';
+import { createProject } from './ts7';
 
 const compat = require('../index.js') as typeof import('../index.js');
 
@@ -64,60 +67,18 @@ function makeRule(listeners: Record<string, true>): MockRule {
 	return { rule, calls };
 }
 
-// Build a minimal ts.Program from in-memory code. Compiler host serves
-// `/test.ts` only; type-checker calls in our pipeline are best-effort
-// (parserServices.getSymbolAtLocation only fires if a rule explicitly
-// asks, which our mock rules don't).
+type FileKind = 'ts' | 'tsx' | 'js' | 'jsx';
+
 function buildProgram(
 	code: string,
-	kind: ts.ScriptKind = ts.ScriptKind.TS,
-): { program: ts.Program; file: ts.SourceFile } {
-	const isJs = kind === ts.ScriptKind.JS || kind === ts.ScriptKind.JSX;
-	const fileName = kind === ts.ScriptKind.TSX
-		? '/test.tsx'
-		: kind === ts.ScriptKind.JSX
-		? '/test.jsx'
-		: kind === ts.ScriptKind.JS
-		? '/test.js'
-		: '/test.ts';
-	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, kind);
-	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
-	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
-	const realLib = ts.createSourceFile(
-		realLibPath,
-		realLibContent,
-		ts.ScriptTarget.Latest,
-		true,
-		ts.ScriptKind.TS,
-	);
-	const host: ts.CompilerHost = {
-		getSourceFile: n => n === fileName ? sf : (n === realLibPath ? realLib : undefined),
-		getDefaultLibFileName: () => realLibName,
-		getDefaultLibLocation: () => realLibPath.replace('/' + realLibName, ''),
-		writeFile: () => {},
-		getCurrentDirectory: () => '/',
-		getDirectories: () => [],
-		fileExists: n => n === fileName || n === realLibPath,
-		readFile: n => n === fileName ? code : (n === realLibPath ? realLibContent : undefined),
-		getCanonicalFileName: n => n,
-		useCaseSensitiveFileNames: () => true,
-		getNewLine: () => '\n',
-	};
-	const program = ts.createProgram({
-		rootNames: [fileName],
-		options: {
-			target: ts.ScriptTarget.Latest,
-			lib: [realLibName],
-			noEmit: true,
-			allowJs: isJs || undefined,
-			jsx: kind === ts.ScriptKind.TSX || kind === ts.ScriptKind.JSX
-				? ts.JsxEmit.Preserve
-				: undefined,
-		},
-		host,
+	kind: FileKind = 'ts',
+): { program: Program; checker: Checker; file: SourceFile } {
+	const isJs = kind === 'js' || kind === 'jsx';
+	return createProject(`test.${kind}`, code, {
+		strict: true,
+		allowJs: isJs || undefined,
+		jsx: kind === 'tsx' || kind === 'jsx' ? 'preserve' : undefined,
 	});
-	return { program, file: sf };
 }
 
 // Drive the rule through the TSSLint pipeline. Returns the reports the
@@ -125,8 +86,9 @@ function buildProgram(
 // instead, which exercises the same path before the report-replay step).
 function runRule(
 	rule: ESLint.Rule.RuleModule,
-	program: ts.Program,
-	file: ts.SourceFile,
+	program: Program,
+	file: SourceFile,
+	checker?: Checker,
 ): { reports: any[]; threw?: unknown } {
 	const reports: any[] = [];
 	let threw: unknown;
@@ -160,7 +122,7 @@ function runRule(
 		return chain;
 	};
 	try {
-		tsslintRule({ file, report: reportFn, program } as any);
+		tsslintRule({ file, report: reportFn, program, checker } as any);
 	}
 	catch (e) {
 		threw = e;
@@ -171,11 +133,11 @@ function runRule(
 function runMock(
 	code: string,
 	listeners: Record<string, true>,
-	kind: ts.ScriptKind = ts.ScriptKind.TS,
+	kind: FileKind = 'ts',
 ): { calls: Recorded[]; threw?: unknown } {
-	const { program, file } = buildProgram(code, kind);
+	const { program, file, checker } = buildProgram(code, kind);
 	const m = makeRule(listeners);
-	const r = runRule(m.rule, program, file);
+	const r = runRule(m.rule, program, file, checker);
 	return { calls: m.calls, threw: r.threw };
 }
 
@@ -281,7 +243,7 @@ function runMock(
 //     no-unreachable false-positive seen on TS repo's checker.ts.
 {
 	const code = `const obj = { method() { return 1; } };\nvar x = 1;`;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUnreachable = require(eslintRoot + '/lib/rules/no-unreachable.js');
 	const reports: { start: number; end: number }[] = [];
@@ -319,7 +281,7 @@ function runMock(
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'no-unreachable: method shorthand return does not poison outer scope reachability',
 		reports.length === 0,
@@ -342,7 +304,7 @@ function runMock(
 		/** @internal */
 		export function after() {}
 	`;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const paddingRule = require(eslintRoot + '/lib/rules/padding-line-between-statements.js');
 	const reports: { start: number; end: number }[] = [];
@@ -384,7 +346,7 @@ function runMock(
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'padding-line: export-wrapped function inherits proper parent (no false positive on JSDoc-then-export)',
 		reports.length === 0,
@@ -401,7 +363,7 @@ function runMock(
 {
 	// `const` binding in a for-of: ESLint says safe, TSSLint must agree.
 	const code = `for (const x of arr) { items.filter(y => y === x); }`;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noLoopFunc = require(eslintRoot + '/lib/rules/no-loop-func.js');
 	const reports: { msg: string }[] = [];
@@ -439,7 +401,7 @@ function runMock(
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'no-loop-func: const for-of binding is block-scoped (safe), no false positive',
 		reports.length === 0,
@@ -470,7 +432,7 @@ function runMock(
 	// `tsNode.parent` from it yields undefined immediately, so the
 	// materialize loop exits with `parent === null` and falls through to
 	// the GenericTSNode(parent=null) branch.
-	const detached = ts.factory.createIdentifier('detached');
+	const detached = createIdentifier('detached');
 	let threw: unknown;
 	let result: unknown;
 	try {
@@ -513,7 +475,7 @@ function g() {
 	return modulePaths.length;
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const preferConst = require(eslintRoot + '/lib/rules/prefer-const.js');
 	const reports: { msg: string }[] = [];
@@ -551,7 +513,7 @@ function g() {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'prefer-const: array destructuring with mixed reassign reports each non-reassigned binding (destructuring: any default)',
 		reports.length === 4,
@@ -583,7 +545,7 @@ const e = JSON.stringify({});
 const f = parseInt('1', 10);
 const g = NOT_A_REAL_GLOBAL;
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -621,7 +583,7 @@ const g = NOT_A_REAL_GLOBAL;
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'no-undef: built-in ECMAScript globals (undefined/Math/String/Array/JSON/parseInt) are recognised',
 		reports.length === 1,
@@ -631,86 +593,6 @@ const g = NOT_A_REAL_GLOBAL;
 		'no-undef: the one report is for the truly undefined name',
 		reports.length === 1 && reports[0].msg.includes('NOT_A_REAL_GLOBAL'),
 		`got: ${reports[0]?.msg}`,
-	);
-}
-
-// 3h. `TsVariable.defs` must filter out declarations that aren't in the
-//     user's source file (e.g. TS lib `.d.ts` declarations for `Map`,
-//     `Set`, `Promise`). `materialize()` can't reach lib-source nodes
-//     because `convertLazy` only pre-registers the user's SourceFile,
-//     so they fall back to `GenericTSNode(parent=null)`. Rules that
-//     read `def.node.parent.type` (naming-convention's
-//     `collectVariables` → `isExported`, no-unused-vars, no-redeclare)
-//     crash on null parent. Upstream models the same symbols as
-//     `ImplicitLibVariable` with empty defs.
-//
-//     Originally surfaced when adding `addGlobals` made eager
-//     `_ensureRefIndex()` populate lib vars in globalScope before
-//     naming-convention's `collectVariables` walked them.
-{
-	// `Map<string>` is a type-only lib reference — scope-manager adds the
-	// Map symbol's TsVariable to globalScope. Without the filter, its
-	// defs[0].node materializes from lib.es2015.collection.d.ts and
-	// returns GenericTSNode(parent=null). naming-convention crashes on
-	// `def.node.parent.type.startsWith('Export')`.
-	const code = `
-const m: Map<string, number> = new Map();
-const x = m.size;
-`;
-	const { program, file } = buildProgram(code);
-	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
-	const tsPlugin = require(require.resolve('@typescript-eslint/eslint-plugin', { paths: [eslintRoot] }));
-	const namingConvention = tsPlugin.rules['naming-convention'];
-	const reports: { msg: string }[] = [];
-	const tsslintRule = compat.convertRule(
-		namingConvention,
-		[{ selector: 'typeLike', format: ['PascalCase'] }],
-		{ id: 'naming-convention' },
-	);
-	const reportFn: any = (msg: string) => {
-		reports.push({ msg });
-		const r: any = {
-			at() {
-				return r;
-			},
-			asWarning() {
-				return r;
-			},
-			asError() {
-				return r;
-			},
-			asSuggestion() {
-				return r;
-			},
-			withFix() {
-				return r;
-			},
-			withRefactor() {
-				return r;
-			},
-			withDeprecated() {
-				return r;
-			},
-			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
-				return r;
-			},
-		};
-		return r;
-	};
-	let threw: unknown;
-	try {
-		tsslintRule({ file, report: reportFn, program } as any);
-	}
-	catch (e) {
-		threw = e;
-	}
-	check(
-		'TsVariable.defs: lib-source declarations are filtered (no naming-convention crash on def.node.parent.type)',
-		threw === undefined,
-		threw ? `threw: ${(threw as Error).message}` : 'unexpected',
 	);
 }
 
@@ -746,7 +628,7 @@ function f(obj?: { x: { y: string } | undefined }) {
 	return undefined;
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const consistentReturn = require(eslintRoot + '/lib/rules/consistent-return.js');
 	const reports: { msg: string }[] = [];
@@ -786,7 +668,7 @@ function f(obj?: { x: { y: string } | undefined }) {
 	};
 	let threw: unknown;
 	try {
-		tsslintRule({ file, report: reportFn, program } as any);
+		tsslintRule({ file, report: reportFn, program, checker } as any);
 	}
 	catch (e) {
 		threw = e;
@@ -818,7 +700,7 @@ function f() {
 	for (let i = 0, j = 0; i < 10; i++, j++) { x = i, j; }
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noSequences = require(eslintRoot + '/lib/rules/no-sequences.js');
 	const reports: { msg: string }[] = [];
@@ -856,7 +738,7 @@ function f() {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	// `x = i, j` — bare comma in expression statement. Not in
 	// allowed-parens skip list, not for-update, no parens → reports.
 	check(
@@ -885,7 +767,7 @@ namespace M {
 	f();
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUseBeforeDef = require(eslintRoot + '/lib/rules/no-use-before-define.js');
 	const reports: { msg: string }[] = [];
@@ -929,7 +811,7 @@ namespace M {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'convertRule: deep-merges meta.defaultOptions with user options (no-use-before-define enums fires on const enum)',
 		reports.length === 1 && reports[0].msg.includes("'Bar'"),
@@ -954,7 +836,7 @@ namespace M {
 import { sys } from './y.js';
 function f(sys: string) { return sys; }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
@@ -992,7 +874,7 @@ function f(sys: string) { return sys; }
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'TsVariable.isValueVariable: ImportBinding counts as value (no-shadow fires on import-vs-param value/value shadow)',
 		reports.length === 1 && reports[0].msg.includes("'sys'"),
@@ -1022,7 +904,7 @@ function outer() {
 	return resolve;
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
@@ -1060,7 +942,7 @@ function outer() {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'TsVariable.scope: named function expression name binding lives in the function-expression-name scope (not the inner function body)',
 		reports.length === 0,
@@ -1087,7 +969,7 @@ if (process.argv.includes('--version')) {
 	require('../dist/x.js');
 }
 `;
-	const { program, file } = buildProgram(code, ts.ScriptKind.JS);
+	const { program, file, checker } = buildProgram(code, 'js');
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
@@ -1125,7 +1007,7 @@ if (process.argv.includes('--version')) {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'TsScope global/module: skip sf.locals entries whose decls are nested inside a scope-boundary (JS CJS-alias hoist)',
 		reports.length === 0,
@@ -1145,7 +1027,7 @@ if (process.argv.includes('--version')) {
 		console.log(x);
 	}
 }`;
-	const { program, file } = buildProgram(code, ts.ScriptKind.JS);
+	const { program, file, checker } = buildProgram(code, 'js');
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
@@ -1183,7 +1065,7 @@ if (process.argv.includes('--version')) {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'TsScope function: skip fn.locals entries whose decls are nested inside a sub-scope (JS CJS-alias hoist into function locals)',
 		reports.length === 0,
@@ -1207,10 +1089,22 @@ class A extends String {}
 class B implements String {}
 type C = String;
 `;
-	const { program, file } = buildProgram(code);
-	const tsRoot = require('path').dirname(require.resolve('@typescript-eslint/eslint-plugin/package.json'));
-	const ruleMod = require(tsRoot + '/dist/rules/no-wrapper-object-types.js');
-	const rule = (ruleMod as { default?: ESLint.Rule.RuleModule }).default ?? ruleMod;
+	const { program, file, checker } = buildProgram(code);
+	// Same listeners as typescript-eslint's `no-wrapper-object-types`.
+	const rule: ESLint.Rule.RuleModule = {
+		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
+		create(ctx) {
+			const check = (node: any, name: any) => {
+				if (name?.type === 'Identifier' && name.name === 'String') {
+					ctx.report({ node, message: node.type });
+				}
+			};
+			return {
+				TSClassImplements: (node: any) => check(node, node.expression),
+				TSTypeReference: (node: any) => check(node, node.typeName),
+			} as any;
+		},
+	};
 	const reports: { msg: string }[] = [];
 	const tsslintRule = compat.convertRule(rule, [], { id: 'no-wrapper-object-types' });
 	const reportFn: any = (msg: string) => {
@@ -1246,7 +1140,7 @@ type C = String;
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'EWTA shape: class extends X is NOT TSClassImplements (no FP on `class A extends String`); implements X + type alias still fire',
 		reports.length === 2,
@@ -1264,7 +1158,7 @@ type C = String;
 //     none fire — the EWTA collapses out of ESTree entirely for this case.
 {
 	const code = `class A extends Foo<string> {}`;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const fired: string[] = [];
 	const probe: any = {
 		meta: { type: 'problem', schema: [], messages: { x: 'x' } },
@@ -1297,7 +1191,7 @@ type C = String;
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'class extends Foo<T>: EWTA fires NO selector (not TSClassImplements / TSInterfaceHeritage / TSInstantiationExpression)',
 		fired.length === 0,
@@ -1326,7 +1220,7 @@ export function outer() {
 	return inner;
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noRedecl = require(eslintRoot + '/lib/rules/no-redeclare.js');
 	const reports: { msg: string }[] = [];
@@ -1364,7 +1258,7 @@ export function outer() {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'scope.block / def.node: unwrap export wrappers (no-redeclare fires on overloads inside exported function)',
 		reports.length === 2,
@@ -1391,7 +1285,7 @@ function f() {
 	return m.size;
 }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -1429,7 +1323,7 @@ function f() {
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'scope.through: alias-aware lookup resolves synthetic `arguments` and lib `Map` (no-undef false positives)',
 		reports.length === 0,
@@ -1449,7 +1343,7 @@ function f() {
 import * as foo from "./foo.js";
 export { foo };
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -1487,7 +1381,7 @@ export { foo };
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'export specifier: re-export resolves to local target via getExportSpecifierLocalTargetSymbol',
 		reports.length === 0,
@@ -1514,7 +1408,7 @@ export { foo };
 import { length, type SomeType } from "./y.js";
 function f(start: number, length: number) { return start + length; }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noShadow = require(eslintRoot + '/lib/rules/no-shadow.js');
 	const reports: { msg: string }[] = [];
@@ -1552,7 +1446,7 @@ function f(start: number, length: number) { return start + length; }
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'TsDefinition.parent: ImportSpecifier walks to ImportDeclaration so no-shadow filter sees specifiers',
 		reports.length === 0,
@@ -1571,7 +1465,7 @@ function f(start: number, length: number) { return start + length; }
 function f(): import("inspector").Profiler.Profile { return null as any; }
 function g(): import("inspector").Session { return null as any; }
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -1609,7 +1503,7 @@ function g(): import("inspector").Session { return null as any; }
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'TSImportType qualifier: not classified as a free reference (single + nested QualifiedName)',
 		reports.length === 0,
@@ -1627,7 +1521,7 @@ function g(): import("inspector").Session { return null as any; }
 	const code = `
 type ExtractName<T> = T extends { name: infer TName } ? TName extends string ? TName : never : never;
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -1665,7 +1559,7 @@ type ExtractName<T> = T extends { name: infer TName } ? TName extends string ? T
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'infer type parameter: defined on the enclosing conditional-type scope',
 		reports.length === 0,
@@ -1685,7 +1579,7 @@ const obj = { "foo-bar": 1 };
 const { ["foo-bar"]: x } = obj;
 console.log(x);
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUselessComputedKey = require(eslintRoot + '/lib/rules/no-useless-computed-key.js');
 	const reports: { msg: string }[] = [];
@@ -1723,7 +1617,7 @@ console.log(x);
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'BindingElement.computed: ComputedPropertyName propertyName produces Property with computed=true',
 		reports.length === 1,
@@ -1753,7 +1647,7 @@ type F = Exclude<'a' | 'b', 'a'>;
 function f(x: A, y: B, z: C): D | E | F { return null!; }
 f({ a: 1 } as A, {} as B, 'a' as C);
 `;
-	const { program, file } = buildProgram(code);
+	const { program, file, checker } = buildProgram(code);
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -1791,7 +1685,7 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 		};
 		return r;
 	};
-	tsslintRule({ file, report: reportFn, program } as any);
+	tsslintRule({ file, report: reportFn, program, checker } as any);
 	check(
 		'no-undef: TS lib utility types in type-arg positions are recognised globals',
 		reports.length === 0,
@@ -1812,34 +1706,10 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 //     `through`. Repro requires a multi-file program — single-file
 //     interfaces don't trigger merging.
 {
-	const fA = '/a.d.ts';
 	const fB = '/b.d.ts';
 	const codeA = `interface Container<T> { value: T; }\n`;
 	const codeB = `interface Container<T> { extra: T; map(fn: (v: T) => T): T; }\n`;
-	const sfA = ts.createSourceFile(fA, codeA, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-	const sfB = ts.createSourceFile(fB, codeB, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
-	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const realLibContent = ts.sys.readFile(realLibPath) ?? '';
-	const realLib = ts.createSourceFile(realLibPath, realLibContent, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-	const host: ts.CompilerHost = {
-		getSourceFile: n => n === fA ? sfA : (n === fB ? sfB : (n === realLibPath ? realLib : undefined)),
-		getDefaultLibFileName: () => realLibName,
-		getDefaultLibLocation: () => realLibPath.replace('/' + realLibName, ''),
-		writeFile: () => {},
-		getCurrentDirectory: () => '/',
-		getDirectories: () => [],
-		fileExists: n => n === fA || n === fB || n === realLibPath,
-		readFile: n => n === fA ? codeA : (n === fB ? codeB : (n === realLibPath ? realLibContent : undefined)),
-		getCanonicalFileName: n => n,
-		useCaseSensitiveFileNames: () => true,
-		getNewLine: () => '\n',
-	};
-	const program = ts.createProgram({
-		rootNames: [fA, fB],
-		options: { target: ts.ScriptTarget.Latest, lib: [realLibName], strict: true, noEmit: true },
-		host,
-	});
+	const projectB = createProject(fB.slice(1), codeA + codeB, { strict: true });
 	const eslintRoot = require('path').dirname(require.resolve('eslint/package.json'));
 	const noUndef = require(eslintRoot + '/lib/rules/no-undef.js');
 	const reports: { msg: string }[] = [];
@@ -1879,7 +1749,7 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 	};
 	// Lint /b.d.ts — the references to T inside Container<T> should
 	// resolve to the merged Container symbol's type parameter, not leak.
-	tsslintRule({ file: program.getSourceFile(fB), report: reportFn, program } as any);
+	tsslintRule({ file: projectB.file, report: reportFn, program: projectB.program, checker: projectB.checker } as any);
 	check(
 		'no-undef: type parameters in cross-file-merged ambient interfaces resolve',
 		reports.length === 0,
@@ -1912,42 +1782,7 @@ type B2 = Omit<{ b: 2 }, 'b'>;
 type C = Record<string, number>;
 type D = Awaited<Promise<number>>;
 `;
-	const fileName = '/test.ts';
-	const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.Latest });
-	const libDir = realLibPath.replace(/[/\\][^/\\]+$/, '');
-	const fs = require('fs') as typeof import('fs');
-	const pathMod = require('path') as typeof import('path');
-	const libFiles = new Map<string, ts.SourceFile>();
-	for (const f of fs.readdirSync(libDir)) {
-		if (f.startsWith('lib.') && f.endsWith('.d.ts')) {
-			const p = pathMod.join(libDir, f);
-			libFiles.set(
-				p,
-				ts.createSourceFile(p, fs.readFileSync(p, 'utf-8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS),
-			);
-		}
-	}
-	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const host: ts.CompilerHost = {
-		getSourceFile: n => n === fileName ? sf : libFiles.get(n),
-		getDefaultLibFileName: () => realLibName,
-		getDefaultLibLocation: () => libDir,
-		writeFile: () => {},
-		getCurrentDirectory: () => '/',
-		getDirectories: () => [],
-		fileExists: n => n === fileName || libFiles.has(n),
-		readFile: n => n === fileName ? code : libFiles.get(n)?.text,
-		getCanonicalFileName: n => n,
-		useCaseSensitiveFileNames: () => true,
-		getNewLine: () => '\n',
-	};
-	const program = ts.createProgram({
-		rootNames: [fileName, realLibPath],
-		options: { target: ts.ScriptTarget.Latest, strict: true, noEmit: true, noLib: false },
-		host,
-	});
-	const file = program.getSourceFile(fileName)!;
+	const { program, file } = createProject('test.ts', code, { strict: true });
 	const refCounts = new Map<string, number>();
 	const inspectRule: ESLint.Rule.RuleModule = {
 		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
@@ -2271,7 +2106,7 @@ type D = Awaited<Promise<number>>;
 		'JSXExpressionContainer': true,
 		'JSXIdentifier': true,
 		'JSXText': true,
-	}, ts.ScriptKind.TSX);
+	}, 'tsx');
 
 	check('JSX: dispatch does not throw', threw === undefined, threw ? String((threw as Error).message ?? threw) : '');
 	check(
@@ -2352,7 +2187,7 @@ type D = Awaited<Promise<number>>;
 	const { calls } = runMock(code, {
 		'JSXEmptyExpression': true,
 		'JSXExpressionContainer': true,
-	}, ts.ScriptKind.TSX);
+	}, 'tsx');
 	check(
 		'JSX-empty: JSXExpressionContainer fires for all 3 ({}, {/*…*/}, {x})',
 		calls.filter(c => c.selector === 'JSXExpressionContainer').length === 3,
@@ -2374,7 +2209,7 @@ type D = Awaited<Promise<number>>;
 			return <div id="x">{count && <span />}</div>;
 		}
 	`;
-	const { program, file } = buildProgram(code, ts.ScriptKind.TSX);
+	const { program, file } = buildProgram(code, 'tsx');
 	const events: string[] = [];
 	const rule: ESLint.Rule.RuleModule = {
 		meta: { type: 'problem', schema: [], messages: { x: 'x' } } as any,
@@ -2434,7 +2269,7 @@ type D = Awaited<Promise<number>>;
 		let _ = <img src="x" />;
 		let __ = <img src="y" alt="ok" />;
 	`;
-	const { program, file } = buildProgram(code, ts.ScriptKind.TSX);
+	const { program, file, checker } = buildProgram(code, 'tsx');
 	const reports: { line: number; column: number; message: string }[] = [];
 	const rule: ESLint.Rule.RuleModule = {
 		meta: { type: 'problem', schema: [], messages: { missing: 'img missing alt' } } as any,
@@ -2489,7 +2324,7 @@ type D = Awaited<Promise<number>>;
 	};
 	let threw: unknown;
 	try {
-		tsslintRule({ file, report: reportFn, program } as any);
+		tsslintRule({ file, report: reportFn, program, checker } as any);
 	}
 	catch (e) {
 		threw = e;
