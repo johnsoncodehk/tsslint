@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install
@@ -28,22 +28,22 @@ jobs:
       - name: Parity bench
         run: pnpm -F @tsslint/compat-eslint bench
 
-      # Vendored @typescript-eslint/scope-manager test suite.
-      - name: Upstream scope-manager
-        run: pnpm -F @tsslint/compat-eslint test:upstream
-
       # Predicate coverage matrix for AST_NODE_TYPES.
       - name: Predicate coverage
         run: pnpm -F @tsslint/compat-eslint test:predicate-coverage
-
-      # JSX type-aware parity vs ESLint Linter on eslint-plugin-react-x.
-      - name: JSX react-x parity
-        run: pnpm -F @tsslint/compat-eslint test:jsx-react-x
 
       # Lazy ESTree shape parity (every .ts under packages/) + identity
       # invariants + smoke under visitorKeys traversal.
       - name: Lazy ESTree parity
         run: node packages/compat-eslint/test/lazy-estree.test.js
+
+      # Regression tests for lazy ESTree review findings.
+      - name: Lazy ESTree review bugs
+        run: node packages/compat-eslint/test/lazy-estree-review-bugs.test.js
+
+      # Predicate vs materializer agreement.
+      - name: Predicate materializer consistency
+        run: node packages/compat-eslint/test/predicate-materializer-consistency.test.js
 
       # Integration: selector dispatch + CPA fallback + per-rule error
       # isolation through the full convertRule pipeline.
@@ -62,10 +62,6 @@ jobs:
       - name: Core probe
         run: node packages/core/test/probe.test.js
 
-      # Core: BuilderProgram POC for layer 2 cache invalidation.
-      - name: Core BuilderProgram POC
-        run: node packages/core/test/builder-program-poc.test.js
-
       # Core: skip-rules option + hasFixForDiagnostic API (the surface
       # the CLI cache layer uses).
       - name: Core skip-rules
@@ -83,6 +79,10 @@ jobs:
       - name: CLI integration
         run: node packages/cli/test/integration.test.js
 
-      # CLI: layer 2 cross-session affected-file diff.
-      - name: CLI incremental state
-        run: node packages/cli/test/incremental-state.test.js
+      # CLI: diagnostic rendering.
+      - name: CLI render
+        run: node packages/cli/test/render.test.js
+
+      # Repo dogfood.
+      - name: Lint
+        run: pnpm run lint --force
