@@ -5,8 +5,8 @@
 //
 // Path key includes:
 //   - tsslint version (segment) → bumping the package invalidates everything
-//   - typescript version (segment) → .tsbuildinfo format / TS internals can
-//     change across TS majors, so segregate per TS version
+//   - typescript version (segment) → checker output can change across TS
+//     versions, so segregate per TS version
 //   - hash of (configFilePath, tsconfig, configFile mtime+size)
 //     → editing tsslint.config.ts mints a fresh cache file
 //
@@ -24,14 +24,13 @@ import fs = require('fs');
 import os = require('os');
 import crypto = require('crypto');
 
-import type * as ts from 'typescript';
-import type { IncrementalState } from './incremental-state.js';
+import type { Diagnostic, RelatedInformation } from '@tsslint/types';
 
 const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v2';
+const CACHE_FORMAT_VERSION = 'v3';
 
 export interface CacheData {
 	version: string;
@@ -40,12 +39,11 @@ export interface CacheData {
 	// which currently means the same thing: cache write happens).
 	ruleModes: Record</* ruleId */ string, 'type-aware'>;
 	files: Record</* abs file path */ string, FileCache>;
-	// Layer 2 cross-session state. Present iff the previous session ran
-	// with `--incremental`. Lets the next session compute which files'
-	// type-relevant inputs (incl. ambient `.d.ts`) have changed since.
-	// See `lib/incremental-state.ts`. Optional so layer-1-only sessions
-	// stay schema-clean.
-	incrementalState?: IncrementalState;
+	// Layer 2: fingerprint of every file in the program (path, mtime,
+	// size) plus compiler options, from the session that wrote this
+	// cache. Type-aware rule entries are reused only when the current
+	// program's fingerprint matches. See `lib/fingerprint.ts`.
+	programFingerprint?: string;
 }
 
 export interface FileCache {
@@ -58,14 +56,14 @@ export interface RuleCache {
 	diagnostics: SerializedDiagnostic[];
 }
 
-// `ts.DiagnosticWithLocation` minus the live `file` reference — that gets
-// re-attached on load by looking up the SourceFile from the current Program.
+// `Diagnostic` minus the live `file` reference — that gets re-attached on
+// load by looking up the SourceFile from the current Program.
 // `relatedInformation` similarly stores `{ fileName }` placeholders.
-export type SerializedDiagnostic = Omit<ts.DiagnosticWithLocation, 'file' | 'relatedInformation'> & {
+export type SerializedDiagnostic = Omit<Diagnostic, 'file' | 'relatedInformation'> & {
 	relatedInformation?: SerializedRelatedInfo[];
 };
 
-export type SerializedRelatedInfo = Omit<ts.DiagnosticRelatedInformation, 'file'> & {
+export type SerializedRelatedInfo = Omit<RelatedInformation, 'file'> & {
 	file?: { fileName: string };
 };
 
@@ -140,12 +138,7 @@ function isCacheData(x: unknown): x is CacheData {
 		if (typeof f.mtime !== 'number') return false;
 		if (typeof f.rules !== 'object' || f.rules === null) return false;
 	}
-	if (o.incrementalState !== undefined) {
-		if (typeof o.incrementalState !== 'object' || o.incrementalState === null) return false;
-		const inc = o.incrementalState as Record<string, unknown>;
-		if (typeof inc.version !== 'string') return false;
-		if (typeof inc.tsBuildInfoText !== 'string') return false;
-	}
+	if (o.programFingerprint !== undefined && typeof o.programFingerprint !== 'string') return false;
 	return true;
 }
 
