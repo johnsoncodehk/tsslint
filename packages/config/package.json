@@ -19,18 +19,22 @@
 	},
 	"dependencies": {
 		"@tsslint/types": "4.0.0-alpha.0",
-		"minimatch": "^10.0.1"
+		"minimatch": "^10.0.1",
+		"typescript": "7.1.0-beta"
 	},
 	"devDependencies": {
 		"@tsslint/compat-eslint": "4.0.0-alpha.0",
-		"typescript": "7.1.0-beta"
+		"eslint": ">=9.39.0 <10.0.0"
 	},
 	"peerDependencies": {
-		"@tsslint/compat-eslint": "^3.0.0",
-		"typescript": "^7.1.0-beta"
+		"@tsslint/compat-eslint": "workspace:*",
+		"eslint": ">=9.39.0 <10.0.0"
 	},
 	"peerDependenciesMeta": {
 		"@tsslint/compat-eslint": {
+			"optional": true
+		},
+		"eslint": {
 			"optional": true
 		}
 	}

@@ -16,12 +16,7 @@
 	},
 	"dependencies": {
 		"@tsslint/types": "4.0.0-alpha.0",
-		"minimatch": "^10.0.1"
-	},
-	"peerDependencies": {
-		"typescript": "^7.1.0-beta"
-	},
-	"devDependencies": {
+		"minimatch": "^10.0.1",
 		"typescript": "7.1.0-beta"
 	}
 }
