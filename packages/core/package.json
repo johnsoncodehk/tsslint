@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/core",
-	"version": "4.0.0-alpha.0",
+	"version": "4.0.0-alpha.1",
 	"license": "MIT",
 	"engines": {
 		"node": ">=22.12.0"
@@ -15,7 +15,7 @@
 		"directory": "packages/core"
 	},
 	"dependencies": {
-		"@tsslint/types": "4.0.0-alpha.0",
+		"@tsslint/types": "4.0.0-alpha.1",
 		"minimatch": "^10.0.1",
 		"typescript": "7.1.0-beta"
 	}

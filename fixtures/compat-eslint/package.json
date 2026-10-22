@@ -1,9 +1,9 @@
 {
 	"private": true,
 	"name": "@tsslint-fixtures/compat-eslint",
-	"version": "4.0.0-alpha.0",
+	"version": "4.0.0-alpha.1",
 	"devDependencies": {
-		"@tsslint/compat-eslint": "4.0.0-alpha.0",
-		"@tsslint/config": "4.0.0-alpha.0"
+		"@tsslint/compat-eslint": "4.0.0-alpha.1",
+		"@tsslint/config": "4.0.0-alpha.1"
 	}
 }

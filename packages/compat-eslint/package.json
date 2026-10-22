@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/compat-eslint",
-	"version": "4.0.0-alpha.0",
+	"version": "4.0.0-alpha.1",
 	"license": "MIT",
 	"files": [
 		"index.js",
@@ -27,7 +27,7 @@
 		"eslint": ">=9.39.0 <10.0.0"
 	},
 	"dependencies": {
-		"@tsslint/types": "4.0.0-alpha.0",
+		"@tsslint/types": "4.0.0-alpha.1",
 		"@typescript-eslint/scope-manager": "^8.72.0",
 		"esquery": "^1.5.0",
 		"typescript": "7.1.0-beta"
