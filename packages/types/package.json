@@ -10,5 +10,11 @@
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/types"
+	},
+	"peerDependencies": {
+		"typescript": "^7.1.0-beta"
+	},
+	"devDependencies": {
+		"typescript": "7.1.0-beta"
 	}
 }

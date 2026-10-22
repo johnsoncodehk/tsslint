@@ -7,7 +7,6 @@
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
 		"release": "npm run build && lerna publish --exact --force-publish --yes --sync-workspace-lock",
-		"release:vscode": "npm run build && cd packages/vscode && npm run publish",
 		"start": "packages/cli/bin/tsslint.js",
 		"format": "dprint fmt",
 		"lint": "packages/cli/bin/tsslint.js --project {tsconfig.json,packages/*/tsconfig.json}",
@@ -18,9 +17,7 @@
 		"@lerna-lite/cli": "latest",
 		"@lerna-lite/publish": "latest",
 		"@types/node": "latest",
-		"@typescript-eslint/eslint-plugin": "latest",
 		"dprint": "latest",
-		"eslint-plugin-react-x": "^4.2.3",
-		"typescript": "latest"
+		"typescript": "7.1.0-beta"
 	}
 }
