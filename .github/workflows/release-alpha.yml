@@ -1,0 +1,171 @@
+# Publishes an alpha of a pull request to npm when the repo owner comments
+# `/release alpha` (or `/release alpha X.Y.Z` to pick the base version).
+#
+# `issue_comment` always runs this file from the default branch, with access
+# to secrets and OIDC, so the job is gated to the owner and to PRs whose head
+# lives in this repository.
+
+name: release-alpha
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  # Global, so two releases never compute the same alpha number.
+  group: release-alpha
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '/release alpha')
+      && (github.event.comment.author_association == 'OWNER' || github.event.comment.user.login == 'johnsoncodehk')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # reaction + reply comment
+      id-token: write # npm trusted publishing / provenance
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Parse command
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          line="$(printf '%s\n' "$BODY" | head -n 1 | tr -d '\r' | sed -E 's/[[:space:]]+$//')"
+          if [[ "$line" =~ ^/release\ alpha$ ]]; then
+            echo "base=" >> "$GITHUB_OUTPUT"
+          elif [[ "$line" =~ ^/release\ alpha\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "base=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unrecognized command: expected '/release alpha' or '/release alpha X.Y.Z'"
+            exit 1
+          fi
+
+      - name: Acknowledge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: gh api --method POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=rocket > /dev/null
+
+      - name: Resolve PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r sha head_repo < <(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.head.sha, (.head.repo.full_name // "")] | @tsv')
+          if [[ "$head_repo" != "$REPO" ]]; then
+            echo "::error::PR head is in '${head_repo:-a deleted repository}', not $REPO; refusing to run it with publish credentials."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # No dependency cache: this job runs PR code in the default
+          # branch's cache scope.
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: Compute version
+        id: version
+        env:
+          BASE: ${{ steps.command.outputs.base }}
+          NODE_AUTH_TOKEN: ''
+        # Inline rather than a script file: the checkout is the PR head, which
+        # may not contain files from the default branch.
+        run: |
+          pnpm ls -r --depth -1 --json > "$RUNNER_TEMP/workspace.json"
+          node -e '
+            const fs = require("node:fs");
+            const pkgs = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).filter(p => !p.private);
+            fs.writeFileSync(process.argv[2], JSON.stringify(pkgs));
+          ' "$RUNNER_TEMP/workspace.json" "$RUNNER_TEMP/packages.json"
+          node - "$RUNNER_TEMP/packages.json" >> "$GITHUB_OUTPUT" <<'EOF'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+
+          const current = require(process.cwd() + '/lerna.json').version;
+          let base = process.env.BASE;
+          if (!base) {
+            const [major, minor, patch] = current.split('-')[0].split('.').map(Number);
+            base = current.includes('-') ? `${major}.${minor}.${patch}` : `${major}.${minor}.${patch + 1}`;
+          }
+
+          const prefix = `${base}-alpha.`;
+          let next = 0;
+          for (const { name } of JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))) {
+            let versions;
+            try {
+              versions = JSON.parse(execFileSync('npm', ['view', name, 'versions', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+            }
+            catch (err) {
+              if (/E404/.test(String(err.stdout) + String(err.stderr))) continue;
+              throw err;
+            }
+            for (const v of [].concat(versions)) {
+              if (v === base) throw new Error(`${name}@${base} is already released; pick a higher base version`);
+              const n = v.startsWith(prefix) ? Number(v.slice(prefix.length)) : NaN;
+              if (Number.isInteger(n) && n >= next) next = n + 1;
+            }
+          }
+
+          const version = `${prefix}${next}`;
+          console.error(`Publishing ${version} (lerna.json: ${current})`);
+          console.log(`version=${version}`);
+          EOF
+
+      - name: Publish
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          # Fallback when trusted publishing is not configured; lerna-lite
+          # exchanges the GitHub OIDC token for an npm token when it is.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: >-
+          pnpm exec lerna publish "$VERSION"
+          --dist-tag alpha
+          --exact
+          --force-publish
+          --no-git-tag-version
+          --no-push
+          --no-changelog
+          --yes
+
+      - name: Report success
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          node - "$RUNNER_TEMP/packages.json" > "$RUNNER_TEMP/comment.md" <<'EOF'
+          const { VERSION, SHA } = process.env;
+          const names = JSON.parse(require('node:fs').readFileSync(process.argv[2], 'utf8')).map(p => p.name);
+          console.log(`Published \`${VERSION}\` (dist-tag \`alpha\`) from ${SHA}:\n`);
+          for (const name of names) console.log(`- [\`${name}@${VERSION}\`](https://www.npmjs.com/package/${name}/v/${VERSION})`);
+          EOF
+          gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="Alpha release failed, see $RUN_URL" > /dev/null
