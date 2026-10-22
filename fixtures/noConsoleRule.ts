@@ -1,7 +1,7 @@
 import { defineRule } from '../packages/config/index.js';
 
 export default defineRule(({ typescript: ts, file, report }) => {
-	ts.forEachChild(file, function cb(node) {
+	file.forEachChild(function cb(node): void {
 		if (
 			ts.isPropertyAccessExpression(node)
 			&& ts.isIdentifier(node.expression)
@@ -25,6 +25,6 @@ export default defineRule(({ typescript: ts, file, report }) => {
 				}],
 			);
 		}
-		ts.forEachChild(node, cb);
+		node.forEachChild(cb);
 	});
 });
