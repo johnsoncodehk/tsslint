@@ -46,7 +46,7 @@ TSLint (TS-AST, deprecated 2019) → ESLint took over via `typescript-eslint` �
 ## Setup
 
 ```bash
-npm install @tsslint/cli @tsslint/config typescript@^7.1.0-beta --save-dev
+npm install @tsslint/cli @tsslint/config --save-dev
 ```
 
 `tsslint.config.ts`:
@@ -246,7 +246,7 @@ Build your own with the `Plugin` type from `@tsslint/types`.
 ## Requirements
 
 - Node.js **22.12.0+** (`tsslint.config.ts` is loaded with `--experimental-strip-types` — no transpile step)
-- `typescript@^7.1.0-beta` (peer dependency). TypeScript 5/6 are not supported; see [docs/migration-v4.md](docs/migration-v4.md)
+- TypeScript 7 comes bundled as a dependency, separate from the `typescript` your project compiles with. TypeScript 5/6 are not supported; see [docs/migration-v4.md](docs/migration-v4.md)
 
 ## License
 

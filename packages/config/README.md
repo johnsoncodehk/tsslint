@@ -5,7 +5,7 @@ Public API for `tsslint.config.ts`: `defineConfig`, `defineRule`, `definePlugin`
 ## Usage
 
 ```bash
-npm install @tsslint/config typescript@^7.1.0-beta --save-dev
+npm install @tsslint/config --save-dev
 ```
 
 ```ts
