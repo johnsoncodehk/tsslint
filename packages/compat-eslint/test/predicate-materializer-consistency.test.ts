@@ -28,9 +28,9 @@
 //
 // Run: tsc --build && node packages/compat-eslint/test/predicate-materializer-consistency.test.js
 
+import * as oracle from '@tsslint/estree-oracle';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as oracle from '@tsslint/estree-oracle';
 import * as ts from '../lib/ts';
 import { parse } from './ts7';
 

@@ -13,8 +13,8 @@
 
 import type * as ESLint from 'eslint';
 import type { SourceFile } from 'typescript/ast';
-import { type Checker, type Program } from 'typescript/sync';
 import { createIdentifier } from 'typescript/ast/factory';
+import { type Checker, type Program } from 'typescript/sync';
 import { createProject } from './ts7';
 
 const compat = require('../index.js') as typeof import('../index.js');

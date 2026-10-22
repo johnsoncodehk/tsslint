@@ -1,12 +1,12 @@
 // A real on-disk TypeScript 7 project for core tests. One API process
 // per test run; temp dirs are removed when the process exits.
-import type { LintTarget } from '../index.js';
 import type { LinterContext } from '@tsslint/types';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as ts from 'typescript/ast';
 import { API } from 'typescript/sync';
+import type { LintTarget } from '../index.js';
 
 let api: API | undefined;
 const tempDirs: string[] = [];

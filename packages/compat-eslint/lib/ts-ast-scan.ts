@@ -17,7 +17,6 @@
 // already lazy-builds the parent chain when a rule reads `.parent`, so we
 // don't pre-build ancestors either.
 
-import * as ts from './ts';
 import {
 	type ConvertContext,
 	GENERIC_TS_NODE_MARKER,
@@ -26,6 +25,7 @@ import {
 	NoESTreeCounterpartError,
 } from './lazy-estree';
 import { UnsupportedSelectorError } from './selector-analysis';
+import * as ts from './ts';
 
 const SK = ts.SyntaxKind;
 // `import * as ts` lowers to a namespace object guarded by a getter on

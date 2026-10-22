@@ -118,8 +118,14 @@ function check(name: string, cond: boolean, detail?: string) {
 	const out = linter.lint(project.target('a.ts'));
 	const fixable = out.find(d => String(d.code) === 'fixable')!;
 	const plain = out.find(d => String(d.code) === 'plain')!;
-	check('hasFixForDiagnostic true for fixable diag', linter.hasFixForDiagnostic(project.target('a.ts').file.fileName, fixable) === true);
-	check('hasFixForDiagnostic false for plain diag', linter.hasFixForDiagnostic(project.target('a.ts').file.fileName, plain) === false);
+	check(
+		'hasFixForDiagnostic true for fixable diag',
+		linter.hasFixForDiagnostic(project.target('a.ts').file.fileName, fixable) === true,
+	);
+	check(
+		'hasFixForDiagnostic false for plain diag',
+		linter.hasFixForDiagnostic(project.target('a.ts').file.fileName, plain) === false,
+	);
 }
 
 // ── Done ────────────────────────────────────────────────────────────────

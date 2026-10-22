@@ -18,9 +18,9 @@
 //   diffs (ideally empty). New unexpected diffs fail; absent
 //   expected diffs also fail (the bug got fixed, baseline is stale).
 
+import * as oracle from '@tsslint/estree-oracle';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as oracle from '@tsslint/estree-oracle';
 import type { SourceFile } from 'typescript/ast';
 import type { Checker, Program } from 'typescript/sync';
 import { createProjectForFiles } from '../ts7';

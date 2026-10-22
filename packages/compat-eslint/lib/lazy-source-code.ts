@@ -25,9 +25,9 @@
 // method that's missing here, throw a clear error rather than silently
 // returning undefined.
 
-import * as ts from './ts';
 import { materialize } from './lazy-estree';
 import { buildCommentObject, walkInnerCommentsOf } from './tokens';
+import * as ts from './ts';
 
 const SK = ts.SyntaxKind;
 

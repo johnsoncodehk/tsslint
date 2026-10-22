@@ -133,5 +133,4 @@ export const RULES: Array<[string, unknown[]?]> = [
 	['no-multi-assign'],
 	['id-denylist', ['callback']],
 	['consistent-this'],
-
 ];
