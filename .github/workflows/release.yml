@@ -1,29 +1,40 @@
-# Publishes an alpha of a pull request to npm when the repo owner comments
-# `/release alpha` (or `/release alpha X.Y.Z` to pick the base version).
+# All npm publishing goes through this file, because an npm Trusted Publisher
+# is bound to a single workflow filename.
 #
-# `issue_comment` always runs this file from the default branch, with access
-# to secrets and OIDC, so the job is gated to the owner and to PRs whose head
-# lives in this repository.
+# - alpha: the repo owner comments `/release alpha` (or `/release alpha X.Y.Z`
+#   to pick the base version) on a pull request. `issue_comment` always runs
+#   this file from the default branch, with access to secrets and OIDC, so the
+#   job is gated to the owner and to PRs whose head lives in this repository.
+# - stable: the repo owner runs this workflow from the Actions tab on master.
+#   It publishes with dist-tag `latest`, then pushes the `vX.Y.Z` commit and
+#   tag to master.
 
-name: release-alpha
+name: release
 
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'patch, minor, major, or an exact X.Y.Z'
+        required: true
+        default: patch
 
 permissions: {}
 
-concurrency:
-  # Global, so two releases never compute the same alpha number.
-  group: release-alpha
-  cancel-in-progress: false
-
 jobs:
-  release:
+  alpha:
     if: >-
-      github.event.issue.pull_request
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
       && startsWith(github.event.comment.body, '/release alpha')
       && (github.event.comment.author_association == 'OWNER' || github.event.comment.user.login == 'johnsoncodehk')
+    # Job-level, so unrelated comments (skipped runs) never displace a
+    # queued release. Shared with `stable` so versions are computed serially.
+    concurrency:
+      group: release
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -169,3 +180,62 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="Alpha release failed, see $RUN_URL" > /dev/null
+
+  stable:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.ref == 'refs/heads/master'
+      && github.triggering_actor == 'johnsoncodehk'
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the version commit and tag
+      id-token: write # npm trusted publishing / provenance
+    steps:
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^(patch|minor|major|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Expected patch, minor, major, or X.Y.Z; got '$VERSION'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # lerna reads the previous release tag
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      # Same flags as `npm run release`. lerna bumps every package, syncs
+      # pnpm-lock.yaml, commits and tags `vX.Y.Z`, pushes to master, then
+      # publishes. A failed push stops before anything is published.
+      - name: Publish
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          pnpm exec lerna publish "$VERSION" \
+            --dist-tag latest \
+            --exact \
+            --force-publish \
+            --sync-workspace-lock \
+            --yes
+          echo "Published \`$(node -p "require('./lerna.json').version")\` with dist-tag \`latest\`." >> "$GITHUB_STEP_SUMMARY"
