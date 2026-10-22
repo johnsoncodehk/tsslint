@@ -1,5 +1,6 @@
 import type { Plugin } from '@tsslint/types';
-import type * as ts from 'typescript';
+import type * as ts from 'typescript/ast';
+import { DiagnosticCategory } from 'typescript/sync';
 
 interface CommentState {
 	used?: boolean;
@@ -44,7 +45,7 @@ interface CachedComment {
 const sharedFileComments = new WeakMap<ts.SourceFile, CachedComment[]>();
 
 function getFileComments(
-	ts: typeof import('typescript'),
+	ts: typeof import('typescript/ast'),
 	file: ts.SourceFile,
 ): CachedComment[] {
 	let comments = sharedFileComments.get(file);
@@ -78,7 +79,7 @@ function getFileComments(
 		// `getChildren` array per visit creates the most allocation
 		// pressure; we still need it because `forEachChild` skips token
 		// kinds. Iterative stack avoids the recursive overhead.
-		let stack: ts.Node[] = [file];
+		const stack: ts.Node[] = [file];
 		while (stack.length > 0) {
 			const node = stack.pop()!;
 			if (ts.isTokenKind(node.kind)) {
@@ -112,7 +113,7 @@ function getFileComments(
 }
 
 function canHaveTrailingTrivia(
-	ts: typeof import('typescript'),
+	ts: typeof import('typescript/ast'),
 	token: ts.Node,
 ): boolean {
 	const SK = ts.SyntaxKind;
@@ -143,7 +144,7 @@ function canHaveTrailingTrivia(
 }
 
 function isJsxElementOrFragment(
-	ts: typeof import('typescript'),
+	ts: typeof import('typescript/ast'),
 	node: ts.Node,
 ): boolean {
 	const SK = ts.SyntaxKind;
@@ -208,109 +209,8 @@ export function create(
 		if (valid.length !== parts.length) return undefined;
 		return valid;
 	}
-	const completeReg1 = /^\s*\/\/(\s*)([\S]*)?$/;
-	const completeReg2 = new RegExp(`//\\s*${cmd}(\\S*)?$`);
 
-	return ({ typescript: ts, languageService }) => {
-		const reportedRulesOfFile = new Map<string, [string, number][]>();
-		const { getCompletionsAtPosition } = languageService;
-
-		languageService.getCompletionsAtPosition = (fileName, position, ...rest) => {
-			let result = getCompletionsAtPosition(fileName, position, ...rest);
-
-			const sourceFile = languageService.getProgram()?.getSourceFile(fileName);
-			if (!sourceFile) {
-				return result;
-			}
-
-			const reportedRules = reportedRulesOfFile.get(fileName);
-			const line = sourceFile.getLineAndCharacterOfPosition(position).line;
-			const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-			const prefix = sourceFile.text.slice(lineStart, position);
-			const matchCmd = completeReg1
-				? prefix.match(completeReg1)
-				: undefined;
-
-			if (matchCmd) {
-				const nextLineRules = reportedRules?.filter(([, reportedLine]) => reportedLine === line + 1) ?? [];
-				const item: ts.CompletionEntry = {
-					name: cmdText,
-					insertText: matchCmd[1].length ? cmdText : ` ${cmdText}`,
-					kind: ts.ScriptElementKind.keyword,
-					sortText: 'a',
-					replacementSpan: matchCmd[2]
-						? {
-							start: position - matchCmd[2].length,
-							length: matchCmd[2].length,
-						}
-						: undefined,
-					labelDetails: {
-						description: nextLineRules.length >= 2
-							? `Ignore ${nextLineRules.length} issues in next line`
-							: nextLineRules.length
-							? 'Ignore 1 issue in next line'
-							: undefined,
-					},
-				};
-				if (result) {
-					result.entries.push(item);
-				}
-				else {
-					result = {
-						isGlobalCompletion: false,
-						isMemberCompletion: false,
-						isNewIdentifierLocation: false,
-						entries: [item],
-					};
-				}
-			}
-			else if (reportedRules?.length) {
-				const matchRule = completeReg2
-					? prefix.match(completeReg2)
-					: undefined;
-				if (matchRule) {
-					const visited = new Set<string>();
-					for (const [ruleId] of reportedRules) {
-						if (visited.has(ruleId)) {
-							continue;
-						}
-						visited.add(ruleId);
-
-						const reportedLines = reportedRules
-							.filter(([r]) => r === ruleId)
-							.map(([, l]) => l + 1);
-						const item: ts.CompletionEntry = {
-							name: ruleId,
-							kind: ts.ScriptElementKind.keyword,
-							sortText: ruleId,
-							replacementSpan: matchRule[1]
-								? {
-									start: position - matchRule[1].length,
-									length: matchRule[1].length,
-								}
-								: undefined,
-							labelDetails: {
-								description: `Reported in line${reportedLines.length >= 2 ? 's' : ''} ${reportedLines.join(', ')}`,
-							},
-						};
-						if (result) {
-							result.entries.push(item);
-						}
-						else {
-							result = {
-								isGlobalCompletion: false,
-								isMemberCompletion: false,
-								isNewIdentifierLocation: false,
-								entries: [item],
-							};
-						}
-					}
-				}
-			}
-
-			return result;
-		};
-
+	return ({ typescript: ts }) => {
 		return {
 			resolveDiagnostics(file, results) {
 				if (
@@ -382,23 +282,14 @@ export function create(
 					}
 				}
 
-				let reportedRules = reportedRulesOfFile.get(file.fileName);
-				if (!reportedRules) {
-					reportedRules = [];
-					reportedRulesOfFile.set(file.fileName, reportedRules);
-				}
-				reportedRules.length = 0;
-
 				results = results.filter(error => {
 					if (error.source !== 'tsslint') {
 						return true;
 					}
 					const line = file.getLineAndCharacterOfPosition(error.start).line;
 
-					reportedRules.push([error.code as any, line]);
-
-					for (const code of [undefined, error.code]) {
-						const states = comments.get(code as any);
+					for (const code of [undefined, String(error.code)]) {
+						const states = comments.get(code);
 						if (!states) {
 							continue;
 						}
@@ -429,10 +320,10 @@ export function create(
 									file: file,
 									start: state.commentRange[0],
 									length: state.commentRange[1] - state.commentRange[0],
-									code: 'tsslint:unused-ignore-comment' as any,
+									code: 'tsslint:unused-ignore-comment',
 									messageText: `Unused comment.`,
 									source: 'tsslint',
-									category: 1,
+									category: DiagnosticCategory.Error,
 								});
 							}
 						}
