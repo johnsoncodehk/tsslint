@@ -1,256 +1,40 @@
-# All npm publishing goes through this file, because an npm Trusted Publisher
-# is bound to a single workflow filename.
+# Publishes every public package to npm. Run it from the Actions tab on the
+# branch to release:
 #
-# - alpha: the repo owner comments `/release alpha` (or `/release alpha X.Y.Z`
-#   to pick the base version) on a pull request. npm rejects trusted
-#   publishing tokens from `issue_comment` runs, so the `dispatch` job only
-#   parses the command and starts this workflow again via `workflow_dispatch`
-#   with the `pr` input; the `alpha` job publishes from that run. The owner
-#   can also start an alpha from the Actions tab by filling in `pr`. Only PRs
-#   whose head lives in this repository are published.
-# - stable: the repo owner runs this workflow from the Actions tab on master,
-#   with `pr` left empty. It pushes the `vX.Y.Z` commit and tag to master,
-#   then publishes with dist-tag `latest`.
+# - master: `version` patch, minor, major or X.Y.Z, `dist-tag` latest.
+# - any other branch (e.g. v4): `version` prerelease or X.Y.Z-alpha.N,
+#   `dist-tag` alpha.
 #
-# lerna-lite only bumps versions. Publishing goes through `pnpm publish`, which
-# packs each package and hands the tarball to the npm CLI: npm >= 11.5.1 is
-# the client that npm trusted publishing accepts (lerna-lite's own OIDC
-# exchange is not). No npm token is configured anywhere.
+# lerna-lite bumps every package, syncs pnpm-lock.yaml, then commits, tags
+# `vX.Y.Z` and pushes to the selected branch; a failed push stops before
+# anything is published. The recorded version is what the next `prerelease`
+# bump starts from. `pnpm publish` hands each tarball to the npm CLI, which
+# authenticates with npm trusted publishing (OIDC) and adds provenance.
+#
+# The npm trusted publisher is bound to this filename, and a dispatch runs the
+# workflow file of the selected branch, so every release branch carries this
+# same file.
 
 name: release
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable release: patch, minor, major, or an exact X.Y.Z'
+        description: 'patch, minor, major, prerelease, or an exact version'
         required: true
         default: patch
-      pr:
-        description: 'Alpha release: pull request number (leave empty for a stable release)'
-        required: false
-        default: ''
-      base:
-        description: 'Alpha release: base version X.Y.Z (empty for the next patch)'
-        required: false
-        default: ''
+      dist-tag:
+        description: 'npm dist-tag (latest only from master)'
+        type: choice
+        options: [latest, alpha]
+        default: latest
 
 permissions: {}
 
 jobs:
-  dispatch:
-    if: >-
-      github.event_name == 'issue_comment'
-      && github.event.issue.pull_request
-      && startsWith(github.event.comment.body, '/release alpha')
-      && (github.event.comment.author_association == 'OWNER' || github.event.comment.user.login == 'johnsoncodehk')
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write # start the workflow_dispatch run
-      pull-requests: write # reaction + failure comment
-    env:
-      REPO: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.issue.number }}
-    steps:
-      - name: Parse command
-        id: command
-        env:
-          BODY: ${{ github.event.comment.body }}
-        run: |
-          line="$(printf '%s\n' "$BODY" | head -n 1 | tr -d '\r' | sed -E 's/[[:space:]]+$//')"
-          if [[ "$line" =~ ^/release\ alpha$ ]]; then
-            echo "base=" >> "$GITHUB_OUTPUT"
-          elif [[ "$line" =~ ^/release\ alpha\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "base=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Unrecognized command: expected '/release alpha' or '/release alpha X.Y.Z'"
-            exit 1
-          fi
-
-      - name: Acknowledge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          COMMENT_ID: ${{ github.event.comment.id }}
-        run: gh api --method POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=rocket > /dev/null
-
-      - name: Dispatch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.command.outputs.base }}
-        run: gh workflow run release.yml --repo "$REPO" --ref master -f pr="$PR_NUMBER" -f base="$BASE"
-
-      - name: Report failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="Alpha release failed, see $RUN_URL" > /dev/null
-
-  alpha:
-    # Started by the `dispatch` job (as github-actions[bot]) or by the owner.
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      && inputs.pr != ''
-      && github.ref == 'refs/heads/master'
-      && (github.triggering_actor == 'johnsoncodehk' || github.triggering_actor == 'github-actions[bot]')
-    # Shared with `stable` so versions are computed serially.
-    concurrency:
-      group: release
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write # reply comment
-      id-token: write # npm trusted publishing / provenance
-    env:
-      REPO: ${{ github.repository }}
-      PR_NUMBER: ${{ inputs.pr }}
-    steps:
-      - name: Validate inputs
-        env:
-          BASE: ${{ inputs.base }}
-        run: |
-          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ || ! "$BASE" =~ ^([0-9]+\.[0-9]+\.[0-9]+)?$ ]]; then
-            echo "::error::Expected a PR number and an optional X.Y.Z base; got pr='$PR_NUMBER' base='$BASE'"
-            exit 1
-          fi
-
-      - name: Resolve PR head
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          read -r sha head_repo < <(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.head.sha, (.head.repo.full_name // "")] | @tsv')
-          if [[ "$head_repo" != "$REPO" ]]; then
-            echo "::error::PR head is in '${head_repo:-a deleted repository}', not $REPO; refusing to run it with publish credentials."
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.pr.outputs.sha }}
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          # No dependency cache: this job runs PR code in the default
-          # branch's cache scope.
-
-      - run: pnpm install --frozen-lockfile
-
-      - run: pnpm run build
-
-      - name: Compute version
-        id: version
-        env:
-          BASE: ${{ inputs.base }}
-        # Inline rather than a script file: the checkout is the PR head, which
-        # may not contain files from the default branch.
-        run: |
-          pnpm ls -r --depth -1 --json > "$RUNNER_TEMP/workspace.json"
-          node -e '
-            const fs = require("node:fs");
-            const pkgs = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).filter(p => !p.private);
-            fs.writeFileSync(process.argv[2], JSON.stringify(pkgs));
-          ' "$RUNNER_TEMP/workspace.json" "$RUNNER_TEMP/packages.json"
-          node - "$RUNNER_TEMP/packages.json" >> "$GITHUB_OUTPUT" <<'EOF'
-          const { execFileSync } = require('node:child_process');
-          const fs = require('node:fs');
-
-          const current = require(process.cwd() + '/lerna.json').version;
-          let base = process.env.BASE;
-          if (!base) {
-            const [major, minor, patch] = current.split('-')[0].split('.').map(Number);
-            base = current.includes('-') ? `${major}.${minor}.${patch}` : `${major}.${minor}.${patch + 1}`;
-          }
-
-          const prefix = `${base}-alpha.`;
-          let next = 0;
-          for (const { name } of JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))) {
-            let versions;
-            try {
-              versions = JSON.parse(execFileSync('npm', ['view', name, 'versions', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-            }
-            catch (err) {
-              if (/E404/.test(String(err.stdout) + String(err.stderr))) continue;
-              throw err;
-            }
-            for (const v of [].concat(versions)) {
-              if (v === base) throw new Error(`${name}@${base} is already released; pick a higher base version`);
-              const n = v.startsWith(prefix) ? Number(v.slice(prefix.length)) : NaN;
-              if (Number.isInteger(n) && n >= next) next = n + 1;
-            }
-          }
-
-          const version = `${prefix}${next}`;
-          console.error(`Publishing ${version} (lerna.json: ${current})`);
-          console.log(`version=${version}`);
-          EOF
-
-      # The claims npm matches against the trusted publisher. Only the decoded
-      # payload is printed, never the token.
-      - name: Show OIDC claims
-        run: |
-          node - <<'EOF'
-          const { ACTIONS_ID_TOKEN_REQUEST_URL: url, ACTIONS_ID_TOKEN_REQUEST_TOKEN: auth } = process.env;
-          fetch(`${url}&audience=npm%3Aregistry.npmjs.org`, { headers: { authorization: `bearer ${auth}` } })
-            .then(res => res.json())
-            .then(({ value }) => {
-              const claims = JSON.parse(Buffer.from(value.split('.')[1], 'base64url'));
-              for (const key of ['sub', 'repository', 'repository_owner', 'event_name', 'ref', 'workflow_ref', 'job_workflow_ref', 'environment', 'actor', 'runner_environment']) {
-                console.log(`${key}: ${claims[key] ?? '(none)'}`);
-              }
-            });
-          EOF
-
-      - name: Publish
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          NPM_CONFIG_PROVENANCE: 'true'
-          NPM_CONFIG_LOGLEVEL: verbose # shows the OIDC token exchange result
-        run: |
-          pnpm exec lerna version "$VERSION" \
-            --exact \
-            --force-publish \
-            --no-git-tag-version \
-            --no-push \
-            --no-changelog \
-            --yes
-          pnpm -r publish --tag alpha --no-git-checks
-
-      - name: Report success
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          SHA: ${{ steps.pr.outputs.sha }}
-        run: |
-          node - "$RUNNER_TEMP/packages.json" > "$RUNNER_TEMP/comment.md" <<'EOF'
-          const { VERSION, SHA } = process.env;
-          const names = JSON.parse(require('node:fs').readFileSync(process.argv[2], 'utf8')).map(p => p.name);
-          console.log(`Published \`${VERSION}\` (dist-tag \`alpha\`) from ${SHA}:\n`);
-          for (const name of names) console.log(`- [\`${name}@${VERSION}\`](https://www.npmjs.com/package/${name}/v/${VERSION})`);
-          EOF
-          gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
-
-      - name: Report failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="Alpha release failed, see $RUN_URL" > /dev/null
-
-  stable:
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      && inputs.pr == ''
-      && github.ref == 'refs/heads/master'
-      && github.triggering_actor == 'johnsoncodehk'
+  release:
+    if: github.triggering_actor == 'johnsoncodehk'
     concurrency:
       group: release
       cancel-in-progress: false
@@ -259,12 +43,26 @@ jobs:
       contents: write # push the version commit and tag
       id-token: write # npm trusted publishing / provenance
     steps:
-      - name: Validate version
+      - name: Validate inputs
         env:
           VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist-tag }}
         run: |
-          if [[ ! "$VERSION" =~ ^(patch|minor|major|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::error::Expected patch, minor, major, or X.Y.Z; got '$VERSION'"
+          if [[ "$GITHUB_REF" != refs/heads/* ]]; then
+            echo "::error::Run this workflow on a branch, not $GITHUB_REF"
+            exit 1
+          fi
+          if [[ "$DIST_TAG" == latest ]]; then
+            if [[ "$GITHUB_REF" != refs/heads/master ]]; then
+              echo "::error::dist-tag latest is only published from master"
+              exit 1
+            fi
+            pattern='^(patch|minor|major|[0-9]+\.[0-9]+\.[0-9]+)$'
+          else
+            pattern='^(prerelease|[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+)$'
+          fi
+          if [[ ! "$VERSION" =~ $pattern ]]; then
+            echo "::error::version '$VERSION' does not fit dist-tag $DIST_TAG"
             exit 1
           fi
 
@@ -283,15 +81,12 @@ jobs:
 
       - run: pnpm run build
 
-      # Same version flags as `npm run release`. lerna bumps every package,
-      # syncs pnpm-lock.yaml, commits and tags `vX.Y.Z` and pushes to master;
-      # a failed push stops before anything is published.
       - name: Publish
         env:
           VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist-tag }}
           GH_TOKEN: ${{ github.token }}
           NPM_CONFIG_PROVENANCE: 'true'
-          NPM_CONFIG_LOGLEVEL: verbose # shows the OIDC token exchange result
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -301,5 +96,5 @@ jobs:
             --force-publish \
             --sync-workspace-lock \
             --yes
-          pnpm -r publish --tag latest --no-git-checks
-          echo "Published \`$(node -p "require('./lerna.json').version")\` with dist-tag \`latest\`." >> "$GITHUB_STEP_SUMMARY"
+          pnpm -r publish --tag "$DIST_TAG" --no-git-checks
+          echo "Published \`$(node -p "require('./lerna.json').version")\` with dist-tag \`$DIST_TAG\`." >> "$GITHUB_STEP_SUMMARY"
