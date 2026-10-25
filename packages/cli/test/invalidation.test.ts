@@ -29,7 +29,11 @@ interface StubFile {
 
 // `resolve` maps a module specifier to the file name the resolver returns;
 // `getSourceFile` accepts every spelling in `aliases` like the program does.
-function createStub(files: Map<string, StubFile>, resolve: (specifier: string) => string, aliases: Map<string, string>) {
+function createStub(
+	files: Map<string, StubFile>,
+	resolve: (specifier: string) => string,
+	aliases: Map<string, string>,
+) {
 	const call = <T extends unknown[], R>(fn: (...args: T) => R) =>
 		Object.assign(fn, { gen: (...args: T) => ({ run: () => fn(...args) }) });
 	const getSourceFile = call((fileName: string) => {
@@ -96,7 +100,11 @@ function bumpMtime(fileName: string) {
 
 		const cache = emptyCache();
 		invalidate(api, project, cache, '');
-		check('importer depends on the program spelling', cache.graph[b]?.deps.includes(a) === true, JSON.stringify(cache.graph[b]));
+		check(
+			'importer depends on the program spelling',
+			cache.graph[b]?.deps.includes(a) === true,
+			JSON.stringify(cache.graph[b]),
+		);
 
 		cache.files[a] = { hasFix: false, diagnostics: [] };
 		cache.files[b] = { hasFix: false, diagnostics: [] };
