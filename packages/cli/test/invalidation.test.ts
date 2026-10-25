@@ -99,19 +99,19 @@ function bumpMtime(fileName: string) {
 		const { api, project } = createStub(files, () => aAlias, new Map([[aAlias, a]]));
 
 		const cache = emptyCache();
-		invalidate(api, project, cache, '');
+		invalidate(api, project, cache, '', new Map());
 		check(
 			'importer depends on the program spelling',
 			cache.graph[b]?.deps.includes(a) === true,
 			JSON.stringify(cache.graph[b]),
 		);
 
-		cache.files[a] = { hasFix: false, diagnostics: [] };
-		cache.files[b] = { hasFix: false, diagnostics: [] };
+		cache.files[a] = { hasFix: false, diagnostics: [], touched: {} };
+		cache.files[b] = { hasFix: false, diagnostics: [], touched: {} };
 		fs.writeFileSync(a, 'export const x = 2;\n');
 		bumpMtime(a);
 		files.get(a)!.declaration = 'export declare const x = 2;\n';
-		invalidate(api, project, cache, '');
+		invalidate(api, project, cache, '', new Map());
 		check('signature change re-lints the importer', !cache.files[b]);
 		check('signature change re-lints the file', !cache.files[a]);
 	}

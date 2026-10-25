@@ -10,7 +10,7 @@ import contentMapper = require('./content-mapper.js');
 import type { LintTarget } from '@tsslint/types';
 import type { CacheData } from './cache.js';
 import { getConfigModulesKey, trackImports } from './config-modules.js';
-import { invalidate } from './invalidation.js';
+import { hashFile, invalidate } from './invalidation.js';
 
 // One TS7 API process and one snapshot holding every project of the run.
 // Projects share parsed files inside the snapshot; `--fix` replaces the
@@ -21,6 +21,8 @@ let snapshot: Snapshot | undefined;
 let tsconfig: string;
 let linter: core.Linter;
 let cache: CacheData;
+// Text hashes of program files, read at most once per run.
+const fileHashes = new Map<string, string>();
 
 export function getApi(): API {
 	// Content mappers run external processes declared by the project's
@@ -83,8 +85,25 @@ export async function setup(
 		config,
 	);
 	cache = cacheData;
-	invalidate(getApi(), getProject(), cache, getConfigModulesKey(configFile));
+	invalidate(getApi(), getProject(), cache, getConfigModulesKey(configFile), fileHashes);
 	return true;
+}
+
+function hashFiles(fileNames: readonly string[]) {
+	const result: Record<string, string> = {};
+	for (let fileName of fileNames) {
+		if (!cache.graph[fileName]) {
+			// A name the rule passed to the API, or a file outside the graph
+			// (`node_modules`, lib files), which the global key covers.
+			const file = getProject().program.getSourceFile(fileName);
+			if (!file || !cache.graph[file.fileName]) {
+				continue;
+			}
+			fileName = file.fileName;
+		}
+		result[fileName] = hashFile(fileName, fileHashes);
+	}
+	return result;
 }
 
 export function lint(fileName: string, fix: boolean) {
@@ -101,7 +120,7 @@ export function lint(fileName: string, fix: boolean) {
 		// run `--fix` repeatedly. ESLint caps at 10 passes; match that.
 		const MAX_FIX_PASSES = 10;
 		for (let pass = 0;; pass++) {
-			const diagnostics = cacheFlow.lintWithCache(linter, target, cache.files, { fix: true });
+			const diagnostics = cacheFlow.lintWithCache(linter, target, cache.files, { fix: true, hashFiles });
 			const file = target.file;
 			// A mapper can copy original code more than once (e.g. Vue's
 			// navigation-only copies), so one edit can arrive once per copy.
@@ -140,6 +159,7 @@ export function lint(fileName: string, fix: boolean) {
 				core.applyTextEdits(contentMapper.getOriginalText(target.file), edits),
 			);
 			delete cache.files[fileName];
+			fileHashes.delete(fileName);
 			// Next run sees the file as changed and compares its signature
 			// against the one from before the fix, so importers linted
 			// earlier in this run are re-checked.
@@ -155,7 +175,7 @@ export function lint(fileName: string, fix: boolean) {
 		}
 	}
 
-	return cacheFlow.lintWithCache(linter, target, cache.files);
+	return cacheFlow.lintWithCache(linter, target, cache.files, { hashFiles });
 }
 
 export function hasCodeFixes(fileName: string) {

@@ -7,7 +7,9 @@
 	},
 	"files": [
 		"index.js",
-		"index.d.ts"
+		"index.d.ts",
+		"lib/**/*.js",
+		"lib/**/*.d.ts"
 	],
 	"repository": {
 		"type": "git",

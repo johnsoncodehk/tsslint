@@ -31,7 +31,7 @@ const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v5';
+const CACHE_FORMAT_VERSION = 'v6';
 
 export interface CacheData {
 	version: string;
@@ -61,6 +61,9 @@ export interface GraphNode {
 export interface FileCache {
 	hasFix: boolean;
 	diagnostics: Diagnostic[];
+	// Hash of the text of each other program file the rules read beyond its
+	// declarations (see `getTouchedFiles` in @tsslint/core).
+	touched: Record</* abs file path */ string, string>;
 }
 
 export function loadCache(
@@ -139,6 +142,7 @@ function isCacheData(x: unknown): x is CacheData {
 		if (typeof v !== 'object' || v === null) return false;
 		const f = v as Record<string, unknown>;
 		if (typeof f.hasFix !== 'boolean' || !Array.isArray(f.diagnostics)) return false;
+		if (typeof f.touched !== 'object' || f.touched === null) return false;
 	}
 	return true;
 }

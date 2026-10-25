@@ -498,6 +498,78 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
+// ── Test 15: a rule reading another file's function body ─────────────
+//
+// The `awaits` rule looks into the body of each called function; only
+// uses.ts calls `load`. typed.ts reads `load`'s type alone, so a body edit
+// in lib.ts must re-lint uses.ts but not typed.ts.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-touched-')));
+	const markerPath = path.join(dir, 'marker.log');
+	const rulePath = path.join(dir, 'awaits-rule.ts');
+	const lib = path.join(dir, 'lib.ts');
+	const libText = (body: string) => `export async function load(): Promise<number> {\n${body}\treturn 1;\n}\n`;
+	try {
+		fs.writeFileSync(
+			rulePath,
+			`import { defineRule } from ${importPath(configModule)};\n`
+				+ `import * as fs from 'fs';\n`
+				+ `export default defineRule(({ typescript: ts, file, checker, report }) => {\n`
+				+ `  fs.appendFileSync(${JSON.stringify(markerPath)}, file.fileName + '\\n');\n`
+				+ `  for (const statement of file.statements) {\n`
+				+ `    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) continue;\n`
+				+ `    const alias = checker.getSymbolAtLocation(statement.expression.expression);\n`
+				+ `    const declaration = alias && checker.getAliasedSymbol(alias).valueDeclaration?.resolve();\n`
+				+ `    if (declaration && /\\bawait\\b/.test(declaration.getText())) {\n`
+				+ `      report('calls a function that awaits', statement.getStart(file), statement.getEnd());\n`
+				+ `    }\n`
+				+ `  }\n`
+				+ `});\n`,
+		);
+		fs.writeFileSync(
+			path.join(dir, 'tsslint.config.ts'),
+			`import { defineConfig } from ${importPath(configModule)};\n`
+				+ `export default defineConfig({\n`
+				+ `  rules: { awaits: (await import(${importPath(rulePath)})).default },\n`
+				+ `});\n`,
+		);
+		fs.writeFileSync(
+			path.join(dir, 'tsconfig.json'),
+			JSON.stringify({
+				compilerOptions: { target: 'es2020', module: 'esnext', moduleResolution: 'bundler', strict: true },
+				files: ['lib.ts', 'uses.ts', 'typed.ts'],
+			}),
+		);
+		fs.writeFileSync(lib, libText(''));
+		fs.writeFileSync(path.join(dir, 'uses.ts'), `import { load } from './lib';\nload();\n`);
+		fs.writeFileSync(path.join(dir, 'typed.ts'), `import { load } from './lib';\nexport const p = load;\n`);
+
+		let out = runCli(dir).stdout;
+		check('cold: no report before the body awaits', !out.includes('calls a function that awaits'), out);
+
+		editFile(lib, libText('\tawait 0;\n'));
+		const added = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('body edit re-lints the file reading the body', added === 'lib.ts,uses.ts', added);
+		check('the new body is reported', out.includes('calls a function that awaits'), out);
+
+		const warm = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('warm run after the body edit lints nothing', warm === '', warm);
+		check('warm run replays the report', out.includes('calls a function that awaits'), out);
+
+		editFile(lib, libText(''));
+		const removed = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('reverting the body re-lints the file reading it', removed === 'lib.ts,uses.ts', removed);
+		check('the report goes away', !out.includes('calls a function that awaits'), out);
+
+		bumpMtime(lib);
+		const touched = lintedDuring(markerPath, () => runCli(dir));
+		check('an unchanged text does not re-lint the file reading it', touched === 'lib.ts', touched);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // A minimal tsconfig content mapper process; `transform` is the source
 // of a `function transform(content)` returning the transform result.
 const mapperServer = (transform: string) => `
@@ -594,7 +666,7 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-// ── Test 14 (content mapper): diagnostics land on the original file ────
+// ── Test 16 (content mapper): diagnostics land on the original file ────
 {
 	const { dir } = makeContentMapperFixture('\n');
 	try {
@@ -607,7 +679,7 @@ function stripAnsi(text: string): string {
 	}
 }
 
-// ── Test 15 (content mapper): --fix edits the original text, exactly ───
+// ── Test 17 (content mapper): --fix edits the original text, exactly ───
 //
 // CRLF line endings: positions must stay in original-file coordinates.
 // The fix touching generated code has no exact original span and must be
@@ -631,7 +703,7 @@ function stripAnsi(text: string): string {
 	}
 }
 
-// ── Test 16 (content mapper): diagnostic directives suppress reports ───
+// ── Test 18 (content mapper): diagnostic directives suppress reports ───
 //
 // Shaped like Vue's output: template expressions are appended to the
 // script inside a generated function, `@vue-ignore` / `@vue-expect-error`
@@ -717,7 +789,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 17 (content mapper): one fix per original range ──────────────
+// ── Test 19 (content mapper): one fix per original range ──────────────
 //
 // The script body is copied twice; the second copy carries only a
 // navigation feature, like Vue's navigation-only copies. The same
@@ -771,7 +843,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 18 (content mapper): compiler diagnostics are mapped once ─────
+// ── Test 20 (content mapper): compiler diagnostics are mapped once ─────
 //
 // `getSemanticDiagnostics` on a content-mapped file already returns
 // original positions.
@@ -802,7 +874,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 19 (content mapper): a rule crash is reported without a position
+// ── Test 21 (content mapper): a rule crash is reported without a position
 //
 // The transformed text starts with generated code, so a crash placed at
 // offset 0 would have no original position and be dropped.
@@ -843,7 +915,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 20 (content mapper): editing the mapper re-lints everything ───
+// ── Test 22 (content mapper): editing the mapper re-lints everything ───
 //
 // A cache hit shows the `--force` hint.
 {
@@ -862,7 +934,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 21 (content mapper): mapped files compare declaration signatures
+// ── Test 23 (content mapper): mapped files compare declaration signatures
 //
 // Editing a function body in A.vue doesn't re-lint B.vue, which imports
 // it; changing its return type does.

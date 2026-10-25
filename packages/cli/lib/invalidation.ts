@@ -5,6 +5,10 @@
 // only that file. A changed signature re-lints the direct importers, and keeps
 // propagating only while their signatures change too.
 //
+// A rule can also read another file beyond its declarations (e.g. the body of
+// a function it calls). The file's result then also depends on that file's
+// full text, and on what that file's own types depend on.
+//
 // Some changes can affect any file; they re-lint everything:
 //   - compiler options, tsconfig files, content mappers, config and rule modules
 //   - files added to or removed from the program, or changes under `node_modules`
@@ -28,7 +32,13 @@ interface FileInfo {
 	references: Map<string, string | null>;
 }
 
-export function invalidate(api: API, project: Project, cache: CacheData, configModulesKey: string) {
+export function invalidate(
+	api: API,
+	project: Project,
+	cache: CacheData,
+	configModulesKey: string,
+	fileHashes: Map<string, string>,
+) {
 	const program = project.program;
 	const ownFiles = new Map<string, fs.Stats>();
 	const globalHash = crypto.createHash('sha256');
@@ -133,6 +143,17 @@ export function invalidate(api: API, project: Project, cache: CacheData, configM
 	for (const fileName of signatureChanged) {
 		if (cache.graph[fileName].global) {
 			return rebuild();
+		}
+	}
+	for (const [fileName, entry] of Object.entries(cache.files)) {
+		if (dirty.has(fileName)) {
+			continue;
+		}
+		for (const [touched, textHash] of Object.entries(entry.touched)) {
+			if (changedSet.has(touched) ? hashFile(touched, fileHashes) !== textHash : dirty.has(touched)) {
+				dirty.add(fileName);
+				break;
+			}
 		}
 	}
 	for (const [fileName, signature] of signatures) {
@@ -404,6 +425,14 @@ function updateContentMappersHash(api: API, hash: crypto.Hash, configFile: strin
 			}
 		}
 	}
+}
+
+export function hashFile(fileName: string, hashes: Map<string, string>) {
+	let fileHash = hashes.get(fileName);
+	if (fileHash === undefined) {
+		hashes.set(fileName, fileHash = hash(readFile(fileName)));
+	}
+	return fileHash;
 }
 
 function readFile(fileName: string) {

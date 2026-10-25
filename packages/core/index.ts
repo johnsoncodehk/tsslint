@@ -13,6 +13,8 @@ import type {
 import type { MappedDiagnosticDirective } from 'typescript/ast';
 import { DiagnosticCategory, type TextEdit } from 'typescript/sync';
 
+import { collectTouchedFiles, trackChecker, trackProgram } from './lib/tracking';
+
 import path = require('path');
 import minimatch = require('minimatch');
 
@@ -40,6 +42,8 @@ export function createLinter(
 			}[],
 		]
 	>();
+	// Other program files the rules and plugins read while linting each file.
+	const touchedFilesByFile = new Map<string, string[]>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
 			include: config.include,
@@ -58,11 +62,14 @@ export function createLinter(
 			const rules = getRulesForFile(fileName);
 			const configs = getConfigsForFile(fileName);
 
+			const trackedTarget: LintTarget = {
+				file,
+				program: trackProgram(program),
+				checker: trackChecker(checker, program),
+			};
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
-				file,
-				program,
-				checker,
+				...trackedTarget,
 				report,
 			};
 
@@ -70,40 +77,45 @@ export function createLinter(
 
 			const lintResult = lintResults.get(fileName)!;
 
-			for (const [ruleId, rule] of Object.entries(rules)) {
-				currentRuleId = ruleId;
-				try {
-					rule(rulesContext);
-				}
-				catch (err) {
-					// A crash has no position, so it carries no `fileName`.
-					addDiagnostic({
-						category: DiagnosticCategory.Message,
-						code: 0,
-						ruleId: currentRuleId,
-						text: err instanceof Error ? err.stack ?? err.message : String(err),
-						pos: 0,
-						end: 0,
-					});
-				}
-			}
-
-			let diagnostics: Diagnostic[] = [...lintResult[1].keys()];
-
-			const directives = file.diagnosticDirectives;
-			if (directives?.length) {
-				diagnostics = diagnostics.filter(diagnostic =>
-					diagnostic.fileName === undefined || !isInDirective(directives, diagnostic.pos)
-				);
-			}
-
-			for (const { plugins } of configs) {
-				for (const { resolveDiagnostics } of plugins) {
-					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(target, diagnostics);
+			let diagnostics: Diagnostic[] = [];
+			const touchedFiles = collectTouchedFiles(() => {
+				for (const [ruleId, rule] of Object.entries(rules)) {
+					currentRuleId = ruleId;
+					try {
+						rule(rulesContext);
+					}
+					catch (err) {
+						// A crash has no position, so it carries no `fileName`.
+						addDiagnostic({
+							category: DiagnosticCategory.Message,
+							code: 0,
+							ruleId: currentRuleId,
+							text: err instanceof Error ? err.stack ?? err.message : String(err),
+							pos: 0,
+							end: 0,
+						});
 					}
 				}
-			}
+
+				diagnostics = [...lintResult[1].keys()];
+
+				const directives = file.diagnosticDirectives;
+				if (directives?.length) {
+					diagnostics = diagnostics.filter(diagnostic =>
+						diagnostic.fileName === undefined || !isInDirective(directives, diagnostic.pos)
+					);
+				}
+
+				for (const { plugins } of configs) {
+					for (const { resolveDiagnostics } of plugins) {
+						if (resolveDiagnostics) {
+							diagnostics = resolveDiagnostics(trackedTarget, diagnostics);
+						}
+					}
+				}
+			});
+			touchedFiles.delete(fileName);
+			touchedFilesByFile.set(fileName, [...touchedFiles]);
 
 			// Remove fixes and refactors that removed by resolveDiagnostics
 			const diagnosticSet = new Set(diagnostics);
@@ -282,6 +294,14 @@ export function createLinter(
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
+		/**
+		 * Other files the last `lint` of `fileName` read beyond their
+		 * declarations: their nodes, source files, diagnostics or emit. Names
+		 * passed to the API by the rule are returned as given.
+		 */
+		getTouchedFiles(fileName: string): readonly string[] {
+			return touchedFilesByFile.get(fileName) ?? [];
+		},
 	};
 
 	function getRulesForFile(fileName: string) {

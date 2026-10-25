@@ -95,7 +95,7 @@ function findCacheFile(marker: string): string | undefined {
 			'/abs/foo.ts': { mtime: 1234567890, size: 10, signature: 'sig', deps: ['/abs/bar.ts'], global: false },
 		},
 		files: {
-			'/abs/foo.ts': { hasFix: true, diagnostics: [] },
+			'/abs/foo.ts': { hasFix: true, diagnostics: [], touched: { '/abs/baz.ts': 'hash' } },
 		},
 	});
 	cache.saveCache(tsconfig, config, '6.0.0', original);
@@ -105,6 +105,7 @@ function findCacheFile(marker: string): string | undefined {
 	check('round-trip: signature preserved', loaded.graph['/abs/foo.ts']?.signature === 'sig');
 	check('round-trip: deps preserved', loaded.graph['/abs/foo.ts']?.deps[0] === '/abs/bar.ts');
 	check('round-trip: file entry preserved', loaded.files['/abs/foo.ts']?.hasFix === true);
+	check('round-trip: touched files preserved', loaded.files['/abs/foo.ts']?.touched['/abs/baz.ts'] === 'hash');
 }
 
 // ── Test 3: corrupted JSON returns empty cache ───────────────────────────
@@ -215,8 +216,12 @@ function findCacheFile(marker: string): string | undefined {
 				graph: { '/x': { mtime: 'nope', size: 1, deps: [], global: false } },
 			}],
 			['graph deps not an array', { ...base, graph: { '/x': { mtime: 1, size: 1, deps: null, global: false } } }],
-			['file diagnostics not an array', { ...base, files: { '/x': { hasFix: false, diagnostics: null } } }],
-			['file hasFix missing', { ...base, files: { '/x': { diagnostics: [] } } }],
+			['file diagnostics not an array', {
+				...base,
+				files: { '/x': { hasFix: false, diagnostics: null, touched: {} } },
+			}],
+			['file hasFix missing', { ...base, files: { '/x': { diagnostics: [], touched: {} } } }],
+			['file touched missing', { ...base, files: { '/x': { hasFix: false, diagnostics: [] } } }],
 		];
 		for (const [label, corrupt] of cases) {
 			fs.writeFileSync(target, JSON.stringify(corrupt));

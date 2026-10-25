@@ -15,6 +15,9 @@ export function lintWithCache(
 		// Fixes are closures that don't survive the cache, so a file with
 		// fixes has to be linted again to apply them.
 		fix?: boolean;
+		// Text hashes of the files the rules read; without it none are
+		// recorded.
+		hashFiles?: (fileNames: readonly string[]) => Record<string, string>;
 	},
 ): Diagnostic[] {
 	const fileName = target.file.fileName;
@@ -27,6 +30,7 @@ export function lintWithCache(
 	files[fileName] = {
 		hasFix: linter.hasCodeFixes(fileName),
 		diagnostics: diagnostics.map(diagnostic => ({ ...diagnostic })),
+		touched: options?.hashFiles?.(linter.getTouchedFiles(fileName)) ?? {},
 	};
 	return diagnostics;
 }

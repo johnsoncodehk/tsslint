@@ -139,7 +139,69 @@ function check(name: string, cond: boolean, detail?: string) {
 	check('fix replays a file without fixes', runs === 3);
 }
 
-// ── Test 5: warm replay keeps the ignore plugin's result ────────────────
+// ── Test 5: files the rules read beyond their declarations ──────────────
+//
+// Reading a declaration node, a source file, or querying the checker by
+// file makes the linted file depend on the other file's text. Types alone
+// don't; declaration signatures cover them.
+{
+	const project = createProject({
+		'lib.ts': 'export function load() {\n\treturn 1;\n}\n',
+		'main.ts': `import { load } from './lib';\nload();\n`,
+	});
+	const main = project.target('main.ts');
+	const libName = project.target('lib.ts').file.fileName;
+	const getCall = (rctx: RuleContext) => {
+		const statement = rctx.file.statements[1];
+		if (!rctx.typescript.isExpressionStatement(statement) || !rctx.typescript.isCallExpression(statement.expression)) {
+			throw new Error('unexpected fixture');
+		}
+		return statement.expression;
+	};
+	const touchedBy = (rule: (rctx: RuleContext) => void) => {
+		const linter = core.createLinter(project.ctx, project.rootDir, { rules: { rule } });
+		const files: Record<string, FileCache> = {};
+		cacheFlow.lintWithCache(linter, main, files, {
+			hashFiles: fileNames => Object.fromEntries(fileNames.map(fileName => [fileName, 'hash'])),
+		});
+		return Object.keys(files[main.file.fileName]?.touched ?? {}).join(',');
+	};
+
+	const types = touchedBy(rctx => {
+		rctx.report(rctx.checker.typeToString(rctx.checker.getTypeAtLocation(getCall(rctx))), 0, 1);
+	});
+	check('types alone touch no file', types === '', types);
+
+	const body = touchedBy(rctx => {
+		const symbol = rctx.checker.getAliasedSymbol(rctx.checker.getSymbolAtLocation(getCall(rctx).expression)!);
+		const declaration = symbol.valueDeclaration!.resolve()!;
+		rctx.report(declaration.getText(), 0, 1);
+	});
+	check('a resolved declaration touches its file', body === libName, body);
+
+	const sourceFile = touchedBy(rctx => {
+		rctx.program.getSourceFile(libName);
+	});
+	check('program.getSourceFile touches the file', sourceFile === libName, sourceFile);
+
+	const batched = touchedBy(rctx => {
+		const api = (rctx.program as any).project.api;
+		api.batch(rctx.program.getSourceFile.gen(libName));
+	});
+	check('a batched getSourceFile touches the file', batched === libName, batched);
+
+	const position = touchedBy(rctx => {
+		rctx.checker.getSymbolAtPosition(libName, 17);
+	});
+	check('a checker query by file touches the file', position === libName, position);
+
+	const own = touchedBy(rctx => {
+		rctx.program.getSourceFile(rctx.file.fileName);
+	});
+	check('the linted file is not recorded', own === '', own);
+}
+
+// ── Test 6: warm replay keeps the ignore plugin's result ────────────────
 //
 // Scenario: a rule fires on line 2, an `// eslint-disable-next-line foo`
 // comment on line 1 suppresses it, ignore plugin (`reportsUnusedComments
@@ -181,7 +243,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 6: cold and warm passes report once each ───────────────────────
+// ── Test 7: cold and warm passes report once each ───────────────────────
 {
 	const project = createProject({ 'a.ts': 'const x = 1;\n' });
 	let runs = 0;
@@ -209,7 +271,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 7: multiple rules + ignore plugin, no duplication on warm ─────
+// ── Test 8: multiple rules + ignore plugin, no duplication on warm ─────
 //
 // Two rules, only one suppressed by a disable comment. Warm pass must
 // produce the same final set as cold — no double-report on the
@@ -253,7 +315,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 8: ignore plugin's regex must capture scoped rule IDs ─────────
+// ── Test 9: ignore plugin's regex must capture scoped rule IDs ─────────
 //
 // `@scope/rule` and `plugin/rule` IDs (the dominant naming in the
 // ecosystem) must be captured into `groups.ruleId` so each block-disable
@@ -297,7 +359,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 9: ignore plugin comment scanner — non-comment contexts ────────
+// ── Test 10: ignore plugin comment scanner — non-comment contexts ────────
 //
 // The plugin's inlined comment walker relies on the AST-realized token
 // boundaries (via `node.getChildren()` + `forEachLeading/TrailingCommentRange`)
@@ -350,7 +412,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	}
 }
 
-// ── Test 10: ignore plugin must collect ALL leading comments per token ──
+// ── Test 11: ignore plugin must collect ALL leading comments per token ──
 //
 // `ts.forEachLeading/TrailingCommentRange` short-circuits when the
 // callback returns a truthy value (matches the documented `forEachX`
