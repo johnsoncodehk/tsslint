@@ -85,8 +85,8 @@ function emptyFileCache(mtime = 0): FileCache {
 	check('second call did NOT re-run rule', runs === 1);
 	check('second call still produced 1 diagnostic', second.length === 1);
 	check(
-		'restored diagnostic has live file ref',
-		!!second[0]?.file && typeof second[0]?.file.fileName === 'string',
+		'restored diagnostic keeps its file name',
+		second[0]?.fileName === project.target('a.ts').file.fileName,
 	);
 }
 
@@ -186,11 +186,11 @@ function emptyFileCache(mtime = 0): FileCache {
 				hasFix: false,
 				diagnostics: [{
 					category: DiagnosticCategory.Message,
-					code: 'typed',
-					messageText: 'stale',
-					start: 0,
-					length: 1,
-					source: 'tsslint',
+					code: 0,
+					ruleId: 'typed',
+					text: 'stale',
+					pos: 0,
+					end: 1,
 				}],
 			},
 		},
@@ -305,8 +305,8 @@ function emptyFileCache(mtime = 0): FileCache {
 	check('second call did NOT re-run type-aware rule', runs === 1);
 	check('second call still produced 1 diagnostic', second.length === 1);
 	check(
-		'restored diagnostic has live file ref (layer 2)',
-		!!second[0]?.file && typeof second[0]?.file.fileName === 'string',
+		'restored diagnostic keeps its file name (layer 2)',
+		second[0]?.fileName === project.target('a.ts').file.fileName,
 	);
 }
 
@@ -435,7 +435,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 	check(
 		'persisted diagnostic is the plain one',
-		cache.rules['env_dependent']?.diagnostics[0]?.messageText === 'plain',
+		cache.rules['env_dependent']?.diagnostics[0]?.text === 'plain',
 	);
 }
 
@@ -464,7 +464,7 @@ function emptyFileCache(mtime = 0): FileCache {
 		1,
 	);
 	check('warm cache hit returns 1 diagnostic', diags.length === 1);
-	check('warm replay drops the marked one', diags[0]?.messageText === 'plain');
+	check('warm replay drops the marked one', diags[0]?.text === 'plain');
 }
 
 // ── Test 17 (regression): mixed-mode rule, early-return file replays sound
@@ -603,7 +603,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	check(
 		'cold pass: rule diag suppressed by disable comment, no user-visible diag',
 		cold.length === 0,
-		`cold returned ${cold.length} diags: ${cold.map(d => d.code).join(',')}`,
+		`cold returned ${cold.length} diags: ${cold.map(d => d.ruleId).join(',')}`,
 	);
 	check('cold pass: rule entry written to cache', !!cache.rules['foo']);
 	check(
@@ -615,7 +615,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	check(
 		'warm pass: same comment suppresses the same (now-cached) diag — no unused-comment FP',
 		warm.length === 0,
-		`warm returned ${warm.length} diags: ${warm.map(d => d.code).join(',')}`,
+		`warm returned ${warm.length} diags: ${warm.map(d => d.ruleId).join(',')}`,
 	);
 }
 
@@ -649,7 +649,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	check('warm: 1 diag returned (no duplication)', warm.length === 1);
 	check(
 		'warm diag has same payload as cold',
-		warm[0].code === cold[0].code && warm[0].start === cold[0].start,
+		warm[0].ruleId === cold[0].ruleId && warm[0].pos === cold[0].pos,
 	);
 }
 
@@ -681,18 +681,18 @@ function emptyFileCache(mtime = 0): FileCache {
 	const cache = emptyFileCache(1);
 
 	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	const coldCodes = cold.map(d => d.code).sort();
+	const coldCodes = cold.map(d => d.ruleId).sort();
 	check(
 		'cold: only `bar` survives (`foo` suppressed by comment for `foo`)',
-		cold.length === 1 && String(cold[0].code) === 'bar',
+		cold.length === 1 && cold[0].ruleId === 'bar',
 		`cold codes: ${coldCodes.join(',')}`,
 	);
 
 	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	const warmCodes = warm.map(d => d.code).sort();
+	const warmCodes = warm.map(d => d.ruleId).sort();
 	check(
 		'warm: same single `bar` — no duplicate, no resurrected `foo`, no FP unused-comment',
-		warm.length === 1 && String(warm[0].code) === 'bar',
+		warm.length === 1 && warm[0].ruleId === 'bar',
 		`warm codes: ${warmCodes.join(',')}`,
 	);
 }
@@ -737,7 +737,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	check(
 		'scoped block-disables: each independently suppresses its targeted rule (no unused FP on second comment)',
 		result.length === 0,
-		`expected 0 diags; got ${result.length}: ${result.map(d => `${d.code}@${d.start}`).join(',')}`,
+		`expected 0 diags; got ${result.length}: ${result.map(d => `${d.ruleId}@${d.pos}`).join(',')}`,
 	);
 }
 
@@ -789,7 +789,7 @@ function emptyFileCache(mtime = 0): FileCache {
 		check(
 			`scanner: no phantom directive in ${label}`,
 			result.length === 0,
-			`expected 0 diags; got ${result.length}: ${result.map(d => d.code).join(',')}`,
+			`expected 0 diags; got ${result.length}: ${result.map(d => d.ruleId).join(',')}`,
 		);
 	}
 }

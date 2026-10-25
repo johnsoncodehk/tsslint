@@ -43,8 +43,11 @@ export default defineRule(({ typescript: ts, file, report }) => {
 Reading `program` or `checker` classifies a rule as type-aware (see
 [Caching](#5-caching)).
 
-`Diagnostic`, `CodeFixAction`, `FileTextChanges`, and the other result types are
-now defined in `@tsslint/types`. A TSSLint diagnostic's `code` is the rule id.
+Results use TypeScript 7.1's own types. A rule report is a `Diagnostic` from
+`typescript/sync` (`pos`, `end`, `text`) plus a `ruleId`, and `withFix` /
+`withRefactor` callbacks return `TextEdit[]` (`{ pos, end, newText }`) for the
+reported file. Plugin `resolveDiagnostics` and `resolveCodeFixes` receive the
+lint target (`{ program, checker, file }`) instead of the file.
 
 ### 3. Removed packages and importers
 
@@ -86,10 +89,10 @@ TypeScript 7.
 Only relevant if you embed the linter directly:
 
 - `createLinter(ctx, rootDir, config, …)` takes
-  `ctx: { typescript: typeof import('typescript/ast'), getProgram(): Program }`.
+  `ctx: { typescript: typeof import('typescript/ast') }`.
 - `linter.lint(target, …)` takes `target: { program, checker, file }` instead of a
   file name.
-- `applyTextChanges(text, changes)` works on strings.
+- `applyTextEdits(text, edits)` works on strings.
 
 ## Framework projects
 

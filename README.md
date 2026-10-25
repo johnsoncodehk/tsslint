@@ -94,7 +94,7 @@ report('No console.', node.getStart(file), node.getEnd())
   .withDeprecated()              // strikethrough
   .withUnnecessary()             // faded
   .withFix('Remove call', () => [
-    { fileName: file.fileName, textChanges: [{ span: { start, length }, newText: '' }] },
+    { pos: node.getStart(file), end: node.getEnd(), newText: '' },
   ])
   .withRefactor('Wrap in if (DEBUG)', () => [/* ... */]);
 ```

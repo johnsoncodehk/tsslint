@@ -1,9 +1,19 @@
 import type { SourceFile } from 'typescript/ast';
-import type { Checker, DiagnosticCategory, Program } from 'typescript/sync';
+import type { Checker, Diagnostic as TSDiagnostic, Program, TextEdit } from 'typescript/sync';
 
 export interface LinterContext {
 	typescript: typeof import('typescript/ast');
-	getProgram(): Program;
+}
+
+export interface LintTarget {
+	program: Program;
+	checker: Checker;
+	/**
+	 * For files produced by a tsconfig `contentMappers` entry, this is the
+	 * transformed TypeScript. Report positions in its coordinates; TSSLint
+	 * maps them back to the original file.
+	 */
+	file: SourceFile;
 }
 
 export interface Config {
@@ -19,8 +29,8 @@ export interface Plugin {
 
 export interface PluginInstance {
 	resolveRules?(fileName: string, rules: Record<string, Rule>): Record<string, Rule>;
-	resolveDiagnostics?(file: SourceFile, diagnostics: Diagnostic[]): Diagnostic[];
-	resolveCodeFixes?(file: SourceFile, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
+	resolveDiagnostics?(target: LintTarget, diagnostics: Diagnostic[]): Diagnostic[];
+	resolveCodeFixes?(target: LintTarget, diagnostic: Diagnostic, codeFixes: CodeFixAction[]): CodeFixAction[];
 }
 
 export interface Rules {
@@ -31,16 +41,8 @@ export interface Rule {
 	(ctx: RuleContext): void;
 }
 
-export interface RuleContext {
+export interface RuleContext extends LintTarget {
 	typescript: typeof import('typescript/ast');
-	program: Program;
-	checker: Checker;
-	/**
-	 * For files produced by a tsconfig `contentMappers` entry, this is the
-	 * transformed TypeScript. Report positions in its coordinates; TSSLint
-	 * maps them back to the original file.
-	 */
-	file: SourceFile;
 	report(message: string, start: number, end: number): Reporter;
 }
 
@@ -51,8 +53,9 @@ export interface Reporter {
 	asSuggestion(): Reporter;
 	withDeprecated(): Reporter;
 	withUnnecessary(): Reporter;
-	withFix(title: string, getChanges: () => FileTextChanges[]): Reporter;
-	withRefactor(title: string, getChanges: () => FileTextChanges[]): Reporter;
+	/** Edits apply to the reported file. */
+	withFix(title: string, getEdits: () => readonly TextEdit[]): Reporter;
+	withRefactor(title: string, getEdits: () => readonly TextEdit[]): Reporter;
 	// Mark this diagnostic as ineligible for the CLI's per-file cache.
 	// The diagnostic is still returned for the current run, but won't be
 	// written to disk — so the next warm run (cache hit on this file)
@@ -65,25 +68,10 @@ export interface Reporter {
 	withoutCache(): Reporter;
 }
 
-export interface TextSpan {
-	start: number;
-	length: number;
-}
-
-export interface TextChange {
-	span: TextSpan;
-	newText: string;
-}
-
-export interface FileTextChanges {
-	fileName: string;
-	textChanges: readonly TextChange[];
-}
-
 export interface CodeFixAction {
 	fixName: string;
 	description: string;
-	changes: FileTextChanges[];
+	edits: readonly TextEdit[];
 	fixId?: string;
 	fixAllDescription?: string;
 }
@@ -94,25 +82,11 @@ export interface RefactorAction {
 	kind?: string;
 }
 
-export interface RelatedInformation {
-	category: DiagnosticCategory;
-	code: string | number;
-	messageText: string;
-	file: SourceFile | undefined;
-	start: number | undefined;
-	length: number | undefined;
-}
-
-export interface Diagnostic {
-	category: DiagnosticCategory;
-	/** The rule id, or the TypeScript diagnostic code for compiler diagnostics. */
-	code: string | number;
-	messageText: string;
-	file: SourceFile;
-	start: number;
-	length: number;
-	source: string;
-	relatedInformation?: RelatedInformation[];
-	reportsUnnecessary?: boolean;
-	reportsDeprecated?: boolean;
+/**
+ * A TypeScript diagnostic, or a rule report when `ruleId` is set. Rule
+ * reports are in the coordinates of `LintTarget.file`; compiler
+ * diagnostics of a content-mapped file are in the original file's.
+ */
+export interface Diagnostic extends TSDiagnostic {
+	ruleId?: string;
 }

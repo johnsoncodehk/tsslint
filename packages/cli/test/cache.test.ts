@@ -60,7 +60,7 @@ function configWithMarker(marker: string): string {
 	const tsconfig = tmpFile('tsconfig2.json', '{}');
 	const config = configWithMarker('t2-' + Date.now());
 	const original: import('../lib/cache.js').CacheData = {
-		version: 'v3',
+		version: 'v4',
 		ruleModes: { 'no-undef': 'type-aware' },
 		files: {
 			'/abs/foo.ts': {
@@ -106,7 +106,7 @@ function configWithMarker(marker: string): string {
 						const parsed = JSON.parse(content);
 						// Find the one we just wrote (heuristic: empty data).
 						if (
-							parsed.version === 'v3'
+							parsed.version === 'v4'
 							&& Object.keys(parsed.ruleModes).length === 0
 							&& Object.keys(parsed.files).length === 0
 						) {
@@ -174,7 +174,7 @@ function configWithMarker(marker: string): string {
 		try {
 			const o = JSON.parse(fs.readFileSync(f, 'utf8'));
 			if (
-				o.version === 'v3' && Object.keys(o.files).length === 0
+				o.version === 'v4' && Object.keys(o.files).length === 0
 				&& Object.keys(o.ruleModes).length === 0
 			) {
 				// Could be from a previous test; pick first.
@@ -196,7 +196,7 @@ function configWithMarker(marker: string): string {
 	const tsconfig = tmpFile('tsconfig6.json', '{}');
 	const config = configWithMarker('t6-' + Date.now());
 	const data: import('../lib/cache.js').CacheData = {
-		version: 'v3',
+		version: 'v4',
 		ruleModes: { 'rule6a': 'type-aware' },
 		files: {},
 	};
@@ -223,7 +223,7 @@ function configWithMarker(marker: string): string {
 	const config = configWithMarker('t7-' + Date.now());
 
 	const data: import('../lib/cache.js').CacheData = {
-		version: 'v3',
+		version: 'v4',
 		ruleModes: { 'rule7': 'type-aware' },
 		files: {},
 	};
@@ -302,7 +302,7 @@ function configWithMarker(marker: string): string {
 			else if (e.isFile() && full.endsWith('.cache.json')) {
 				try {
 					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
-					if (o.version === 'v3' && Object.keys(o.files).length === 0) {
+					if (o.version === 'v4' && Object.keys(o.files).length === 0) {
 						target = full;
 						break;
 					}
@@ -315,7 +315,7 @@ function configWithMarker(marker: string): string {
 	if (target) {
 		// mtime is a string, not a number — must reject.
 		const corrupt = {
-			version: 'v3',
+			version: 'v4',
 			ruleModes: {},
 			files: { '/x': { mtime: 'not-a-number', rules: {} } },
 		};
@@ -325,7 +325,7 @@ function configWithMarker(marker: string): string {
 
 		// rules is null — must also reject.
 		const corrupt2 = {
-			version: 'v3',
+			version: 'v4',
 			ruleModes: {},
 			files: { '/x': { mtime: 1, rules: null } },
 		};
@@ -375,12 +375,12 @@ function configWithMarker(marker: string): string {
 	}
 	check('test 10 cache file found', !!target);
 	if (target) {
-		const corrupt = { version: 'v3', ruleModes: {}, files: {}, programFingerprint: 42 };
+		const corrupt = { version: 'v4', ruleModes: {}, files: {}, programFingerprint: 42 };
 		fs.writeFileSync(target, JSON.stringify(corrupt));
 		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
 		check('programFingerprint wrong type → empty cache', loaded.programFingerprint === undefined);
 
-		const valid = { version: 'v3', ruleModes: {}, files: {}, programFingerprint: 'abc' };
+		const valid = { version: 'v4', ruleModes: {}, files: {}, programFingerprint: 'abc' };
 		fs.writeFileSync(target, JSON.stringify(valid));
 		const loaded2 = cache.loadCache(tsconfig, config, '6.0.0');
 		check('programFingerprint string round-trips', loaded2.programFingerprint === 'abc');

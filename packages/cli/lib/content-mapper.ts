@@ -4,8 +4,8 @@
 // report in transformed coordinates; everything the user sees or that
 // touches disk goes through here.
 
-import type { TextChange } from '@tsslint/types';
-import { type SourceFile, SpanMap } from 'typescript/ast';
+import { type ReadonlyTextRange, type SourceFile, SpanMap } from 'typescript/ast';
+import type { TextEdit } from 'typescript/sync';
 
 export function getOriginalText(file: SourceFile): string {
 	return file.spanMap ? file.originalText : file.text;
@@ -13,37 +13,30 @@ export function getOriginalText(file: SourceFile): string {
 
 // Undefined when the range only covers generated code with no counterpart
 // in the original file — there is nothing for the user to look at.
-export function toOriginalRange(
-	file: SourceFile,
-	start: number,
-	end: number,
-): { start: number; end: number } | undefined {
+export function toOriginalRange(file: SourceFile, range: ReadonlyTextRange): ReadonlyTextRange | undefined {
 	if (!file.spanMap) {
-		return { start, end };
+		return range;
 	}
-	const { range, fidelity } = file.spanMap.virtualToOriginalSpan({ pos: start, end });
-	if (SpanMap.isNone(fidelity)) {
+	const mapped = file.spanMap.virtualToOriginalSpan(range);
+	if (SpanMap.isNone(mapped.fidelity)) {
 		return undefined;
 	}
-	return { start: range.pos, end: range.end };
+	return mapped.range;
 }
 
 // Undefined unless every edit maps exactly onto original text; an
 // approximate edit could corrupt the user's file.
-export function toOriginalTextChanges(
-	file: SourceFile,
-	textChanges: readonly TextChange[],
-): TextChange[] | undefined {
+export function toOriginalTextEdits(file: SourceFile, edits: readonly TextEdit[]): TextEdit[] | undefined {
 	if (!file.spanMap) {
-		return [...textChanges];
+		return [...edits];
 	}
-	const result: TextChange[] = [];
-	for (const { span, newText } of textChanges) {
-		const { range, fidelity } = file.spanMap.virtualToOriginalSpan({ pos: span.start, end: span.start + span.length });
+	const result: TextEdit[] = [];
+	for (const edit of edits) {
+		const { range, fidelity } = file.spanMap.virtualToOriginalSpan(edit);
 		if (!SpanMap.isExact(fidelity)) {
 			return undefined;
 		}
-		result.push({ span: { start: range.pos, length: range.end - range.pos }, newText });
+		result.push({ pos: range.pos, end: range.end, newText: edit.newText });
 	}
 	return result;
 }

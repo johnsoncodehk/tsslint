@@ -60,7 +60,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	const out = linter.lint(project.target('a.ts'), { skipRules: new Set(['a']) });
 	check('a skipped', aRuns === 0);
 	check('b ran', bRuns === 1);
-	check('only b in result', out.length === 1 && String(out[0]?.code) === 'b');
+	check('only b in result', out.length === 1 && out[0]?.ruleId === 'b');
 }
 
 // ── Test 3: lint without options runs everything (back-compat) ───────────
@@ -116,8 +116,8 @@ function check(name: string, cond: boolean, detail?: string) {
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
 	const out = linter.lint(project.target('a.ts'));
-	const fixable = out.find(d => String(d.code) === 'fixable')!;
-	const plain = out.find(d => String(d.code) === 'plain')!;
+	const fixable = out.find(d => d.ruleId === 'fixable')!;
+	const plain = out.find(d => d.ruleId === 'plain')!;
 	check(
 		'hasFixForDiagnostic true for fixable diag',
 		linter.hasFixForDiagnostic(project.target('a.ts').file.fileName, fixable) === true,

@@ -1,7 +1,7 @@
-// Converts core diagnostics into the shape TS7's diagnostic formatter
-// renders, in the coordinates of the file the user actually wrote.
+// Renders diagnostics with TS7's diagnostic formatter, in the coordinates
+// of the file the user actually wrote.
 
-import type { Diagnostic, RelatedInformation } from '@tsslint/types';
+import type { Diagnostic } from '@tsslint/types';
 import type { SourceFile } from 'typescript/ast';
 import {
 	type Diagnostic as TSDiagnostic,
@@ -14,54 +14,45 @@ const lineStartsCache = new WeakMap<SourceFile, number[]>();
 
 // Undefined when the diagnostic lies entirely in generated code of a
 // content-mapped file.
-export function formatDiagnostic(diagnostic: Diagnostic, host: FormatDiagnosticsHost): string | undefined {
-	const converted = convert(diagnostic);
+export function formatDiagnostic(
+	diagnostic: Diagnostic,
+	file: SourceFile,
+	host: FormatDiagnosticsHost,
+): string | undefined {
+	// The formatter prints `${source}${code}`, so `source` is only kept to
+	// carry a rule id.
+	const converted = diagnostic.ruleId === undefined
+		? { ...diagnostic, source: undefined, fileName: file.fileName }
+		: convertRuleReport(diagnostic, diagnostic.ruleId, file);
 	if (!converted) {
 		return undefined;
 	}
 	return formatDiagnosticsWithColorAndContext([converted], host).trimEnd();
 }
 
-function convert(diagnostic: Diagnostic | RelatedInformation): TSDiagnostic | undefined {
-	// The formatter prints `${source}${code}`; rule ids go in `source`.
-	const code = typeof diagnostic.code === 'string'
-		? { source: diagnostic.code, code: '' as unknown as number }
-		: { code: diagnostic.code };
-	const base = {
-		...code,
-		category: diagnostic.category,
-		text: diagnostic.messageText,
-	};
-	const { file, start, length } = diagnostic;
-	if (!file || start === undefined || length === undefined) {
-		return { ...base, pos: 0, end: 0 };
-	}
-	// Compiler diagnostics of a content-mapped file already come back in
-	// original coordinates; only rule reports are in transformed ones.
-	const range = 'source' in diagnostic && diagnostic.source === 'tsslint'
-		? contentMapper.toOriginalRange(file, start, start + length)
-		: { start, end: start + length };
+// Rule reports are in transformed coordinates and carry no line
+// information; compiler diagnostics already come back with both in the
+// original file.
+function convertRuleReport(diagnostic: Diagnostic, ruleId: string, file: SourceFile): TSDiagnostic | undefined {
+	const range = contentMapper.toOriginalRange(file, diagnostic);
 	if (!range) {
 		return undefined;
 	}
 	const text = contentMapper.getOriginalText(file);
 	const lineStarts = getLineStarts(file, text);
-	const startPosition = toLineAndCharacter(lineStarts, range.start);
+	const startPosition = toLineAndCharacter(lineStarts, range.pos);
 	const endPosition = toLineAndCharacter(lineStarts, range.end);
-	const relatedInformation = 'relatedInformation' in diagnostic
-		? diagnostic.relatedInformation?.map(convert).filter(info => !!info)
-		: undefined;
 	return {
-		...base,
+		...diagnostic,
+		// There are no string codes.
+		source: ruleId,
+		code: '' as unknown as number,
 		fileName: file.fileName,
-		pos: range.start,
+		pos: range.pos,
 		end: range.end,
 		startPosition,
 		endPosition,
 		sourceLines: getSourceLines(text, lineStarts, startPosition.line, endPosition.line),
-		reportsUnnecessary: 'reportsUnnecessary' in diagnostic ? diagnostic.reportsUnnecessary : undefined,
-		reportsDeprecated: 'reportsDeprecated' in diagnostic ? diagnostic.reportsDeprecated : undefined,
-		relatedInformation,
 	};
 }
 

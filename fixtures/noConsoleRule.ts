@@ -14,14 +14,9 @@ export default defineRule(({ typescript: ts, file, report }) => {
 			).withFix(
 				`Remove 'console.${node.name.text}'`,
 				() => [{
-					fileName: file.fileName,
-					textChanges: [{
-						newText: '/* deleted */',
-						span: {
-							start: node.parent.getStart(file),
-							length: node.parent.getWidth(file),
-						},
-					}],
+					newText: '/* deleted */',
+					pos: node.parent.getStart(file),
+					end: node.parent.getEnd(),
 				}],
 			);
 		}

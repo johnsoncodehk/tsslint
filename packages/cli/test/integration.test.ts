@@ -437,10 +437,9 @@ function makeContentMapperFixture(newLine: string): { dir: string; vue: string }
 			+ `    'no-console': (await import(${importPath(noConsoleRule)})),\n`
 			+ `    'generated': defineRule(({ file, report }) => {\n`
 			+ `      const start = file.text.lastIndexOf('export {}');\n`
-			+ `      report('in generated code', start, start + 9).withFix('rewrite generated code', () => [{\n`
-			+ `        fileName: file.fileName,\n`
-			+ `        textChanges: [{ span: { start, length: 9 }, newText: 'void 0;' }],\n`
-			+ `      }]);\n`
+			+ `      report('in generated code', start, start + 9).withFix('rewrite generated code', () => [\n`
+			+ `        { pos: start, end: start + 9, newText: 'void 0;' },\n`
+			+ `      ]);\n`
 			+ `    }),\n`
 			+ `  },\n`
 			+ `});\n`,
@@ -612,10 +611,9 @@ function transform(content) {
 			+ `    'mark': defineRule(({ file, report }) => {\n`
 			+ `      for (let i = file.text.indexOf('console'); i >= 0; i = file.text.indexOf('console', i + 1)) {\n`
 			+ `        if (file.text.slice(0, i).endsWith('/* checked */ ')) continue;\n`
-			+ `        report('unchecked', i, i + 7).withFix('mark', () => [{\n`
-			+ `          fileName: file.fileName,\n`
-			+ `          textChanges: [{ span: { start: i, length: 0 }, newText: '/* checked */ ' }],\n`
-			+ `        }]);\n`
+			+ `        report('unchecked', i, i + 7).withFix('mark', () => [\n`
+			+ `          { pos: i, end: i, newText: '/* checked */ ' },\n`
+			+ `        ]);\n`
 			+ `      }\n`
 			+ `    }),\n`
 			+ `  },\n`

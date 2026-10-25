@@ -1,7 +1,14 @@
 import type * as TSSLint from '@tsslint/types';
 import { analyze } from '@typescript-eslint/scope-manager';
 import type * as ESLint from 'eslint';
-import { type Checker, type CompilerOptions, DiagnosticCategory, type Program, ScriptKind } from 'typescript/sync';
+import {
+	type Checker,
+	type CompilerOptions,
+	DiagnosticCategory,
+	type Program,
+	ScriptKind,
+	type TextEdit,
+} from 'typescript/sync';
 import { ESLINT_BUILTIN_GLOBALS } from './lib/globals';
 import * as ts from './lib/ts';
 import CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js');
@@ -103,8 +110,8 @@ interface DeferredReport {
 	start: number;
 	end: number;
 	category: DiagnosticCategory;
-	textChanges?: TSSLint.TextChange[];
-	suggestions?: { message: string; textChanges: TSSLint.TextChange[] }[];
+	textChanges?: TextEdit[];
+	suggestions?: { message: string; textChanges: TextEdit[] }[];
 }
 
 // Module-level state — populated by convertRule, queried at lint time.
@@ -263,7 +270,7 @@ export function convertRule(
 				const tc = r.textChanges;
 				reporter.withFix(
 					getTextChangeMessage(file, tc),
-					() => [{ fileName: file.fileName, textChanges: tc }],
+					() => tc,
 				);
 			}
 			if (r.suggestions) {
@@ -271,7 +278,7 @@ export function convertRule(
 					const tc = s.textChanges;
 					reporter.withRefactor(
 						s.message,
-						() => [{ fileName: file.fileName, textChanges: tc }],
+						() => tc,
 					);
 				}
 			}
@@ -752,26 +759,26 @@ function runEntries(
 	}
 }
 
-function getTextChangeMessage(file: ts.SourceFile, textChanges: TSSLint.TextChange[]) {
+function getTextChangeMessage(file: ts.SourceFile, textChanges: TextEdit[]) {
 	if (textChanges.length === 1) {
 		const change = textChanges[0];
-		const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
+		const originalText = file.text.substring(change.pos, change.end);
 		if (change.newText.length === 0) {
 			return `Remove \`${originalText}\`.`;
 		}
-		else if (change.span.length === 0) {
-			const line = file.getLineAndCharacterOfPosition(change.span.start).line;
+		else if (change.pos === change.end) {
+			const line = file.getLineAndCharacterOfPosition(change.pos).line;
 			const lineStart = file.getPositionOfLineAndCharacter(line, 0);
-			const lineText = file.text.substring(lineStart, change.span.start).trimStart();
+			const lineText = file.text.substring(lineStart, change.pos).trimStart();
 			return `Insert \`${change.newText}\` after \`${lineText}\`.`;
 		}
 	}
-	const changes = [...textChanges].sort((a, b) => a.span.start - b.span.start);
+	const changes = [...textChanges].sort((a, b) => a.pos - b.pos);
 	let text = '';
 	let newText = '';
 	for (let i = 0; i < changes.length; i++) {
 		const change = changes[i];
-		text += file.text.substring(change.span.start, change.span.start + change.span.length);
+		text += file.text.substring(change.pos, change.end);
 		newText += change.newText;
 		if (i !== changes.length - 1) {
 			text += '…';
@@ -825,7 +832,7 @@ function getTextChangeMessage(file: ts.SourceFile, textChanges: TSSLint.TextChan
 function getTextChanges(
 	_file: ts.SourceFile,
 	fix: ESLint.Rule.ReportFixer | null | undefined,
-): TSSLint.TextChange[] {
+): TextEdit[] {
 	if (!fix) {
 		return [];
 	}
@@ -860,10 +867,11 @@ function getTextChanges(
 		return [];
 	}
 	const fixes = isIterable(result) ? [...result] : [result];
-	const textChanges: TSSLint.TextChange[] = [];
+	const textChanges: TextEdit[] = [];
 	for (const f of fixes) {
 		textChanges.push({
-			span: { start: f.range[0], length: f.range[1] - f.range[0] },
+			pos: f.range[0],
+			end: f.range[1],
 			newText: f.text,
 		});
 	}

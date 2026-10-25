@@ -3,15 +3,18 @@ import type { DiagnosticCategory } from 'typescript/sync';
 
 import minimatch = require('minimatch');
 
+// `source` selects rule reports (`'tsslint'`, matched by rule id) or
+// compiler diagnostics (their source, `'ts'` by default, matched by code).
 export function create(config: Record<string, DiagnosticCategory>, source = 'tsslint'): Plugin {
 	const matchCache = new Map<string | number, DiagnosticCategory | undefined>();
 	return () => ({
-		resolveDiagnostics(_file, diagnostics) {
+		resolveDiagnostics(_target, diagnostics) {
 			for (const diagnostic of diagnostics) {
-				if (diagnostic.source !== source) {
+				const diagnosticSource = diagnostic.ruleId !== undefined ? 'tsslint' : diagnostic.source;
+				if (diagnosticSource !== source) {
 					continue;
 				}
-				const category = match(diagnostic.code.toString());
+				const category = match(diagnostic.ruleId ?? diagnostic.code.toString());
 				if (category !== undefined) {
 					diagnostic.category = category;
 				}

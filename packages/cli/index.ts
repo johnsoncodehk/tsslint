@@ -455,9 +455,11 @@ class Project {
 					// having registered a fix this session — `hasCodeFixes`
 					// only sees fresh runs. Fall back to the cached
 					// per-rule `hasFix` flag for the diagnostic's rule.
-					hasFix ||= !!fileCache.rules[String(diagnostic.code)]?.hasFix;
+					if (diagnostic.ruleId !== undefined) {
+						hasFix ||= !!fileCache.rules[diagnostic.ruleId]?.hasFix;
+					}
 
-					const output = format.formatDiagnostic(diagnostic, worker.getApi());
+					const output = format.formatDiagnostic(diagnostic, worker.getSourceFile(fileName)!, worker.getApi());
 					if (output === undefined) {
 						continue;
 					}

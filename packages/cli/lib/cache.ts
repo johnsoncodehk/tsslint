@@ -24,13 +24,13 @@ import fs = require('fs');
 import os = require('os');
 import crypto = require('crypto');
 
-import type { Diagnostic, RelatedInformation } from '@tsslint/types';
+import type { Diagnostic } from '@tsslint/types';
 
 const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v3';
+const CACHE_FORMAT_VERSION = 'v4';
 
 export interface CacheData {
 	version: string;
@@ -53,19 +53,8 @@ export interface FileCache {
 
 export interface RuleCache {
 	hasFix: boolean;
-	diagnostics: SerializedDiagnostic[];
+	diagnostics: Diagnostic[];
 }
-
-// `Diagnostic` minus the live `file` reference — that gets re-attached on
-// load by looking up the SourceFile from the current Program.
-// `relatedInformation` similarly stores `{ fileName }` placeholders.
-export type SerializedDiagnostic = Omit<Diagnostic, 'file' | 'relatedInformation'> & {
-	relatedInformation?: SerializedRelatedInfo[];
-};
-
-export type SerializedRelatedInfo = Omit<RelatedInformation, 'file'> & {
-	file?: { fileName: string };
-};
 
 export function loadCache(
 	tsconfig: string,

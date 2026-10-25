@@ -2,18 +2,16 @@ import type {
 	CodeFixAction,
 	Config,
 	Diagnostic,
-	FileTextChanges,
 	LinterContext,
+	LintTarget,
 	RefactorAction,
 	Reporter,
 	Rule,
 	RuleContext,
 	Rules,
-	TextChange,
 } from '@tsslint/types';
-import type { MappedDiagnosticDirective, SourceFile } from 'typescript/ast';
-import type { Checker, Program } from 'typescript/sync';
-import { DiagnosticCategory } from 'typescript/sync';
+import type { MappedDiagnosticDirective } from 'typescript/ast';
+import { DiagnosticCategory, type TextEdit } from 'typescript/sync';
 
 import path = require('path');
 import minimatch = require('minimatch');
@@ -26,12 +24,6 @@ export type Linter = ReturnType<typeof createLinter>;
 // it's stable across module instances) — invisible to JSON.stringify and
 // to `{...spread}` so it doesn't leak into the serialised cache.
 export const NO_CACHE = Symbol.for('@tsslint/no-cache');
-
-export interface LintTarget {
-	program: Program;
-	checker: Checker;
-	file: SourceFile;
-}
 
 export function createLinter(
 	ctx: LinterContext,
@@ -49,15 +41,15 @@ export function createLinter(
 	const lintResults = new Map<
 		/* fileName */ string,
 		[
-			file: SourceFile,
+			target: LintTarget,
 			diagnostic2Fixes: Map<Diagnostic, {
 				title: string;
-				getEdits: () => FileTextChanges[];
+				getEdits: () => readonly TextEdit[];
 			}[]>,
 			refactors: {
 				title: string;
 				diagnostic: Diagnostic;
-				getEdits: () => FileTextChanges[];
+				getEdits: () => readonly TextEdit[];
 			}[],
 		]
 	>();
@@ -101,13 +93,14 @@ export function createLinter(
 		// which decides "is this disable comment used?" by matching against
 		// fired diagnostics.
 		lint(
-			{ program, checker, file }: LintTarget,
+			target: LintTarget,
 			options?: {
 				skipRules?: ReadonlySet<string>;
 				prevDiagnostics?: readonly Diagnostic[];
 			},
 		): Diagnostic[] {
 			let currentRuleId: string;
+			const { program, checker, file } = target;
 			const skipRules = options?.skipRules;
 			const fileName = file.fileName;
 
@@ -129,7 +122,7 @@ export function createLinter(
 				report,
 			};
 
-			lintResults.set(fileName, [rulesContext.file, new Map(), []]);
+			lintResults.set(fileName, [target, new Map(), []]);
 
 			const lintResult = lintResults.get(fileName)!;
 
@@ -169,13 +162,13 @@ export function createLinter(
 
 			const directives = file.diagnosticDirectives;
 			if (directives?.length) {
-				diagnostics = diagnostics.filter(diagnostic => !isInDirective(directives, diagnostic.start));
+				diagnostics = diagnostics.filter(diagnostic => !isInDirective(directives, diagnostic.pos));
 			}
 
 			for (const { plugins } of configs) {
 				for (const { resolveDiagnostics } of plugins) {
 					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(rulesContext.file, diagnostics);
+						diagnostics = resolveDiagnostics(target, diagnostics);
 					}
 				}
 			}
@@ -194,17 +187,17 @@ export function createLinter(
 			function report(message: string, start: number, end: number): Reporter {
 				const error: Diagnostic = {
 					category: DiagnosticCategory.Message,
-					code: currentRuleId,
-					messageText: message,
-					file: rulesContext.file,
-					start,
-					length: end - start,
-					source: 'tsslint',
+					code: 0,
+					ruleId: currentRuleId,
+					text: message,
+					fileName: file.fileName,
+					pos: start,
+					end,
 				};
 
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
-					lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
+					lintResults.set(fileName, lintResult = [target, new Map(), []]);
 				}
 				const diagnostic2Fixes = lintResult[1];
 				const refactors = lintResult[2];
@@ -286,7 +279,7 @@ export function createLinter(
 				return [];
 			}
 
-			const file = lintResult[0];
+			const target = lintResult[0];
 			const configs = getConfigsForFile(fileName);
 			const result: CodeFixAction[] = [];
 
@@ -294,8 +287,8 @@ export function createLinter(
 				if (diagnostics?.length && !diagnostics.includes(diagnostic)) {
 					continue;
 				}
-				const diagStart = diagnostic.start;
-				const diagEnd = diagStart + diagnostic.length;
+				const diagStart = diagnostic.pos;
+				const diagEnd = diagnostic.end;
 				if (
 					(diagStart >= start && diagStart <= end)
 					|| (diagEnd >= start && diagEnd <= end)
@@ -305,9 +298,9 @@ export function createLinter(
 					let codeFixes: CodeFixAction[] = [];
 					for (const action of actions) {
 						codeFixes.push({
-							fixName: `tsslint:${diagnostic.code}`,
+							fixName: `tsslint:${diagnostic.ruleId}`,
 							description: action.title,
-							changes: action.getEdits(),
+							edits: action.getEdits(),
 							fixId: 'tsslint',
 							fixAllDescription: 'Fix all TSSLint errors',
 						});
@@ -315,7 +308,7 @@ export function createLinter(
 					for (const { plugins } of configs) {
 						for (const { resolveCodeFixes } of plugins) {
 							if (resolveCodeFixes) {
-								codeFixes = resolveCodeFixes(file, diagnostic, codeFixes);
+								codeFixes = resolveCodeFixes(target, diagnostic, codeFixes);
 							}
 						}
 					}
@@ -335,8 +328,8 @@ export function createLinter(
 
 			for (let i = 0; i < lintResult[2].length; i++) {
 				const refactor = lintResult[2][i];
-				const diagStart = refactor.diagnostic.start;
-				const diagEnd = diagStart + refactor.diagnostic.length;
+				const diagStart = refactor.diagnostic.pos;
+				const diagEnd = refactor.diagnostic.end;
 				if (
 					(diagStart >= start && diagStart <= end)
 					|| (diagEnd >= start && diagEnd <= end)
@@ -447,7 +440,7 @@ function isInDirective(directives: readonly MappedDiagnosticDirective[], start: 
 	return directives.some(({ virtualRange }) => start >= virtualRange.pos && start < virtualRange.end);
 }
 
-export function combineCodeFixes(fileName: string, fixes: CodeFixAction[]) {
+export function combineCodeFixes(fixes: CodeFixAction[]) {
 	// Match ESLint's `compareMessagesByFixRange` order so overlap resolution
 	// agrees with applyFixes: sort ASC by start, tie-break ASC by end. The
 	// earliest-starting fix wins; later overlapping fixes are dropped. (e.g.
@@ -455,37 +448,29 @@ export function combineCodeFixes(fileName: string, fixes: CodeFixAction[]) {
 	// whole assertion and prefer-as-const just the inner literal, ESLint
 	// keeps the wider no-unnecessary fix and prefer-as-const is silently
 	// skipped — see eslint/lib/linter/source-code-fixer.js:124.)
-	const changes = fixes
-		.map(fix => fix.changes)
-		.flat()
-		.filter(change => change.fileName === fileName && change.textChanges.length)
-		.sort((a, b) => {
-			const aFirst = a.textChanges[0];
-			const bFirst = b.textChanges[0];
-			return aFirst.span.start - bFirst.span.start
-				|| (aFirst.span.start + aFirst.span.length) - (bFirst.span.start + bFirst.span.length);
-		});
+	const editLists = fixes
+		.map(fix => fix.edits)
+		.filter(edits => edits.length)
+		.sort((a, b) => a[0].pos - b[0].pos || a[0].end - b[0].end);
 
-	let lastChangeEndAt = -1;
-	let finalTextChanges: TextChange[] = [];
+	let lastEditEndAt = -1;
+	let finalEdits: TextEdit[] = [];
 
-	for (const change of changes) {
-		const textChanges = [...change.textChanges].sort((a, b) => a.span.start - b.span.start);
-		const firstChange = textChanges[0];
-		const lastChange = textChanges[textChanges.length - 1];
-		if (firstChange.span.start >= lastChangeEndAt) {
-			lastChangeEndAt = lastChange.span.start + lastChange.span.length;
-			finalTextChanges = finalTextChanges.concat(textChanges);
+	for (const editList of editLists) {
+		const edits = [...editList].sort((a, b) => a.pos - b.pos);
+		if (edits[0].pos >= lastEditEndAt) {
+			lastEditEndAt = edits[edits.length - 1].end;
+			finalEdits = finalEdits.concat(edits);
 		}
 	}
 
-	return finalTextChanges;
+	return finalEdits;
 }
 
-export function applyTextChanges(text: string, textChanges: readonly TextChange[]): string {
-	const sorted = [...textChanges].sort((a, b) => b.span.start - a.span.start);
-	for (const change of sorted) {
-		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
+export function applyTextEdits(text: string, edits: readonly TextEdit[]): string {
+	const sorted = [...edits].sort((a, b) => b.pos - a.pos);
+	for (const edit of sorted) {
+		text = text.slice(0, edit.pos) + edit.newText + text.slice(edit.end);
 	}
 	return text;
 }

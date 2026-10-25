@@ -212,10 +212,10 @@ export function create(
 
 	return ({ typescript: ts }) => {
 		return {
-			resolveDiagnostics(file, results) {
+			resolveDiagnostics({ file }, results) {
 				if (
 					!reportsUnusedComments
-					&& !results.some(error => error.source === 'tsslint')
+					&& !results.some(error => error.ruleId !== undefined)
 				) {
 					return results;
 				}
@@ -283,12 +283,12 @@ export function create(
 				}
 
 				results = results.filter(error => {
-					if (error.source !== 'tsslint') {
+					if (error.ruleId === undefined) {
 						return true;
 					}
-					const line = file.getLineAndCharacterOfPosition(error.start).line;
+					const line = file.getLineAndCharacterOfPosition(error.pos).line;
 
-					for (const code of [undefined, String(error.code)]) {
+					for (const code of [undefined, error.ruleId]) {
 						const states = comments.get(code);
 						if (!states) {
 							continue;
@@ -317,12 +317,12 @@ export function create(
 						for (const state of comment.values()) {
 							if (!state.used) {
 								results.push({
-									file: file,
-									start: state.commentRange[0],
-									length: state.commentRange[1] - state.commentRange[0],
-									code: 'tsslint:unused-ignore-comment',
-									messageText: `Unused comment.`,
-									source: 'tsslint',
+									fileName: file.fileName,
+									pos: state.commentRange[0],
+									end: state.commentRange[1],
+									code: 0,
+									ruleId: 'tsslint:unused-ignore-comment',
+									text: `Unused comment.`,
 									category: DiagnosticCategory.Error,
 								});
 							}
@@ -331,28 +331,22 @@ export function create(
 				}
 				return results;
 			},
-			resolveCodeFixes(file, diagnostic, codeFixes) {
-				if (diagnostic.source !== 'tsslint' || diagnostic.start === undefined) {
+			resolveCodeFixes({ file }, diagnostic, codeFixes) {
+				if (diagnostic.ruleId === undefined) {
 					return codeFixes;
 				}
-				const line = file.getLineAndCharacterOfPosition(diagnostic.start).line;
+				const line = file.getLineAndCharacterOfPosition(diagnostic.pos).line;
+				const lineStart = file.getPositionOfLineAndCharacter(line, 0);
 				codeFixes.push({
 					fixName: cmd,
 					description: `Ignore with ${cmdText}`,
-					changes: [
-						{
-							fileName: file.fileName,
-							textChanges: [{
-								newText: reg.test(`${cmdText}${diagnostic.code}`)
-									? `// ${cmdText}${diagnostic.code}\n`
-									: `// ${cmdText} ${diagnostic.code}\n`,
-								span: {
-									start: file.getPositionOfLineAndCharacter(line, 0),
-									length: 0,
-								},
-							}],
-						},
-					],
+					edits: [{
+						newText: reg.test(`${cmdText}${diagnostic.ruleId}`)
+							? `// ${cmdText}${diagnostic.ruleId}\n`
+							: `// ${cmdText} ${diagnostic.ruleId}\n`,
+						pos: lineStart,
+						end: lineStart,
+					}],
 				});
 				return codeFixes;
 			},

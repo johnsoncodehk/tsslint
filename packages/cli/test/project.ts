@@ -1,7 +1,6 @@
 // A real on-disk TypeScript 7 project for core tests. One API process
 // per test run; temp dirs are removed when the process exits.
-import type { LintTarget } from '@tsslint/core';
-import type { LinterContext } from '@tsslint/types';
+import type { LinterContext, LintTarget } from '@tsslint/types';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -42,7 +41,7 @@ export function createProject(files: Record<string, string>) {
 	);
 	const snapshot = getApi().createSnapshot({ openProjects: [tsconfig] });
 	const { program, checker } = snapshot.getConfiguredProject(tsconfig)!;
-	const ctx: LinterContext = { typescript: ts, getProgram: () => program };
+	const ctx: LinterContext = { typescript: ts };
 	return {
 		ctx,
 		rootDir: dir,

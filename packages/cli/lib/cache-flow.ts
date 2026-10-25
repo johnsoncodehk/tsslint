@@ -8,9 +8,9 @@
 // CLI's responsibility — serialization, mtime invalidation, sticky
 // type-aware cleanup.
 
-import { type Linter, type LintTarget, NO_CACHE } from '@tsslint/core';
-import type { Diagnostic } from '@tsslint/types';
-import type { FileCache, SerializedDiagnostic } from './cache.js';
+import { type Linter, NO_CACHE } from '@tsslint/core';
+import type { Diagnostic, LintTarget } from '@tsslint/types';
+import type { FileCache } from './cache.js';
 
 export function lintWithCache(
 	linter: Linter,
@@ -76,7 +76,7 @@ export function lintWithCache(
 		const entry = fileCache.rules[ruleId];
 		if (!entry) continue;
 		for (const sd of entry.diagnostics) {
-			restored.push(deserializeDiagnostic(sd, target));
+			restored.push(deserializeDiagnostic(sd));
 		}
 	}
 
@@ -90,7 +90,7 @@ export function lintWithCache(
 	const raw = linter.getRawLintResult(fileName);
 	const byRule = new Map<string, Diagnostic[]>();
 	for (const diag of raw) {
-		const ruleId = String(diag.code);
+		const ruleId = diag.ruleId!;
 		let bucket = byRule.get(ruleId);
 		if (!bucket) byRule.set(ruleId, bucket = []);
 		bucket.push(diag);
@@ -134,28 +134,10 @@ export function lintWithCache(
 	return fresh;
 }
 
-function serializeDiagnostic(d: Diagnostic): SerializedDiagnostic {
-	const { file, relatedInformation, ...rest } = d;
-	void file;
-	return {
-		...rest,
-		relatedInformation: relatedInformation?.map(info => ({
-			...info,
-			file: info.file ? { fileName: info.file.fileName } : undefined,
-		})),
-	};
+function serializeDiagnostic(d: Diagnostic): Diagnostic {
+	return { ...d };
 }
 
-function deserializeDiagnostic(
-	sd: SerializedDiagnostic,
-	{ program, file }: LintTarget,
-): Diagnostic {
-	return {
-		...sd,
-		file,
-		relatedInformation: sd.relatedInformation?.map(info => ({
-			...info,
-			file: info.file ? program.getSourceFile(info.file.fileName) : undefined,
-		})),
-	};
+function deserializeDiagnostic(d: Diagnostic): Diagnostic {
+	return { ...d };
 }

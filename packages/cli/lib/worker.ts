@@ -7,7 +7,7 @@ import * as ts from 'typescript/ast';
 import { API, type Project, type Snapshot } from 'typescript/sync';
 import cacheFlow = require('./cache-flow.js');
 import contentMapper = require('./content-mapper.js');
-import type { FileTextChanges } from '@tsslint/types';
+import type { LintTarget } from '@tsslint/types';
 import type { FileCache } from './cache.js';
 import { getProgramFingerprint } from './fingerprint.js';
 
@@ -52,10 +52,14 @@ function getProject(configFileName = tsconfig): Project {
 	return project;
 }
 
-function getTarget(fileName: string): core.LintTarget | undefined {
+function getTarget(fileName: string): LintTarget | undefined {
 	const { program, checker } = getProject();
 	const file = program.getSourceFile(fileName);
 	return file && { program, checker, file };
+}
+
+export function getSourceFile(fileName: string) {
+	return getProject().program.getSourceFile(fileName);
 }
 
 export async function setup(
@@ -77,7 +81,7 @@ export async function setup(
 
 	tsconfig = _tsconfig;
 	linter = core.createLinter(
-		{ typescript: ts, getProgram: () => getProject().program },
+		{ typescript: ts },
 		path.dirname(configFile),
 		config,
 		initialTypeAwareRules,
@@ -129,26 +133,19 @@ export function lint(fileName: string, fix: boolean, fileCache: FileCache, fileM
 				.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
 				.filter(fix => fix.fixId === 'tsslint')
 				.flatMap(fix => {
-					const changes: FileTextChanges[] = [];
-					for (const change of fix.changes) {
-						if (change.fileName !== fileName) {
-							continue;
-						}
-						const textChanges = contentMapper.toOriginalTextChanges(file, change.textChanges);
-						if (!textChanges) {
-							return [];
-						}
-						changes.push({ ...change, textChanges });
+					const edits = contentMapper.toOriginalTextEdits(file, fix.edits);
+					if (!edits) {
+						return [];
 					}
-					const key = JSON.stringify(changes.map(change => change.textChanges));
+					const key = JSON.stringify(edits);
 					if (seenEdits.has(key)) {
 						return [];
 					}
 					seenEdits.add(key);
-					return [{ ...fix, changes }];
+					return [{ ...fix, edits }];
 				});
-			const textChanges = core.combineCodeFixes(fileName, fixes);
-			if (!textChanges.length) {
+			const edits = core.combineCodeFixes(fixes);
+			if (!edits.length) {
 				return diagnostics;
 			}
 			if (pass === MAX_FIX_PASSES) {
@@ -163,7 +160,7 @@ export function lint(fileName: string, fix: boolean, fileCache: FileCache, fileM
 			}
 			fs.writeFileSync(
 				fileName,
-				core.applyTextChanges(contentMapper.getOriginalText(target.file), textChanges),
+				core.applyTextEdits(contentMapper.getOriginalText(target.file), edits),
 			);
 			wroteFiles = true;
 			fileMtime = fs.statSync(fileName).mtimeMs;
