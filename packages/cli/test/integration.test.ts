@@ -609,6 +609,14 @@ function addGraphFiles(dir: string, files: Record<string, string>) {
 		const linted = lintedDuring(markerPath, () => out = runCli(dir).stdout);
 		check('UMD type change re-lints the file using its global name', linted.split(',').includes('s.ts'), linted);
 		check('the global name reports the new type', out.includes('sv has type string'), out);
+
+		// Trivia between the keywords is still `export as namespace`.
+		editFile(umd, `export declare const V: number;\nexport /* umd */ as\n\tnamespace U;\n`);
+		runCli(dir);
+		editFile(umd, `export declare const V: boolean;\nexport /* umd */ as\n\tnamespace U;\n`);
+		const trivia = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('UMD with comments re-lints the file using its global name', trivia.split(',').includes('s.ts'), trivia);
+		check('the global name reports the type through comments', out.includes('sv has type boolean'), out);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });

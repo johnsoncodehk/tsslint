@@ -379,10 +379,7 @@ function analyze(
 			}
 			const info: FileInfo = { deps: [...deps], global: false, references };
 			if (!file.fileName.endsWith('.json')) {
-				if (
-					!file.externalModuleIndicator
-					|| (/\bexport\s+as\s+namespace\b/.test(file.text) && file.statements.some(ts.isNamespaceExportDeclaration))
-				) {
+				if (!file.externalModuleIndicator || file.statements.some(ts.isNamespaceExportDeclaration)) {
 					info.global = true;
 				}
 				else if (file.moduleAugmentations.length || file.ambientModuleNames.length) {
