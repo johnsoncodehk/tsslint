@@ -151,8 +151,8 @@ export function invalidate(api: API, project: Project, cache: CacheData, configM
 		}
 		const declaration = declarations.get(fileName);
 		if (declaration === undefined) {
-			// No declaration to compare (e.g. a content-mapped file): its
-			// types may still change through a dependency.
+			// No declaration emit to compare: its types may still change
+			// through a dependency.
 			return !changedSet.has(fileName);
 		}
 		// The text can stay the same while the types it names change, e.g.
@@ -289,7 +289,7 @@ function getDeclarations(api: API, program: Program, fileNames: string[]) {
 	for (let i = 0; i < fileNames.length; i += CHUNK_SIZE) {
 		const files = api.batch(...fileNames.slice(i, i + CHUNK_SIZE).map(fileName => program.getSourceFile.gen(fileName)))
 			.filter((file): file is SourceFile => !!file);
-		const emitted = files.filter(file => !file.spanMap && !file.isDeclarationFile);
+		const emitted = files.filter(file => !file.isDeclarationFile);
 		const outputs = new Map<string, string[]>();
 		if (emitted.length) {
 			for (const [outputName, output] of program.getDeclarationEmit(emitted.map(file => file.fileName)).outputFiles) {
@@ -304,13 +304,7 @@ function getDeclarations(api: API, program: Program, fileNames: string[]) {
 			}
 		}
 		for (const file of files) {
-			let declaration: string | undefined;
-			if (file.isDeclarationFile && !file.spanMap) {
-				declaration = file.text;
-			}
-			else if (!file.spanMap) {
-				declaration = outputs.get(file.fileName)?.sort().join('\0');
-			}
+			const declaration = file.isDeclarationFile ? file.text : outputs.get(file.fileName)?.sort().join('\0');
 			result.set(file.fileName, { declaration, signature: hash(declaration ?? file.text) });
 		}
 	}

@@ -420,7 +420,29 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
-// ── Test 12: --force re-lints every file every time ─────────────────────
+// ── Test 12: a project opened through a symlink keeps precise invalidation
+//
+// File names in the program then differ from the real paths on disk.
+{
+	const { dir, markerPath, files } = makeGraphFixture();
+	const link = dir + '-link';
+	fs.symlinkSync(dir, link, 'dir');
+	try {
+		runCli(link);
+		editFile(files.a, `export function f() {\n\treturn 2;\n}\n`);
+		const body = lintedDuring(markerPath, () => runCli(link));
+		check('body edit through a symlink re-lints only a.ts', body === 'a.ts', body);
+		editFile(files.a, `export function f() {\n\treturn 'x';\n}\n`);
+		const type = lintedDuring(markerPath, () => runCli(link));
+		check('type change through a symlink re-lints importers', type === 'a.ts,b.ts,c.ts,r.ts', type);
+	}
+	finally {
+		fs.rmSync(link, { force: true });
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 13: --force re-lints every file every time ─────────────────────
 {
 	const { dir, markerPath } = makeGraphFixture();
 	try {
@@ -529,7 +551,7 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-// ── Test 13 (content mapper): diagnostics land on the original file ────
+// ── Test 14 (content mapper): diagnostics land on the original file ────
 {
 	const { dir } = makeContentMapperFixture('\n');
 	try {
@@ -542,7 +564,7 @@ function stripAnsi(text: string): string {
 	}
 }
 
-// ── Test 14 (content mapper): --fix edits the original text, exactly ───
+// ── Test 15 (content mapper): --fix edits the original text, exactly ───
 //
 // CRLF line endings: positions must stay in original-file coordinates.
 // The fix touching generated code has no exact original span and must be
@@ -566,7 +588,7 @@ function stripAnsi(text: string): string {
 	}
 }
 
-// ── Test 15 (content mapper): diagnostic directives suppress reports ───
+// ── Test 16 (content mapper): diagnostic directives suppress reports ───
 //
 // Shaped like Vue's output: template expressions are appended to the
 // script inside a generated function, `@vue-ignore` / `@vue-expect-error`
@@ -652,7 +674,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 16 (content mapper): one fix per original range ──────────────
+// ── Test 17 (content mapper): one fix per original range ──────────────
 //
 // The script body is copied twice; the second copy carries only a
 // navigation feature, like Vue's navigation-only copies. The same
@@ -706,7 +728,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 17 (content mapper): compiler diagnostics are mapped once ─────
+// ── Test 18 (content mapper): compiler diagnostics are mapped once ─────
 //
 // `getSemanticDiagnostics` on a content-mapped file already returns
 // original positions.
@@ -737,7 +759,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 18 (content mapper): a rule crash is reported without a position
+// ── Test 19 (content mapper): a rule crash is reported without a position
 //
 // The transformed text starts with generated code, so a crash placed at
 // offset 0 would have no original position and be dropped.
@@ -778,7 +800,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 19 (content mapper): editing the mapper re-lints everything ───
+// ── Test 20 (content mapper): editing the mapper re-lints everything ───
 //
 // A cache hit shows the `--force` hint.
 {
@@ -791,6 +813,45 @@ function transform(content) {
 		const out = runCli(dir).stdout;
 		check('mapper edit → no cache hit', !out.includes('--force'), out);
 		check('mapper edit still reports', out.includes('no-console'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 21 (content mapper): mapped files compare declaration signatures
+//
+// Editing a function body in A.vue doesn't re-lint B.vue, which imports
+// it; changing its return type does.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	writeMapperProject(dir, MAPPER_SERVER);
+	const markerPath = path.join(dir, 'marker.log');
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig, defineRule } from ${importPath(configModule)};\n`
+			+ `import * as fs from 'fs';\n`
+			+ `export default defineConfig({\n`
+			+ `  rules: {\n`
+			+ `    'marker': defineRule(({ file }) => {\n`
+			+ `      fs.appendFileSync(${JSON.stringify(markerPath)}, file.fileName + '\\n');\n`
+			+ `    }),\n`
+			+ `  },\n`
+			+ `});\n`,
+	);
+	const a = path.join(dir, 'A.vue');
+	const vue = (script: string) =>
+		['<template>', '  <div></div>', '</template>', '<script lang="ts">', script, '</script>', ''].join('\n');
+	fs.writeFileSync(a, vue(`export function f() { return 1; }`));
+	fs.writeFileSync(path.join(dir, 'B.vue'), vue(`import { f } from './A.vue';\nexport const v = f();`));
+	try {
+		check('cold run lints both files', lintedDuring(markerPath, () => runCli(dir)) === 'A.vue,B.vue');
+		editFile(a, vue(`export function f() { return 2; }`));
+		const body = lintedDuring(markerPath, () => runCli(dir));
+		check('mapped body edit re-lints only A.vue', body === 'A.vue', body);
+		editFile(a, vue(`export function f() { return 'x'; }`));
+		const type = lintedDuring(markerPath, () => runCli(dir));
+		check('mapped type change re-lints B.vue', type === 'A.vue,B.vue', type);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
