@@ -679,6 +679,61 @@ function addGraphFiles(dir: string, files: Record<string, string>) {
 	}
 }
 
+// ── Test 17 (per name): an augmentation block depends on what it uses ───
+//
+// m.ts's block uses `homePath` from hp.ts and its own `Local`; `other` and
+// `n` appear only in a comment and a string. Changing them re-lints m.ts
+// and its importers; changing `homePath` or `Local`, everything.
+{
+	const { dir, markerPath, files } = makeGraphFixture();
+	const hp = path.join(dir, 'hp.ts');
+	const hpText = (home: string, other: string) =>
+		`export function homePath() {\n\treturn ${home};\n}\n`
+		+ `export function other() {\n\treturn ${other};\n}\n`;
+	const m = (n: string, local: string) =>
+		`import { homePath, other } from './hp';\n`
+		+ `export const o = other();\n`
+		+ `export const n = ${n};\n`
+		+ `export interface Local {\n\tz: ${local};\n}\n`
+		+ `declare module './t' {\n\tinterface Extra {\n\t\t// other, n\n\t\thp: typeof homePath;\n\t\tl: Local;\n\t\ts: 'other' | 'n';\n\t}\n}\n`;
+	const all = 'a.ts,b.ts,c.ts,g.d.ts,hp.ts,i.ts,m.ts,r.ts,t.ts,u.ts';
+	try {
+		fs.writeFileSync(files.m, m('1', 'number'));
+		addGraphFiles(dir, {
+			'hp.ts': hpText(`''`, '1'),
+			'i.ts': `import { o } from './m';\nexport const k = o;\n`,
+			't.ts': `export const t = 1;\n`,
+		});
+		runCli(dir);
+
+		editFile(hp, hpText(`''`, `'x'`));
+		const otherImport = lintedDuring(markerPath, () => runCli(dir));
+		check('an unused import of a used module re-lints its importers', otherImport === 'hp.ts,i.ts,m.ts', otherImport);
+
+		editFile(files.m, m(`'x'`, 'number'));
+		const otherLocal = lintedDuring(markerPath, () => runCli(dir));
+		check(
+			'an unused declaration of the module re-lints m.ts and its importers',
+			otherLocal === 'i.ts,m.ts',
+			otherLocal,
+		);
+
+		editFile(hp, hpText('1', `'x'`));
+		const usedImport = lintedDuring(markerPath, () => runCli(dir));
+		check('a used import re-lints everything', usedImport === all, usedImport);
+
+		editFile(files.m, m(`'x'`, 'string'));
+		const usedLocal = lintedDuring(markerPath, () => runCli(dir));
+		check('a used declaration re-lints everything', usedLocal === all, usedLocal);
+
+		const warm = lintedDuring(markerPath, () => runCli(dir));
+		check('warm run after it lints nothing', warm === '', warm);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Test 18: a workspace package's source behind a symlink ──────────────
 //
 // The program reaches core/lib.ts through node_modules, so it emits no
