@@ -3,7 +3,7 @@
 // entries that are no longer valid before linting starts, so an entry that is
 // still here can be replayed as is.
 
-import { type Linter, NO_CACHE } from '@tsslint/core';
+import type { Linter } from '@tsslint/core';
 import type { Diagnostic, LintTarget } from '@tsslint/types';
 import type { FileCache } from './cache.js';
 
@@ -24,14 +24,9 @@ export function lintWithCache(
 	}
 
 	const diagnostics = linter.lint(target);
-	if (linter.getRawLintResult(fileName).some(diagnostic => (diagnostic as any)[NO_CACHE])) {
-		delete files[fileName];
-	}
-	else {
-		files[fileName] = {
-			hasFix: linter.hasCodeFixes(fileName),
-			diagnostics: diagnostics.map(diagnostic => ({ ...diagnostic })),
-		};
-	}
+	files[fileName] = {
+		hasFix: linter.hasCodeFixes(fileName),
+		diagnostics: diagnostics.map(diagnostic => ({ ...diagnostic })),
+	};
 	return diagnostics;
 }

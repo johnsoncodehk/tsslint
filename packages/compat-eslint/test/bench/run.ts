@@ -126,9 +126,6 @@ function runTsslint(
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};

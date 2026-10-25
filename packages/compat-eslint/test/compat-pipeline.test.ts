@@ -275,9 +275,6 @@ function runMock(
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -340,9 +337,6 @@ function runMock(
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -393,9 +387,6 @@ function runMock(
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -507,9 +498,6 @@ function g() {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -575,9 +563,6 @@ const g = NOT_A_REAL_GLOBAL;
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -660,9 +645,6 @@ function f(obj?: { x: { y: string } | undefined }) {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -730,9 +712,6 @@ function f() {
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -805,9 +784,6 @@ namespace M {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -866,9 +842,6 @@ function f(sys: string) { return sys; }
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -936,9 +909,6 @@ function outer() {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1001,9 +971,6 @@ if (process.argv.includes('--version')) {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1057,9 +1024,6 @@ if (process.argv.includes('--version')) {
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -1134,9 +1098,6 @@ type C = String;
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1187,7 +1148,6 @@ type C = String;
 			withRefactor: () => r,
 			withDeprecated: () => r,
 			withUnnecessary: () => r,
-			withoutCache: () => r,
 		};
 		return r;
 	};
@@ -1252,9 +1212,6 @@ export function outer() {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1317,9 +1274,6 @@ function f() {
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1373,9 +1327,6 @@ export { foo };
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -1440,9 +1391,6 @@ function f(start: number, length: number) { return start + length; }
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1495,9 +1443,6 @@ function g(): import("inspector").Session { return null as any; }
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -1553,9 +1498,6 @@ type ExtractName<T> = T extends { name: infer TName } ? TName extends string ? T
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1609,9 +1551,6 @@ console.log(x);
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -1679,9 +1618,6 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
@@ -1739,9 +1675,6 @@ f({ a: 1 } as A, {} as B, 'a' as C);
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};
@@ -1816,7 +1749,6 @@ type D = Awaited<Promise<number>>;
 			withRefactor: () => ({} as any),
 			withDeprecated: () => ({} as any),
 			withUnnecessary: () => ({} as any),
-			withoutCache: () => ({} as any),
 		} as any),
 	} as any);
 	check(
@@ -2314,9 +2246,6 @@ type D = Awaited<Promise<number>>;
 				return r;
 			},
 			withUnnecessary() {
-				return r;
-			},
-			withoutCache() {
 				return r;
 			},
 		};

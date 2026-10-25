@@ -56,11 +56,6 @@ export interface Reporter {
 	/** Edits apply to the reported file. */
 	withFix(title: string, getEdits: () => readonly TextEdit[]): Reporter;
 	withRefactor(title: string, getEdits: () => readonly TextEdit[]): Reporter;
-	// The CLI won't cache the reported file, so every run lints it again.
-	// Use when a finding depends on inputs the cache doesn't track
-	// (external resources, env, files read directly via fs). Anything
-	// reached through `program` / `checker` is tracked.
-	withoutCache(): Reporter;
 }
 
 export interface CodeFixAction {

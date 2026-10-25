@@ -139,84 +139,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	check('fix replays a file without fixes', runs === 3);
 }
 
-// ── Test 5: withoutCache() — the file is not cached ─────────────────────
-//
-// `Reporter.withoutCache()` is the rule's contract: "this finding's
-// correctness depends on inputs the cache doesn't track". The whole file
-// is linted again next run, since the other diagnostics may depend on the
-// same inputs through the plugins (an ignore comment matching it).
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let runs = 0;
-	const config: Config = {
-		rules: {
-			env_dependent: ((rctx: RuleContext) => {
-				runs++;
-				rctx.report('depends on env', 0, 1).withoutCache();
-				rctx.report('plain', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const files: Record<string, FileCache> = {};
-	const target = project.target('a.ts');
-	const diags = cacheFlow.lintWithCache(linter, target, files);
-	check('current run returns both diagnostics', diags.length === 2);
-	check('no entry written', !files[target.file.fileName]);
-
-	const second = cacheFlow.lintWithCache(linter, target, files);
-	check('second run lints again', runs === 2);
-	check('second run returns both diagnostics', second.length === 2);
-}
-
-// ── Test 6: withoutCache() still applies when a plugin drops the report ─
-//
-// The ignore plugin suppresses the marked report, but whether the comment
-// counts as used still depends on it.
-{
-	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
-		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
-	};
-	const code = '// eslint-disable-next-line env\nconst x = 1;\n';
-	const project = createProject({ 'a.ts': code });
-	const config: Config = {
-		rules: {
-			env: ((rctx: RuleContext) => {
-				const at = code.indexOf('const');
-				rctx.report('depends on env', at, at + 5).withoutCache();
-			}),
-		},
-		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const files: Record<string, FileCache> = {};
-	const target = project.target('a.ts');
-	const diags = cacheFlow.lintWithCache(linter, target, files);
-	check('suppressed report leaves no diagnostic', diags.length === 0);
-	check('suppressed withoutCache() report still prevents caching', !files[target.file.fileName]);
-}
-
-// ── Test 7: NO_CACHE marker doesn't leak through serialisation ──────────
-//
-// Symbol-keyed property must stay invisible to JSON.stringify so the
-// on-disk cache stays clean.
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	const config: Config = {
-		rules: {
-			r: ((rctx: RuleContext) => {
-				rctx.report('marked', 0, 1).withoutCache();
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const files: Record<string, FileCache> = {};
-	const diags = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
-	check('NO_CACHE marker not visible in serialised diagnostics', !JSON.stringify(diags).includes('no-cache'));
-	check('NO_CACHE marker not visible in serialised cache', !JSON.stringify(files).includes('no-cache'));
-}
-
-// ── Test 8: warm replay keeps the ignore plugin's result ────────────────
+// ── Test 5: warm replay keeps the ignore plugin's result ────────────────
 //
 // Scenario: a rule fires on line 2, an `// eslint-disable-next-line foo`
 // comment on line 1 suppresses it, ignore plugin (`reportsUnusedComments
@@ -258,7 +181,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 9: cold and warm passes report once each ───────────────────────
+// ── Test 6: cold and warm passes report once each ───────────────────────
 {
 	const project = createProject({ 'a.ts': 'const x = 1;\n' });
 	let runs = 0;
@@ -286,7 +209,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 10: multiple rules + ignore plugin, no duplication on warm ─────
+// ── Test 7: multiple rules + ignore plugin, no duplication on warm ─────
 //
 // Two rules, only one suppressed by a disable comment. Warm pass must
 // produce the same final set as cold — no double-report on the
@@ -330,7 +253,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 11: ignore plugin's regex must capture scoped rule IDs ─────────
+// ── Test 8: ignore plugin's regex must capture scoped rule IDs ─────────
 //
 // `@scope/rule` and `plugin/rule` IDs (the dominant naming in the
 // ecosystem) must be captured into `groups.ruleId` so each block-disable
@@ -374,7 +297,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-// ── Test 12: ignore plugin comment scanner — non-comment contexts ────────
+// ── Test 9: ignore plugin comment scanner — non-comment contexts ────────
 //
 // The plugin's inlined comment walker relies on the AST-realized token
 // boundaries (via `node.getChildren()` + `forEachLeading/TrailingCommentRange`)
@@ -427,7 +350,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	}
 }
 
-// ── Test 13: ignore plugin must collect ALL leading comments per token ──
+// ── Test 10: ignore plugin must collect ALL leading comments per token ──
 //
 // `ts.forEachLeading/TrailingCommentRange` short-circuits when the
 // callback returns a truthy value (matches the documented `forEachX`

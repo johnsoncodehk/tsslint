@@ -18,12 +18,6 @@ import minimatch = require('minimatch');
 
 export type Linter = ReturnType<typeof createLinter>;
 
-// Marker stamped onto diagnostics by `Reporter.withoutCache()`. The CLI
-// does not cache a file whose rules produced one. Symbol-keyed (via
-// Symbol.for so it's stable across module instances) — invisible to
-// JSON.stringify so it never reaches the cache file.
-export const NO_CACHE = Symbol.for('@tsslint/no-cache');
-
 export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
@@ -46,10 +40,6 @@ export function createLinter(
 			}[],
 		]
 	>();
-	// Each file's rule output before plugins ran. A plugin can drop a
-	// `withoutCache()` report whose absence still shapes the result (an
-	// ignore comment it matched), so the CLI checks this view.
-	const rawDiagnosticsByFile = new Map<string, Diagnostic[]>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
 			include: config.include,
@@ -97,8 +87,6 @@ export function createLinter(
 					});
 				}
 			}
-
-			rawDiagnosticsByFile.set(fileName, [...lintResult[1].keys()]);
 
 			let diagnostics: Diagnostic[] = [...lintResult[1].keys()];
 
@@ -184,10 +172,6 @@ export function createLinter(
 							title,
 							getEdits,
 						});
-						return this;
-					},
-					withoutCache() {
-						(error as any)[NO_CACHE] = true;
 						return this;
 					},
 				};
@@ -298,9 +282,6 @@ export function createLinter(
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
-		getRawLintResult(fileName: string): readonly Diagnostic[] {
-			return rawDiagnosticsByFile.get(fileName) ?? [];
-		},
 	};
 
 	function getRulesForFile(fileName: string) {

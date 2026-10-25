@@ -128,9 +128,7 @@ The CLI caches each file's diagnostics on disk under `os.tmpdir()/tsslint-cache/
 
 Everything is re-linted when a change can affect any file: compiler options or a tsconfig file, the content mappers, `tsslint.config.ts` or any module it imports, files added to or removed from the program, files under `node_modules`, or a file that declares globals (a script without imports or exports, `declare global`, `declare module '...'`).
 
-Rules can read `ctx.program` and `ctx.checker` freely; whatever they reach that way is tracked. A rule whose finding depends on inputs the cache can't see — external resources, env vars, files it reads directly via `fs` — should call `.withoutCache()` on the reporter. The file it reported on is then linted again on every run.
-
-Pass `--force` to the CLI to ignore the cache.
+Rules must only depend on the program they are given (`ctx.file`, `ctx.program`, `ctx.checker`). Anything outside it — files read directly via `fs`, environment variables, network resources — is not tracked; pass `--force` to re-lint every file.
 
 ### Debugging
 

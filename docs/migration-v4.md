@@ -73,8 +73,9 @@ options, config and rule modules, globals) re-lint everything. See
 [Caching](../README.md#caching). `--list-rules` is removed, since there is no
 classification left to print.
 
-`Reporter.withoutCache()` now keeps the whole file out of the cache instead of
-dropping only the marked diagnostic.
+`Reporter.withoutCache()` is removed. Rules must only depend on the program;
+inputs outside it (`fs`, environment variables) are not tracked, and `--force`
+re-lints every file.
 
 ### 6. ESLint interop
 
