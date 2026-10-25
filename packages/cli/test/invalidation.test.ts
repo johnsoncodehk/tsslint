@@ -46,6 +46,7 @@ function createStub(
 			typeReferenceDirectives: [],
 			referencedFiles: [],
 			externalModuleIndicator: {},
+			statements: [],
 			moduleAugmentations: [],
 			ambientModuleNames: [],
 			isDeclarationFile: false,
