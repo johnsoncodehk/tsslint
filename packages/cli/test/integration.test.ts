@@ -582,6 +582,61 @@ function transform(content) {
 	}
 }
 
+// ── Test 13 (content mapper): one fix per original range ──────────────
+//
+// The script body is copied twice; the second copy carries only a
+// navigation feature, like Vue's navigation-only copies. The same
+// insertion reported on both copies must land in App.vue once.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	writeMapperProject(
+		dir,
+		mapperServer(`
+function transform(content) {
+	const open = '<script lang="ts">';
+	const start = content.indexOf(open) + open.length;
+	const body = content.slice(start, content.indexOf('</script>'));
+	return {
+		text: body + '\\n' + body + '\\nexport {};\\n',
+		extension: '.ts',
+		mappings: [[0, body.length, start, body.length, 0, 1048575], [body.length + 1, body.length, start, body.length, 0, 8]],
+	};
+}
+`),
+	);
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig, defineRule } from ${importPath(configModule)};\n`
+			+ `export default defineConfig({\n`
+			+ `  rules: {\n`
+			+ `    'mark': defineRule(({ file, report }) => {\n`
+			+ `      for (let i = file.text.indexOf('console'); i >= 0; i = file.text.indexOf('console', i + 1)) {\n`
+			+ `        if (file.text.slice(0, i).endsWith('/* checked */ ')) continue;\n`
+			+ `        report('unchecked', i, i + 7).withFix('mark', () => [{\n`
+			+ `          fileName: file.fileName,\n`
+			+ `          textChanges: [{ span: { start: i, length: 0 }, newText: '/* checked */ ' }],\n`
+			+ `        }]);\n`
+			+ `      }\n`
+			+ `    }),\n`
+			+ `  },\n`
+			+ `});\n`,
+	);
+	const vue = path.join(dir, 'App.vue');
+	fs.writeFileSync(vue, ['<script lang="ts">', `console.log('hi');`, '</script>', ''].join('\n'));
+	try {
+		runCli(dir, '--fix');
+		const after = fs.readFileSync(vue, 'utf8');
+		check(
+			'insertion from both copies applied once',
+			after === ['<script lang="ts">', `/* checked */ console.log('hi');`, '</script>', ''].join('\n'),
+			JSON.stringify(after),
+		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

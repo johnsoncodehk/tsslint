@@ -122,6 +122,9 @@ export function lint(fileName: string, fix: boolean, fileCache: FileCache, fileM
 			// signal no longer holds for any file.
 			const diagnostics = cacheFlow.lintWithCache(linter, target, fileCache, fileMtime, { incremental: true });
 			const file = target.file;
+			// A mapper can copy original code more than once (e.g. Vue's
+			// navigation-only copies), so one edit can arrive once per copy.
+			const seenEdits = new Set<string>();
 			const fixes = linter
 				.getCodeFixes(fileName, 0, Number.MAX_VALUE, diagnostics)
 				.filter(fix => fix.fixId === 'tsslint')
@@ -137,6 +140,11 @@ export function lint(fileName: string, fix: boolean, fileCache: FileCache, fileM
 						}
 						changes.push({ ...change, textChanges });
 					}
+					const key = JSON.stringify(changes.map(change => change.textChanges));
+					if (seenEdits.has(key)) {
+						return [];
+					}
+					seenEdits.add(key);
 					return [{ ...fix, changes }];
 				});
 			const textChanges = core.combineCodeFixes(fileName, fixes);
