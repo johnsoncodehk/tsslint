@@ -26,6 +26,11 @@ import type { CacheData, GraphNode } from './cache.js';
 
 const CHUNK_SIZE = 500;
 
+interface Declaration {
+	fileName: string;
+	text: string;
+}
+
 interface FileInfo {
 	deps: string[];
 	global: boolean;
@@ -115,8 +120,11 @@ export function invalidate(
 	const changedSet = new Set(changed);
 	const dirty = new Set(changed);
 	const signatureChanged = new Set<string>();
-	const declarations = new Map<string, string | undefined>();
+	const declarations = new Map<string, Declaration[] | undefined>();
 	const signatures = new Map<string, string>();
+	// Module specifiers in the declaration emit of files whose signature
+	// stayed the same.
+	const referenced = new Map<string, string[]>();
 
 	let queue = changed;
 	while (queue.length) {
@@ -135,6 +143,14 @@ export function invalidate(
 			if (!changedSet.has(fileName)) {
 				oldSignatures.set(fileName, cache.graph[fileName].signature);
 			}
+		}
+		const unread = wave.filter(fileName =>
+			!referenced.has(fileName)
+			&& declarations.get(fileName) !== undefined
+			&& oldSignatures.get(fileName) === signatures.get(fileName)
+		);
+		for (const [fileName, { specifiers }] of readDeclarations(api, unread.map(f => [f, declarations.get(f)!]))) {
+			referenced.set(fileName, specifiers);
 		}
 		// A file in this wave can reference another one that turns out to
 		// change, so repeat until nothing new changes.
@@ -223,8 +239,8 @@ export function invalidate(
 		if (oldSignature === undefined || oldSignature !== signatures.get(fileName)) {
 			return true;
 		}
-		const declaration = declarations.get(fileName);
-		if (declaration === undefined) {
+		const specifiers = referenced.get(fileName);
+		if (specifiers === undefined) {
 			// No declaration emit to compare: its types may still change
 			// through a dependency.
 			return !changedSet.has(fileName);
@@ -232,7 +248,7 @@ export function invalidate(
 		// The text can stay the same while the types it names change, e.g.
 		// `typeof import("./a").f` after `f`'s return type changed in `a`.
 		const references = infos.get(fileName)!.references;
-		for (const specifier of getReferencedSpecifiers(declaration)) {
+		for (const specifier of specifiers) {
 			const target = references.get(specifier);
 			if (target === undefined || (target !== null && signatureChanged.has(target))) {
 				return true;
@@ -461,22 +477,22 @@ function* getWords(text: string) {
 // declaration, or of the text when the file has none to compare.
 function getDeclarations(api: API, project: Project, fileNames: string[]) {
 	const { program } = project;
-	const result = new Map<string, { declaration: string | undefined; signature: string }>();
+	const result = new Map<string, { declaration: Declaration[] | undefined; signature: string }>();
 	for (let i = 0; i < fileNames.length; i += CHUNK_SIZE) {
 		const files = api.batch(...fileNames.slice(i, i + CHUNK_SIZE).map(fileName => program.getSourceFile.gen(fileName)))
 			.filter((file): file is ts.SourceFile => !!file);
 		const emitted = files.filter(file => !file.isDeclarationFile);
-		const outputs = new Map<string, string[]>();
+		const outputs = new Map<string, Declaration[]>();
 		const collect = (outputFiles: ReturnType<typeof program.getDeclarationEmit>['outputFiles']) => {
 			for (const [outputName, output] of outputFiles) {
 				if (output.sourceFileName === undefined || outputName.endsWith('.map')) {
 					continue;
 				}
-				let texts = outputs.get(output.sourceFileName);
-				if (!texts) {
-					outputs.set(output.sourceFileName, texts = []);
+				let declaration = outputs.get(output.sourceFileName);
+				if (!declaration) {
+					outputs.set(output.sourceFileName, declaration = []);
 				}
-				texts.push(output.text);
+				declaration.push({ fileName: outputName, text: output.text });
 			}
 		};
 		if (emitted.length) {
@@ -499,34 +515,48 @@ function getDeclarations(api: API, project: Project, fileNames: string[]) {
 			}
 		}
 		for (const file of files) {
-			const declaration = file.isDeclarationFile ? file.text : outputs.get(file.fileName)?.sort().join('\0');
-			result.set(file.fileName, { declaration, signature: hash(declaration ?? file.text) });
+			const declaration = file.isDeclarationFile
+				? [{ fileName: file.fileName, text: file.text }]
+				: outputs.get(file.fileName)?.sort((a, b) => a.text < b.text ? -1 : a.text > b.text ? 1 : 0);
+			const text = declaration?.map(output => output.text).join('\0') ?? file.text;
+			result.set(file.fileName, { declaration, signature: hash(text) });
 		}
 	}
 	return result;
 }
 
-const SPECIFIER_PATTERNS = [
-	/\bfrom\s*['"]([^'"\n]+)['"]/g,
-	// A side-effect import starts a statement; elsewhere `import` followed by
-	// a quote can be a string, e.g. `with { 'resolution-mode': 'import' }`.
-	/^\s*import\s*['"]([^'"\n]+)['"]/gm,
-	// Also `import("x", { with: { "resolution-mode": "import" } })`.
-	/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*[,)]/g,
-	/\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
-	// Attributes in any order, e.g. `resolution-mode="import" types="x"`.
-	/\/\/\/\s*<reference\s+[^>\n]*?\b(?:path|types)\s*=\s*['"]([^'"\n]+)['"]/g,
-	// Names inside an augmentation resolve in the augmented module.
-	/\bdeclare\s+module\s+['"]([^'"\n]+)['"]/g,
-];
-
-// Over-matching (e.g. inside a string literal type) only re-lints more.
-function* getReferencedSpecifiers(declaration: string) {
-	for (const pattern of SPECIFIER_PATTERNS) {
-		for (const match of declaration.matchAll(pattern)) {
-			yield match[1];
+// Parses the declaration emit of each file and reads the module specifiers
+// it names, keyed like `FileInfo.references`.
+function readDeclarations(api: API, entries: [fileName: string, declaration: Declaration[]][]) {
+	const result = new Map<string, { specifiers: string[] }>();
+	const outputs = entries.flatMap(([fileName, declaration]) => declaration.map(output => ({ fileName, output })));
+	for (let i = 0; i < outputs.length; i += CHUNK_SIZE) {
+		const chunk = outputs.slice(i, i + CHUNK_SIZE);
+		const leases = api.batch(...chunk.map(({ output }) => api.createSourceFile.gen(output.fileName, output.text)));
+		try {
+			leases.forEach(({ sourceFile: file }, j) => {
+				let entry = result.get(chunk[j].fileName);
+				if (!entry) {
+					result.set(chunk[j].fileName, entry = { specifiers: [] });
+				}
+				entry.specifiers.push(...getReferencedSpecifiers(file));
+			});
+		}
+		finally {
+			api.batch(...leases.map(lease => lease.dispose.gen()));
 		}
 	}
+	return result;
+}
+
+function getReferencedSpecifiers(file: ts.SourceFile) {
+	return [
+		...file.imports.map(specifier => (specifier as ts.StringLiteral).text),
+		// Names inside an augmentation resolve in the augmented module.
+		...file.moduleAugmentations.flatMap(name => ts.isStringLiteral(name) ? [name.text] : []),
+		...file.typeReferenceDirectives.map(ref => ref.fileName),
+		...file.referencedFiles.map(ref => ref.fileName),
+	];
 }
 
 function updateContentMappersHash(api: API, hash: crypto.Hash, configFile: string) {

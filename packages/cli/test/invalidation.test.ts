@@ -7,8 +7,12 @@
 import fs = require('fs');
 import os = require('os');
 import path = require('path');
+import { API } from 'typescript/sync';
 import { emptyCache } from '../lib/cache.js';
 import { invalidate } from '../lib/invalidation.js';
+
+// Parses declaration texts for the stub.
+const realApi = new API({ cwd: process.cwd() });
 
 const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: string) {
@@ -69,7 +73,9 @@ function createStub(
 		}),
 	};
 	const api = {
-		batch: (...requests: { run(): unknown }[]) => requests.map(request => request.run()),
+		batch: (...requests: ({ run(): unknown } | Generator<any, unknown, any>)[]) =>
+			requests.map(request => 'run' in request ? request.run() : realApi.batch(request)[0]),
+		createSourceFile: realApi.createSourceFile,
 	};
 	return { api: api as any, project: { program } as any };
 }
@@ -207,6 +213,41 @@ checkReference(
 	`/// <reference resolution-mode="import" types="./a" />\nexport declare const v: number;\n`,
 );
 
+// ── Test 5: specifiers in comments and strings are not references ──────
+//
+// b.ts imports nothing; its declaration only spells module specifiers in a
+// comment and a string literal type, so a body edit keeps c.ts.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-inv-text-')));
+	try {
+		const b = path.join(dir, 'b.ts');
+		const c = path.join(dir, 'c.ts');
+		fs.writeFileSync(b, 'export const v = 1;\n');
+		fs.writeFileSync(c, `import { v } from './b';\n`);
+		const declaration = `/**\n * Like \`import { y } from './x'\` or \`require('./y')\`.\n * /// <reference path="./z" />\n */\n`
+			+ `export declare const v: "from './x'" | 'import("./w")';\n`;
+		const files = new Map<string, StubFile>([
+			[b, { text: fs.readFileSync(b, 'utf8'), imports: [], declaration }],
+			[c, { text: fs.readFileSync(c, 'utf8'), imports: ['./b'], declaration: 'export {};\n' }],
+		]);
+		const { api, project } = createStub(files, () => b, new Map());
+
+		const cache = emptyCache();
+		invalidate(api, project, cache, '', new Map());
+		cache.files[b] = { hasFix: false, diagnostics: [], touched: {} };
+		cache.files[c] = { hasFix: false, diagnostics: [], touched: {} };
+		fs.writeFileSync(b, 'export const v = 2;\n');
+		bumpMtime(b);
+		invalidate(api, project, cache, '', new Map());
+		check('body edit re-lints the file', !cache.files[b]);
+		check('specifiers in a comment or a string keep the importer', !!cache.files[c]);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+realApi.close();
 process.stdout.write('\n');
 if (failures.length) {
 	console.error(`\n${failures.length} failure(s):`);
