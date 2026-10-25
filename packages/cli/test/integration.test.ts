@@ -793,6 +793,54 @@ function addGraphFiles(dir: string, files: Record<string, string>) {
 	}
 }
 
+// ── Test 17 (unread references): a change reaches names read after it ──
+//
+// The first run stores names without what they reference. A change of `Dir`
+// right after it still reaches far.ts, through `homePath` in hp.ts, the
+// `export *` of barrel.ts and `h` in user.ts. A change of `Other`, which
+// only `other` reaches, stops at the files importing it whole or by name.
+{
+	const { dir, markerPath } = makeGraphFixture();
+	const types = path.join(dir, 'types.ts');
+	const typesText = (home: string, other: string) => `export type Dir = ${home};\nexport type Other = ${other};\n`;
+	try {
+		addGraphFiles(dir, {
+			'types.ts': typesText('string', 'number'),
+			'hp.ts': `import type { Dir, Other } from './types';\n`
+				+ `export function homePath(): Dir {\n\treturn '';\n}\n`
+				+ `export function other(): Other {\n\treturn 1;\n}\n`,
+			'barrel.ts': `export * from './hp';\n`,
+			'user.ts': `import { homePath } from './barrel';\nexport function h() {\n\treturn homePath();\n}\n`,
+			'far.ts': `import { h } from './user';\nexport const f = h()?.length;\n`,
+		});
+		runCli(dir);
+
+		editFile(types, typesText('string | undefined', 'number'));
+		let out = '';
+		const deep = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check(
+			'a change right after the first run reaches a name three modules away',
+			deep === 'barrel.ts,far.ts,hp.ts,types.ts,user.ts',
+			deep,
+		);
+		check('the name reports the new type', out.includes('f has type number | undefined'), out);
+
+		editFile(types, typesText('string | undefined', 'boolean'));
+		const unreached = lintedDuring(markerPath, () => runCli(dir));
+		check(
+			'a declaration no used name reaches stops at its importers',
+			unreached === 'barrel.ts,hp.ts,types.ts',
+			unreached,
+		);
+
+		const warm = lintedDuring(markerPath, () => runCli(dir));
+		check('warm run after it lints nothing', warm === '', warm);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Test 18: a workspace package's source behind a symlink ──────────────
 //
 // The program reaches core/lib.ts through node_modules, so it emits no

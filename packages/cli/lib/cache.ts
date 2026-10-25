@@ -31,7 +31,7 @@ const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v9';
+const CACHE_FORMAT_VERSION = 'v10';
 
 export interface CacheData {
 	version: string;
@@ -71,6 +71,9 @@ export interface GraphNode {
 	// specifier that did not resolve. An empty hash marks one whose types
 	// changed through a reference since it was emitted.
 	names?: Record<string, string[]>;
+	// Keys of `names` whose references are not read yet; their entries only
+	// hold the hash until a change can reach the file.
+	pending?: string[];
 }
 
 // Diagnostics after plugins ran, as the CLI reports them.

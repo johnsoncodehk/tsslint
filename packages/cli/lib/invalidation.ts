@@ -11,7 +11,8 @@
 // through cycles; that is, when a hash it reaches changed, as if each name
 // hashed the hashes of what it references. References are read from the
 // source, not the declaration emit, so they stay valid while a dependency
-// changes the emit of an unchanged file.
+// changes the emit of an unchanged file, and only once a change can reach
+// the module.
 //
 // What can't be told apart counts as more, never less:
 //   - a namespace import, `import =`, `import('./a')` and a module specifier
@@ -143,10 +144,15 @@ export function invalidate(
 		scopeChanged ||= cache.graph[fileName].scope !== infos.get(fileName)!.scope?.hash;
 		setNode(cache, fileName, ownFiles.get(fileName)!, infos.get(fileName)!);
 	}
-	updateNames(api, project, cache, ownFiles, infos);
+	const importers = updateNames(api, project, cache, ownFiles, infos);
 
 	const changedSet = new Set(changed);
-	const graph = createGraph(cache, previous);
+	const graph = createGraph(
+		cache,
+		previous,
+		importers,
+		fileNames => readPendingRefs(api, project, cache, ownFiles, infos, fileNames),
+	);
 	const used = new Map<string, string[]>();
 	for (const fileName of Object.keys(cache.files)) {
 		const node = cache.graph[fileName];
@@ -248,6 +254,7 @@ function updateNames(
 		if (!importers.has(fileName) && !node.global) {
 			delete node.signature;
 			delete node.names;
+			delete node.pending;
 		}
 		else if (node.signature === undefined) {
 			missing.push(fileName);
@@ -262,14 +269,20 @@ function updateNames(
 		cache.graph[fileName].signature = signature;
 		entries.push([fileName, declaration]);
 	}
-	for (const [fileName, names] of getNames(api, project, entries, infos, cache)) {
-		if (names) {
-			cache.graph[fileName].names = names;
+	for (const [fileName, read] of getNames(api, project, entries, infos, cache)) {
+		const node = cache.graph[fileName];
+		delete node.pending;
+		if (read) {
+			node.names = read.names;
+			if (read.pending.length) {
+				node.pending = read.pending;
+			}
 		}
 		else {
-			delete cache.graph[fileName].names;
+			delete node.names;
 		}
 	}
+	return importers;
 }
 
 function getName(names: Record<string, string[]> | undefined, key: string) {
@@ -284,19 +297,44 @@ function isLocal(key: string) {
 // references. A file without names (a script, a JS or JSON file, or one
 // without a single declaration output) is one node, which references the
 // whole of every file it depends on.
-function createGraph(cache: CacheData, previous: Map<string, GraphNode>) {
+//
+// A name references names of its own file and of the files it depends on,
+// and a name found through `export *` those of the re-exported files. So a
+// file's names can only change when a name of the file, of a dep, or of a
+// file a dep re-exports changed, or when one references a module specifier
+// that did not resolve; the graph only reads the names of such files, and
+// reads the references of a file whose names were stored without them
+// (`GraphNode.pending`) then. Those can't name an unresolved specifier: the
+// source only names those of `file.imports`, which all resolved or point
+// outside the graph.
+function createGraph(
+	cache: CacheData,
+	previous: Map<string, GraphNode>,
+	importers: Map<string, Set<string>>,
+	readRefs: (fileNames: string[]) => void,
+) {
 	const dependents = new Map<string, string[]>();
-	const added = new Set<string>();
+	// Per file, each name added so far, by id.
+	const added = new Map<string, Map<string, string>>();
+	const expanded = new Set<string>();
 	const pending: [id: string, fileName: string, key: string][] = [];
+	const result = new Set<string>();
+	const queue: string[] = [];
 	const get = (fileName: string, key: string) => {
 		const names = cache.graph[fileName]?.names;
 		if (!names || (key.startsWith(LOCAL) && key !== ALL && !getName(names, key))) {
 			key = ALL;
 		}
 		const id = fileName + '\0' + key;
-		if (!added.has(id)) {
-			added.add(id);
-			pending.push([id, fileName, key]);
+		let ids = added.get(fileName);
+		if (!ids) {
+			added.set(fileName, ids = new Map());
+		}
+		if (!ids.has(id)) {
+			ids.set(id, key);
+			if (expanded.has(fileName)) {
+				pending.push([id, fileName, key]);
+			}
 		}
 		return id;
 	};
@@ -311,12 +349,21 @@ function createGraph(cache: CacheData, previous: Map<string, GraphNode>) {
 		const dep = cache.graph[fileName].deps[+ref.slice(0, separator)];
 		return dep === undefined ? UNKNOWN : get(dep, key ?? ref.slice(separator + 1));
 	};
+	const mark = (id: string) => {
+		if (!result.has(id)) {
+			result.add(id);
+			queue.push(id);
+		}
+	};
 	const link = (from: string, to: string) => {
 		let list = dependents.get(to);
 		if (!list) {
 			dependents.set(to, list = []);
 		}
 		list.push(from);
+		if (result.has(to)) {
+			mark(from);
+		}
 	};
 	const expand = (id: string, fileName: string, key: string) => {
 		const node = cache.graph[fileName];
@@ -361,46 +408,117 @@ function createGraph(cache: CacheData, previous: Map<string, GraphNode>) {
 			link(id, get(fileName, 'export='));
 		}
 	};
+	const expandFile = (fileName: string) => {
+		expanded.add(fileName);
+		for (const [id, key] of [...added.get(fileName) ?? []]) {
+			pending.push([id, fileName, key]);
+		}
+		const node = cache.graph[fileName];
+		for (const key of Object.keys(node?.names ?? {})) {
+			get(fileName, key);
+		}
+		if (node && !node.names && node.signature !== undefined) {
+			get(fileName, ALL);
+		}
+	};
 	return {
 		get,
 		resolve,
 		// Every name whose hash or a hash it reaches changed.
 		solve() {
+			// Per file, the files that re-export it through `export *`.
+			const reexporters = new Map<string, string[]>();
+			const requested = new Set<string>();
+			let unread: string[] = [];
+			const request = (fileName: string) => {
+				if (!requested.has(fileName)) {
+					requested.add(fileName);
+					if (cache.graph[fileName]?.pending) {
+						unread.push(fileName);
+					}
+					else {
+						expandFile(fileName);
+					}
+				}
+			};
+			// A reference to an unresolved specifier is always changed.
 			for (const [fileName, node] of Object.entries(cache.graph)) {
-				for (const key of Object.keys(node.names ?? {})) {
-					get(fileName, key);
+				if (!node.names) {
+					continue;
 				}
-				if (!node.names && node.signature !== undefined) {
-					get(fileName, ALL);
+				for (const [key, entry] of Object.entries(node.names)) {
+					for (let i = 1; i < entry.length; i++) {
+						const ref = entry[i];
+						const separator = ref.indexOf('\0');
+						const dep = separator > 0 ? node.deps[+ref.slice(0, separator)] : undefined;
+						if (ref === UNKNOWN || (separator > 0 && dep === undefined)) {
+							request(fileName);
+						}
+						else if (key === STAR && dep !== undefined) {
+							let list = reexporters.get(dep);
+							if (!list) {
+								reexporters.set(dep, list = []);
+							}
+							list.push(fileName);
+						}
+					}
 				}
 			}
-			while (pending.length) {
-				expand(...pending.pop()!);
-			}
-			const result = new Set<string>([UNKNOWN]);
+			mark(UNKNOWN);
 			for (const [fileName, old] of previous) {
 				const { names, signature } = cache.graph[fileName];
 				if (!names || !old.names) {
 					if (names || old.names || signature === undefined || signature !== old.signature) {
-						result.add(fileName + '\0' + ALL);
+						mark(fileName + '\0' + ALL);
 					}
 				}
 				for (const key of new Set([...Object.keys(names ?? {}), ...Object.keys(old.names ?? {})])) {
 					if (getName(names, key)?.[0] !== getName(old.names, key)?.[0]) {
-						result.add(fileName + '\0' + key);
+						mark(fileName + '\0' + key);
 					}
 				}
 			}
-			const queue = [...result];
-			while (queue.length) {
-				for (const dependent of dependents.get(queue.pop()!) ?? []) {
-					if (!result.has(dependent)) {
-						result.add(dependent);
-						queue.push(dependent);
+			const reached = new Set<string>();
+			const reach = (fileName: string) => {
+				const stack = [fileName];
+				request(fileName);
+				while (stack.length) {
+					const file = stack.pop()!;
+					if (reached.has(file)) {
+						continue;
+					}
+					reached.add(file);
+					for (const importer of importers.get(file) ?? []) {
+						request(importer);
+					}
+					stack.push(...reexporters.get(file) ?? []);
+				}
+			};
+			while (true) {
+				while (pending.length || queue.length) {
+					if (pending.length) {
+						expand(...pending.pop()!);
+						continue;
+					}
+					const id = queue.pop()!;
+					const separator = id.indexOf('\0');
+					if (separator > 0) {
+						reach(id.slice(0, separator));
+					}
+					for (const dependent of dependents.get(id) ?? []) {
+						mark(dependent);
 					}
 				}
+				if (!unread.length) {
+					return result;
+				}
+				const fileNames = unread;
+				unread = [];
+				readRefs(fileNames);
+				for (const fileName of fileNames) {
+					expandFile(fileName);
+				}
 			}
-			return result;
 		},
 	};
 }
@@ -432,6 +550,9 @@ function analyze(
 	fileNames: string[],
 	ownFiles: Map<string, fs.Stats>,
 	known?: Map<string, FileInfo>,
+	// Whether to read what `declare global` / `declare module '...'` blocks
+	// use, as `FileInfo.scope`.
+	readScopes = true,
 ) {
 	const { program } = project;
 	const infos = new Map<string, FileInfo>();
@@ -527,7 +648,9 @@ function analyze(
 				}
 				else if (file.moduleAugmentations.length || file.ambientModuleNames.length) {
 					info.global = true;
-					scoped.push([file, info]);
+					if (readScopes) {
+						scoped.push([file, info]);
+					}
 				}
 			}
 			infos.set(file.fileName, info);
@@ -864,10 +987,17 @@ interface Unit {
 	specifiers: [specifier: string, key: string][];
 }
 
+interface Names {
+	names: Record<string, string[]>;
+	// Keys of declarations stored without their references.
+	pending: string[];
+}
+
 // The names of each module: per export, per top-level declaration and import,
 // and for `export *`. A declaration's hash is its text in the declaration
 // emit; what it references is resolved by the checker in the source. Files
-// whose exports can't be read this way get none (see `createGraph`).
+// whose exports can't be read this way get none (see `createGraph`). What
+// declarations reference is read when the graph first needs it.
 function getNames(
 	api: API,
 	project: Project,
@@ -875,8 +1005,8 @@ function getNames(
 	infos: Map<string, FileInfo>,
 	cache: CacheData,
 ) {
-	const { program, checker } = project;
-	const result = new Map<string, Record<string, string[]> | undefined>();
+	const { program } = project;
+	const result = new Map<string, Names | undefined>();
 	const named = entries.filter(([fileName, declaration]) => {
 		const info = infos.get(fileName);
 		const named = declaration?.length === 1 && !!info && !(info.global && !info.scope)
@@ -894,22 +1024,17 @@ function getNames(
 		const leases = api.batch(...parsed.map(output => api.createSourceFile.gen(output.fileName, output.text)));
 		try {
 			const emits = new Map(parsed.map((output, j) => [output, leases[j].sourceFile]));
-			const sources = files.map(file => file && collectSource(file));
-			const requests = sources.filter(source => !!source?.nodes.length);
-			const resolved = new Map(
-				api.batch(...requests.map(source => checker.getSymbolAtLocation.gen(source!.nodes)))
-					.map((symbols, j) => [requests[j], symbols]),
-			);
 			chunk.forEach(([fileName], j) => {
 				const file = files[j];
-				const source = sources[j];
 				const emit = outputs[j] ? emits.get(outputs[j]) : file;
-				if (!file || !source || !emit) {
+				if (!file || !emit) {
 					result.set(fileName, undefined);
 					return;
 				}
-				resolveUnits(source, resolved.get(source));
-				result.set(fileName, readNames(fileName, file, emit, source, infos.get(fileName)!, cache.graph[fileName].deps));
+				result.set(
+					fileName,
+					readNames(fileName, emit, collectSource(file), infos.get(fileName)!, cache.graph[fileName].deps),
+				);
 			});
 		}
 		finally {
@@ -917,6 +1042,43 @@ function getNames(
 		}
 	}
 	return result;
+}
+
+// Reads what the pending declarations of each file reference. The file is
+// unchanged since its names were read.
+function readPendingRefs(
+	api: API,
+	project: Project,
+	cache: CacheData,
+	ownFiles: Map<string, fs.Stats>,
+	infos: Map<string, FileInfo>,
+	fileNames: string[],
+) {
+	const { program, checker } = project;
+	const unanalyzed = fileNames.filter(fileName => !infos.has(fileName));
+	for (const [fileName, info] of analyze(api, project, unanalyzed, ownFiles, undefined, false)) {
+		infos.set(fileName, info);
+	}
+	for (let i = 0; i < fileNames.length; i += CHUNK_SIZE) {
+		const chunk = fileNames.slice(i, i + CHUNK_SIZE);
+		const files = api.batch(...chunk.map(fileName => program.getSourceFile.gen(fileName)));
+		const sources = files.map(file => file && collectSource(file));
+		resolveSources(api, checker, sources);
+		chunk.forEach((fileName, j) => {
+			const node = cache.graph[fileName];
+			const source = sources[j];
+			const info = infos.get(fileName);
+			if (source && info) {
+				readRefs(fileName, source, info, node.deps, node.names!, node.pending!);
+			}
+			else {
+				for (const key of node.pending!) {
+					node.names![key] = [node.names![key][0], ...node.deps.map((_, i) => `${i}\0${ALL}`)];
+				}
+			}
+			delete node.pending;
+		});
+	}
 }
 
 // The top-level declarations and imports of a module's source, and the
@@ -1029,6 +1191,30 @@ function collectSource(file: ts.SourceFile) {
 		}
 	}
 
+	return { file, units, imports, shared, assignment, attributed, bindings, walks, nodes: [] as ts.Identifier[] };
+}
+
+type Source = ReturnType<typeof collectSource>;
+
+// Turns the declarations of a source into the identifiers that can reference
+// a top-level name, and resolves them.
+function resolveSources(api: API, checker: Checker, sources: (Source | undefined)[]) {
+	const requests: [Source, [ts.Identifier, Unit][]][] = [];
+	for (const source of sources) {
+		if (source) {
+			const candidates = walkSource(source);
+			if (source.nodes.length) {
+				requests.push([source, candidates]);
+			}
+		}
+	}
+	api.batch(...requests.map(([source]) => checker.getSymbolAtLocation.gen(source.nodes))).forEach((symbols, i) => {
+		resolveUnits(...requests[i], symbols);
+	});
+}
+
+function walkSource(source: Source) {
+	const { units, imports, bindings, attributed, walks } = source;
 	const topLevel = new Set([...units.keys(), ...imports.keys()]);
 	const candidates: [ts.Identifier, Unit][] = [];
 	const walk = (node: ts.Node, unit: Unit): void => {
@@ -1096,29 +1282,22 @@ function collectSource(file: ts.SourceFile) {
 	for (const [node, unit] of candidates) {
 		unit.nodes.push(node);
 	}
-	return {
-		file,
-		units,
-		imports,
-		shared,
-		assignment,
-		attributed,
-		bindings,
-		candidates,
-		nodes: [...bindings, ...candidates.map(([node]) => node)],
-	};
+	source.nodes = [...bindings, ...candidates.map(([node]) => node)];
+	return candidates;
 }
-
-type Source = ReturnType<typeof collectSource>;
 
 // Turns the identifiers of each unit into the names they resolve to. One the
 // checker resolves to nothing, or whose name's declarations it doesn't
 // resolve, counts as every top-level name of its text.
-function resolveUnits(source: Source, symbols: readonly ({ id: number } | undefined)[] | undefined) {
+function resolveUnits(
+	source: Source,
+	candidates: [ts.Identifier, Unit][],
+	symbols: readonly ({ id: number } | undefined)[],
+) {
 	const byId = new Map<number, string>();
 	const unresolved = new Set<string>();
 	source.bindings.forEach((node, i) => {
-		const symbol = symbols?.[i];
+		const symbol = symbols[i];
 		if (symbol) {
 			byId.set(symbol.id, node.text);
 		}
@@ -1126,8 +1305,8 @@ function resolveUnits(source: Source, symbols: readonly ({ id: number } | undefi
 			unresolved.add(node.text);
 		}
 	});
-	source.candidates.forEach(([node, unit], i) => {
-		const symbol = symbols?.[source.bindings.length + i];
+	candidates.forEach(([node, unit], i) => {
+		const symbol = symbols[source.bindings.length + i];
 		const name = symbol && byId.get(symbol.id);
 		if (name !== undefined) {
 			unit.names.add(name);
@@ -1138,56 +1317,19 @@ function resolveUnits(source: Source, symbols: readonly ({ id: number } | undefi
 	});
 }
 
+// The names of a module with their hashes, and what its exports, imports
+// and `export *` reference. Declarations get their references from
+// `readRefs`; their keys are returned as pending.
 function readNames(
 	fileName: string,
-	file: ts.SourceFile,
 	emit: ts.SourceFile,
 	source: Source,
 	info: FileInfo,
 	deps: string[],
-): Record<string, string[]> {
+): Names {
 	const encode = (specifier: string, key: string) => encodeRef(fileName, info.references, deps, specifier, key);
 	// A key that names the same target in any run, unlike the dep index.
 	const describe = (specifier: string, key: string) => `${info.references.get(specifier) ?? '?' + specifier}\0${key}`;
-	const addUnit = (unit: Unit, refs: Set<string>) => {
-		for (const name of unit.names) {
-			refs.add(LOCAL + name);
-		}
-		for (const [specifier, key] of unit.specifiers) {
-			const ref = encode(specifier, key);
-			if (ref !== undefined) {
-				refs.add(ref);
-			}
-		}
-	};
-	// What every declaration references: the other statements, and module
-	// specifiers and references no declaration accounts for.
-	const shared = new Set<string>();
-	addUnit(source.shared, shared);
-	for (const ref of [...file.typeReferenceDirectives, ...file.referencedFiles]) {
-		const encoded = encode(ref.fileName, ALL);
-		if (encoded !== undefined) {
-			shared.add(encoded);
-		}
-	}
-	for (const specifier of file.imports as unknown as ts.StringLiteral[]) {
-		if (!source.attributed.has(specifier)) {
-			const ref = encode(specifier.text, ALL);
-			if (ref !== undefined) {
-				shared.add(ref);
-			}
-		}
-	}
-	// A declaration the emit adds, e.g. `_default` for `export default f()`,
-	// references what `export default` / `export =` does, or, without
-	// one, every dep.
-	const emitted = new Set<string>();
-	if (source.assignment) {
-		addUnit(source.assignment, emitted);
-	}
-	else {
-		deps.forEach((_, i) => emitted.add(`${i}\0${ALL}`));
-	}
 
 	const texts = new Map<string, string[]>();
 	const exports = new Map<string, Set<string>>();
@@ -1326,24 +1468,12 @@ function readNames(
 	}
 
 	const names = new Map<string, string[]>();
+	const pending: string[] = [];
 	for (const name of new Set([...texts.keys(), ...source.units.keys()])) {
-		if (imports.has(name)) {
-			continue;
+		if (!imports.has(name)) {
+			names.set(LOCAL + name, [hash(texts.get(name)?.join('\0') ?? '')]);
+			pending.push(LOCAL + name);
 		}
-		const refs = new Set(shared);
-		const units = source.units.get(name);
-		if (units) {
-			for (const unit of units) {
-				addUnit(unit, refs);
-			}
-		}
-		else {
-			for (const ref of emitted) {
-				refs.add(ref);
-			}
-		}
-		refs.delete(LOCAL + name);
-		names.set(LOCAL + name, [hash(texts.get(name)?.join('\0') ?? ''), ...refs]);
 	}
 	for (const [name, [specifier, key]] of imports) {
 		const ref = encode(specifier, key);
@@ -1361,7 +1491,76 @@ function readNames(
 		const refs = stars.map(specifier => encode(specifier, ALL)).filter(ref => ref !== undefined);
 		names.set(STAR, [hash(stars.map(specifier => describe(specifier, ALL)).sort().join('\0')), ...new Set(refs)]);
 	}
-	return Object.fromEntries(names);
+	return { names: Object.fromEntries(names), pending };
+}
+
+// What each of the given declarations of a module references, from its
+// resolved source.
+function readRefs(
+	fileName: string,
+	source: Source,
+	info: FileInfo,
+	deps: string[],
+	names: Record<string, string[]>,
+	keys: string[],
+) {
+	const { file } = source;
+	const encode = (specifier: string, key: string) => encodeRef(fileName, info.references, deps, specifier, key);
+	const addUnit = (unit: Unit, refs: Set<string>) => {
+		for (const name of unit.names) {
+			refs.add(LOCAL + name);
+		}
+		for (const [specifier, key] of unit.specifiers) {
+			const ref = encode(specifier, key);
+			if (ref !== undefined) {
+				refs.add(ref);
+			}
+		}
+	};
+	// What every declaration references: the other statements, and module
+	// specifiers and references no declaration accounts for.
+	const shared = new Set<string>();
+	addUnit(source.shared, shared);
+	for (const ref of [...file.typeReferenceDirectives, ...file.referencedFiles]) {
+		const encoded = encode(ref.fileName, ALL);
+		if (encoded !== undefined) {
+			shared.add(encoded);
+		}
+	}
+	for (const specifier of file.imports as unknown as ts.StringLiteral[]) {
+		if (!source.attributed.has(specifier)) {
+			const ref = encode(specifier.text, ALL);
+			if (ref !== undefined) {
+				shared.add(ref);
+			}
+		}
+	}
+	// A declaration the emit adds, e.g. `_default` for `export default f()`,
+	// references what `export default` / `export =` does, or, without
+	// one, every dep.
+	const emitted = new Set<string>();
+	if (source.assignment) {
+		addUnit(source.assignment, emitted);
+	}
+	else {
+		deps.forEach((_, i) => emitted.add(`${i}\0${ALL}`));
+	}
+	for (const key of keys) {
+		const refs = new Set(shared);
+		const units = source.units.get(key.slice(LOCAL.length));
+		if (units) {
+			for (const unit of units) {
+				addUnit(unit, refs);
+			}
+		}
+		else {
+			for (const ref of emitted) {
+				refs.add(ref);
+			}
+		}
+		refs.delete(key);
+		names[key] = [names[key][0], ...refs];
+	}
 }
 
 function updateContentMappersHash(api: API, hash: crypto.Hash, configFile: string) {
