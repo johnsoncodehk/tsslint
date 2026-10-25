@@ -144,12 +144,15 @@ export function invalidate(
 			return rebuild(infos);
 		}
 	}
+	// A file read for its syntax only matters through its text and its
+	// types, not through what its own rules read.
+	const retyped = new Set(dirty);
 	for (const [fileName, entry] of Object.entries(cache.files)) {
 		if (dirty.has(fileName)) {
 			continue;
 		}
 		for (const [touched, textHash] of Object.entries(entry.touched)) {
-			if (changedSet.has(touched) ? hashFile(touched, fileHashes) !== textHash : dirty.has(touched)) {
+			if (changedSet.has(touched) ? hashFile(touched, fileHashes) !== textHash : retyped.has(touched)) {
 				dirty.add(fileName);
 				break;
 			}

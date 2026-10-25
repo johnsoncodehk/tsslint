@@ -500,9 +500,10 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 
 // ── Test 15: a rule reading another file's function body ─────────────
 //
-// The `awaits` rule looks into the body of each called function; only
-// uses.ts calls `load`. typed.ts reads `load`'s type alone, so a body edit
-// in lib.ts must re-lint uses.ts but not typed.ts.
+// The `awaits` rule looks into the body of each called function; uses.ts
+// and mid.ts call `load`. typed.ts reads `load`'s type alone, so a body edit
+// in lib.ts must re-lint uses.ts and mid.ts but not typed.ts. top.ts reads
+// mid.ts's syntax, which stays the same.
 {
 	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-touched-')));
 	const markerPath = path.join(dir, 'marker.log');
@@ -537,19 +538,21 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 			path.join(dir, 'tsconfig.json'),
 			JSON.stringify({
 				compilerOptions: { target: 'es2020', module: 'esnext', moduleResolution: 'bundler', strict: true },
-				files: ['lib.ts', 'uses.ts', 'typed.ts'],
+				files: ['lib.ts', 'mid.ts', 'top.ts', 'typed.ts', 'uses.ts'],
 			}),
 		);
 		fs.writeFileSync(lib, libText(''));
 		fs.writeFileSync(path.join(dir, 'uses.ts'), `import { load } from './lib';\nload();\n`);
 		fs.writeFileSync(path.join(dir, 'typed.ts'), `import { load } from './lib';\nexport const p = load;\n`);
+		fs.writeFileSync(path.join(dir, 'mid.ts'), `import { load } from './lib';\nload();\nexport function run() {}\n`);
+		fs.writeFileSync(path.join(dir, 'top.ts'), `import { run } from './mid';\nrun();\n`);
 
 		let out = runCli(dir).stdout;
 		check('cold: no report before the body awaits', !out.includes('calls a function that awaits'), out);
 
 		editFile(lib, libText('\tawait 0;\n'));
 		const added = lintedDuring(markerPath, () => out = runCli(dir).stdout);
-		check('body edit re-lints the file reading the body', added === 'lib.ts,uses.ts', added);
+		check('body edit re-lints the files reading the body', added === 'lib.ts,mid.ts,uses.ts', added);
 		check('the new body is reported', out.includes('calls a function that awaits'), out);
 
 		const warm = lintedDuring(markerPath, () => out = runCli(dir).stdout);
@@ -558,7 +561,7 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 
 		editFile(lib, libText(''));
 		const removed = lintedDuring(markerPath, () => out = runCli(dir).stdout);
-		check('reverting the body re-lints the file reading it', removed === 'lib.ts,uses.ts', removed);
+		check('reverting the body re-lints the files reading it', removed === 'lib.ts,mid.ts,uses.ts', removed);
 		check('the report goes away', !out.includes('calls a function that awaits'), out);
 
 		bumpMtime(lib);
