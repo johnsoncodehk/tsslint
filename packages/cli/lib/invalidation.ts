@@ -371,11 +371,13 @@ function getDeclarations(api: API, program: Program, fileNames: string[]) {
 }
 
 const SPECIFIER_PATTERNS = [
-	/\bfrom\s*['"]([^'"]+)['"]/g,
-	/\bimport\s*['"]([^'"]+)['"]/g,
-	/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-	/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-	/\/\/\/\s*<reference\s+(?:path|types)\s*=\s*['"]([^'"]+)['"]/g,
+	/\bfrom\s*['"]([^'"\n]+)['"]/g,
+	// A side-effect import starts a statement; elsewhere `import` followed by
+	// a quote can be a string, e.g. `with { 'resolution-mode': 'import' }`.
+	/^\s*import\s*['"]([^'"\n]+)['"]/gm,
+	/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+	/\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+	/\/\/\/\s*<reference\s+(?:path|types)\s*=\s*['"]([^'"\n]+)['"]/g,
 ];
 
 // Over-matching (e.g. inside a string literal type) only re-lints more.

@@ -120,6 +120,43 @@ function bumpMtime(fileName: string) {
 	}
 }
 
+// ── Test 2: an import attribute is not a module specifier ──────────────
+//
+// `'import'` in `with { 'resolution-mode': 'import' }` must not start a
+// side-effect import that spans to the next quote, which would leave an
+// unknown specifier and count the signature as changed.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-inv-attr-')));
+	try {
+		const b = path.join(dir, 'b.ts');
+		const c = path.join(dir, 'c.ts');
+		fs.writeFileSync(b, 'export const v = 1;\n');
+		fs.writeFileSync(c, `import { v } from './b';\n`);
+		const declaration = `import type * as A from 'a' with { 'resolution-mode': 'import' };\n`
+			+ `import type { X } from 'x';\n`
+			+ `export declare const v: A.T | X;\n`;
+		const files = new Map<string, StubFile>([
+			[b, { text: fs.readFileSync(b, 'utf8'), imports: ['a', 'x'], declaration }],
+			[c, { text: fs.readFileSync(c, 'utf8'), imports: ['./b'], declaration: 'export {};\n' }],
+		]);
+		const resolve = (specifier: string) => specifier === './b' ? b : `/node_modules/${specifier}/index.d.ts`;
+		const { api, project } = createStub(files, resolve, new Map());
+
+		const cache = emptyCache();
+		invalidate(api, project, cache, '', new Map());
+		cache.files[b] = { hasFix: false, diagnostics: [], touched: {} };
+		cache.files[c] = { hasFix: false, diagnostics: [], touched: {} };
+		fs.writeFileSync(b, 'export const v = 2;\n');
+		bumpMtime(b);
+		invalidate(api, project, cache, '', new Map());
+		check('body edit re-lints the file', !cache.files[b]);
+		check('unchanged declaration with an import attribute keeps the importer', !!cache.files[c]);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 process.stdout.write('\n');
 if (failures.length) {
 	console.error(`\n${failures.length} failure(s):`);
