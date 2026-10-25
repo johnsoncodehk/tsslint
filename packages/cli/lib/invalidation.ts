@@ -1622,6 +1622,7 @@ function readFile(fileName: string) {
 	}
 }
 
+// 96 bits; the cache keeps one per name.
 function hash(text: string) {
-	return crypto.createHash('sha256').update(text).digest('hex');
+	return crypto.createHash('sha256').update(text).digest('base64url').slice(0, 16);
 }
