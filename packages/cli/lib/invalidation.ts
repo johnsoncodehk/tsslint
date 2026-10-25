@@ -1,9 +1,29 @@
 // Decides which cached lint results are still valid, the way `tsc --incremental`
 // decides which files to re-check. A file's result is reused when the file is
-// unchanged and none of the files it depends on changed their declaration
-// signature (their `.d.ts` emit), so an edit inside a function body re-lints
-// only that file. A changed signature re-lints the direct importers, and keeps
-// propagating only while their signatures change too.
+// unchanged and none of the names it imports changed their types, so an edit
+// inside a function body re-lints only that file.
+//
+// Each module other files depend on keeps, per export and per top-level
+// declaration, a hash of its declaration emit and what it references: the
+// declarations and imports the checker resolves its identifiers to, and the
+// exports of other modules these name. A name's types changed when its own
+// hash changed, or when one it references changed, also across files and
+// through cycles; that is, when a hash it reaches changed, as if each name
+// hashed the hashes of what it references. References are read from the
+// source, not the declaration emit, so they stay valid while a dependency
+// changes the emit of an unchanged file.
+//
+// What can't be told apart counts as more, never less:
+//   - a namespace import, `import =`, `import('./a')` and a module specifier
+//     no declaration accounts for reference the whole module
+//   - an identifier the checker resolves to nothing references every
+//     top-level name of its text
+//   - a declaration only the emit has (e.g. `_default`) references what
+//     `export default` / `export =` does, or every dep
+//   - a JS, JSON, script or UMD file, or one without a single declaration
+//     output, is one name referencing the whole of every dep
+//   - an unchanged file whose name went stale counts it as changed again
+//     on its next edit
 //
 // A rule can also read another file beyond its declarations (e.g. the body of
 // a function it calls). The file's result then also depends on that file's
@@ -14,8 +34,8 @@
 //   - files added to or removed from the program, or changes under `node_modules`
 //   - a changed signature of a script or a UMD module (`export as namespace`)
 //   - a changed `declare global` / `declare module '...'` block, or a changed
-//     declaration of a name its blocks use: an import, a declaration of the
-//     module itself, or the augmented module
+//     name its blocks use: an import, a declaration of the module itself, or
+//     any export of the augmented module
 //   - a file starting or stopping to declare globals
 
 import crypto = require('crypto');
@@ -26,10 +46,14 @@ import type { API, Checker, Project } from 'typescript/sync';
 import type { CacheData, GraphNode } from './cache.js';
 
 const CHUNK_SIZE = 500;
-// Key prefixes in `GraphNode.names` beside export names, which are
-// identifiers or string literals; neither can hold `\0`.
+// Keys in `GraphNode.names` beside export names, which are identifiers or
+// string literals; neither can hold `\0`.
 const LOCAL = '\0';
 const STAR = '\0*';
+// The whole module: every export, also through `export *`.
+const ALL = '\0\0';
+// Stands for a module specifier that did not resolve; always changed.
+const UNKNOWN = '';
 
 interface Declaration {
 	fileName: string;
@@ -38,6 +62,8 @@ interface Declaration {
 
 interface FileInfo {
 	deps: string[];
+	// Per dep, the export names the file imports from it.
+	uses: string[][];
 	global: boolean;
 	// For a module with `declare global` / `declare module '...'` blocks; a
 	// script or a UMD module is global as a whole.
@@ -50,26 +76,8 @@ interface FileInfo {
 interface Scope {
 	// Hash of the blocks' text.
 	hash: string;
-	// Module specifiers the blocks name, e.g. the augmented module or an
-	// `import('./a')` type.
-	specifiers: Set<string>;
-	// Export names the blocks use through the imports of each module
-	// specifier; `*` for a namespace or `import =` binding.
-	imports: Map<string, Set<string>>;
-	// Names of the module's own declarations the blocks use.
-	locals: Set<string>;
-}
-
-// Per name in a declaration emit, what its declarations reach within the
-// file, and the module specifiers they name.
-interface NameInfo {
-	hash: string;
-	specifiers: string[];
-}
-
-interface DeclarationInfo {
-	specifiers: string[];
-	names?: Map<string, NameInfo>;
+	// What the blocks use, as references.
+	refs: string[];
 }
 
 export function invalidate(
@@ -128,93 +136,42 @@ export function invalidate(
 		return rebuild(infos);
 	}
 
-	const oldSignatures = new Map<string, string | undefined>();
+	const previous = new Map<string, GraphNode>();
 	let scopeChanged = false;
 	for (const fileName of changed) {
-		oldSignatures.set(fileName, cache.graph[fileName]?.signature);
+		previous.set(fileName, cache.graph[fileName]);
 		scopeChanged ||= cache.graph[fileName].scope !== infos.get(fileName)!.scope?.hash;
 		setNode(cache, fileName, ownFiles.get(fileName)!, infos.get(fileName)!);
 	}
-	const importers = getImporters(cache);
+	updateNames(api, project, cache, ownFiles, infos);
+
 	const changedSet = new Set(changed);
-	const dirty = new Set(changed);
-	const signatureChanged = new Set<string>();
-	const declarations = new Map<string, Declaration[] | undefined>();
-	const signatures = new Map<string, string>();
-	// The parsed declaration emit of files whose signature stayed the same,
-	// and of files whose names are tracked.
-	const read = new Map<string, DeclarationInfo>();
-
-	let queue = changed;
-	while (queue.length) {
-		const wave = [...new Set(queue)].filter(fileName => !signatureChanged.has(fileName));
-		queue = [];
-		const unanalyzed = wave.filter(fileName => !infos.has(fileName));
-		if (unanalyzed.length) {
-			for (const [fileName, info] of analyze(api, project, unanalyzed, ownFiles)) {
-				infos.set(fileName, info);
-			}
-		}
-		const unemitted = wave.filter(fileName => !signatures.has(fileName));
-		for (const [fileName, declaration] of getDeclarations(api, project, unemitted)) {
-			declarations.set(fileName, declaration.declaration);
-			signatures.set(fileName, declaration.signature);
-			if (!changedSet.has(fileName)) {
-				oldSignatures.set(fileName, cache.graph[fileName].signature);
-			}
-		}
-		const unread = wave.filter(fileName =>
-			!read.has(fileName)
-			&& declarations.get(fileName) !== undefined
-			&& (oldSignatures.get(fileName) === signatures.get(fileName) || cache.graph[fileName].names)
-		);
-		const entries = unread.map(fileName => [fileName, declarations.get(fileName)!] as const);
-		for (const [fileName, info] of readDeclarations(api, entries, fileName => !!cache.graph[fileName].names)) {
-			read.set(fileName, info);
-		}
-		// A file in this wave can reference another one that turns out to
-		// change, so repeat until nothing new changes.
-		let progress = true;
-		while (progress) {
-			progress = false;
-			for (const fileName of wave) {
-				if (signatureChanged.has(fileName) || !hasSignatureChanged(fileName)) {
-					continue;
-				}
-				signatureChanged.add(fileName);
-				progress = true;
-				for (const importer of importers.get(fileName) ?? []) {
-					dirty.add(importer);
-					if (!signatureChanged.has(importer)) {
-						queue.push(importer);
-					}
-				}
-			}
+	const graph = createGraph(cache, previous);
+	const used = new Map<string, string[]>();
+	for (const fileName of Object.keys(cache.files)) {
+		const node = cache.graph[fileName];
+		if (node && !changedSet.has(fileName)) {
+			used.set(fileName, node.deps.flatMap((dep, i) => (node.uses?.[i] ?? [ALL]).map(name => graph.get(dep, name))));
 		}
 	}
-
-	for (const [fileName, signature] of signatures) {
-		cache.graph[fileName].signature = signature;
+	const globals: string[] = [];
+	for (const [fileName, node] of Object.entries(cache.graph)) {
+		if (node.global) {
+			globals.push(...node.scopeRefs?.map(ref => graph.resolve(fileName, ref)) ?? [graph.get(fileName, ALL)]);
+		}
 	}
-	const named = getNamed(infos);
-	const oldNames = new Map<string, Record<string, string> | undefined>();
-	const naming = [...declarations.keys()].filter(fileName => named.has(fileName) || cache.graph[fileName].names);
-	const unnamed = naming.filter(fileName => declarations.get(fileName) !== undefined && !read.get(fileName)?.names);
-	const entries = unnamed.map(fileName => [fileName, declarations.get(fileName)!] as const);
-	for (const [fileName, info] of readDeclarations(api, entries, () => true)) {
-		read.set(fileName, info);
-	}
-	for (const fileName of naming) {
-		oldNames.set(fileName, cache.graph[fileName].names);
-		setNames(cache.graph[fileName], read.get(fileName)?.names);
-	}
-	updateMissingSignatures(api, project, cache, importers, named);
+	const changedNames = graph.solve();
+	markChanged(cache, previous, changedNames);
 	// The graph stays valid; only the results can't be reused.
-	if (
-		scopeChanged || [...signatureChanged].some(fileName => cache.graph[fileName].global && reachesGlobals(fileName))
-	) {
+	if (scopeChanged || globals.some(id => changedNames.has(id))) {
 		cache.files = {};
 		return;
+	}
+	const dirty = new Set(changed);
+	for (const [fileName, ids] of used) {
+		if (ids.some(id => changedNames.has(id))) {
+			dirty.add(fileName);
+		}
 	}
 	// A file read for its syntax only matters through its text and its
 	// types, not through what its own rules read.
@@ -243,131 +200,23 @@ export function invalidate(
 		for (const fileName of all) {
 			setNode(cache, fileName, ownFiles.get(fileName)!, allInfos.get(fileName)!);
 		}
-		updateMissingSignatures(api, project, cache, getImporters(cache), getNamed(allInfos));
-	}
-
-	// Whether a global file's changed signature reaches what it declares
-	// globally. Its blocks are unchanged here; what they use can still
-	// change, through an import or a declaration of the module itself.
-	function reachesGlobals(fileName: string) {
-		const { scope, references } = infos.get(fileName)!;
-		if (!scope) {
-			return true;
-		}
-		for (const [specifier, target] of references) {
-			if (target === null || target === fileName || !signatureChanged.has(target)) {
-				continue;
-			}
-			if (scope.specifiers.has(specifier)) {
-				return true;
-			}
-			for (const name of scope.imports.get(specifier) ?? []) {
-				if (hasNameChanged(target, name, false)) {
-					return true;
-				}
-			}
-		}
-		for (const name of scope.locals) {
-			if (hasNameChanged(fileName, name, true)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	// Whether the declarations a name reaches in a file's declaration emit
-	// changed, or what they name from other files. A name that can't be
-	// found in either emit counts as changed.
-	function hasNameChanged(fileName: string, name: string, local: boolean) {
-		if (name === '*') {
-			return true;
-		}
-		const names = read.get(fileName)?.names;
-		const old = oldNames.get(fileName);
-		const info = findName(key => names?.get(key), name, local);
-		if (!info || info.hash !== findName(key => old?.[key], name, local)) {
-			return true;
-		}
-		const references = infos.get(fileName)!.references;
-		return info.specifiers.some(specifier => {
-			const target = references.get(specifier);
-			return target === undefined || (target !== null && signatureChanged.has(target));
-		});
-	}
-
-	function hasSignatureChanged(fileName: string) {
-		const oldSignature = oldSignatures.get(fileName);
-		if (oldSignature === undefined || oldSignature !== signatures.get(fileName)) {
-			return true;
-		}
-		const specifiers = read.get(fileName)?.specifiers;
-		if (specifiers === undefined) {
-			// No declaration emit to compare: its types may still change
-			// through a dependency.
-			return !changedSet.has(fileName);
-		}
-		// The text can stay the same while the types it names change, e.g.
-		// `typeof import("./a").f` after `f`'s return type changed in `a`.
-		const references = infos.get(fileName)!.references;
-		for (const specifier of specifiers) {
-			const target = references.get(specifier);
-			if (target === undefined || (target !== null && signatureChanged.has(target))) {
-				return true;
-			}
-		}
-		return false;
+		updateNames(api, project, cache, ownFiles, allInfos);
 	}
 }
 
 function setNode(cache: CacheData, fileName: string, stat: fs.Stats, info: FileInfo) {
-	const node: GraphNode = { mtime: stat.mtimeMs, size: stat.size, deps: info.deps, global: info.global };
+	const node: GraphNode = {
+		mtime: stat.mtimeMs,
+		size: stat.size,
+		deps: info.deps,
+		uses: info.uses,
+		global: info.global,
+	};
 	if (info.scope) {
 		node.scope = info.scope.hash;
-	}
-	const { signature, names } = cache.graph[fileName] ?? {};
-	if (signature !== undefined) {
-		node.signature = signature;
-	}
-	if (names !== undefined) {
-		node.names = names;
+		node.scopeRefs = info.scope.refs;
 	}
 	cache.graph[fileName] = node;
-}
-
-function setNames(node: GraphNode, names: Map<string, NameInfo> | undefined) {
-	if (names) {
-		node.names = Object.fromEntries([...names].map(([name, info]) => [name, info.hash]));
-	}
-	else {
-		delete node.names;
-	}
-}
-
-// An export not found by its name can be a declaration of a declaration
-// file without exports, or come from `export * from`.
-function findName<T>(get: (key: string) => T | undefined, name: string, local: boolean) {
-	return local ? get(LOCAL + name) : get(name) ?? get(LOCAL + name) ?? get(STAR);
-}
-
-// Files whose names the blocks of a global module use: the targets of their
-// imports, and the module itself for its own declarations.
-function getNamed(infos: Map<string, FileInfo>) {
-	const named = new Set<string>();
-	for (const [fileName, { scope, references }] of infos) {
-		if (!scope) {
-			continue;
-		}
-		if (scope.locals.size) {
-			named.add(fileName);
-		}
-		for (const [specifier, names] of scope.imports) {
-			const target = references.get(specifier);
-			if (target && [...names].some(name => name !== '*')) {
-				named.add(target);
-			}
-		}
-	}
-	return named;
 }
 
 function getImporters(cache: CacheData) {
@@ -384,35 +233,196 @@ function getImporters(cache: CacheData) {
 	return importers;
 }
 
-// Signatures are only compared for files other files depend on, and for
-// files that declare globals; names only for the files in `named`.
-function updateMissingSignatures(
+// Signatures and names are only kept for files other files depend on, and
+// for files that declare globals.
+function updateNames(
 	api: API,
 	project: Project,
 	cache: CacheData,
-	importers: Map<string, Set<string>>,
-	named: Set<string>,
+	ownFiles: Map<string, fs.Stats>,
+	infos: Map<string, FileInfo>,
 ) {
+	const importers = getImporters(cache);
 	const missing: string[] = [];
 	for (const [fileName, node] of Object.entries(cache.graph)) {
 		if (!importers.has(fileName) && !node.global) {
 			delete node.signature;
 			delete node.names;
 		}
-		else if (node.signature === undefined || (named.has(fileName) && !node.names)) {
+		else if (node.signature === undefined) {
 			missing.push(fileName);
 		}
 	}
-	const declarations = getDeclarations(api, project, missing);
-	const entries: [string, Declaration[]][] = [];
-	for (const [fileName, { declaration, signature }] of declarations) {
-		cache.graph[fileName].signature ??= signature;
-		if (named.has(fileName) && declaration) {
-			entries.push([fileName, declaration]);
+	const unanalyzed = missing.filter(fileName => !infos.has(fileName));
+	for (const [fileName, info] of analyze(api, project, unanalyzed, ownFiles)) {
+		infos.set(fileName, info);
+	}
+	const entries: [string, Declaration[] | undefined][] = [];
+	for (const [fileName, { declaration, signature }] of getDeclarations(api, project, missing)) {
+		cache.graph[fileName].signature = signature;
+		entries.push([fileName, declaration]);
+	}
+	for (const [fileName, names] of getNames(api, project, entries, infos, cache)) {
+		if (names) {
+			cache.graph[fileName].names = names;
+		}
+		else {
+			delete cache.graph[fileName].names;
 		}
 	}
-	for (const [fileName, { names }] of readDeclarations(api, entries, () => true)) {
-		setNames(cache.graph[fileName], names);
+}
+
+function getName(names: Record<string, string[]> | undefined, key: string) {
+	return names && Object.hasOwn(names, key) ? names[key] : undefined;
+}
+
+function isLocal(key: string) {
+	return key.startsWith(LOCAL) && key !== STAR && key !== ALL;
+}
+
+// The names of all files as one graph, from each name to what it
+// references. A file without names (a script, a JS or JSON file, or one
+// without a single declaration output) is one node, which references the
+// whole of every file it depends on.
+function createGraph(cache: CacheData, previous: Map<string, GraphNode>) {
+	const dependents = new Map<string, string[]>();
+	const added = new Set<string>();
+	const pending: [id: string, fileName: string, key: string][] = [];
+	const get = (fileName: string, key: string) => {
+		const names = cache.graph[fileName]?.names;
+		if (!names || (key.startsWith(LOCAL) && key !== ALL && !getName(names, key))) {
+			key = ALL;
+		}
+		const id = fileName + '\0' + key;
+		if (!added.has(id)) {
+			added.add(id);
+			pending.push([id, fileName, key]);
+		}
+		return id;
+	};
+	const resolve = (fileName: string, ref: string, key?: string) => {
+		if (ref === UNKNOWN) {
+			return UNKNOWN;
+		}
+		const separator = ref.indexOf('\0');
+		if (separator <= 0) {
+			return get(fileName, key ?? ref);
+		}
+		const dep = cache.graph[fileName].deps[+ref.slice(0, separator)];
+		return dep === undefined ? UNKNOWN : get(dep, key ?? ref.slice(separator + 1));
+	};
+	const link = (from: string, to: string) => {
+		let list = dependents.get(to);
+		if (!list) {
+			dependents.set(to, list = []);
+		}
+		list.push(from);
+	};
+	const expand = (id: string, fileName: string, key: string) => {
+		const node = cache.graph[fileName];
+		const names = node?.names;
+		if (!names) {
+			for (const dep of node?.deps ?? []) {
+				link(id, get(dep, ALL));
+			}
+			return;
+		}
+		const stars = getName(names, STAR)?.slice(1) ?? [];
+		if (key === ALL) {
+			const keys = new Set([...Object.keys(names), ...Object.keys(previous.get(fileName)?.names ?? {})]);
+			for (const name of keys) {
+				if (!isLocal(name)) {
+					link(id, get(fileName, name));
+				}
+			}
+			for (const ref of stars) {
+				link(id, resolve(fileName, ref));
+			}
+			return;
+		}
+		const entry = getName(names, key);
+		if (entry) {
+			if (key !== STAR) {
+				for (const ref of entry.slice(1)) {
+					link(id, resolve(fileName, ref));
+				}
+			}
+			return;
+		}
+		// An export not found by its name comes from `export *`, or from
+		// the properties of `export =`.
+		if (stars.length) {
+			link(id, get(fileName, STAR));
+			for (const ref of stars) {
+				link(id, resolve(fileName, ref, key));
+			}
+		}
+		if (getName(names, 'export=')) {
+			link(id, get(fileName, 'export='));
+		}
+	};
+	return {
+		get,
+		resolve,
+		// Every name whose hash or a hash it reaches changed.
+		solve() {
+			for (const [fileName, node] of Object.entries(cache.graph)) {
+				for (const key of Object.keys(node.names ?? {})) {
+					get(fileName, key);
+				}
+				if (!node.names && node.signature !== undefined) {
+					get(fileName, ALL);
+				}
+			}
+			while (pending.length) {
+				expand(...pending.pop()!);
+			}
+			const result = new Set<string>([UNKNOWN]);
+			for (const [fileName, old] of previous) {
+				const { names, signature } = cache.graph[fileName];
+				if (!names || !old.names) {
+					if (names || old.names || signature === undefined || signature !== old.signature) {
+						result.add(fileName + '\0' + ALL);
+					}
+				}
+				for (const key of new Set([...Object.keys(names ?? {}), ...Object.keys(old.names ?? {})])) {
+					if (getName(names, key)?.[0] !== getName(old.names, key)?.[0]) {
+						result.add(fileName + '\0' + key);
+					}
+				}
+			}
+			const queue = [...result];
+			while (queue.length) {
+				for (const dependent of dependents.get(queue.pop()!) ?? []) {
+					if (!result.has(dependent)) {
+						result.add(dependent);
+						queue.push(dependent);
+					}
+				}
+			}
+			return result;
+		},
+	};
+}
+
+// The declaration emit of an unchanged file goes stale when a name it
+// references changes. Clear the hashes of such names, so the next edit of
+// the file counts them as changed whatever the new emit is.
+function markChanged(cache: CacheData, previous: Map<string, GraphNode>, changedNames: Set<string>) {
+	for (const [fileName, node] of Object.entries(cache.graph)) {
+		if (previous.has(fileName)) {
+			continue;
+		}
+		if (node.names) {
+			for (const [key, entry] of Object.entries(node.names)) {
+				if (isLocal(key) && changedNames.has(fileName + '\0' + key)) {
+					entry[0] = '';
+				}
+			}
+		}
+		else if (node.signature !== undefined && changedNames.has(fileName + '\0' + ALL)) {
+			node.signature = '';
+		}
 	}
 }
 
@@ -443,7 +453,7 @@ function analyze(
 			[
 				...file.imports,
 				...file.moduleAugmentations.filter(name => ts.isStringLiteral(name)),
-			] as unknown as { text: string }[]
+			] as unknown as ts.StringLiteral[]
 		);
 		const requests = files.flatMap((file, i) => [
 			...specifiers[i].map(specifier =>
@@ -505,7 +515,12 @@ function analyze(
 					references.set(specifier, dep);
 				}
 			}
-			const info: FileInfo = { deps: [...deps], global: false, references };
+			const info: FileInfo = {
+				deps: [...deps],
+				uses: getUses(file, specifiers[i], references, [...deps]),
+				global: false,
+				references,
+			};
 			if (!file.fileName.endsWith('.json')) {
 				if (!file.externalModuleIndicator || file.statements.some(ts.isNamespaceExportDeclaration)) {
 					info.global = true;
@@ -518,9 +533,121 @@ function analyze(
 			infos.set(file.fileName, info);
 		});
 		const scopes = getScopes(api, project.checker, scoped.map(([file]) => file));
-		scoped.forEach(([, info], i) => info.scope = scopes[i]);
+		scoped.forEach(([file, info], i) => {
+			const { hash, specifiers, imports, locals } = scopes[i];
+			const refs = new Set<string>();
+			const add = (specifier: string, key: string) => {
+				if (info.references.get(specifier) !== file.fileName) {
+					const ref = encodeRef(file.fileName, info.references, info.deps, specifier, key);
+					if (ref !== undefined) {
+						refs.add(ref);
+					}
+				}
+			};
+			for (const specifier of specifiers) {
+				add(specifier, ALL);
+			}
+			for (const [specifier, names] of imports) {
+				for (const name of names) {
+					add(specifier, name);
+				}
+			}
+			for (const name of locals) {
+				refs.add(LOCAL + name);
+			}
+			info.scope = { hash, refs: [...refs] };
+		});
 	}
 	return infos;
+}
+
+// A reference to `key` of the module a specifier names: an export name or
+// `ALL`. `undefined` for a module outside the graph.
+function encodeRef(
+	fileName: string,
+	references: Map<string, string | null>,
+	deps: string[],
+	specifier: string,
+	key: string,
+) {
+	const target = references.get(specifier);
+	if (target === undefined) {
+		return UNKNOWN;
+	}
+	if (target === null) {
+		return undefined;
+	}
+	return target === fileName ? key : `${deps.indexOf(target)}\0${key}`;
+}
+
+// What the file imports from each dep. A module specifier outside an
+// `import` / `export` statement (e.g. `import('./a')`, an import type or an
+// augmented module) and a `/// <reference>` use the whole module.
+function getUses(
+	file: ts.SourceFile,
+	specifiers: ts.StringLiteral[],
+	references: Map<string, string | null>,
+	deps: string[],
+) {
+	const used = new Map<string, Set<string>>();
+	const use = (specifier: string, name?: string) => {
+		const target = references.get(specifier);
+		if (!target) {
+			return;
+		}
+		let names = used.get(target);
+		if (!names) {
+			used.set(target, names = new Set());
+		}
+		if (name !== undefined) {
+			names.add(name);
+		}
+	};
+	const attributed = new Set<ts.Node>();
+	for (const statement of file.statements) {
+		if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+			attributed.add(statement.moduleSpecifier);
+			const specifier = statement.moduleSpecifier.text;
+			const clause = statement.importClause;
+			use(specifier);
+			if (clause?.name) {
+				use(specifier, 'default');
+			}
+			const named = clause?.namedBindings;
+			if (named && ts.isNamespaceImport(named)) {
+				use(specifier, ALL);
+			}
+			else if (named) {
+				for (const element of named.elements) {
+					use(specifier, (element.propertyName ?? element.name).text);
+				}
+			}
+		}
+		else if (
+			ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
+		) {
+			attributed.add(statement.moduleSpecifier);
+			const specifier = statement.moduleSpecifier.text;
+			const clause = statement.exportClause;
+			if (!clause || ts.isNamespaceExport(clause)) {
+				use(specifier, ALL);
+			}
+			else {
+				for (const element of clause.elements) {
+					use(specifier, (element.propertyName ?? element.name).text);
+				}
+			}
+		}
+	}
+	for (const specifier of specifiers) {
+		if (!attributed.has(specifier)) {
+			use(specifier.text, ALL);
+		}
+	}
+	for (const ref of [...file.typeReferenceDirectives, ...file.referencedFiles]) {
+		use(ref.fileName, ALL);
+	}
+	return deps.map(dep => [...used.get(dep) ?? [ALL]]);
 }
 
 interface Binding {
@@ -529,12 +656,24 @@ interface Binding {
 	name: string;
 }
 
+interface ScopeUses {
+	hash: string;
+	// Module specifiers the blocks name, e.g. the augmented module or an
+	// `import('./a')` type.
+	specifiers: Set<string>;
+	// Export names the blocks use through the imports of each module
+	// specifier; `ALL` for a namespace or `import =` binding.
+	imports: Map<string, Set<string>>;
+	// Names of the module's own declarations the blocks use.
+	locals: Set<string>;
+}
+
 // What the `declare global` / `declare module '...'` blocks of each file
 // use, by resolving every identifier in them to its symbol. Identifiers that
 // resolve to neither an import nor a declaration of the module are declared
 // by the blocks themselves, globally elsewhere, or in the augmented module,
-// which `Scope.specifiers` covers.
-function getScopes(api: API, checker: Checker, files: ts.SourceFile[]): Scope[] {
+// which `ScopeUses.specifiers` covers.
+function getScopes(api: API, checker: Checker, files: ts.SourceFile[]): ScopeUses[] {
 	const collected = files.map(collectScope);
 	const requests = collected.filter(({ used }) => used.length);
 	const resolved = new Map(
@@ -543,7 +682,7 @@ function getScopes(api: API, checker: Checker, files: ts.SourceFile[]): Scope[] 
 	);
 	return collected.map(scope => {
 		const { hash, specifiers, bindings } = scope;
-		const result: Scope = { hash, specifiers, imports: new Map(), locals: new Set() };
+		const result: ScopeUses = { hash, specifiers, imports: new Map(), locals: new Set() };
 		const symbols = resolved.get(scope);
 		if (!symbols) {
 			return result;
@@ -604,22 +743,8 @@ function collectScope(file: ts.SourceFile) {
 		}
 		node.forEachChild(visitBlock);
 	};
-	// A `var` in a nested statement is also a declaration of the module.
-	const visitDeclarations = (node: ts.Node): void => {
-		if (
-			(ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isFunctionDeclaration(node)
-				|| ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)
-				|| ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node))
-			&& node.name && ts.isIdentifier(node.name)
-		) {
-			bindings.set(node.name, { name: node.name.text });
-		}
-		if (!ts.isFunctionLikeDeclaration(node) && !ts.isClassLikeDeclaration(node) && !ts.isModuleDeclaration(node)) {
-			node.forEachChild(visitDeclarations);
-		}
-	};
 	for (const statement of file.statements) {
-		if (ts.isModuleDeclaration(statement) && (ts.isStringLiteral(statement.name) || statement.name.text === 'global')) {
+		if (isBlock(statement)) {
 			text += file.text.slice(statement.pos, statement.end) + '\0';
 			visitBlock(statement);
 		}
@@ -634,7 +759,7 @@ function collectScope(file: ts.SourceFile) {
 			}
 			const named = clause.namedBindings;
 			if (named && ts.isNamespaceImport(named)) {
-				bindings.set(named.name, { specifier, name: '*' });
+				bindings.set(named.name, { specifier, name: ALL });
 			}
 			else if (named) {
 				for (const element of named.elements) {
@@ -647,15 +772,35 @@ function collectScope(file: ts.SourceFile) {
 			bindings.set(
 				statement.name,
 				ts.isExternalModuleReference(reference) && ts.isStringLiteral(reference.expression)
-					? { specifier: reference.expression.text, name: '*' }
+					? { specifier: reference.expression.text, name: ALL }
 					: { name: statement.name.text },
 			);
 		}
 		else {
-			visitDeclarations(statement);
+			visitDeclarations(statement, name => bindings.set(name, { name: name.text }));
 		}
 	}
 	return { hash: hash(text), specifiers, bindings, used };
+}
+
+function isBlock(statement: ts.Statement): statement is ts.ModuleDeclaration {
+	return ts.isModuleDeclaration(statement) && (ts.isStringLiteral(statement.name) || statement.name.text === 'global');
+}
+
+// The declarations of a statement that belong to the module's scope; a
+// `var` in a nested statement is also one.
+function visitDeclarations(node: ts.Node, declare: (name: ts.Identifier) => void): void {
+	if (
+		(ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isFunctionDeclaration(node)
+			|| ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)
+			|| ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node))
+		&& node.name && ts.isIdentifier(node.name)
+	) {
+		declare(node.name);
+	}
+	if (!ts.isFunctionLikeDeclaration(node) && !ts.isClassLikeDeclaration(node) && !ts.isModuleDeclaration(node)) {
+		node.forEachChild(child => visitDeclarations(child, declare));
+	}
 }
 
 // The declaration emit of each file, and its signature: a hash of the
@@ -710,32 +855,61 @@ function getDeclarations(api: API, project: Project, fileNames: string[]) {
 	return result;
 }
 
-// Parses the declaration emit of each file and reads the module specifiers
-// it names, keyed like `FileInfo.references`, and for `withNames` files
-// its names. A file with more than one output gets none.
-function readDeclarations(
+// Identifiers of a source declaration that can reference a top-level name,
+// and the module specifiers it names.
+interface Unit {
+	nodes: ts.Identifier[];
+	// Names referenced without the checker's help, e.g. `{ a }`.
+	names: Set<string>;
+	specifiers: [specifier: string, key: string][];
+}
+
+// The names of each module: per export, per top-level declaration and import,
+// and for `export *`. A declaration's hash is its text in the declaration
+// emit; what it references is resolved by the checker in the source. Files
+// whose exports can't be read this way get none (see `createGraph`).
+function getNames(
 	api: API,
-	entries: readonly (readonly [fileName: string, declaration: Declaration[]])[],
-	withNames: (fileName: string) => boolean,
+	project: Project,
+	entries: [fileName: string, declaration: Declaration[] | undefined][],
+	infos: Map<string, FileInfo>,
+	cache: CacheData,
 ) {
-	const result = new Map<string, DeclarationInfo>();
-	const outputs = entries.flatMap(([fileName, declaration]) =>
-		declaration.map(output => ({ fileName, output, names: declaration.length === 1 && withNames(fileName) }))
-	);
-	for (let i = 0; i < outputs.length; i += CHUNK_SIZE) {
-		const chunk = outputs.slice(i, i + CHUNK_SIZE);
-		const leases = api.batch(...chunk.map(({ output }) => api.createSourceFile.gen(output.fileName, output.text)));
+	const { program, checker } = project;
+	const result = new Map<string, Record<string, string[]> | undefined>();
+	const named = entries.filter(([fileName, declaration]) => {
+		const info = infos.get(fileName);
+		const named = declaration?.length === 1 && !!info && !(info.global && !info.scope)
+			&& !/\.(?:[cm]?jsx?|json)$/.test(fileName);
+		if (!named) {
+			result.set(fileName, undefined);
+		}
+		return named;
+	});
+	for (let i = 0; i < named.length; i += CHUNK_SIZE) {
+		const chunk = named.slice(i, i + CHUNK_SIZE);
+		const files = api.batch(...chunk.map(([fileName]) => program.getSourceFile.gen(fileName)));
+		const outputs = chunk.map(([, declaration], j) => files[j]?.isDeclarationFile ? undefined : declaration![0]);
+		const parsed = outputs.flatMap(output => output ? [output] : []);
+		const leases = api.batch(...parsed.map(output => api.createSourceFile.gen(output.fileName, output.text)));
 		try {
-			leases.forEach(({ sourceFile: file }, j) => {
-				const { fileName, names } = chunk[j];
-				let entry = result.get(fileName);
-				if (!entry) {
-					result.set(fileName, entry = { specifiers: [] });
+			const emits = new Map(parsed.map((output, j) => [output, leases[j].sourceFile]));
+			const sources = files.map(file => file && collectSource(file));
+			const requests = sources.filter(source => !!source?.nodes.length);
+			const resolved = new Map(
+				api.batch(...requests.map(source => checker.getSymbolAtLocation.gen(source!.nodes)))
+					.map((symbols, j) => [requests[j], symbols]),
+			);
+			chunk.forEach(([fileName], j) => {
+				const file = files[j];
+				const source = sources[j];
+				const emit = outputs[j] ? emits.get(outputs[j]) : file;
+				if (!file || !source || !emit) {
+					result.set(fileName, undefined);
+					return;
 				}
-				entry.specifiers.push(...getReferencedSpecifiers(file));
-				if (names) {
-					entry.names = getNames(file);
-				}
+				resolveUnits(source, resolved.get(source));
+				result.set(fileName, readNames(fileName, file, emit, source, infos.get(fileName)!, cache.graph[fileName].deps));
 			});
 		}
 		finally {
@@ -745,201 +919,449 @@ function readDeclarations(
 	return result;
 }
 
-function getReferencedSpecifiers(file: ts.SourceFile) {
-	return [
-		...file.imports.map(specifier => (specifier as ts.StringLiteral).text),
-		// Names inside an augmentation resolve in the augmented module.
-		...file.moduleAugmentations.flatMap(name => ts.isStringLiteral(name) ? [name.text] : []),
-		...file.typeReferenceDirectives.map(ref => ref.fileName),
-		...file.referencedFiles.map(ref => ref.fileName),
-	];
-}
-
-// For each export, each top-level declaration, and `export *` together:
-// a hash of the statements it reaches through the names they mention, and
-// the module specifiers those statements name. Names are matched by text,
-// so a property or a parameter named like a declaration only reaches more.
-// Augmentation blocks are left out; their changes and what they use are
-// checked for the file itself.
-function getNames(file: ts.SourceFile) {
-	const declared = new Map<string, ts.Statement[]>();
-	const exported = new Map<string, ts.Statement[]>();
-	const stars: ts.Statement[] = [];
-	const localExports: [name: string, local: string, statement: ts.Statement][] = [];
-	// e.g. a side-effect import; reached from every name.
-	const shared: ts.Statement[] = [];
-	const add = (map: Map<string, ts.Statement[]>, name: string, statement: ts.Statement) => {
-		let statements = map.get(name);
-		if (!statements) {
-			map.set(name, statements = []);
+// The top-level declarations and imports of a module's source, and the
+// identifiers of each declaration that can reference one of them. Function
+// bodies with a return type and initializers with a type don't reach the
+// declared types, so they are skipped.
+function collectSource(file: ts.SourceFile) {
+	const units = new Map<string, Unit[]>();
+	const imports = new Map<string, [specifier: string, name: string]>();
+	const bindings: ts.Identifier[] = [];
+	const attributed = new Set<ts.Node>();
+	const newUnit = (): Unit => ({ nodes: [], names: new Set(), specifiers: [] });
+	// Other statements, e.g. `f.x = 1`, which adds to `f`'s declaration.
+	const shared = newUnit();
+	let assignment: Unit | undefined;
+	const walks: [ts.Node, Unit][] = [];
+	const declare = (name: string, unit: Unit, node?: ts.Identifier) => {
+		if (node) {
+			bindings.push(node);
 		}
-		statements.push(statement);
+		let list = units.get(name);
+		if (!list) {
+			units.set(name, list = []);
+		}
+		list.push(unit);
 	};
-	const addBindings = (name: ts.BindingName | undefined, statement: ts.Statement, isExported: boolean) => {
-		if (!name) {
-			return;
-		}
+	const declareBindings = (name: ts.BindingName, unit: Unit) => {
 		if (ts.isIdentifier(name)) {
-			add(declared, name.text, statement);
-			if (isExported) {
-				add(exported, name.text, statement);
-			}
+			declare(name.text, unit, name);
 			return;
 		}
 		for (const element of name.elements) {
-			if (!ts.isOmittedExpression(element)) {
-				addBindings(element.name, statement, isExported);
+			if (!ts.isOmittedExpression(element) && element.name) {
+				declareBindings(element.name, unit);
 			}
 		}
 	};
 	for (const statement of file.statements) {
-		const modifiers = (statement as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
-		const isExported = !!modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword);
-		const isDefault = !!modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword);
-		if (ts.isModuleDeclaration(statement) && (ts.isStringLiteral(statement.name) || statement.name.text === 'global')) {
+		if (isBlock(statement) || ts.isNamespaceExportDeclaration(statement)) {
 			continue;
 		}
 		if (ts.isImportDeclaration(statement)) {
+			attributed.add(statement.moduleSpecifier);
 			const clause = statement.importClause;
-			if (!clause) {
-				shared.push(statement);
+			if (!clause || !ts.isStringLiteral(statement.moduleSpecifier)) {
 				continue;
 			}
+			const specifier = statement.moduleSpecifier.text;
 			if (clause.name) {
-				add(declared, clause.name.text, statement);
+				bindings.push(clause.name);
+				imports.set(clause.name.text, [specifier, 'default']);
 			}
-			const named = clause.namedBindings;
-			if (named && ts.isNamespaceImport(named)) {
-				add(declared, named.name.text, statement);
+			const namedBindings = clause.namedBindings;
+			if (namedBindings && ts.isNamespaceImport(namedBindings)) {
+				bindings.push(namedBindings.name);
+				imports.set(namedBindings.name.text, [specifier, ALL]);
 			}
-			else if (named) {
-				for (const element of named.elements) {
-					add(declared, element.name.text, statement);
+			else if (namedBindings) {
+				for (const element of namedBindings.elements) {
+					bindings.push(element.name);
+					imports.set(element.name.text, [specifier, (element.propertyName ?? element.name).text]);
 				}
 			}
 		}
 		else if (ts.isImportEqualsDeclaration(statement)) {
-			addBindings(statement.name, statement, isExported);
+			const reference = statement.moduleReference;
+			if (ts.isExternalModuleReference(reference)) {
+				attributed.add(reference.expression);
+				bindings.push(statement.name);
+				if (ts.isStringLiteral(reference.expression)) {
+					imports.set(statement.name.text, [reference.expression.text, ALL]);
+				}
+			}
+			else {
+				const unit = newUnit();
+				declare(statement.name.text, unit, statement.name);
+				walks.push([reference, unit]);
+			}
+		}
+		else if (ts.isExportDeclaration(statement)) {
+			if (statement.moduleSpecifier) {
+				attributed.add(statement.moduleSpecifier);
+			}
+		}
+		else if (ts.isExportAssignment(statement)) {
+			// `export default a` is read from the declaration emit.
+			if (!ts.isIdentifier(statement.expression)) {
+				walks.push([statement.expression, assignment ??= newUnit()]);
+			}
 		}
 		else if (ts.isVariableStatement(statement)) {
 			for (const declaration of statement.declarationList.declarations) {
-				addBindings(declaration.name, statement, isExported);
+				const unit = newUnit();
+				declareBindings(declaration.name, unit);
+				walks.push([declaration, unit]);
 			}
 		}
 		else if (
 			ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isInterfaceDeclaration(statement)
 			|| ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)
 		) {
-			if (statement.name && ts.isIdentifier(statement.name)) {
-				add(declared, statement.name.text, statement);
+			const unit = newUnit();
+			const name = statement.name && ts.isIdentifier(statement.name) ? statement.name : undefined;
+			declare(name?.text ?? 'default', unit, name);
+			walks.push([statement, unit]);
+		}
+		else {
+			visitDeclarations(statement, name => declare(name.text, shared, name));
+			walks.push([statement, shared]);
+		}
+	}
+
+	const topLevel = new Set([...units.keys(), ...imports.keys()]);
+	const candidates: [ts.Identifier, Unit][] = [];
+	const walk = (node: ts.Node, unit: Unit): void => {
+		if (ts.isIdentifier(node)) {
+			if (topLevel.has(node.text)) {
+				const parent = node.parent as ts.Node & { name?: ts.Node; propertyName?: ts.Node; label?: ts.Node };
+				if (ts.isShorthandPropertyAssignment(parent) || ts.isExportSpecifier(parent)) {
+					// The checker resolves these to the property or the export.
+					if (ts.isShorthandPropertyAssignment(parent) || node === (parent.propertyName ?? parent.name)) {
+						unit.names.add(node.text);
+					}
+				}
+				else if (parent.name !== node && parent.propertyName !== node && parent.label !== node) {
+					candidates.push([node, unit]);
+				}
 			}
-			if (isExported) {
-				const name = isDefault ? 'default' : statement.name && ts.isIdentifier(statement.name) && statement.name.text;
-				if (name) {
-					add(exported, name, statement);
+			return;
+		}
+		if (
+			ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)
+		) {
+			attributed.add(node.argument.literal);
+			let qualifier = node.qualifier;
+			while (qualifier && ts.isQualifiedName(qualifier)) {
+				qualifier = qualifier.left;
+			}
+			unit.specifiers.push([node.argument.literal.text, qualifier?.text ?? ALL]);
+			node.typeArguments?.forEach(child => walk(child, unit));
+			return;
+		}
+		if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+			const argument = node.arguments[0];
+			if (argument && ts.isStringLiteral(argument)) {
+				attributed.add(argument);
+				unit.specifiers.push([argument.text, ALL]);
+			}
+		}
+		if (ts.isPropertyAccessExpression(node)) {
+			walk(node.expression, unit);
+			return;
+		}
+		if (ts.isQualifiedName(node)) {
+			walk(node.left, unit);
+			return;
+		}
+		let skipped: ts.Node | undefined;
+		if (ts.isFunctionLikeDeclaration(node) && (node.type || ts.isSetAccessorDeclaration(node))) {
+			skipped = node.body;
+		}
+		else if (
+			(ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isParameterDeclaration(node))
+			&& node.type
+		) {
+			skipped = node.initializer;
+		}
+		node.forEachChild(child => {
+			if (child !== skipped) {
+				walk(child, unit);
+			}
+		});
+	};
+	for (const [node, unit] of walks) {
+		walk(node, unit);
+	}
+	for (const [node, unit] of candidates) {
+		unit.nodes.push(node);
+	}
+	return {
+		file,
+		units,
+		imports,
+		shared,
+		assignment,
+		attributed,
+		bindings,
+		candidates,
+		nodes: [...bindings, ...candidates.map(([node]) => node)],
+	};
+}
+
+type Source = ReturnType<typeof collectSource>;
+
+// Turns the identifiers of each unit into the names they resolve to. One the
+// checker resolves to nothing, or whose name's declarations it doesn't
+// resolve, counts as every top-level name of its text.
+function resolveUnits(source: Source, symbols: readonly ({ id: number } | undefined)[] | undefined) {
+	const byId = new Map<number, string>();
+	const unresolved = new Set<string>();
+	source.bindings.forEach((node, i) => {
+		const symbol = symbols?.[i];
+		if (symbol) {
+			byId.set(symbol.id, node.text);
+		}
+		else {
+			unresolved.add(node.text);
+		}
+	});
+	source.candidates.forEach(([node, unit], i) => {
+		const symbol = symbols?.[source.bindings.length + i];
+		const name = symbol && byId.get(symbol.id);
+		if (name !== undefined) {
+			unit.names.add(name);
+		}
+		else if (!symbol || unresolved.has(node.text)) {
+			unit.names.add(node.text);
+		}
+	});
+}
+
+function readNames(
+	fileName: string,
+	file: ts.SourceFile,
+	emit: ts.SourceFile,
+	source: Source,
+	info: FileInfo,
+	deps: string[],
+): Record<string, string[]> {
+	const encode = (specifier: string, key: string) => encodeRef(fileName, info.references, deps, specifier, key);
+	// A key that names the same target in any run, unlike the dep index.
+	const describe = (specifier: string, key: string) => `${info.references.get(specifier) ?? '?' + specifier}\0${key}`;
+	const addUnit = (unit: Unit, refs: Set<string>) => {
+		for (const name of unit.names) {
+			refs.add(LOCAL + name);
+		}
+		for (const [specifier, key] of unit.specifiers) {
+			const ref = encode(specifier, key);
+			if (ref !== undefined) {
+				refs.add(ref);
+			}
+		}
+	};
+	// What every declaration references: the other statements, and module
+	// specifiers and references no declaration accounts for.
+	const shared = new Set<string>();
+	addUnit(source.shared, shared);
+	for (const ref of [...file.typeReferenceDirectives, ...file.referencedFiles]) {
+		const encoded = encode(ref.fileName, ALL);
+		if (encoded !== undefined) {
+			shared.add(encoded);
+		}
+	}
+	for (const specifier of file.imports as unknown as ts.StringLiteral[]) {
+		if (!source.attributed.has(specifier)) {
+			const ref = encode(specifier.text, ALL);
+			if (ref !== undefined) {
+				shared.add(ref);
+			}
+		}
+	}
+	// A declaration the emit adds, e.g. `_default` for `export default f()`,
+	// references what `export default` / `export =` does, or, without
+	// one, every dep.
+	const emitted = new Set<string>();
+	if (source.assignment) {
+		addUnit(source.assignment, emitted);
+	}
+	else {
+		deps.forEach((_, i) => emitted.add(`${i}\0${ALL}`));
+	}
+
+	const texts = new Map<string, string[]>();
+	const exports = new Map<string, Set<string>>();
+	const stars: string[] = [];
+	const imports = new Map(source.imports);
+	const addText = (name: string, text: string) => {
+		let list = texts.get(name);
+		if (!list) {
+			texts.set(name, list = []);
+		}
+		list.push(text);
+	};
+	const addExport = (name: string, ...refs: (string | undefined)[]) => {
+		let set = exports.get(name);
+		if (!set) {
+			exports.set(name, set = new Set());
+		}
+		for (const ref of refs) {
+			if (ref !== undefined) {
+				set.add(ref);
+			}
+		}
+	};
+	for (const statement of emit.statements) {
+		const modifiers = (statement as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers;
+		const isExported = !!modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword);
+		const isDefault = !!modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword);
+		const text = emit.text.slice(statement.pos, statement.end);
+		if (isBlock(statement)) {
+			continue;
+		}
+		if (ts.isImportDeclaration(statement)) {
+			const clause = statement.importClause;
+			if (!clause || !ts.isStringLiteral(statement.moduleSpecifier)) {
+				continue;
+			}
+			const specifier = statement.moduleSpecifier.text;
+			if (clause.name && !imports.has(clause.name.text)) {
+				imports.set(clause.name.text, [specifier, 'default']);
+			}
+			const namedBindings = clause.namedBindings;
+			if (namedBindings && ts.isNamespaceImport(namedBindings)) {
+				if (!imports.has(namedBindings.name.text)) {
+					imports.set(namedBindings.name.text, [specifier, ALL]);
+				}
+			}
+			else if (namedBindings) {
+				for (const element of namedBindings.elements) {
+					if (!imports.has(element.name.text)) {
+						imports.set(element.name.text, [specifier, (element.propertyName ?? element.name).text]);
+					}
 				}
 			}
 		}
+		else if (ts.isImportEqualsDeclaration(statement)) {
+			const reference = statement.moduleReference;
+			if (ts.isExternalModuleReference(reference)) {
+				if (ts.isStringLiteral(reference.expression) && !imports.has(statement.name.text)) {
+					imports.set(statement.name.text, [reference.expression.text, ALL]);
+				}
+			}
+			else {
+				addText(statement.name.text, text);
+			}
+			if (isExported) {
+				addExport(statement.name.text, LOCAL + statement.name.text);
+			}
+		}
+		else if (ts.isVariableStatement(statement)) {
+			const list = statement.declarationList.declarations;
+			const prefix = list.length ? emit.text.slice(statement.pos, list[0].pos) : '';
+			for (const declaration of list) {
+				const names: string[] = [];
+				const collect = (name: ts.BindingName) => {
+					if (ts.isIdentifier(name)) {
+						names.push(name.text);
+						return;
+					}
+					for (const element of name.elements) {
+						if (!ts.isOmittedExpression(element) && element.name) {
+							collect(element.name);
+						}
+					}
+				};
+				collect(declaration.name);
+				for (const name of names) {
+					addText(name, prefix + emit.text.slice(declaration.pos, declaration.end));
+					if (isExported) {
+						addExport(name, LOCAL + name);
+					}
+				}
+			}
+		}
+		else if (
+			ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isInterfaceDeclaration(statement)
+			|| ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)
+		) {
+			const name = statement.name && ts.isIdentifier(statement.name) ? statement.name.text : 'default';
+			addText(name, text);
+			if (isExported) {
+				addExport(isDefault ? 'default' : name, LOCAL + name);
+			}
+		}
 		else if (ts.isExportDeclaration(statement)) {
+			const specifier = statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
+				? statement.moduleSpecifier.text
+				: undefined;
 			const clause = statement.exportClause;
 			if (!clause) {
-				stars.push(statement);
+				if (specifier !== undefined) {
+					stars.push(specifier);
+				}
 			}
 			else if (ts.isNamespaceExport(clause)) {
-				add(exported, clause.name.text, statement);
+				if (specifier !== undefined) {
+					addExport(clause.name.text, encode(specifier, ALL));
+				}
 			}
 			else {
 				for (const element of clause.elements) {
-					if (statement.moduleSpecifier) {
-						add(exported, element.name.text, statement);
-					}
-					else {
-						localExports.push([element.name.text, (element.propertyName ?? element.name).text, statement]);
-					}
+					const local = (element.propertyName ?? element.name).text;
+					addExport(element.name.text, specifier === undefined ? LOCAL + local : encode(specifier, local));
 				}
 			}
 		}
 		else if (ts.isExportAssignment(statement)) {
-			add(exported, statement.isExportEquals ? 'export=' : 'default', statement);
+			const name = statement.isExportEquals ? 'export=' : 'default';
+			if (ts.isIdentifier(statement.expression)) {
+				addExport(name, LOCAL + statement.expression.text);
+			}
+			else {
+				addText(name, text);
+				addExport(name, LOCAL + name);
+			}
+		}
+	}
+
+	const names = new Map<string, string[]>();
+	for (const name of new Set([...texts.keys(), ...source.units.keys()])) {
+		if (imports.has(name)) {
+			continue;
+		}
+		const refs = new Set(shared);
+		const units = source.units.get(name);
+		if (units) {
+			for (const unit of units) {
+				addUnit(unit, refs);
+			}
 		}
 		else {
-			shared.push(statement);
+			for (const ref of emitted) {
+				refs.add(ref);
+			}
 		}
+		refs.delete(LOCAL + name);
+		names.set(LOCAL + name, [hash(texts.get(name)?.join('\0') ?? ''), ...refs]);
 	}
-	// `export { a as b }` reaches what `a` does.
-	for (const [name, local, statement] of localExports) {
-		for (const declaration of declared.get(local) ?? [statement]) {
-			add(exported, name, declaration);
-		}
+	for (const [name, [specifier, key]] of imports) {
+		const ref = encode(specifier, key);
+		names.set(LOCAL + name, [hash(describe(specifier, key)), ...ref === undefined ? [] : [ref]]);
 	}
-
-	const fileSpecifiers = [
-		...file.typeReferenceDirectives.map(ref => ref.fileName),
-		...file.referencedFiles.map(ref => ref.fileName),
-	];
-	const mentions = new Map<ts.Statement, { names: Set<string>; specifiers: string[] }>();
-	const getMentions = (statement: ts.Statement) => {
-		let result = mentions.get(statement);
-		if (result) {
-			return result;
-		}
-		const names = new Set<string>();
-		const specifiers: string[] = [];
-		const visit = (node: ts.Node): void => {
-			if (ts.isIdentifier(node)) {
-				names.add(node.text);
-			}
-			else if (
-				(ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-				&& node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
-			) {
-				specifiers.push(node.moduleSpecifier.text);
-			}
-			else if (ts.isExternalModuleReference(node) && ts.isStringLiteral(node.expression)) {
-				specifiers.push(node.expression.text);
-			}
-			else if (
-				ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)
-			) {
-				specifiers.push(node.argument.literal.text);
-			}
-			node.forEachChild(visit);
+	for (const [name, refs] of exports) {
+		// Refs within the file are the same in any run.
+		const describeRef = (ref: string) => {
+			const separator = ref.indexOf('\0');
+			return separator <= 0 ? ref : `${deps[+ref.slice(0, separator)]}\0${ref.slice(separator + 1)}`;
 		};
-		visit(statement);
-		mentions.set(statement, result = { names, specifiers });
-		return result;
-	};
-	const reach = (statements: ts.Statement[]): NameInfo => {
-		const seen = new Set<ts.Statement>();
-		const queue = [...statements, ...shared];
-		while (queue.length) {
-			const statement = queue.pop()!;
-			if (seen.has(statement)) {
-				continue;
-			}
-			seen.add(statement);
-			for (const name of getMentions(statement).names) {
-				queue.push(...declared.get(name) ?? []);
-			}
-		}
-		const reached = [...seen].sort((a, b) => a.pos - b.pos);
-		return {
-			hash: hash(reached.map(statement => file.text.slice(statement.pos, statement.end)).join('\0')),
-			specifiers: [...new Set([...fileSpecifiers, ...reached.flatMap(statement => getMentions(statement).specifiers)])],
-		};
-	};
-
-	const names = new Map<string, NameInfo>();
-	for (const [name, statements] of exported) {
-		names.set(name, reach(statements));
-	}
-	for (const [name, statements] of declared) {
-		names.set(LOCAL + name, reach(statements));
+		names.set(name, [hash([...refs].map(describeRef).sort().join('\0')), ...refs]);
 	}
 	if (stars.length) {
-		names.set(STAR, reach(stars));
+		const refs = stars.map(specifier => encode(specifier, ALL)).filter(ref => ref !== undefined);
+		names.set(STAR, [hash(stars.map(specifier => describe(specifier, ALL)).sort().join('\0')), ...new Set(refs)]);
 	}
-	return names;
+	return Object.fromEntries(names);
 }
 
 function updateContentMappersHash(api: API, hash: crypto.Hash, configFile: string) {

@@ -31,7 +31,7 @@ const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v8';
+const CACHE_FORMAT_VERSION = 'v9';
 
 export interface CacheData {
 	version: string;
@@ -52,15 +52,25 @@ export interface GraphNode {
 	signature?: string;
 	// Program files outside `node_modules` this file imports or references.
 	deps: string[];
+	// Per dep, the export names this file imports from it; `\0\0` for the
+	// whole module.
+	uses?: string[][];
 	// Declares globals or augments modules, so a signature change can affect
 	// any file.
 	global: boolean;
 	// Hash of the `declare global` / `declare module '...'` blocks of a
 	// global module; a script or a UMD module has none.
 	scope?: string;
-	// Hash of what each name reaches in the declaration emit, for files
-	// whose names the blocks of a global module use.
-	names?: Record<string, string>;
+	// What the blocks of a global module use, as references (see `names`).
+	scopeRefs?: string[];
+	// For a module other files depend on, per export name, per top-level
+	// declaration or import (`\0` + its name) and for `export *` (`\0*`):
+	// the hash of its declaration emit, then what it references. A reference
+	// is a key of the same file, `<i>\0<export name>` for an export of
+	// `deps[i]` (`<i>\0\0\0` for the whole module), or `''` for a module
+	// specifier that did not resolve. An empty hash marks one whose types
+	// changed through a reference since it was emitted.
+	names?: Record<string, string[]>;
 }
 
 // Diagnostics after plugins ran, as the CLI reports them.

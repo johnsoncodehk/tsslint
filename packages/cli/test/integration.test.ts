@@ -734,6 +734,65 @@ function addGraphFiles(dir: string, files: Record<string, string>) {
 	}
 }
 
+// ── Test 17 (by symbol): a name depends on the declarations it reaches ──
+//
+// m.ts's block uses `homePath` from hp.ts, whose type is `Dir` from
+// types.ts, and its own `Local`, which has a property named like m.ts's
+// `other`. Changing `Other`, `other` or `hp.other` reaches neither; changing
+// `Dir`, two modules away, reaches the block through `homePath`.
+{
+	const { dir, markerPath, files } = makeGraphFixture();
+	const types = path.join(dir, 'types.ts');
+	const hp = path.join(dir, 'hp.ts');
+	const typesText = (home: string, other: string) => `export type Dir = ${home};\nexport type Other = ${other};\n`;
+	const hpText = (other: string) =>
+		`import type { Dir, Other } from './types';\n`
+		+ `export function homePath(): Dir {\n\treturn '';\n}\n`
+		+ `export function other(): ${other} {\n\treturn 1;\n}\n`;
+	const m = (other: string) =>
+		`import { homePath } from './hp';\n`
+		+ `export const other = ${other};\n`
+		+ `export interface Local {\n\tother: number;\n}\n`
+		+ `declare module './t' {\n\tinterface Extra {\n\t\thp: typeof homePath;\n\t\tl: Local;\n\t}\n}\n`;
+	const all = 'a.ts,b.ts,c.ts,g.d.ts,hp.ts,m.ts,r.ts,t.ts,types.ts,u.ts,user.ts';
+	try {
+		fs.writeFileSync(files.m, m('1'));
+		addGraphFiles(dir, {
+			'types.ts': typesText('string', 'number'),
+			'hp.ts': hpText('Other'),
+			'user.ts': `import { homePath } from './hp';\nexport const h = homePath();\n`,
+			't.ts': `export const t = 1;\n`,
+		});
+		runCli(dir);
+
+		editFile(types, typesText('string', 'number | boolean'));
+		const unreached = lintedDuring(markerPath, () => runCli(dir));
+		check(
+			'a declaration no used name reaches re-lints only its module and importers',
+			unreached === 'hp.ts,types.ts',
+			unreached,
+		);
+
+		editFile(files.m, m(`'x'`));
+		const property = lintedDuring(markerPath, () => runCli(dir));
+		check('a declaration named like a used property re-lints only its module', property === 'm.ts', property);
+
+		editFile(hp, hpText('Other | undefined'));
+		const sibling = lintedDuring(markerPath, () => runCli(dir));
+		check('an export no importer uses re-lints only its module', sibling === 'hp.ts', sibling);
+
+		editFile(types, typesText('string | undefined', 'number | boolean'));
+		const deep = lintedDuring(markerPath, () => runCli(dir));
+		check('a declaration a used name reaches two modules away re-lints everything', deep === all, deep);
+
+		const warm = lintedDuring(markerPath, () => runCli(dir));
+		check('warm run after it lints nothing', warm === '', warm);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Test 18: a workspace package's source behind a symlink ──────────────
 //
 // The program reaches core/lib.ts through node_modules, so it emits no
