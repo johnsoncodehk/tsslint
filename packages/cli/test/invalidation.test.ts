@@ -224,7 +224,8 @@ checkReference(
 		const c = path.join(dir, 'c.ts');
 		fs.writeFileSync(b, 'export const v = 1;\n');
 		fs.writeFileSync(c, `import { v } from './b';\n`);
-		const declaration = `/**\n * Like \`import { y } from './x'\` or \`require('./y')\`.\n * /// <reference path="./z" />\n */\n`
+		const declaration =
+			`/**\n * Like \`import { y } from './x'\` or \`require('./y')\`.\n * /// <reference path="./z" />\n */\n`
 			+ `export declare const v: "from './x'" | 'import("./w")';\n`;
 		const files = new Map<string, StubFile>([
 			[b, { text: fs.readFileSync(b, 'utf8'), imports: [], declaration }],
