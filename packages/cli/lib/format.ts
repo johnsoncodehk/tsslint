@@ -36,7 +36,11 @@ function convert(diagnostic: Diagnostic | RelatedInformation): TSDiagnostic | un
 	if (!file || start === undefined || length === undefined) {
 		return { ...base, pos: 0, end: 0 };
 	}
-	const range = contentMapper.toOriginalRange(file, start, start + length);
+	// Compiler diagnostics of a content-mapped file already come back in
+	// original coordinates; only rule reports are in transformed ones.
+	const range = 'source' in diagnostic && diagnostic.source === 'tsslint'
+		? contentMapper.toOriginalRange(file, start, start + length)
+		: { start, end: start + length };
 	if (!range) {
 		return undefined;
 	}

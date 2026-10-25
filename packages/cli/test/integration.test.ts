@@ -637,6 +637,37 @@ function transform(content) {
 	}
 }
 
+// ── Test 14 (content mapper): compiler diagnostics are mapped once ─────
+//
+// `getSemanticDiagnostics` on a content-mapped file already returns
+// original positions.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	writeMapperProject(dir, MAPPER_SERVER);
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig, createDiagnosticsPlugin } from ${importPath(configModule)};\n`
+			+ `export default defineConfig({ plugins: [createDiagnosticsPlugin('semantic')] });\n`,
+	);
+	fs.writeFileSync(
+		path.join(dir, 'App.vue'),
+		['<template>', '  <div></div>', '</template>', '<script lang="ts">', 'const s: string = 1;', '</script>', ''].join(
+			'\n',
+		),
+	);
+	try {
+		const out = stripAnsi(runCli(dir).stdout);
+		check(
+			'compiler diagnostic points at App.vue:5:7',
+			out.includes('App.vue:5:7') && out.includes(`Type 'number' is not assignable to type 'string'.`),
+			out,
+		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {
