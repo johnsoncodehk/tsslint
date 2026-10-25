@@ -72,27 +72,26 @@ export function invalidate(
 		}
 	}
 
-	let infos: Map<string, FileInfo> | undefined;
 	if (cache.globalKey !== globalKey) {
 		return rebuild();
 	}
 	if (!changed.length) {
 		return;
 	}
-	infos = analyze(api, program, changed, ownFiles);
+	const infos = analyze(api, program, changed, ownFiles);
 	if (
 		changed.some(fileName => {
 			const node = cache.graph[fileName];
-			return !node || node.global !== infos!.get(fileName)!.global;
+			return !node || node.global !== infos.get(fileName)!.global;
 		})
 	) {
-		return rebuild();
+		return rebuild(infos);
 	}
 
 	const oldSignatures = new Map<string, string | undefined>();
 	for (const fileName of changed) {
 		oldSignatures.set(fileName, cache.graph[fileName]?.signature);
-		setNode(cache, fileName, ownFiles.get(fileName)!, infos!.get(fileName)!);
+		setNode(cache, fileName, ownFiles.get(fileName)!, infos.get(fileName)!);
 	}
 	const importers = getImporters(cache);
 	const changedSet = new Set(changed);
@@ -105,10 +104,10 @@ export function invalidate(
 	while (queue.length) {
 		const wave = [...new Set(queue)].filter(fileName => !signatureChanged.has(fileName));
 		queue = [];
-		const unanalyzed = wave.filter(fileName => !infos!.has(fileName));
+		const unanalyzed = wave.filter(fileName => !infos.has(fileName));
 		if (unanalyzed.length) {
 			for (const [fileName, info] of analyze(api, program, unanalyzed, ownFiles)) {
-				infos!.set(fileName, info);
+				infos.set(fileName, info);
 			}
 		}
 		const unemitted = wave.filter(fileName => !signatures.has(fileName));
@@ -142,7 +141,7 @@ export function invalidate(
 
 	for (const fileName of signatureChanged) {
 		if (cache.graph[fileName].global) {
-			return rebuild();
+			return rebuild(infos);
 		}
 	}
 	for (const [fileName, entry] of Object.entries(cache.files)) {
@@ -164,12 +163,12 @@ export function invalidate(
 		delete cache.files[fileName];
 	}
 
-	function rebuild() {
+	function rebuild(known?: Map<string, FileInfo>) {
 		cache.globalKey = globalKey;
 		cache.files = {};
 		cache.graph = {};
 		const all = [...ownFiles.keys()];
-		const allInfos = analyze(api, program, all, ownFiles, infos);
+		const allInfos = analyze(api, program, all, ownFiles, known);
 		for (const fileName of all) {
 			setNode(cache, fileName, ownFiles.get(fileName)!, allInfos.get(fileName)!);
 		}
@@ -189,7 +188,7 @@ export function invalidate(
 		}
 		// The text can stay the same while the types it names change, e.g.
 		// `typeof import("./a").f` after `f`'s return type changed in `a`.
-		const references = infos!.get(fileName)!.references;
+		const references = infos.get(fileName)!.references;
 		for (const specifier of getReferencedSpecifiers(declaration)) {
 			const target = references.get(specifier);
 			if (target === undefined || (target !== null && signatureChanged.has(target))) {
