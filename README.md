@@ -82,8 +82,6 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
-Touch `program` / `checker` only when you need type information — rules that don't are cached aggressively (see [Caching](#caching)).
-
 ### Severity, fixes, refactors
 
 `report()` returns a chainable reporter:
@@ -123,16 +121,16 @@ defineConfig({
 
 ### Caching
 
-Diagnostics are cached on disk under `os.tmpdir()/tsslint-cache/` in two layers, picked per rule:
+The CLI caches each file's diagnostics on disk under `os.tmpdir()/tsslint-cache/`, and re-lints a file only when its result may have changed, the way `tsc --incremental` decides what to re-check:
 
-- **Layer 1** — invalidated by the linted file's mtime. Used for rules that don't read `ctx.program` or `ctx.checker` (purely syntactic).
-- **Layer 2** — invalidated by a program fingerprint (compiler options plus the name, mtime, and size of every file in the program, including `.d.ts`). Any change re-runs type-aware rules on every file. Used for rules that touch `ctx.program` or `ctx.checker`. The first time a rule reads either it's classified type-aware and stays type-aware across sessions.
+- the file itself changed (mtime or size), or
+- a file it imports or references changed its declaration signature (its `.d.ts` emit). Editing a function body re-lints only that file; changing an exported type re-lints its importers, and keeps going through files whose own signature changes as a result (e.g. re-exports).
 
-A diagnostic whose correctness depends on inputs neither layer tracks — external resources, env vars, sibling files the rule reads directly via `fs` — should opt out per-diagnostic via `.withoutCache()` on the reporter. The diagnostic still surfaces on the current run; it just isn't written to disk, so the next warm hit on this file won't replay it (the rule has to re-run to surface it again).
+Everything is re-linted when a change can affect any file: compiler options or a tsconfig file, the content mappers, `tsslint.config.ts` or any module it imports, files added to or removed from the program, files under `node_modules`, or a file that declares globals (a script without imports or exports, `declare global`, `declare module '...'`).
 
-For diagnostics that depend on cross-file types, prefer reading `ctx.checker` once instead — that re-classifies the rule type-aware and layer 2 handles invalidation properly.
+Rules can read `ctx.program` and `ctx.checker` freely; whatever they reach that way is tracked. A rule whose finding depends on inputs the cache can't see — external resources, env vars, files it reads directly via `fs` — should call `.withoutCache()` on the reporter. The file it reported on is then linted again on every run.
 
-Pass `--force` to the CLI to ignore the cache. `--list-rules` prints each rule's classification (type-aware vs syntactic) after the run.
+Pass `--force` to the CLI to ignore the cache.
 
 ### Debugging
 
@@ -166,7 +164,6 @@ Flags:
 | `--fix` | Apply fixes |
 | `--force` | Ignore cache |
 | `--failures-only` | Only print diagnostics that affect exit code |
-| `--list-rules` | Print each rule's classification (syntactic / type-aware) |
 | `-h`, `--help` | |
 
 TSSLint produces diagnostics and edits — it does not format. Run dprint or Prettier after `--fix`.

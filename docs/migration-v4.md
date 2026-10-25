@@ -40,9 +40,6 @@ export default defineRule(({ typescript: ts, file, report }) => {
 });
 ```
 
-Reading `program` or `checker` classifies a rule as type-aware (see
-[Caching](#5-caching)).
-
 Results use TypeScript 7.1's own types. A rule report is a `Diagnostic` from
 `typescript/sync` (`pos`, `end`, `text`) plus a `ruleId`, and `withFix` /
 `withRefactor` callbacks return `TextEdit[]` (`{ pos, end, newText }`) for the
@@ -69,10 +66,15 @@ See [Framework projects](#framework-projects).
 
 The cache format is bumped, so the first v4 run re-lints everything.
 
-Layer 2 (type-aware rules) is now keyed on a program fingerprint: compiler
-options plus every source file's name, mtime, and size. Any change to a file in
-the program re-runs type-aware rules on every file. v3 used TypeScript's
-`BuilderProgram` affected-file diff, which TypeScript 7 does not expose.
+Rules are no longer split into syntactic and type-aware. Each file's result is
+reused until the file changes or a file it depends on changes its declaration
+signature, like `tsc --incremental`; changes that can affect any file (compiler
+options, config and rule modules, globals) re-lint everything. See
+[Caching](../README.md#caching). `--list-rules` is removed, since there is no
+classification left to print.
+
+`Reporter.withoutCache()` now keeps the whole file out of the cache instead of
+dropping only the marked diagnostic.
 
 ### 6. ESLint interop
 
