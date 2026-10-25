@@ -29,7 +29,6 @@ Options:
   --fix                         Apply automatic fixes
   --force                       Ignore cache (re-lint every file)
   --failures-only               Only print errors and messages (skip warnings and suggestions)
-  --list-rules                  After linting, print each rule's classification (syntactic / type-aware)
   --debug-estree                After linting, print the actual ESTree node types converted by @tsslint/compat-eslint and their counts
   -h, --help                    Show this help message
 
@@ -118,10 +117,8 @@ class Project {
 			colors.gray(`(${this.fileNames.length}${filteredLengthDiff ? `, skipped ${filteredLengthDiff}` : ''})`)
 		}`;
 
-		// Load layer-1 cache unless --force was passed. The cache file path
-		// key includes tsslint version, TS version, tsconfig, and configFile
-		// mtime+size — anything that changes the rule set or the toolchain
-		// mints a fresh file. See packages/cli/lib/cache.ts.
+		// Load the cache unless --force was passed; `worker.setup` drops
+		// whatever is no longer valid. See packages/cli/lib/invalidation.ts.
 		if (!process.argv.includes('--force')) {
 			this.cacheData = cache.loadCache(this.tsconfig, this.configFile, tsVersion);
 		}
@@ -290,40 +287,6 @@ class Project {
 
 	renderer.summary(summaryLines);
 
-	if (process.argv.includes('--list-rules')) {
-		// Derive from the per-project cacheData: any rule with an entry
-		// in `ruleModes` is type-aware; the rest came up as cached
-		// entries on per-file maps without being classified, so they
-		// ran as syntactic. Output is grouped + alphabetised so it's
-		// stable across runs and easy to diff.
-		const typeAware = new Set<string>();
-		const syntactic = new Set<string>();
-		for (const project of projects) {
-			for (const ruleId of Object.keys(project.cacheData.ruleModes)) {
-				typeAware.add(ruleId);
-			}
-			for (const file of Object.values(project.cacheData.files)) {
-				for (const ruleId of Object.keys(file.rules)) {
-					if (!project.cacheData.ruleModes[ruleId]) syntactic.add(ruleId);
-				}
-			}
-		}
-		// A rule classified type-aware in any project is type-aware
-		// everywhere — drop it from the syntactic side to avoid
-		// double-listing the same id across multi-project runs.
-		for (const id of typeAware) syntactic.delete(id);
-
-		// Always emit both headers — even with count 0 — so the format
-		// stays consistent across runs (otherwise a project with only
-		// type-aware rules looks visually different from one with both).
-		const lines: string[] = [];
-		lines.push(colors.cyan('type-aware') + colors.gray(` (${typeAware.size})`));
-		for (const id of [...typeAware].sort()) lines.push('  ' + id);
-		lines.push(colors.cyan('syntactic') + colors.gray(` (${syntactic.size})`));
-		for (const id of [...syntactic].sort()) lines.push('  ' + id);
-		for (const l of lines) renderer.info(l);
-	}
-
 	if (process.argv.includes('--debug-estree')) {
 		// compat-eslint's lazy-estree publishes a per-`type` counter on
 		// globalThis under Symbol.for('@tsslint/compat-eslint:node-type-counts')
@@ -406,8 +369,7 @@ class Project {
 		const setupResult = await worker.setup(
 			project.configFile!,
 			project.tsconfig,
-			Object.keys(project.cacheData.ruleModes),
-			project.cacheData.programFingerprint,
+			project.cacheData,
 		);
 		if (setupResult !== true) {
 			renderer.diagnostic(formatConfigError(project.configFile!, setupResult));
@@ -420,45 +382,22 @@ class Project {
 		while (project.currentFileIndex < project.fileNames.length) {
 			const fileName = project.fileNames[project.currentFileIndex++];
 
-			const fileStat = fs.statSync(fileName, { throwIfNoEntry: false });
-			if (!fileStat) {
+			if (!fs.statSync(fileName, { throwIfNoEntry: false })) {
 				continue;
 			}
 
-			let fileCache = project.cacheData.files[fileName];
-			if (!fileCache) {
-				fileCache = { mtime: fileStat.mtimeMs, rules: {} };
-				project.cacheData.files[fileName] = fileCache;
-			}
-			else if (fileCache.mtime === fileStat.mtimeMs && Object.keys(fileCache.rules).length) {
-				// File text untouched since the prev session AND we have at
-				// least one rule's diagnostics cached for it — treat as a
-				// warm hit for the `--force` summary hint. Layer 2 might
-				// still re-run type-aware rules if the program moved,
-				// but the user-visible signal here is just "cache had
-				// something for this file."
+			if (project.cacheData.files[fileName]) {
 				cached++;
 			}
 
-			const diagnostics = worker.lint(
-				fileName,
-				process.argv.includes('--fix'),
-				fileCache,
-				fileStat.mtimeMs,
-			);
+			const diagnostics = worker.lint(fileName, process.argv.includes('--fix'));
 
 			if (diagnostics.length) {
-				hasFix ||= worker.hasCodeFixes(fileName);
+				// A cache hit didn't run any rule this session, so its fixes
+				// are only known from the cache entry.
+				hasFix ||= worker.hasCodeFixes(fileName) || !!project.cacheData.files[fileName]?.hasFix;
 
 				for (const diagnostic of diagnostics) {
-					// Cache-hit diagnostics come back without their rule
-					// having registered a fix this session — `hasCodeFixes`
-					// only sees fresh runs. Fall back to the cached
-					// per-rule `hasFix` flag for the diagnostic's rule.
-					if (diagnostic.ruleId !== undefined) {
-						hasFix ||= !!fileCache.rules[diagnostic.ruleId]?.hasFix;
-					}
-
 					const output = format.formatDiagnostic(diagnostic, worker.getSourceFile(fileName)!, worker.getApi());
 					if (output === undefined) {
 						continue;
@@ -492,16 +431,6 @@ class Project {
 			processed++;
 		}
 
-		// Snapshot the linter's runtime classification back into the cache
-		// file's `ruleModes`. Next session reads this and seeds the linter
-		// via `initialTypeAwareRules` so rules are classified correctly
-		// from the first invocation, before the runtime probe re-runs.
-		const typeAware = worker.getTypeAwareRules();
-		project.cacheData.ruleModes = {};
-		for (const ruleId of typeAware) {
-			project.cacheData.ruleModes[ruleId] = 'type-aware';
-		}
-		project.cacheData.programFingerprint = worker.getFingerprint();
 		cache.saveCache(project.tsconfig, project.configFile!, tsVersion, project.cacheData);
 
 		await startWorker();

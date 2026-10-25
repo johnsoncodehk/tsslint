@@ -58,20 +58,11 @@ jobs:
       - name: TS-AST scan
         run: node packages/compat-eslint/test/ts-ast-scan.test.js
 
-      # Core: type-aware rule probe (foundation for layer 1 cache).
-      - name: Core probe
-        run: node packages/core/test/probe.test.js
-
-      # Core: skip-rules option + hasFixForDiagnostic API (the surface
-      # the CLI cache layer uses).
-      - name: Core skip-rules
-        run: node packages/core/test/skip-rules.test.js
-
       # CLI: cache file load / save / atomic write / version key.
       - name: CLI cache module
         run: node packages/cli/test/cache.test.js
 
-      # CLI: cache-flow — layer 1 cache integration with the linter.
+      # CLI: cache-flow — per-file cache integration with the linter.
       - name: CLI cache-flow
         run: node packages/cli/test/cache-flow.test.js
 

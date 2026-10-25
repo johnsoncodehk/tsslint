@@ -1,8 +1,8 @@
 // CLI integration tests. Spawns the local tsslint binary against a
 // throwaway fixture and inspects diagnostics + cache state on disk.
 // These complement the in-process cache-flow unit tests by exercising
-// the actual lint loop, mtime check, --force gate, and cache file
-// load/save round-trip.
+// the actual lint loop, dependency-based invalidation, --force gate, and
+// cache file load/save round-trip.
 //
 // Run via:
 //   node packages/cli/test/integration.test.js
@@ -109,18 +109,30 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	return null;
 }
 
+let mtimeOffset = 0;
+// Coarse filesystem timestamps could leave an edit with the same mtime.
+function bumpMtime(fileName: string) {
+	const t = new Date(Date.now() + 60_000 * ++mtimeOffset);
+	fs.utimesSync(fileName, t, t);
+}
+
+function editFile(fileName: string, text: string) {
+	fs.writeFileSync(fileName, text);
+	bumpMtime(fileName);
+}
+
 // ── Test 1: cold run produces diagnostic + writes cache ─────────────────
 {
 	const dir = makeFixture();
+	const fixturePath = path.join(dir, 'fixture.ts');
 	try {
 		const r = runCli(dir);
 		check('cold run included no-console diagnostic', r.stdout.includes('no-console'));
-		const data = readCacheForFixture(dir) as { files: any };
+		const data = readCacheForFixture(dir) as any;
 		check('cache file written for the fixture', !!data);
-		check(
-			'cache has rule entry for fixture',
-			!!data?.files?.[path.join(dir, 'fixture.ts')]?.rules?.['no-console/default'],
-		);
+		check("cache has the fixture's diagnostic", data?.files?.[fixturePath]?.diagnostics?.length === 1);
+		check("cache has the fixture's graph node", typeof data?.graph?.[fixturePath]?.mtime === 'number');
+		check('cache has a global key', typeof data?.globalKey === 'string' && data.globalKey.length > 0);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
@@ -147,19 +159,16 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	try {
 		runCli(dir);
 		const before = readCacheForFixture(dir) as any;
-		const beforeMtime = before?.files?.[fixturePath]?.mtime;
+		const beforeMtime = before?.graph?.[fixturePath]?.mtime;
 		check('cold run wrote a mtime', typeof beforeMtime === 'number');
 
-		// Edit the file. Bump mtime explicitly so coarse filesystem
-		// timestamps don't cause a flaky "same mtime" hit.
 		fs.writeFileSync(fixturePath, `console.warn('changed');\n`);
-		const t = new Date(Date.now() + 60_000);
-		fs.utimesSync(fixturePath, t, t);
+		bumpMtime(fixturePath);
 
 		const r2 = runCli(dir);
 		check('still produced diagnostic after edit', r2.stdout.includes('no-console'));
 		const after = readCacheForFixture(dir) as any;
-		const afterMtime = after?.files?.[fixturePath]?.mtime;
+		const afterMtime = after?.graph?.[fixturePath]?.mtime;
 		check(
 			'cache mtime moved past the edit',
 			typeof afterMtime === 'number' && afterMtime > beforeMtime,
@@ -171,34 +180,7 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	}
 }
 
-// ── Test 4: editing tsslint.config.ts mints a fresh cache file ──────────
-{
-	const dir = makeFixture();
-	const configPath = path.join(dir, 'tsslint.config.ts');
-	try {
-		runCli(dir);
-		const before = readCacheForFixture(dir);
-		check('cache exists after cold run', !!before);
-
-		// Touch the config so its mtime+size change. Adding a comment is
-		// enough — the cache key includes config mtime+size.
-		const original = fs.readFileSync(configPath, 'utf8');
-		fs.writeFileSync(configPath, `// touched\n` + original);
-
-		const r2 = runCli(dir);
-		check('still produced diagnostic with new config mtime', r2.stdout.includes('no-console'));
-		// The current cache file (under new key) should have entries; the
-		// old one is orphaned. Both might exist; verify the new run
-		// produced a valid cache by re-reading.
-		const after = readCacheForFixture(dir);
-		check('new cache file written under new key', !!after);
-	}
-	finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-}
-
-// ── Test 5: --force bypasses cache (still produces diagnostic) ──────────
+// ── Test 4: --force bypasses cache (still produces diagnostic) ──────────
 {
 	const dir = makeFixture();
 	try {
@@ -212,41 +194,33 @@ function readCacheForFixture(fixtureDir: string): unknown {
 	}
 }
 
-// ── Test 6: programFingerprint always persisted (layer 2 default-on) ───
-{
-	const dir = makeFixture();
-	try {
-		const r = runCli(dir);
-		check('default run produced diagnostic', r.stdout.includes('no-console'));
-		const data = readCacheForFixture(dir) as any;
-		check('cache written', !!data);
-		check(
-			'programFingerprint persisted to cache file',
-			typeof data?.programFingerprint === 'string' && data.programFingerprint.length > 0,
-		);
-	}
-	finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-}
-
-// Build a fixture that exercises layer 2: a type-aware rule that touches
-// `program` (classifies it type-aware via the runtime probe), writes the
-// linted file's name to a marker file each time it runs, and reports a
-// fixed diagnostic. The marker file's line count tells us how many times
-// the rule actually executed across runs.
-function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: string; fixture: string } {
-	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-l2-')));
+// A project with a dependency graph:
+//
+//   b.ts ──▶ a.ts ◀── r.ts (re-exports a) ◀── c.ts
+//   u.ts (no dependencies)
+//   g.d.ts (global script), m.ts (`declare global`)
+//
+// The `type-of` rule reads the checker, reports the type of every
+// variable, and appends the linted file's name to `marker.log` each time
+// it runs.
+function makeGraphFixture(options: { ignorePlugin?: boolean } = {}) {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-graph-')));
 	const markerPath = path.join(dir, 'marker.log');
-	const rulePath = path.join(dir, 'type-aware-rule.ts');
+	const rulePath = path.join(dir, 'type-of-rule.ts');
 	fs.writeFileSync(
 		rulePath,
 		`import { defineRule } from ${importPath(configModule)};\n`
 			+ `import * as fs from 'fs';\n`
-			+ `export default defineRule(({ file, checker, report }) => {\n`
-			+ `  void checker;\n`
+			+ `export default defineRule(({ typescript: ts, file, checker, report }) => {\n`
 			+ `  fs.appendFileSync(${JSON.stringify(markerPath)}, file.fileName + '\\n');\n`
-			+ `  report('type-aware ran', 0, 1);\n`
+			+ `  for (const statement of file.statements) {\n`
+			+ `    if (!ts.isVariableStatement(statement)) continue;\n`
+			+ `    for (const decl of statement.declarationList.declarations) {\n`
+			+ `      if (!ts.isIdentifier(decl.name)) continue;\n`
+			+ `      const type = checker.typeToString(checker.getTypeAtLocation(decl.name));\n`
+			+ `      report(decl.name.text + ' has type ' + type, decl.name.getStart(file), decl.name.getEnd());\n`
+			+ `    }\n`
+			+ `  }\n`
 			+ `});\n`,
 	);
 	fs.writeFileSync(
@@ -259,103 +233,200 @@ function makeTypeAwareFixture(): { dir: string; markerPath: string; ambient: str
 				strict: true,
 				skipLibCheck: true,
 			},
-			include: ['*.ts', '*.d.ts'],
+			files: ['a.ts', 'b.ts', 'r.ts', 'c.ts', 'u.ts', 'g.d.ts', 'm.ts'],
 		}),
 	);
 	fs.writeFileSync(
 		path.join(dir, 'tsslint.config.ts'),
-		`import { defineConfig } from ${importPath(configModule)};\n`
+		`import { defineConfig, createIgnorePlugin } from ${importPath(configModule)};\n`
 			+ `export default defineConfig({\n`
-			+ `  include: ['fixture.ts'],\n`
-			+ `  rules: { 'type-aware': (await import(${importPath(rulePath)})) },\n`
+			+ `  rules: { 'type-of': (await import(${importPath(rulePath)})).default },\n`
+			+ (options.ignorePlugin ? `  plugins: [createIgnorePlugin('eslint-disable-next-line', true)],\n` : '')
 			+ `});\n`,
 	);
-	const ambient = path.join(dir, 'ambient.d.ts');
-	const fixture = path.join(dir, 'fixture.ts');
-	fs.writeFileSync(ambient, `declare const FOO: number;\n`);
-	fs.writeFileSync(fixture, `const z = FOO;\nexport {};\n`);
-	return { dir, markerPath, ambient, fixture };
+	const files = {
+		a: path.join(dir, 'a.ts'),
+		b: path.join(dir, 'b.ts'),
+		r: path.join(dir, 'r.ts'),
+		c: path.join(dir, 'c.ts'),
+		u: path.join(dir, 'u.ts'),
+		g: path.join(dir, 'g.d.ts'),
+		m: path.join(dir, 'm.ts'),
+	};
+	fs.writeFileSync(files.a, `export function f() {\n\treturn 1;\n}\n`);
+	fs.writeFileSync(
+		files.b,
+		(options.ignorePlugin
+			? `import { f } from './a';\n// eslint-disable-next-line type-of\n`
+			: `import { f } from './a';\n`)
+			+ `export const v = f();\n`,
+	);
+	fs.writeFileSync(files.r, `export { f } from './a';\n`);
+	fs.writeFileSync(files.c, `import { f } from './r';\nexport const w = f();\n`);
+	fs.writeFileSync(
+		files.u,
+		(options.ignorePlugin ? `// eslint-disable-next-line nope\n` : '') + `export const u = 1;\n`,
+	);
+	fs.writeFileSync(files.g, `declare const G: number;\n`);
+	fs.writeFileSync(files.m, `export {};\ndeclare global {\n\tvar M: number;\n}\n`);
+	return { dir, markerPath, files };
 }
 
-function markerLineCount(markerPath: string): number {
-	if (!fs.existsSync(markerPath)) return 0;
-	return fs.readFileSync(markerPath, 'utf8').split('\n').filter(Boolean).length;
+// Names of the files the rule ran on during `run`.
+function lintedDuring(markerPath: string, run: () => void): string {
+	const before = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8').length : 0;
+	run();
+	const after = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8') : '';
+	return after.slice(before).split('\n').filter(Boolean).map(f => path.basename(f)).sort().join(',');
 }
 
-// ── Test 7 (layer 2): warm run skips type-aware rule (cache hit) ────────
+const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
+
+// ── Test 5: warm run lints nothing ──────────────────────────────────────
 {
-	const { dir, markerPath } = makeTypeAwareFixture();
+	const { dir, markerPath } = makeGraphFixture();
 	try {
-		runCli(dir);
-		const afterCold = markerLineCount(markerPath);
-		check('cold ran rule once', afterCold === 1);
-
-		runCli(dir);
-		const afterWarm = markerLineCount(markerPath);
-		check(
-			'warm did NOT re-run rule (layer 2 cache hit)',
-			afterWarm === 1,
-			`expected 1 marker line, got ${afterWarm}`,
-		);
+		check('cold run lints every file', lintedDuring(markerPath, () => runCli(dir)) === ALL_GRAPH_FILES);
+		let out = '';
+		const linted = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('warm run lints nothing', linted === '', linted);
+		check('warm run replays type-aware results', out.includes('v has type number'), out);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }
 
-// ── Test 8 (layer 2): editing ambient.d.ts forces re-run on dependent ───
-//
-// The killer case for layer 2: ambient declaration edits don't move the
-// dependent file's mtime, so layer 1 alone would silently serve stale
-// type-aware results. The program fingerprint covers every file the
-// program loaded, so it must catch this.
+// ── Test 6: editing a function body re-lints only that file ─────────────
 {
-	const { dir, markerPath, ambient } = makeTypeAwareFixture();
+	const { dir, markerPath, files } = makeGraphFixture();
 	try {
 		runCli(dir);
-		check('cold ran rule once', markerLineCount(markerPath) === 1);
-
-		// Mutate the ambient declaration. fixture.ts's text doesn't change.
-		fs.writeFileSync(ambient, `declare const FOO: string;\n`);
-		const t = new Date(Date.now() + 60_000);
-		fs.utimesSync(ambient, t, t);
-
-		runCli(dir);
-		check(
-			'ambient edit forced fixture.ts re-lint (layer 2 invalidation)',
-			markerLineCount(markerPath) === 2,
-			`expected 2 marker lines after ambient edit, got ${markerLineCount(markerPath)}`,
-		);
-
-		// And the cache should re-hit again on the next warm run.
-		runCli(dir);
-		check(
-			'warm after ambient edit cache-hits again',
-			markerLineCount(markerPath) === 2,
-		);
+		editFile(files.a, `export function f() {\n\treturn 2;\n}\n`);
+		const linted = lintedDuring(markerPath, () => runCli(dir));
+		check('body edit re-lints only a.ts', linted === 'a.ts', linted);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }
 
-// ── Test 9 (--force): type-aware rule re-runs every time ────────────────
+// ── Test 7: changing an exported type re-lints importers transitively ──
 //
-// `--force` is the opt-out from layer 2. It skips the cache load, so
-// the linter starts cold every invocation — the type-aware rule has
-// no prev state to cache-hit against and runs fresh.
+// b.ts imports a.ts directly; c.ts reaches it through r.ts's re-export,
+// whose own declaration text doesn't change.
 {
-	const { dir, markerPath } = makeTypeAwareFixture();
+	const { dir, markerPath, files } = makeGraphFixture();
 	try {
-		runCli(dir, '--force');
-		check('first --force ran rule once', markerLineCount(markerPath) === 1);
+		runCli(dir);
+		editFile(files.a, `export function f() {\n\treturn 'x';\n}\n`);
+		let out = '';
+		const linted = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('type change re-lints a.ts, b.ts, r.ts, c.ts', linted === 'a.ts,b.ts,c.ts,r.ts', linted);
+		check('importer reports the new type', out.includes('v has type string'), out);
+		check('importer through re-export reports the new type', out.includes('w has type string'), out);
+		check('no stale type is reported', !/[vw] has type number/.test(out), out);
 
-		runCli(dir, '--force');
-		check(
-			'second --force re-ran type-aware rule',
-			markerLineCount(markerPath) === 2,
-			`expected 2 marker lines, got ${markerLineCount(markerPath)} — --force should bypass layer 2`,
-		);
+		const warm = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('warm run after type change lints nothing', warm === '', warm);
+		check('warm run replays the new types', out.includes('w has type string'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 8: editing a global declaration re-lints everything ────────────
+{
+	const { dir, markerPath, files } = makeGraphFixture();
+	try {
+		runCli(dir);
+		editFile(files.g, `declare const G: string;\n`);
+		const script = lintedDuring(markerPath, () => runCli(dir));
+		check('global script edit re-lints every file', script === ALL_GRAPH_FILES, script);
+
+		editFile(files.m, `export {};\ndeclare global {\n\tvar M: string;\n}\n`);
+		const augmentation = lintedDuring(markerPath, () => runCli(dir));
+		check('`declare global` edit re-lints every file', augmentation === ALL_GRAPH_FILES, augmentation);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 9: a compiler option change re-lints everything ────────────────
+{
+	const { dir, markerPath } = makeGraphFixture();
+	const tsconfigPath = path.join(dir, 'tsconfig.json');
+	try {
+		runCli(dir);
+		const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, 'utf8'));
+		tsconfig.compilerOptions.noUnusedLocals = true;
+		editFile(tsconfigPath, JSON.stringify(tsconfig));
+		const linted = lintedDuring(markerPath, () => runCli(dir));
+		check('compiler option change re-lints every file', linted === ALL_GRAPH_FILES, linted);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 10: config and rule module edits re-lint everything ────────────
+//
+// The rule module is only reachable through the config's import.
+{
+	const { dir, markerPath } = makeGraphFixture();
+	const configPath = path.join(dir, 'tsslint.config.ts');
+	const rulePath = path.join(dir, 'type-of-rule.ts');
+	try {
+		runCli(dir);
+		editFile(configPath, `// touched\n` + fs.readFileSync(configPath, 'utf8'));
+		const config = lintedDuring(markerPath, () => runCli(dir));
+		check('config edit re-lints every file', config === ALL_GRAPH_FILES, config);
+
+		editFile(rulePath, fs.readFileSync(rulePath, 'utf8').replace(`' has type '`, `' is typed '`));
+		let out = '';
+		const rule = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('rule module edit re-lints every file', rule === ALL_GRAPH_FILES, rule);
+		check('rule module edit reports the new message', out.includes('v is typed number'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 11: ignore plugin results stay correct on warm runs ────────────
+//
+// b.ts's report is suppressed by a used comment; u.ts's comment targets a
+// rule that never fires, so it's reported as unused.
+{
+	const { dir, markerPath, files } = makeGraphFixture({ ignorePlugin: true });
+	try {
+		const runs: string[] = [];
+		runs.push(runCli(dir).stdout);
+		runs.push(runCli(dir).stdout);
+		editFile(files.a, `export function f() {\n\treturn 2;\n}\n`);
+		const linted = lintedDuring(markerPath, () => runs.push(runCli(dir).stdout));
+		check('body edit with ignore plugin re-lints only a.ts', linted === 'a.ts', linted);
+		for (const [i, out] of runs.entries()) {
+			const label = ['cold', 'warm', 'after body edit'][i];
+			check(`${label}: suppressed report stays hidden`, !out.includes('v has type'), out);
+			check(`${label}: used comment is not reported`, (out.match(/Unused comment/g) ?? []).length === 1, out);
+			check(`${label}: unused comment is reported for u.ts`, /u\.ts:1:\d+/.test(stripAnsi(out)), out);
+		}
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 12: --force re-lints every file every time ─────────────────────
+{
+	const { dir, markerPath } = makeGraphFixture();
+	try {
+		runCli(dir);
+		const linted = lintedDuring(markerPath, () => runCli(dir, '--force'));
+		check('--force re-lints every file', linted === ALL_GRAPH_FILES, linted);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
@@ -458,7 +529,7 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-// ── Test 10 (content mapper): diagnostics land on the original file ────
+// ── Test 13 (content mapper): diagnostics land on the original file ────
 {
 	const { dir } = makeContentMapperFixture('\n');
 	try {
@@ -471,7 +542,7 @@ function stripAnsi(text: string): string {
 	}
 }
 
-// ── Test 11 (content mapper): --fix edits the original text, exactly ───
+// ── Test 14 (content mapper): --fix edits the original text, exactly ───
 //
 // CRLF line endings: positions must stay in original-file coordinates.
 // The fix touching generated code has no exact original span and must be
@@ -495,7 +566,7 @@ function stripAnsi(text: string): string {
 	}
 }
 
-// ── Test 12 (content mapper): diagnostic directives suppress reports ───
+// ── Test 15 (content mapper): diagnostic directives suppress reports ───
 //
 // Shaped like Vue's output: template expressions are appended to the
 // script inside a generated function, `@vue-ignore` / `@vue-expect-error`
@@ -581,7 +652,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 13 (content mapper): one fix per original range ──────────────
+// ── Test 16 (content mapper): one fix per original range ──────────────
 //
 // The script body is copied twice; the second copy carries only a
 // navigation feature, like Vue's navigation-only copies. The same
@@ -635,7 +706,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 14 (content mapper): compiler diagnostics are mapped once ─────
+// ── Test 17 (content mapper): compiler diagnostics are mapped once ─────
 //
 // `getSemanticDiagnostics` on a content-mapped file already returns
 // original positions.
@@ -666,7 +737,7 @@ function transform(content) {
 	}
 }
 
-// ── Test 15 (content mapper): a rule crash is reported without a position
+// ── Test 18 (content mapper): a rule crash is reported without a position
 //
 // The transformed text starts with generated code, so a crash placed at
 // offset 0 would have no original position and be dropped.
@@ -701,6 +772,25 @@ function transform(content) {
 			out.includes('App.vue - message crash: Error: rule exploded') && !/App\.vue:\d+:\d+/.test(out),
 			out,
 		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 19 (content mapper): editing the mapper re-lints everything ───
+//
+// A cache hit shows the `--force` hint.
+{
+	const { dir } = makeContentMapperFixture('\n');
+	const serverPath = path.join(dir, 'node_modules', 'test-mapper', 'server.js');
+	try {
+		runCli(dir);
+		check('unchanged mapper → cache hit', runCli(dir).stdout.includes('--force'));
+		editFile(serverPath, fs.readFileSync(serverPath, 'utf8') + '\n// changed\n');
+		const out = runCli(dir).stdout;
+		check('mapper edit → no cache hit', !out.includes('--force'), out);
+		check('mapper edit still reports', out.includes('no-console'), out);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });

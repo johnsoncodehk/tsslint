@@ -1,11 +1,10 @@
-// Layer 1 cache-flow tests. These cover the cache-aware lint pass —
-// every invariant of the CLI's per-file mtime / per-rule cache.
+// Cache-flow tests. These cover the cache-aware lint pass — every
+// invariant of the CLI's per-file cache entries.
 //
 // Run via:
 //   node packages/cli/test/cache-flow.test.js
 
 import type { Config, RuleContext } from '@tsslint/types';
-import { DiagnosticCategory } from 'typescript/sync';
 import type { FileCache } from '../lib/cache.js';
 import { createProject } from './project';
 
@@ -23,11 +22,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	}
 }
 
-function emptyFileCache(mtime = 0): FileCache {
-	return { mtime, rules: {} };
-}
-
-// ── Test 1: syntactic rule writes cache entry ────────────────────────────
+// ── Test 1: lint writes the file's entry ─────────────────────────────────
 {
 	const project = createProject({ 'a.ts': 'const x = 1;' });
 	const config: Config = {
@@ -35,62 +30,62 @@ function emptyFileCache(mtime = 0): FileCache {
 			syntactic: ((rctx: RuleContext) => {
 				rctx.report('hi', 0, 1);
 			}),
+			typed: ((rctx: RuleContext) => {
+				void rctx.checker;
+				rctx.report('typed', 0, 1);
+			}),
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('syntactic rule cache entry written', !!cache.rules['syntactic']);
-	check('cache has 1 diagnostic', cache.rules['syntactic']?.diagnostics.length === 1);
-	check('hasFix false (no fix reported)', cache.rules['syntactic']?.hasFix === false);
+	const files: Record<string, FileCache> = {};
+	const target = project.target('a.ts');
+	cacheFlow.lintWithCache(linter, target, files);
+	const entry = files[target.file.fileName];
+	check('file entry written', !!entry);
+	check("entry holds every rule's diagnostics", entry?.diagnostics.length === 2);
+	check('hasFix false (no fix reported)', entry?.hasFix === false);
 }
 
-// ── Test 2: type-aware rule does not write cache entry ───────────────────
+// ── Test 2: cache hit skips every rule, replays diagnostics ──────────────
 {
 	const project = createProject({ 'a.ts': 'const x = 1;' });
+	let runs = 0;
 	const config: Config = {
 		rules: {
+			a: ((rctx: RuleContext) => {
+				runs++;
+				rctx.report('a', 0, 1);
+			}),
 			typed: ((rctx: RuleContext) => {
+				runs++;
 				void rctx.program;
 				rctx.report('typed', 0, 1);
 			}),
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('type-aware rule still produces diagnostics', result.length === 1);
-	check('type-aware rule NOT cached', !cache.rules['typed']);
-}
+	const files: Record<string, FileCache> = {};
 
-// ── Test 3: cache hit skips rule, restores diagnostic ────────────────────
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let runs = 0;
-	const config: Config = {
-		rules: {
-			syntactic: ((rctx: RuleContext) => {
-				runs++;
-				rctx.report('hi', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
+	check('first call ran both rules', runs === 2);
 
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('first call ran rule', runs === 1);
-
-	const second = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('second call did NOT re-run rule', runs === 1);
-	check('second call still produced 1 diagnostic', second.length === 1);
+	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
+	check('second call ran no rule', runs === 2);
+	check('second call replayed both diagnostics', warm.length === 2);
 	check(
-		'restored diagnostic keeps its file name',
-		second[0]?.fileName === project.target('a.ts').file.fileName,
+		'replayed diagnostics match the cold run',
+		JSON.stringify(warm) === JSON.stringify(cold),
+	);
+	check(
+		'replayed diagnostics are copies',
+		warm[0] !== files[project.target('a.ts').file.fileName].diagnostics[0],
 	);
 }
 
-// ── Test 4: mtime mismatch clears all rule entries ───────────────────────
+// ── Test 3: a deleted entry re-lints ─────────────────────────────────────
+//
+// Invalidation deletes entries before linting starts; whatever is left
+// is replayed as is.
 {
 	const project = createProject({ 'a.ts': 'const x = 1;' });
 	let runs = 0;
@@ -103,454 +98,108 @@ function emptyFileCache(mtime = 0): FileCache {
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const files: Record<string, FileCache> = {};
+	const target = project.target('a.ts');
 
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('first call ran', runs === 1);
-
-	// Same mtime → cache hit
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('same mtime → still 1 run', runs === 1);
-
-	// Different mtime → cache invalidated
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 2);
-	check('mtime change → re-run', runs === 2);
-	check('cache mtime updated', cache.mtime === 2);
+	cacheFlow.lintWithCache(linter, target, files);
+	delete files[target.file.fileName];
+	cacheFlow.lintWithCache(linter, target, files);
+	check('deleted entry → re-run', runs === 2);
+	check('entry written again', !!files[target.file.fileName]);
 }
 
-// ── Test 5: report-then-touch deletes any cache entry ────────────────────
+// ── Test 4: hasFix, and `fix` re-lints a file with fixes ─────────────────
+//
+// Fixes are closures that don't survive the cache.
 {
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	const config: Config = {
-		rules: {
-			'report-then-touch': ((rctx: RuleContext) => {
-				rctx.report('first', 0, 1);
-				void rctx.program; // flips touchedProgram → mark type-aware
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('post-rule cleanup deleted entry', !cache.rules['report-then-touch']);
-}
-
-// ── Test 6: sticky type-aware across files ───────────────────────────────
-{
-	const project = createProject({
-		'a.ts': 'const x = 1;',
-		'b.ts': 'const y = 2;',
-	});
-	const config: Config = {
-		rules: {
-			'sometimes-typed': ((rctx: RuleContext) => {
-				if (rctx.file.fileName.endsWith('/a.ts')) {
-					void rctx.program;
-				}
-				rctx.report('hi', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cacheA = emptyFileCache(1);
-	const cacheB = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cacheA, 1);
-	cacheFlow.lintWithCache(linter, project.target('b.ts'), cacheB, 1);
-	check('a.ts no cache entry (touched)', !cacheA.rules['sometimes-typed']);
-	check(
-		'b.ts no cache entry (sticky classification)',
-		!cacheB.rules['sometimes-typed'],
-	);
-}
-
-// ── Test 7: stale cache entry for type-aware rule is ignored & cleaned ───
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
+	const project = createProject({ 'a.ts': 'const x = 1;', 'b.ts': 'const y = 2;' });
 	let runs = 0;
-	const config: Config = {
-		rules: {
-			typed: ((rctx: RuleContext) => {
-				runs++;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-	// Linter is seeded with `typed` as type-aware (e.g. from prior session
-	// via cache file's ruleModes). The fileCache also has a stale entry.
-	const linter = core.createLinter(project.ctx, project.rootDir, config, ['typed']);
-	const cache: FileCache = {
-		mtime: 1,
-		rules: {
-			typed: {
-				hasFix: false,
-				diagnostics: [{
-					category: DiagnosticCategory.Message,
-					code: 0,
-					ruleId: 'typed',
-					text: 'stale',
-					pos: 0,
-					end: 1,
-				}],
-			},
-		},
-	};
-	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('rule re-ran (stale cache ignored)', runs === 1);
-	check('result reflects fresh run', result.length === 1);
-	check('stale entry deleted', !cache.rules['typed']);
-}
-
-// ── Test 8: hasFix flag derives from rule fix registration ───────────────
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
 	const config: Config = {
 		rules: {
 			fixable: ((rctx: RuleContext) => {
-				rctx.report('fix me', 0, 1).withFix('apply', () => []);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('hasFix true after rule registered fix', cache.rules['fixable']?.hasFix === true);
-}
-
-// ── Test 9: multiple rules — only cached ones skipped, others run ────────
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let aRuns = 0, bRuns = 0;
-	const config: Config = {
-		rules: {
-			a: ((rctx: RuleContext) => {
-				aRuns++;
-				rctx.report('a', 0, 1);
-			}),
-			b: ((rctx: RuleContext) => {
-				bRuns++;
-				rctx.report('b', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-
-	// First call: both run
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('first call ran both', aRuns === 1 && bRuns === 1);
-	check('a cached', !!cache.rules['a']);
-	check('b cached', !!cache.rules['b']);
-
-	// Second call: both cached
-	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('second call ran neither', aRuns === 1 && bRuns === 1);
-	check('result has both restored diagnostics', result.length === 2);
-}
-
-// ── Test 10 (layer 2): typeAwareUnaffected=true caches type-aware rule ───
-//
-// When the caller signals that the file's type-relevant inputs haven't
-// moved (BuilderProgram check in production), type-aware rules become
-// eligible for cache hits and writes — same path as syntactic rules.
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let runs = 0;
-	const config: Config = {
-		rules: {
-			typed: ((rctx: RuleContext) => {
 				runs++;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
+				if (rctx.file.fileName.endsWith('/a.ts')) {
+					rctx.report('fix me', 0, 1).withFix('apply', () => []);
+				}
 			}),
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const files: Record<string, FileCache> = {};
+	const a = project.target('a.ts');
+	const b = project.target('b.ts');
+	cacheFlow.lintWithCache(linter, a, files);
+	cacheFlow.lintWithCache(linter, b, files);
+	check('hasFix true after rule registered fix', files[a.file.fileName]?.hasFix === true);
+	check('hasFix false without fixes', files[b.file.fileName]?.hasFix === false);
 
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1, { incremental: true, typeAwareUnaffected: true });
-	check('first call ran (no cache yet)', runs === 1);
-	check(
-		'type-aware entry written under unaffected signal',
-		!!cache.rules['typed'],
-		'expected entry — typeAwareUnaffected=true makes type-aware caching legal',
-	);
-	check(
-		'cached diagnostic count',
-		cache.rules['typed']?.diagnostics.length === 1,
-	);
+	cacheFlow.lintWithCache(linter, a, files, { fix: true });
+	check('fix re-lints a file with fixes', runs === 3);
+	cacheFlow.lintWithCache(linter, b, files, { fix: true });
+	check('fix replays a file without fixes', runs === 3);
 }
 
-// ── Test 11 (layer 2): cache hit on second call with same signal ─────────
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let runs = 0;
-	const config: Config = {
-		rules: {
-			typed: ((rctx: RuleContext) => {
-				runs++;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1, { incremental: true, typeAwareUnaffected: true });
-	const second = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1, {
-		incremental: true,
-		typeAwareUnaffected: true,
-	});
-	check('second call did NOT re-run type-aware rule', runs === 1);
-	check('second call still produced 1 diagnostic', second.length === 1);
-	check(
-		'restored diagnostic keeps its file name (layer 2)',
-		second[0]?.fileName === project.target('a.ts').file.fileName,
-	);
-}
-
-// ── Test 12 (layer 2): mode B → mode A re-runs and clears entry ──────────
-//
-// Cache entry was written under typeAwareUnaffected=true. Next call
-// drops the signal (BuilderProgram now considers the file affected).
-// The type-aware rule must re-run AND its old entry deleted.
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let runs = 0;
-	const config: Config = {
-		rules: {
-			typed: ((rctx: RuleContext) => {
-				runs++;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-
-	// Mode B: write the entry.
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1, { incremental: true, typeAwareUnaffected: true });
-	check('layer-2 first run cached the entry', !!cache.rules['typed']);
-
-	// Mode A (default): file is affected. Re-run, drop entry.
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('mode-A re-run executed rule', runs === 2);
-	check('mode-A re-run dropped the entry', !cache.rules['typed']);
-}
-
-// ── Test 13 (layer 2): mode A (no incremental) never caches type-aware ──
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	const config: Config = {
-		rules: {
-			typed: ((rctx: RuleContext) => {
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-
-	// No options arg → mode A. Type-aware rules never cached.
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	check('default (no options) does NOT cache type-aware', !cache.rules['typed']);
-
-	// Explicit incremental=false also mode A.
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1, { incremental: false });
-	check('explicit incremental=false does NOT cache type-aware', !cache.rules['typed']);
-}
-
-// ── Test 14 (layer 2): incremental writes type-aware even when affected ─
-//
-// First-time-ever (cold session) under --incremental: there's no prior
-// entry to hit, but we must still WRITE one so the next session can
-// hit. The split between "trust cache" (typeAwareUnaffected) and "write
-// cache" (incremental) is the gate.
-{
-	const project = createProject({ 'a.ts': 'const x = 1;' });
-	let runs = 0;
-	const config: Config = {
-		rules: {
-			typed: ((rctx: RuleContext) => {
-				runs++;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-
-	// Cold session under --incremental: no prev state, file is "affected"
-	// (unaffected=false). Must run AND write entry.
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1, {
-		incremental: true,
-		typeAwareUnaffected: false,
-	});
-	check('cold session ran the rule', runs === 1);
-	check(
-		'cold session under --incremental wrote type-aware entry',
-		!!cache.rules['typed'],
-		'entry needed for next session to cache-hit',
-	);
-}
-
-// ── Test 15: withoutCache() — diagnostic returned but not persisted ─────
+// ── Test 5: withoutCache() — the file is not cached ─────────────────────
 //
 // `Reporter.withoutCache()` is the rule's contract: "this finding's
-// correctness depends on inputs neither layer tracks; please don't
-// replay it from the cache." The current run still surfaces the
-// diagnostic; it just isn't written to disk, so the next warm hit on
-// the same file won't see it.
+// correctness depends on inputs the cache doesn't track". The whole file
+// is linted again next run, since the other diagnostics may depend on the
+// same inputs through the plugins (an ignore comment matching it).
 {
 	const project = createProject({ 'a.ts': 'const x = 1;' });
+	let runs = 0;
 	const config: Config = {
 		rules: {
 			env_dependent: ((rctx: RuleContext) => {
+				runs++;
 				rctx.report('depends on env', 0, 1).withoutCache();
 				rctx.report('plain', 0, 1);
 			}),
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	const diags = cacheFlow.lintWithCache(
-		linter,
-		project.target('a.ts'),
-		cache,
-		1,
-	);
+	const files: Record<string, FileCache> = {};
+	const target = project.target('a.ts');
+	const diags = cacheFlow.lintWithCache(linter, target, files);
 	check('current run returns both diagnostics', diags.length === 2);
-	check(
-		'cache entry exists for the rule',
-		!!cache.rules['env_dependent'],
-	);
-	check(
-		'only the non-marked diagnostic is persisted',
-		cache.rules['env_dependent']?.diagnostics.length === 1,
-		`expected 1 cached diagnostic, got ${cache.rules['env_dependent']?.diagnostics.length}`,
-	);
-	check(
-		'persisted diagnostic is the plain one',
-		cache.rules['env_dependent']?.diagnostics[0]?.text === 'plain',
-	);
+	check('no entry written', !files[target.file.fileName]);
+
+	const second = cacheFlow.lintWithCache(linter, target, files);
+	check('second run lints again', runs === 2);
+	check('second run returns both diagnostics', second.length === 2);
 }
 
-// ── Test 16: withoutCache() — second run cache-hits with the survivor ───
+// ── Test 6: withoutCache() still applies when a plugin drops the report ─
+//
+// The ignore plugin suppresses the marked report, but whether the comment
+// counts as used still depends on it.
 {
-	const project = createProject({ 'a.ts': 'const x = 1;' });
+	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
+		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
+	};
+	const code = '// eslint-disable-next-line env\nconst x = 1;\n';
+	const project = createProject({ 'a.ts': code });
 	const config: Config = {
 		rules: {
-			env_dependent: ((rctx: RuleContext) => {
-				rctx.report('depends on env', 0, 1).withoutCache();
-				rctx.report('plain', 0, 1);
+			env: ((rctx: RuleContext) => {
+				const at = code.indexOf('const');
+				rctx.report('depends on env', at, at + 5).withoutCache();
 			}),
 		},
+		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-
-	// Second run with the same mtime — rule cache-hits, only the
-	// persisted diagnostic comes back.
-	const linter2 = core.createLinter(project.ctx, project.rootDir, config);
-	const diags = cacheFlow.lintWithCache(
-		linter2,
-		project.target('a.ts'),
-		cache,
-		1,
-	);
-	check('warm cache hit returns 1 diagnostic', diags.length === 1);
-	check('warm replay drops the marked one', diags[0]?.text === 'plain');
+	const files: Record<string, FileCache> = {};
+	const target = project.target('a.ts');
+	const diags = cacheFlow.lintWithCache(linter, target, files);
+	check('suppressed report leaves no diagnostic', diags.length === 0);
+	check('suppressed withoutCache() report still prevents caching', !files[target.file.fileName]);
 }
 
-// ── Test 17 (regression): mixed-mode rule, early-return file replays sound
+// ── Test 7: NO_CACHE marker doesn't leak through serialisation ──────────
 //
-// A rule that file-shape-filters before reading `program` will, for the
-// early-returning file, finish without touching the probe. Verify the
-// resulting cache entry replays correctly across sessions even after the
-// rule is globally classified type-aware (because some OTHER file did
-// touch program). The early-return path's output is a deterministic
-// function of file text alone — replaying it on a warm hit should match
-// what re-running the rule would produce.
-{
-	const project = createProject({
-		'skip.ts': 'const x = 1;',
-		'check.ts': 'const y = 2;',
-	});
-	const config: Config = {
-		rules: {
-			'mixed-mode': ((rctx: RuleContext) => {
-				if (rctx.file.fileName.endsWith('/skip.ts')) return;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-
-	// ── Session 1: cold, both files lint — process the early-return file
-	// FIRST so the rule isn't yet type-aware when its entry gets written.
-	const linter1 = core.createLinter(project.ctx, project.rootDir, config);
-	const cacheSkip: FileCache = emptyFileCache(1);
-	const cacheCheck: FileCache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter1, project.target('skip.ts'), cacheSkip, 1);
-	cacheFlow.lintWithCache(linter1, project.target('check.ts'), cacheCheck, 1);
-
-	check(
-		'session 1: rule classified type-aware after both files',
-		linter1.getTypeAwareRules().has('mixed-mode'),
-	);
-	check(
-		"session 1: early-return file got an entry (rule wasn't yet type-aware at write time)",
-		!!cacheSkip.rules['mixed-mode'],
-	);
-	check(
-		"session 1: early-return file's entry has 0 diagnostics (rule reported nothing)",
-		cacheSkip.rules['mixed-mode']?.diagnostics.length === 0,
-	);
-
-	// ── Session 2: rule pre-classified type-aware (from session 1).
-	// Both files unchanged. typeAwareUnaffected=true → both should
-	// cache-hit and replay cleanly.
-	const linter2 = core.createLinter(project.ctx, project.rootDir, config, ['mixed-mode']);
-	let earlyReturnRanInSession2 = false;
-	const config2: Config = {
-		rules: {
-			'mixed-mode': ((rctx: RuleContext) => {
-				earlyReturnRanInSession2 = true;
-				if (rctx.file.fileName.endsWith('/skip.ts')) return;
-				void rctx.program;
-				rctx.report('typed', 0, 1);
-			}),
-		},
-	};
-	const linterMonitored = core.createLinter(project.ctx, project.rootDir, config2, ['mixed-mode']);
-	const session2Skip = cacheFlow.lintWithCache(
-		linterMonitored,
-		project.target('skip.ts'),
-		cacheSkip,
-		1,
-		{ incremental: true, typeAwareUnaffected: true },
-	);
-	check(
-		'session 2: warm hit on early-return file replays empty diagnostics',
-		session2Skip.length === 0,
-	);
-	check(
-		'session 2: rule body did NOT execute on early-return file (cache skipped it)',
-		!earlyReturnRanInSession2,
-		"cache-hit means we skip the rule entirely — body shouldn't run",
-	);
-	void linter2; // type-only ref; linterMonitored is the one we observe
-}
-
-// ── Test 18: NO_CACHE marker doesn't leak through serialisation ─────────
-//
-// Symbol-keyed property must stay invisible to JSON.stringify and to
-// `{...spread}` so the on-disk cache stays clean.
+// Symbol-keyed property must stay invisible to JSON.stringify so the
+// on-disk cache stays clean.
 {
 	const project = createProject({ 'a.ts': 'const x = 1;' });
 	const config: Config = {
@@ -561,25 +210,19 @@ function emptyFileCache(mtime = 0): FileCache {
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
-	// rule entry exists but with 0 diagnostics — no smuggled keys.
-	const json = JSON.stringify(cache);
-	check('NO_CACHE marker not visible in serialised cache', !json.includes('no-cache'));
+	const files: Record<string, FileCache> = {};
+	const diags = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
+	check('NO_CACHE marker not visible in serialised diagnostics', !JSON.stringify(diags).includes('no-cache'));
+	check('NO_CACHE marker not visible in serialised cache', !JSON.stringify(files).includes('no-cache'));
 }
 
-// ── Test 19: warm cache must not break resolveDiagnostics view ───────────
+// ── Test 8: warm replay keeps the ignore plugin's result ────────────────
 //
 // Scenario: a rule fires on line 2, an `// eslint-disable-next-line foo`
 // comment on line 1 suppresses it, ignore plugin (`reportsUnusedComments
 // = true`) marks the comment used. Cold pass produces 0 user-visible
-// errors. Warm pass: the rule is cached → skipped → its diagnostic
-// would be missing from the array `resolveDiagnostics` sees, so the
-// ignore plugin can no longer match the comment to a diagnostic and
-// erroneously reports it as unused.
-//
-// Cache flow MUST seed `prevDiagnostics` with the cached entries before
-// `resolveDiagnostics` runs, so the plugin's view matches the cold pass.
+// errors. The entry holds the result after plugins ran, so the warm pass
+// must not turn the comment into an unused-comment false positive.
 {
 	const ignorePlugin = require('@tsslint/config/lib/plugins/ignore.js') as {
 		create: (cmd: string | [string, string], reportsUnused: boolean) => any;
@@ -597,21 +240,17 @@ function emptyFileCache(mtime = 0): FileCache {
 		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const files: Record<string, FileCache> = {};
 
-	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	check(
 		'cold pass: rule diag suppressed by disable comment, no user-visible diag',
 		cold.length === 0,
 		`cold returned ${cold.length} diags: ${cold.map(d => d.ruleId).join(',')}`,
 	);
-	check('cold pass: rule entry written to cache', !!cache.rules['foo']);
-	check(
-		'cold pass: cache stores the suppressed diagnostic so warm can re-evaluate',
-		cache.rules['foo']?.diagnostics.length === 1,
-	);
+	check('cold pass: entry written to cache', files[project.target('a.ts').file.fileName]?.diagnostics.length === 0);
 
-	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	check(
 		'warm pass: same comment suppresses the same (now-cached) diag — no unused-comment FP',
 		warm.length === 0,
@@ -619,13 +258,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
-// ── Test 20: prevDiagnostics + fresh must not duplicate ──────────────────
-//
-// `skipRules` and the rules that actually run are disjoint by construction
-// (cache-flow only adds a rule to skipRules if it has a cached entry, and
-// lint skips those — so they can't also produce fresh output). Verify the
-// invariant: across cold + warm passes for a non-suppressed diagnostic,
-// the user sees exactly one report each pass — never two.
+// ── Test 9: cold and warm passes report once each ───────────────────────
 {
 	const project = createProject({ 'a.ts': 'const x = 1;\n' });
 	let runs = 0;
@@ -638,13 +271,13 @@ function emptyFileCache(mtime = 0): FileCache {
 		},
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const files: Record<string, FileCache> = {};
 
-	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	check('cold: rule ran once', runs === 1);
 	check('cold: 1 diag returned', cold.length === 1);
 
-	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	check('warm: rule did NOT re-run (cached)', runs === 1);
 	check('warm: 1 diag returned (no duplication)', warm.length === 1);
 	check(
@@ -653,7 +286,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
-// ── Test 21: multiple rules + ignore plugin, no duplication on warm ──────
+// ── Test 10: multiple rules + ignore plugin, no duplication on warm ─────
 //
 // Two rules, only one suppressed by a disable comment. Warm pass must
 // produce the same final set as cold — no double-report on the
@@ -678,9 +311,9 @@ function emptyFileCache(mtime = 0): FileCache {
 		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const files: Record<string, FileCache> = {};
 
-	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const cold = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	const coldCodes = cold.map(d => d.ruleId).sort();
 	check(
 		'cold: only `bar` survives (`foo` suppressed by comment for `foo`)',
@@ -688,7 +321,7 @@ function emptyFileCache(mtime = 0): FileCache {
 		`cold codes: ${coldCodes.join(',')}`,
 	);
 
-	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const warm = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	const warmCodes = warm.map(d => d.ruleId).sort();
 	check(
 		'warm: same single `bar` — no duplicate, no resurrected `foo`, no FP unused-comment',
@@ -697,7 +330,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
-// ── Test 22: ignore plugin's regex must capture scoped rule IDs ──────────
+// ── Test 11: ignore plugin's regex must capture scoped rule IDs ─────────
 //
 // `@scope/rule` and `plugin/rule` IDs (the dominant naming in the
 // ecosystem) must be captured into `groups.ruleId` so each block-disable
@@ -731,9 +364,9 @@ function emptyFileCache(mtime = 0): FileCache {
 		plugins: [ignorePlugin.create(['eslint-disable', 'eslint-enable'], true)],
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
+	const files: Record<string, FileCache> = {};
 
-	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	check(
 		'scoped block-disables: each independently suppresses its targeted rule (no unused FP on second comment)',
 		result.length === 0,
@@ -741,7 +374,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	);
 }
 
-// ── Test 23: ignore plugin comment scanner — non-comment contexts ─────────
+// ── Test 12: ignore plugin comment scanner — non-comment contexts ────────
 //
 // The plugin's inlined comment walker relies on the AST-realized token
 // boundaries (via `node.getChildren()` + `forEachLeading/TrailingCommentRange`)
@@ -784,8 +417,8 @@ function emptyFileCache(mtime = 0): FileCache {
 			plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
 		};
 		const linter = core.createLinter(project.ctx, project.rootDir, config);
-		const cache = emptyFileCache(1);
-		const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+		const files: Record<string, FileCache> = {};
+		const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 		check(
 			`scanner: no phantom directive in ${label}`,
 			result.length === 0,
@@ -794,7 +427,7 @@ function emptyFileCache(mtime = 0): FileCache {
 	}
 }
 
-// ── Test 24: ignore plugin must collect ALL leading comments per token ───
+// ── Test 13: ignore plugin must collect ALL leading comments per token ──
 //
 // `ts.forEachLeading/TrailingCommentRange` short-circuits when the
 // callback returns a truthy value (matches the documented `forEachX`
@@ -819,8 +452,8 @@ function emptyFileCache(mtime = 0): FileCache {
 		plugins: [ignorePlugin.create('eslint-disable-next-line', true)],
 	};
 	const linter = core.createLinter(project.ctx, project.rootDir, config);
-	const cache = emptyFileCache(1);
-	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), cache, 1);
+	const files: Record<string, FileCache> = {};
+	const result = cacheFlow.lintWithCache(linter, project.target('a.ts'), files);
 	// Each disable targets a non-existent rule → all 20 are unused → 20 diagnostics.
 	check(
 		'comment-trivia callback: all N stacked comments processed (no truthy-return short-circuit)',

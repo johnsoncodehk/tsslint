@@ -125,8 +125,8 @@ const ruleRegistry = new Map</* eslintRule */ ESLint.Rule.RuleModule, RuleEntry>
 //   - `reports`: deferred per-rule reports collected during a single
 //     shared traversal; each tsslintRule call replays its own bucket.
 //   - `errors`: per-rule listener throws, captured so a rule's tsslintRule
-//     can rethrow at replay time (preserving TSSLint core's per-rule
-//     type-aware retry semantics).
+//     can rethrow at replay time, so core reports the crash under that
+//     rule.
 //
 // WeakMap (vs prior single-slot module variable) means concurrent files
 // don't thrash, and ts.SourceFile GC cleans up automatically.

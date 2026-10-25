@@ -1,12 +1,7 @@
-// Cache-aware wrapper around `linter.lint`. Decides which rules to skip
-// based on the file's cached entries + the linter's type-aware
-// classification, calls into core with `skipRules`, and merges the
-// freshly-computed diagnostics with the rehydrated cached ones.
-//
-// Core knows nothing about the cache shape or lifecycle. It just runs
-// rules and returns diagnostics. Everything in this module is the
-// CLI's responsibility — serialization, mtime invalidation, sticky
-// type-aware cleanup.
+// Cache-aware wrapper around `linter.lint`. A file's cached result is the
+// diagnostics it produced after plugins ran; `lib/invalidation.ts` deletes the
+// entries that are no longer valid before linting starts, so an entry that is
+// still here can be replayed as is.
 
 import { type Linter, NO_CACHE } from '@tsslint/core';
 import type { Diagnostic, LintTarget } from '@tsslint/types';
@@ -15,129 +10,28 @@ import type { FileCache } from './cache.js';
 export function lintWithCache(
 	linter: Linter,
 	target: LintTarget,
-	fileCache: FileCache,
-	fileMtime: number,
+	files: Record<string, FileCache>,
 	options?: {
-		// Layer 2 master switch. Always on under the CLI.
-		// When false / undefined (mode A), type-aware rules are never
-		// cached: their entries are deleted after each run. When true
-		// (mode B), type-aware rules' fresh results get persisted so the
-		// next session can reuse them.
-		incremental?: boolean;
-		// Caller signal: this file's type-relevant inputs (every file in
-		// the program, plus compiler options) haven't moved since the
-		// prior session.
-		// Only meaningful in mode B. When true, type-aware rule cache
-		// entries are also cache-hit-eligible (skipped via the run's
-		// skipRules set).
-		typeAwareUnaffected?: boolean;
+		// Fixes are closures that don't survive the cache, so a file with
+		// fixes has to be linted again to apply them.
+		fix?: boolean;
 	},
 ): Diagnostic[] {
 	const fileName = target.file.fileName;
-	// File mtime is the layer-1 invalidation key. Anything that touched
-	// the file's text drops every cached rule entry — those rules will
-	// re-run because they vanish from the skip set.
-	if (fileCache.mtime !== fileMtime) {
-		fileCache.mtime = fileMtime;
-		fileCache.rules = {};
+	const cached = files[fileName];
+	if (cached && !(options?.fix && cached.hasFix)) {
+		return cached.diagnostics.map(diagnostic => ({ ...diagnostic }));
 	}
 
-	const writeTypeAware = options?.incremental === true;
-	const trustTypeAwareCache = writeTypeAware && options?.typeAwareUnaffected === true;
-	const typeAware = linter.getTypeAwareRules();
-
-	// Cache hit only when this file has a cache entry for the rule AND
-	// either:
-	//   - the rule is not classified type-aware, or
-	//   - the rule is type-aware but the caller signalled the file is
-	//     unaffected this session (layer 2)
-	const skipRules = new Set<string>();
-	for (const ruleId of Object.keys(fileCache.rules)) {
-		if (typeAware.has(ruleId)) {
-			if (trustTypeAwareCache) {
-				skipRules.add(ruleId);
-			}
-			// else: re-run; the post-rule write path will overwrite the
-			// stale entry or delete it depending on classification.
-		}
-		else {
-			skipRules.add(ruleId);
-		}
+	const diagnostics = linter.lint(target);
+	if (linter.getRawLintResult(fileName).some(diagnostic => (diagnostic as any)[NO_CACHE])) {
+		delete files[fileName];
 	}
-
-	// Restore cached diagnostics BEFORE calling lint. They're seeded as
-	// `prevDiagnostics` so plugin `resolveDiagnostics` (e.g. ignore plugin
-	// matching disable comments to fired diagnostics) sees the same view
-	// it would on a cold pass — without this, skipped rules' diagnostics
-	// are missing during plugin filtering and every successful suppression
-	// turns into a warm-only unused-comment false positive.
-	const restored: Diagnostic[] = [];
-	for (const ruleId of skipRules) {
-		const entry = fileCache.rules[ruleId];
-		if (!entry) continue;
-		for (const sd of entry.diagnostics) {
-			restored.push(deserializeDiagnostic(sd));
-		}
-	}
-
-	const fresh = linter.lint(target, { skipRules, prevDiagnostics: restored });
-
-	// Cache writes key off the PRE-suppression rule output (`getRawLintResult`),
-	// not the post-plugin `fresh`. Otherwise a diagnostic the ignore plugin
-	// successfully suppressed would never make it to disk, and the next
-	// warm pass would have nothing to feed back in via `prevDiagnostics`
-	// — re-creating the very FP this is fixing.
-	const raw = linter.getRawLintResult(fileName);
-	const byRule = new Map<string, Diagnostic[]>();
-	for (const diag of raw) {
-		const ruleId = diag.ruleId!;
-		let bucket = byRule.get(ruleId);
-		if (!bucket) byRule.set(ruleId, bucket = []);
-		bucket.push(diag);
-	}
-
-	// For every rule that actually ran (i.e. not skipped), update the
-	// cache. Type-aware rules in mode A (no `incremental`): delete any
-	// entry, never write. Otherwise (syntactic, or type-aware in mode
-	// B): write the freshly-computed entry — even if the file was
-	// considered affected this run, so the next session can cache-hit.
-	const allRuleIds = Object.keys(linter.getRules(fileName));
-	for (const ruleId of allRuleIds) {
-		if (skipRules.has(ruleId)) continue;
-		if (typeAware.has(ruleId) && !writeTypeAware) {
-			delete fileCache.rules[ruleId];
-			continue;
-		}
-		const diags = byRule.get(ruleId) ?? [];
-		let hasFix = false;
-		for (const diag of diags) {
-			if (linter.hasFixForDiagnostic(fileName, diag)) {
-				hasFix = true;
-				break;
-			}
-		}
-		// Drop diagnostics the rule marked via `Reporter.withoutCache()` —
-		// the rule is asserting they depend on inputs we don't track in
-		// the cache key, so a warm replay would be unsound. They're still
-		// included in the live `fresh` array returned from this function;
-		// they just don't survive to disk.
-		fileCache.rules[ruleId] = {
-			hasFix,
-			diagnostics: diags
-				.filter(d => !(d as any)[NO_CACHE])
-				.map(serializeDiagnostic),
+	else {
+		files[fileName] = {
+			hasFix: linter.hasCodeFixes(fileName),
+			diagnostics: diagnostics.map(diagnostic => ({ ...diagnostic })),
 		};
 	}
-
-	// `fresh` already contains the survived `restored` items (seeded via
-	// `prevDiagnostics`) plus the rules that ran this session, post-plugin.
-	return fresh;
-}
-
-function serializeDiagnostic(d: Diagnostic): Diagnostic {
-	return { ...d };
-}
-
-function deserializeDiagnostic(d: Diagnostic): Diagnostic {
-	return { ...d };
+	return diagnostics;
 }

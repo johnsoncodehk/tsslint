@@ -7,10 +7,11 @@
 //   - tsslint version (segment) → bumping the package invalidates everything
 //   - typescript version (segment) → checker output can change across TS
 //     versions, so segregate per TS version
-//   - hash of (configFilePath, tsconfig, configFile mtime+size)
-//     → editing tsslint.config.ts mints a fresh cache file
+//   - hash of (configFilePath, tsconfig)
 //
-// Cache file shape — see packages/cli/CACHE.md "Cache file format" section.
+// Everything else that can invalidate results (compiler options, config
+// and rule modules, content mappers, files in the program) is checked
+// through `globalKey` and the dependency graph; see `lib/invalidation.ts`.
 //
 // Soundness invariants the loader enforces:
 //   - any parse / shape / version mismatch returns an empty cache (treated
@@ -30,28 +31,32 @@ const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v4';
+const CACHE_FORMAT_VERSION = 'v5';
 
 export interface CacheData {
 	version: string;
-	// Sticky per-rule classification. Only "type-aware" entries are
-	// stored — anything missing is treated as syntactic (or unclassified,
-	// which currently means the same thing: cache write happens).
-	ruleModes: Record</* ruleId */ string, 'type-aware'>;
+	// Hash of every input whose change re-lints all files.
+	globalKey?: string;
+	// Every program file outside `node_modules`.
+	graph: Record</* abs file path */ string, GraphNode>;
+	// Lint results that are still valid, by linted file.
 	files: Record</* abs file path */ string, FileCache>;
-	// Layer 2: fingerprint of every file in the program (path, mtime,
-	// size) plus compiler options, from the session that wrote this
-	// cache. Type-aware rule entries are reused only when the current
-	// program's fingerprint matches. See `lib/fingerprint.ts`.
-	programFingerprint?: string;
 }
 
-export interface FileCache {
+export interface GraphNode {
 	mtime: number;
-	rules: Record</* ruleId */ string, RuleCache>;
+	size: number;
+	// Hash of the file's declaration emit, or of its text when there is
+	// none. Only kept for files that other files depend on.
+	signature?: string;
+	// Program files outside `node_modules` this file imports or references.
+	deps: string[];
+	// Declares globals or augments modules, so a change can affect any file.
+	global: boolean;
 }
 
-export interface RuleCache {
+// Diagnostics after plugins ran, as the CLI reports them.
+export interface FileCache {
 	hasFix: boolean;
 	diagnostics: Diagnostic[];
 }
@@ -108,7 +113,7 @@ export function saveCache(
 }
 
 export function emptyCache(): CacheData {
-	return { version: CACHE_FORMAT_VERSION, ruleModes: {}, files: {} };
+	return { version: CACHE_FORMAT_VERSION, graph: {}, files: {} };
 }
 
 // Deep shape check. A corrupt `files` entry (wrong `mtime` type, missing
@@ -119,15 +124,20 @@ function isCacheData(x: unknown): x is CacheData {
 	if (typeof x !== 'object' || x === null) return false;
 	const o = x as Record<string, unknown>;
 	if (typeof o.version !== 'string') return false;
-	if (typeof o.ruleModes !== 'object' || o.ruleModes === null) return false;
+	if (o.globalKey !== undefined && typeof o.globalKey !== 'string') return false;
+	if (typeof o.graph !== 'object' || o.graph === null) return false;
+	for (const v of Object.values(o.graph as Record<string, unknown>)) {
+		if (typeof v !== 'object' || v === null) return false;
+		const n = v as Record<string, unknown>;
+		if (typeof n.mtime !== 'number' || typeof n.size !== 'number') return false;
+		if (!Array.isArray(n.deps) || typeof n.global !== 'boolean') return false;
+	}
 	if (typeof o.files !== 'object' || o.files === null) return false;
 	for (const v of Object.values(o.files as Record<string, unknown>)) {
 		if (typeof v !== 'object' || v === null) return false;
 		const f = v as Record<string, unknown>;
-		if (typeof f.mtime !== 'number') return false;
-		if (typeof f.rules !== 'object' || f.rules === null) return false;
+		if (typeof f.hasFix !== 'boolean' || !Array.isArray(f.diagnostics)) return false;
 	}
-	if (o.programFingerprint !== undefined && typeof o.programFingerprint !== 'string') return false;
 	return true;
 }
 
@@ -137,13 +147,7 @@ function getCacheFilePath(
 	tsVersion: string,
 	createHash: (s: string) => string,
 ): string {
-	const configStat = fs.statSync(configFilePath, { throwIfNoEntry: false });
-	const cacheKey = [
-		configFilePath,
-		tsconfig,
-		configStat?.mtimeMs ?? 0,
-		configStat?.size ?? 0,
-	].join('\0');
+	const cacheKey = [configFilePath, tsconfig].join('\0');
 	return path.join(
 		getTsslintCachePath(),
 		tsVersion,

@@ -19,22 +19,15 @@ import minimatch = require('minimatch');
 export type Linter = ReturnType<typeof createLinter>;
 
 // Marker stamped onto diagnostics by `Reporter.withoutCache()`. The CLI
-// cache-flow filters these out before serialising to disk so they're
-// never replayed from a warm cache hit. Symbol-keyed (via Symbol.for so
-// it's stable across module instances) — invisible to JSON.stringify and
-// to `{...spread}` so it doesn't leak into the serialised cache.
+// does not cache a file whose rules produced one. Symbol-keyed (via
+// Symbol.for so it's stable across module instances) — invisible to
+// JSON.stringify so it never reaches the cache file.
 export const NO_CACHE = Symbol.for('@tsslint/no-cache');
 
 export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
-	// Rule IDs already known to be type-aware from a prior session (via
-	// the cache file's `ruleModes` map). Pre-seeding lets us treat those
-	// rules as type-aware on their first invocation in this session,
-	// before the runtime probe has a chance to classify them — closing
-	// the cold-session-with-stale-cache hole 3.0.4 had.
-	initialTypeAwareRules?: Iterable<string>,
 ) {
 	const fileRules = new Map<string, Record<string, Rule>>();
 	const fileConfigs = new Map<string, typeof configs>();
@@ -53,16 +46,9 @@ export function createLinter(
 			}[],
 		]
 	>();
-	// Snapshot of each file's rule output BEFORE plugin `resolveDiagnostics`
-	// runs. Plugins can suppress diagnostics (e.g. `eslint-disable-next-line`
-	// matching a fired diagnostic) — the suppression is the right thing for
-	// the live API, but the cache layer needs the unsuppressed view so a
-	// warm pass can re-feed plugins with the cached diagnostics that were
-	// originally suppressed. Without this, cache stores post-suppression
-	// state, the next warm pass restores nothing for skipped rules, and the
-	// ignore plugin can no longer match disable comments to rule output —
-	// turning every successful suppression into a warm-only unused-comment
-	// false positive.
+	// Each file's rule output before plugins ran. A plugin can drop a
+	// `withoutCache()` report whose absence still shapes the result (an
+	// ignore comment it matched), so the CLI checks this view.
 	const rawDiagnosticsByFile = new Map<string, Diagnostic[]>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
@@ -72,53 +58,21 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
-	// Sticky type-aware classification. Once a rule has read
-	// `rulesContext.program` in any past or current session, it stays
-	// type-aware for the lifetime of this linter. Reads are gated by a
-	// getter on `program` that flips a per-rule flag during execution.
-	const typeAwareRules = new Set<string>(initialTypeAwareRules ?? []);
 
 	return {
-		// `options.skipRules`: rule IDs the caller already has cached
-		// results for. Core just doesn't run them — the caller is
-		// responsible for merging cached output into the final diagnostic
-		// list. Decoupling cache lifecycle from core means future cache
-		// changes (BuilderProgram-based invalidation, schema bumps) live
-		// in the CLI without churning this layer.
-		//
-		// `options.prevDiagnostics`: cached diagnostics from prior sessions
-		// for rules in `skipRules`. Seeded into the diagnostics array
-		// before plugin `resolveDiagnostics` runs so plugins see the same
-		// view they would on a cold pass — critical for `createIgnorePlugin`,
-		// which decides "is this disable comment used?" by matching against
-		// fired diagnostics.
-		lint(
-			target: LintTarget,
-			options?: {
-				skipRules?: ReadonlySet<string>;
-				prevDiagnostics?: readonly Diagnostic[];
-			},
-		): Diagnostic[] {
+		lint(target: LintTarget): Diagnostic[] {
 			let currentRuleId: string;
 			const { program, checker, file } = target;
-			const skipRules = options?.skipRules;
 			const fileName = file.fileName;
 
 			const rules = getRulesForFile(fileName);
 			const configs = getConfigsForFile(fileName);
 
-			let touchedProgram = false;
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
 				file,
-				get program() {
-					touchedProgram = true;
-					return program;
-				},
-				get checker() {
-					touchedProgram = true;
-					return checker;
-				},
+				program,
+				checker,
 				report,
 			};
 
@@ -128,12 +82,6 @@ export function createLinter(
 
 			for (const [ruleId, rule] of Object.entries(rules)) {
 				currentRuleId = ruleId;
-
-				if (skipRules?.has(currentRuleId)) {
-					continue;
-				}
-
-				touchedProgram = false;
 				try {
 					rule(rulesContext);
 				}
@@ -148,20 +96,11 @@ export function createLinter(
 						end: 0,
 					});
 				}
-				if (touchedProgram) {
-					typeAwareRules.add(currentRuleId);
-				}
 			}
 
-			// Snapshot fresh rule output for the cache layer (callers read
-			// it via `getRawLintResult`). Skipped rules' diagnostics aren't
-			// re-issued here — they live in the caller's cache.
 			rawDiagnosticsByFile.set(fileName, [...lintResult[1].keys()]);
 
-			let diagnostics: Diagnostic[] = [
-				...(options?.prevDiagnostics ?? []),
-				...lintResult[1].keys(),
-			];
+			let diagnostics: Diagnostic[] = [...lintResult[1].keys()];
 
 			const directives = file.diagnosticDirectives;
 			if (directives?.length) {
@@ -266,15 +205,6 @@ export function createLinter(
 			}
 			return false;
 		},
-		// Per-diagnostic fix presence — used by the CLI cache layer to
-		// snapshot `hasFix` for a rule's cache entry without reaching
-		// into core's internal `diagnostic2Fixes` map.
-		hasFixForDiagnostic(fileName: string, diagnostic: Diagnostic): boolean {
-			const lintResult = lintResults.get(fileName);
-			if (!lintResult) return false;
-			const fixes = lintResult[1].get(diagnostic);
-			return !!fixes && fixes.length > 0;
-		},
 		getCodeFixes(
 			fileName: string,
 			start: number,
@@ -368,16 +298,6 @@ export function createLinter(
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
-		// Snapshot of rules classified type-aware so far. The CLI reads
-		// this after a lint pass to persist into the cache file's
-		// `ruleModes` map, then feeds it back via `initialTypeAwareRules`
-		// on the next session.
-		getTypeAwareRules(): ReadonlySet<string> {
-			return typeAwareRules;
-		},
-		// Pre-suppression rule output from the most recent `lint(fileName)`.
-		// Cache layer keys writes off this so suppressed-but-fired
-		// diagnostics survive into the next session's `prevDiagnostics`.
 		getRawLintResult(fileName: string): readonly Diagnostic[] {
 			return rawDiagnosticsByFile.get(fileName) ?? [];
 		},

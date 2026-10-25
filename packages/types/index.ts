@@ -56,15 +56,10 @@ export interface Reporter {
 	/** Edits apply to the reported file. */
 	withFix(title: string, getEdits: () => readonly TextEdit[]): Reporter;
 	withRefactor(title: string, getEdits: () => readonly TextEdit[]): Reporter;
-	// Mark this diagnostic as ineligible for the CLI's per-file cache.
-	// The diagnostic is still returned for the current run, but won't be
-	// written to disk — so the next warm run (cache hit on this file)
-	// won't replay it, and the rule must re-run to surface it again.
-	// Use when a diagnostic's correctness depends on inputs the layer-1
-	// mtime check doesn't track (external resources, env, sibling files
-	// the rule reads directly via fs). For type-checker-derived findings
-	// just read `ctx.program` / `ctx.checker` once — that re-classifies the
-	// rule type-aware, and layer 2 handles cross-file invalidation properly.
+	// The CLI won't cache the reported file, so every run lints it again.
+	// Use when a finding depends on inputs the cache doesn't track
+	// (external resources, env, files read directly via fs). Anything
+	// reached through `program` / `checker` is tracked.
 	withoutCache(): Reporter;
 }
 
