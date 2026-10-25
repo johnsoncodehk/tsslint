@@ -8,7 +8,8 @@
 // Some changes can affect any file; they re-lint everything:
 //   - compiler options, tsconfig files, content mappers, config and rule modules
 //   - files added to or removed from the program, or changes under `node_modules`
-//   - a changed file that declares globals or augments modules
+//   - a changed signature of a file that declares globals or augments modules,
+//     or a file starting or stopping to do so
 
 import crypto = require('crypto');
 import fs = require('fs');
@@ -62,27 +63,20 @@ export function invalidate(api: API, project: Project, cache: CacheData, configM
 	}
 
 	let infos: Map<string, FileInfo> | undefined;
-	let cold = cache.globalKey !== globalKey;
-	if (!cold && changed.length) {
-		infos = analyze(api, program, changed, ownFiles);
-		cold = changed.some(fileName => cache.graph[fileName]?.global || infos!.get(fileName)!.global);
+	if (cache.globalKey !== globalKey) {
+		return rebuild();
 	}
-
-	if (cold) {
-		cache.globalKey = globalKey;
-		cache.files = {};
-		cache.graph = {};
-		const all = [...ownFiles.keys()];
-		const allInfos = analyze(api, program, all, ownFiles, infos);
-		for (const fileName of all) {
-			setNode(cache, fileName, ownFiles.get(fileName)!, allInfos.get(fileName)!);
-		}
-		updateMissingSignatures(api, program, cache);
-		return;
-	}
-
 	if (!changed.length) {
 		return;
+	}
+	infos = analyze(api, program, changed, ownFiles);
+	if (
+		changed.some(fileName => {
+			const node = cache.graph[fileName];
+			return !node || node.global !== infos!.get(fileName)!.global;
+		})
+	) {
+		return rebuild();
 	}
 
 	const oldSignatures = new Map<string, string | undefined>();
@@ -136,12 +130,29 @@ export function invalidate(api: API, project: Project, cache: CacheData, configM
 		}
 	}
 
+	for (const fileName of signatureChanged) {
+		if (cache.graph[fileName].global) {
+			return rebuild();
+		}
+	}
 	for (const [fileName, signature] of signatures) {
 		cache.graph[fileName].signature = signature;
 	}
 	updateMissingSignatures(api, program, cache, importers);
 	for (const fileName of dirty) {
 		delete cache.files[fileName];
+	}
+
+	function rebuild() {
+		cache.globalKey = globalKey;
+		cache.files = {};
+		cache.graph = {};
+		const all = [...ownFiles.keys()];
+		const allInfos = analyze(api, program, all, ownFiles, infos);
+		for (const fileName of all) {
+			setNode(cache, fileName, ownFiles.get(fileName)!, allInfos.get(fileName)!);
+		}
+		updateMissingSignatures(api, program, cache);
 	}
 
 	function hasSignatureChanged(fileName: string) {
@@ -191,7 +202,8 @@ function getImporters(cache: CacheData) {
 	return importers;
 }
 
-// Signatures are only compared for files other files depend on.
+// Signatures are only compared for files other files depend on, and for
+// files that declare globals.
 function updateMissingSignatures(
 	api: API,
 	program: Program,
@@ -200,7 +212,7 @@ function updateMissingSignatures(
 ) {
 	const missing: string[] = [];
 	for (const [fileName, node] of Object.entries(cache.graph)) {
-		if (!importers.has(fileName)) {
+		if (!importers.has(fileName) && !node.global) {
 			delete node.signature;
 		}
 		else if (node.signature === undefined) {

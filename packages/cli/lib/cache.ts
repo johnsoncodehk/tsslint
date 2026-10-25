@@ -47,11 +47,13 @@ export interface GraphNode {
 	mtime: number;
 	size: number;
 	// Hash of the file's declaration emit, or of its text when there is
-	// none. Only kept for files that other files depend on.
+	// none. Only kept for files that other files depend on, and for global
+	// files.
 	signature?: string;
 	// Program files outside `node_modules` this file imports or references.
 	deps: string[];
-	// Declares globals or augments modules, so a change can affect any file.
+	// Declares globals or augments modules, so a signature change can affect
+	// any file.
 	global: boolean;
 }
 

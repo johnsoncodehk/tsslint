@@ -69,7 +69,7 @@ The cache format is bumped, so the first v4 run re-lints everything.
 Rules are no longer split into syntactic and type-aware. Each file's result is
 reused until the file changes or a file it depends on changes its declaration
 signature, like `tsc --incremental`; changes that can affect any file (compiler
-options, config and rule modules, globals) re-lint everything. See
+options, config and rule modules, the declarations of globals) re-lint everything. See
 [Caching](../README.md#caching). `--list-rules` is removed, since there is no
 classification left to print.
 

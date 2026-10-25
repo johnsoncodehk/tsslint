@@ -354,7 +354,50 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
-// ── Test 9: a compiler option change re-lints everything ────────────────
+// ── Test 9: editing a global file without changing its declarations ────
+//
+// A body edit leaves the declaration signature of a script or of a module
+// with `declare global` / `declare module '...'` as is, so only that file
+// is re-linted.
+{
+	const { dir, markerPath, files } = makeGraphFixture();
+	const tsconfigPath = path.join(dir, 'tsconfig.json');
+	const script = path.join(dir, 's.ts');
+	const augmentation = (body: string, type: string) =>
+		`export function h() {\n\treturn ${body};\n}\n`
+		+ `declare global {\n\tvar M: number;\n}\n`
+		+ `declare module './a' {\n\tinterface Extra {\n\t\tx: ${type};\n\t}\n}\n`;
+	const withScript = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,s.ts,u.ts';
+	try {
+		fs.writeFileSync(script, `function sf() {\n\treturn 1;\n}\n`);
+		const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, 'utf8'));
+		tsconfig.files.push('s.ts');
+		fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig));
+		fs.writeFileSync(files.m, augmentation('1', 'number'));
+		runCli(dir);
+
+		editFile(script, `function sf() {\n\treturn 2;\n}\n`);
+		const scriptBody = lintedDuring(markerPath, () => runCli(dir));
+		check('script body edit re-lints only s.ts', scriptBody === 's.ts', scriptBody);
+
+		editFile(files.m, augmentation('2', 'number'));
+		const augmentationBody = lintedDuring(markerPath, () => runCli(dir));
+		check('augmenting module body edit re-lints only m.ts', augmentationBody === 'm.ts', augmentationBody);
+
+		editFile(files.m, augmentation('2', 'string'));
+		const augmentationType = lintedDuring(markerPath, () => runCli(dir));
+		check('`declare module` type edit re-lints every file', augmentationType === withScript, augmentationType);
+
+		editFile(script, `function sf() {\n\treturn '';\n}\n`);
+		const scriptType = lintedDuring(markerPath, () => runCli(dir));
+		check('script type edit re-lints every file', scriptType === withScript, scriptType);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 10: a compiler option change re-lints everything ────────────────
 {
 	const { dir, markerPath } = makeGraphFixture();
 	const tsconfigPath = path.join(dir, 'tsconfig.json');
@@ -371,7 +414,7 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
-// ── Test 10: config and rule module edits re-lint everything ────────────
+// ── Test 11: config and rule module edits re-lint everything ────────────
 //
 // The rule module is only reachable through the config's import.
 {
@@ -395,7 +438,7 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
-// ── Test 11: ignore plugin results stay correct on warm runs ────────────
+// ── Test 12: ignore plugin results stay correct on warm runs ────────────
 //
 // b.ts's report is suppressed by a used comment; u.ts's comment targets a
 // rule that never fires, so it's reported as unused.
@@ -420,7 +463,7 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
-// ── Test 12: a project opened through a symlink keeps precise invalidation
+// ── Test 13: a project opened through a symlink keeps precise invalidation
 //
 // File names in the program then differ from the real paths on disk.
 {
@@ -442,7 +485,7 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
-// ── Test 13: --force re-lints every file every time ─────────────────────
+// ── Test 14: --force re-lints every file every time ─────────────────────
 {
 	const { dir, markerPath } = makeGraphFixture();
 	try {
