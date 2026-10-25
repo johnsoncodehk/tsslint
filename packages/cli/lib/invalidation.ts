@@ -378,6 +378,8 @@ const SPECIFIER_PATTERNS = [
 	/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
 	/\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
 	/\/\/\/\s*<reference\s+(?:path|types)\s*=\s*['"]([^'"\n]+)['"]/g,
+	// Names inside an augmentation resolve in the augmented module.
+	/\bdeclare\s+module\s+['"]([^'"\n]+)['"]/g,
 ];
 
 // Over-matching (e.g. inside a string literal type) only re-lints more.

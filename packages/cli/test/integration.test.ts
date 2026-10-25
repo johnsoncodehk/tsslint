@@ -358,15 +358,17 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 //
 // A body edit leaves the declaration signature of a script or of a module
 // with `declare global` / `declare module '...'` as is, so only that file
-// is re-linted.
+// is re-linted. A changed signature, also one that changes through an
+// import, re-lints everything.
 {
 	const { dir, markerPath, files } = makeGraphFixture();
 	const tsconfigPath = path.join(dir, 'tsconfig.json');
 	const script = path.join(dir, 's.ts');
 	const augmentation = (body: string, type: string) =>
-		`export function h() {\n\treturn ${body};\n}\n`
+		`import type { f } from './a';\n`
+		+ `export function h() {\n\treturn ${body};\n}\n`
 		+ `declare global {\n\tvar M: number;\n}\n`
-		+ `declare module './a' {\n\tinterface Extra {\n\t\tx: ${type};\n\t}\n}\n`;
+		+ `declare module './a' {\n\tinterface Extra {\n\t\tx: ${type};\n\t\ty: ReturnType<typeof f>;\n\t}\n}\n`;
 	const withScript = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,s.ts,u.ts';
 	try {
 		fs.writeFileSync(script, `function sf() {\n\treturn 1;\n}\n`);
@@ -391,6 +393,13 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 		editFile(script, `function sf() {\n\treturn '';\n}\n`);
 		const scriptType = lintedDuring(markerPath, () => runCli(dir));
 		check('script type edit re-lints every file', scriptType === withScript, scriptType);
+
+		// m.ts's declaration text stays the same, but the type it names changes.
+		editFile(files.a, `export function f() {\n\treturn 'x';\n}\n`);
+		const propagated = lintedDuring(markerPath, () => runCli(dir));
+		check('a type change reaching an augmentation re-lints every file', propagated === withScript, propagated);
+		const warm = lintedDuring(markerPath, () => runCli(dir));
+		check('warm run after it lints nothing', warm === '', warm);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
