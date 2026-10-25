@@ -532,7 +532,8 @@ interface Binding {
 // What the `declare global` / `declare module '...'` blocks of each file
 // use, by resolving every identifier in them to its symbol. Identifiers that
 // resolve to neither an import nor a declaration of the module are declared
-// by the blocks themselves, or globally elsewhere.
+// by the blocks themselves, globally elsewhere, or in the augmented module,
+// which `Scope.specifiers` covers.
 function getScopes(api: API, checker: Checker, files: ts.SourceFile[]): Scope[] {
 	const collected = files.map(collectScope);
 	const requests = collected.filter(({ used }) => used.length);
@@ -548,27 +549,37 @@ function getScopes(api: API, checker: Checker, files: ts.SourceFile[]): Scope[] 
 			return result;
 		}
 		const byId = new Map<number, Binding>();
-		[...bindings.values()].forEach((binding, i) => {
+		// An identifier the checker resolves to nothing may still be a
+		// binding, so it uses every binding of its name.
+		const byText = new Map<string, Binding[]>();
+		[...bindings].forEach(([node, binding], i) => {
 			const symbol = symbols[i];
 			if (symbol) {
 				byId.set(symbol.id, binding);
 			}
+			let list = byText.get(node.text);
+			if (!list) {
+				byText.set(node.text, list = []);
+			}
+			list.push(binding);
 		});
-		for (const symbol of symbols.slice(bindings.size)) {
-			const binding = symbol && byId.get(symbol.id);
-			if (!binding) {
-				continue;
+		symbols.slice(bindings.size).forEach((symbol, i) => {
+			const found = symbol ? [byId.get(symbol.id)] : byText.get(scope.used[i].text) ?? [];
+			for (const binding of found) {
+				if (!binding) {
+					continue;
+				}
+				if (binding.specifier === undefined) {
+					result.locals.add(binding.name);
+					continue;
+				}
+				let names = result.imports.get(binding.specifier);
+				if (!names) {
+					result.imports.set(binding.specifier, names = new Set());
+				}
+				names.add(binding.name);
 			}
-			if (binding.specifier === undefined) {
-				result.locals.add(binding.name);
-				continue;
-			}
-			let names = result.imports.get(binding.specifier);
-			if (!names) {
-				result.imports.set(binding.specifier, names = new Set());
-			}
-			names.add(binding.name);
-		}
+		});
 		return result;
 	});
 }
