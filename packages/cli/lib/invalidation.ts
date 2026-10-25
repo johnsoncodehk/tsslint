@@ -139,10 +139,14 @@ export function invalidate(
 		}
 	}
 
-	for (const fileName of signatureChanged) {
-		if (cache.graph[fileName].global) {
-			return rebuild(infos);
-		}
+	for (const [fileName, signature] of signatures) {
+		cache.graph[fileName].signature = signature;
+	}
+	updateMissingSignatures(api, program, cache, importers);
+	// The graph stays valid; only the results can't be reused.
+	if ([...signatureChanged].some(fileName => cache.graph[fileName].global)) {
+		cache.files = {};
+		return;
 	}
 	// A file read for its syntax only matters through its text and its
 	// types, not through what its own rules read.
@@ -158,10 +162,6 @@ export function invalidate(
 			}
 		}
 	}
-	for (const [fileName, signature] of signatures) {
-		cache.graph[fileName].signature = signature;
-	}
-	updateMissingSignatures(api, program, cache, importers);
 	for (const fileName of dirty) {
 		delete cache.files[fileName];
 	}
