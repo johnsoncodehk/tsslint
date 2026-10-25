@@ -243,11 +243,46 @@ function analyze(
 		]);
 		const resolved = api.batch(...requests) as ({ resolvedFileName: string } | undefined)[];
 		let index = 0;
-		for (const file of files) {
+		const targets = files.map(file => {
+			const fileTargets: [specifier: string, target: string | undefined][] = [];
+			for (const specifier of file.imports) {
+				fileTargets.push([(specifier as unknown as { text: string }).text, resolved[index++]?.resolvedFileName]);
+			}
+			for (const ref of file.typeReferenceDirectives) {
+				fileTargets.push([ref.fileName, resolved[index++]?.resolvedFileName]);
+			}
+			const dir = path.dirname(file.fileName);
+			for (const ref of file.referencedFiles) {
+				const base = path.resolve(dir, ref.fileName);
+				fileTargets.push([
+					ref.fileName,
+					[base, base + '.ts', base + '.tsx', base + '.d.ts'].find(f => fs.existsSync(f)),
+				]);
+			}
+			return fileTargets;
+		});
+		// A resolution can spell a program file differently than the program
+		// does (e.g. through a symlinked directory); the program's own lookup
+		// gives its name.
+		const unknown = [
+			...new Set(
+				targets.flat()
+					.map(([, target]) => target)
+					.filter((target): target is string =>
+						target !== undefined && !ownFiles.has(target) && !target.includes('/node_modules/')
+					),
+			),
+		];
+		const programNames = new Map<string, string | undefined>();
+		api.batch(...unknown.map(target => program.getSourceFile.gen(target))).forEach((file, i) => {
+			programNames.set(unknown[i], file?.fileName);
+		});
+		files.forEach((file, i) => {
 			const deps = new Set<string>();
 			const references = new Map<string, string | null>();
-			const add = (specifier: string, target: string | undefined) => {
-				const dep = target !== undefined && ownFiles.has(target) ? target : null;
+			for (const [specifier, target] of targets[i]) {
+				const name = target !== undefined && programNames.has(target) ? programNames.get(target) : target;
+				const dep = name !== undefined && ownFiles.has(name) ? name : null;
 				if (dep !== null && dep !== file.fileName) {
 					deps.add(dep);
 				}
@@ -256,17 +291,6 @@ function analyze(
 				if (!references.get(specifier)) {
 					references.set(specifier, dep);
 				}
-			};
-			for (const specifier of file.imports) {
-				add((specifier as unknown as { text: string }).text, resolved[index++]?.resolvedFileName);
-			}
-			for (const ref of file.typeReferenceDirectives) {
-				add(ref.fileName, resolved[index++]?.resolvedFileName);
-			}
-			const dir = path.dirname(file.fileName);
-			for (const ref of file.referencedFiles) {
-				const base = path.resolve(dir, ref.fileName);
-				add(ref.fileName, [base, base + '.ts', base + '.tsx', base + '.d.ts'].find(f => ownFiles.has(f)));
 			}
 			infos.set(file.fileName, {
 				deps: [...deps],
@@ -277,7 +301,7 @@ function analyze(
 				),
 				references,
 			});
-		}
+		});
 	}
 	return infos;
 }
