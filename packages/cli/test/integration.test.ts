@@ -671,6 +671,47 @@ function addGraphFiles(dir: string, files: Record<string, string>) {
 	}
 }
 
+// ── Test 18: a workspace package's source behind a symlink ──────────────
+//
+// The program reaches core/lib.ts through node_modules, so it emits no
+// declarations for it; a body edit must still keep its importer.
+{
+	const { dir, markerPath } = makeGraphFixture();
+	const core = path.join(dir, 'core');
+	const lib = path.join(core, 'lib.ts');
+	try {
+		fs.mkdirSync(core);
+		fs.writeFileSync(
+			path.join(core, 'tsconfig.json'),
+			JSON.stringify({ compilerOptions: { composite: true, strict: true }, files: ['lib.ts'] }),
+		);
+		fs.writeFileSync(path.join(core, 'package.json'), JSON.stringify({ name: 'core', types: './lib.ts' }));
+		fs.writeFileSync(lib, `export function lf() {\n\treturn 1;\n}\n`);
+		fs.mkdirSync(path.join(dir, 'node_modules'));
+		fs.symlinkSync(core, path.join(dir, 'node_modules', 'core'), 'dir');
+		const tsconfigPath = path.join(dir, 'tsconfig.json');
+		const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, 'utf8'));
+		tsconfig.files = ['use.ts'];
+		tsconfig.references = [{ path: './core' }];
+		fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig));
+		fs.writeFileSync(path.join(dir, 'use.ts'), `import { lf } from 'core';\nexport const x = lf();\n`);
+		runCli(dir);
+
+		editFile(lib, `export function lf() {\n\treturn 2;\n}\n`);
+		const body = lintedDuring(markerPath, () => runCli(dir));
+		check('a body edit behind a symlink keeps the importer', body === '', body);
+
+		editFile(lib, `export function lf() {\n\treturn 'x';\n}\n`);
+		let out = '';
+		const type = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('a type change behind a symlink re-lints the importer', type === 'use.ts', type);
+		check('the importer reports the new type', out.includes('x has type string'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // A minimal tsconfig content mapper process; `transform` is the source
 // of a `function transform(content)` returning the transform result.
 const mapperServer = (transform: string) => `

@@ -485,6 +485,22 @@ function getDeclarations(api: API, project: Project, fileNames: string[]) {
 		if (emitted.length) {
 			collect(program.getDeclarationEmit(emitted.map(file => file.fileName)).outputFiles);
 		}
+		// The program emits no declarations for a file it reached through
+		// `node_modules`, e.g. a workspace package or a referenced project's
+		// source behind a symlink. As root files of a program with the same
+		// options and references they get the declarations this program sees.
+		const unemitted = emitted.filter(file => !outputs.has(file.fileName)).map(file => file.fileName);
+		if (unemitted.length) {
+			const roots = api.createProgram(unemitted, program.getCompilerOptions() as any, {
+				projectReferences: project.parsedCommandLine.projectReferences,
+			});
+			try {
+				collect(roots.getDeclarationEmit(unemitted).outputFiles);
+			}
+			finally {
+				roots.dispose();
+			}
+		}
 		for (const file of files) {
 			const declaration = file.isDeclarationFile ? file.text : outputs.get(file.fileName)?.sort().join('\0');
 			result.set(file.fileName, { declaration, signature: hash(declaration ?? file.text) });
