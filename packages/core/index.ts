@@ -138,12 +138,15 @@ export function createLinter(
 					rule(rulesContext);
 				}
 				catch (err) {
-					if (err instanceof Error) {
-						report(err.stack ?? err.message, 0, 0).at(err, 0);
-					}
-					else {
-						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
-					}
+					// A crash has no position, so it carries no `fileName`.
+					addDiagnostic({
+						category: DiagnosticCategory.Message,
+						code: 0,
+						ruleId: currentRuleId,
+						text: err instanceof Error ? err.stack ?? err.message : String(err),
+						pos: 0,
+						end: 0,
+					});
 				}
 				if (touchedProgram) {
 					typeAwareRules.add(currentRuleId);
@@ -162,7 +165,9 @@ export function createLinter(
 
 			const directives = file.diagnosticDirectives;
 			if (directives?.length) {
-				diagnostics = diagnostics.filter(diagnostic => !isInDirective(directives, diagnostic.pos));
+				diagnostics = diagnostics.filter(diagnostic =>
+					diagnostic.fileName === undefined || !isInDirective(directives, diagnostic.pos)
+				);
 			}
 
 			for (const { plugins } of configs) {
@@ -184,6 +189,16 @@ export function createLinter(
 
 			return diagnostics;
 
+			function addDiagnostic(diagnostic: Diagnostic) {
+				let lintResult = lintResults.get(fileName);
+				if (!lintResult) {
+					lintResults.set(fileName, lintResult = [target, new Map(), []]);
+				}
+				const fixes: { title: string; getEdits: () => readonly TextEdit[] }[] = [];
+				lintResult[1].set(diagnostic, fixes);
+				return { fixes, refactors: lintResult[2] };
+			}
+
 			function report(message: string, start: number, end: number): Reporter {
 				const error: Diagnostic = {
 					category: DiagnosticCategory.Message,
@@ -194,15 +209,7 @@ export function createLinter(
 					pos: start,
 					end,
 				};
-
-				let lintResult = lintResults.get(fileName);
-				if (!lintResult) {
-					lintResults.set(fileName, lintResult = [target, new Map(), []]);
-				}
-				const diagnostic2Fixes = lintResult[1];
-				const refactors = lintResult[2];
-				diagnostic2Fixes.set(error, []);
-				const fixes = diagnostic2Fixes.get(error)!;
+				const { fixes, refactors } = addDiagnostic(error);
 
 				return {
 					at() {

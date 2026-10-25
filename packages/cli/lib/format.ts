@@ -2,12 +2,14 @@
 // of the file the user actually wrote.
 
 import type { Diagnostic } from '@tsslint/types';
+import path = require('path');
 import type { SourceFile } from 'typescript/ast';
 import {
 	type Diagnostic as TSDiagnostic,
 	type FormatDiagnosticsHost,
 	formatDiagnosticsWithColorAndContext,
 } from 'typescript/sync';
+import { cyan } from './colors.js';
 import contentMapper = require('./content-mapper.js');
 
 const lineStartsCache = new WeakMap<SourceFile, number[]>();
@@ -27,13 +29,23 @@ export function formatDiagnostic(
 	if (!converted) {
 		return undefined;
 	}
-	return formatDiagnosticsWithColorAndContext([converted], host).trimEnd();
+	const output = formatDiagnosticsWithColorAndContext([converted], host).trimEnd();
+	if (converted.fileName === undefined) {
+		// The formatter only names the file together with a position.
+		return cyan(path.relative(host.getCurrentDirectory(), file.fileName)) + ' - ' + output;
+	}
+	return output;
 }
 
 // Rule reports are in transformed coordinates and carry no line
 // information; compiler diagnostics already come back with both in the
 // original file.
 function convertRuleReport(diagnostic: Diagnostic, ruleId: string, file: SourceFile): TSDiagnostic | undefined {
+	// There are no string codes.
+	const code = { source: ruleId, code: '' as unknown as number };
+	if (diagnostic.fileName === undefined) {
+		return { ...diagnostic, ...code };
+	}
 	const range = contentMapper.toOriginalRange(file, diagnostic);
 	if (!range) {
 		return undefined;
@@ -44,9 +56,7 @@ function convertRuleReport(diagnostic: Diagnostic, ruleId: string, file: SourceF
 	const endPosition = toLineAndCharacter(lineStarts, range.end);
 	return {
 		...diagnostic,
-		// There are no string codes.
-		source: ruleId,
-		code: '' as unknown as number,
+		...code,
 		fileName: file.fileName,
 		pos: range.pos,
 		end: range.end,

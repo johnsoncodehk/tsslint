@@ -666,6 +666,47 @@ function transform(content) {
 	}
 }
 
+// ── Test 15 (content mapper): a rule crash is reported without a position
+//
+// The transformed text starts with generated code, so a crash placed at
+// offset 0 would have no original position and be dropped.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	writeMapperProject(
+		dir,
+		mapperServer(`
+function transform(content) {
+	const open = '<script lang="ts">';
+	const start = content.indexOf(open) + open.length;
+	const body = content.slice(start, content.indexOf('</script>'));
+	const prefix = 'export {};\\n';
+	return { text: prefix + body, extension: '.ts', mappings: [[prefix.length, body.length, start, body.length, 0, 1048575]] };
+}
+`),
+	);
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig, defineRule } from ${importPath(configModule)};\n`
+			+ `export default defineConfig({\n`
+			+ `  rules: {\n`
+			+ `    'crash': defineRule(() => { throw new Error('rule exploded'); }),\n`
+			+ `  },\n`
+			+ `});\n`,
+	);
+	fs.writeFileSync(path.join(dir, 'App.vue'), ['<script lang="ts">', 'const a = 1;', '</script>', ''].join('\n'));
+	try {
+		const out = stripAnsi(runCli(dir).stdout);
+		check(
+			'crash is reported for App.vue without a position',
+			out.includes('App.vue - message crash: Error: rule exploded') && !/App\.vue:\d+:\d+/.test(out),
+			out,
+		);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

@@ -283,7 +283,8 @@ export function create(
 				}
 
 				results = results.filter(error => {
-					if (error.ruleId === undefined) {
+					// Reports without a file position (a rule crash) are not on any line.
+					if (error.ruleId === undefined || error.fileName === undefined) {
 						return true;
 					}
 					const line = file.getLineAndCharacterOfPosition(error.pos).line;
