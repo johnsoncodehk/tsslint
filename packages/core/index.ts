@@ -11,7 +11,7 @@ import type {
 	Rules,
 	TextChange,
 } from '@tsslint/types';
-import type { SourceFile } from 'typescript/ast';
+import type { MappedDiagnosticDirective, SourceFile } from 'typescript/ast';
 import type { Checker, Program } from 'typescript/sync';
 import { DiagnosticCategory } from 'typescript/sync';
 
@@ -166,6 +166,11 @@ export function createLinter(
 				...(options?.prevDiagnostics ?? []),
 				...lintResult[1].keys(),
 			];
+
+			const directives = file.diagnosticDirectives;
+			if (directives?.length) {
+				diagnostics = diagnostics.filter(diagnostic => !isInDirective(directives, diagnostic.start));
+			}
 
 			for (const { plugins } of configs) {
 				for (const { resolveDiagnostics } of plugins) {
@@ -433,6 +438,13 @@ export function createLinter(
 			record[[...paths, path].join('/')] = rule;
 		}
 	}
+}
+
+// A content mapper's Ignore and Expect directives both suppress rule
+// reports that start inside their virtual range. An unused Expect is
+// reported by TypeScript itself, so there is nothing to add here.
+function isInDirective(directives: readonly MappedDiagnosticDirective[], start: number) {
+	return directives.some(({ virtualRange }) => start >= virtualRange.pos && start < virtualRange.end);
 }
 
 export function combineCodeFixes(fileName: string, fixes: CodeFixAction[]) {

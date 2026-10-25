@@ -362,10 +362,9 @@ function markerLineCount(markerPath: string): number {
 	}
 }
 
-// A project whose `.vue` files go through a minimal tsconfig content
-// mapper: the `<script lang="ts">` body is copied verbatim (one exact
-// segment) and `export {};` is appended as unmapped generated code.
-const MAPPER_SERVER = `
+// A minimal tsconfig content mapper process; `transform` is the source
+// of a `function transform(content)` returning the transform result.
+const mapperServer = (transform: string) => `
 let input = Buffer.alloc(0);
 process.stdin.on('data', chunk => {
 	input = Buffer.concat([input, chunk]);
@@ -383,12 +382,7 @@ process.stdin.on('data', chunk => {
 function handle(method, params) {
 	if (method === 'initialize') return { positionEncoding: 'utf-16', diagnosticSource: 'test' };
 	if (method === 'openProject') return { configIdentity: 'test' };
-	if (method === 'transform') {
-		const open = '<script lang="ts">';
-		const start = params.content.indexOf(open) + open.length;
-		const body = params.content.slice(start, params.content.indexOf('</script>'));
-		return { text: body + '\\nexport {};\\n', extension: '.ts', mappings: [[0, body.length, start, body.length, 0, 1048575]] };
-	}
+	if (method === 'transform') return transform(params.content);
 	return null;
 }
 function respond(id, result) {
@@ -396,10 +390,21 @@ function respond(id, result) {
 	process.stdout.write('Content-Length: ' + body.length + '\\r\\n\\r\\n');
 	process.stdout.write(body);
 }
+${transform}
 `;
 
-function makeContentMapperFixture(newLine: string): { dir: string; vue: string } {
-	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+// The `<script lang="ts">` body is copied verbatim (one exact segment)
+// and `export {};` is appended as unmapped generated code.
+const MAPPER_SERVER = mapperServer(`
+function transform(content) {
+	const open = '<script lang="ts">';
+	const start = content.indexOf(open) + open.length;
+	const body = content.slice(start, content.indexOf('</script>'));
+	return { text: body + '\\nexport {};\\n', extension: '.ts', mappings: [[0, body.length, start, body.length, 0, 1048575]] };
+}
+`);
+
+function writeMapperProject(dir: string, server: string) {
 	const mapperDir = path.join(dir, 'node_modules', 'test-mapper');
 	fs.mkdirSync(mapperDir, { recursive: true });
 	fs.writeFileSync(
@@ -410,7 +415,7 @@ function makeContentMapperFixture(newLine: string): { dir: string; vue: string }
 			typescript: { contentMapper: { exec: ['node', 'server.js'], dynamicConfig: true } },
 		}),
 	);
-	fs.writeFileSync(path.join(mapperDir, 'server.js'), MAPPER_SERVER);
+	fs.writeFileSync(path.join(mapperDir, 'server.js'), server);
 	fs.writeFileSync(
 		path.join(dir, 'tsconfig.json'),
 		JSON.stringify({
@@ -419,6 +424,11 @@ function makeContentMapperFixture(newLine: string): { dir: string; vue: string }
 			include: ['*.vue'],
 		}),
 	);
+}
+
+function makeContentMapperFixture(newLine: string): { dir: string; vue: string } {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	writeMapperProject(dir, MAPPER_SERVER);
 	fs.writeFileSync(
 		path.join(dir, 'tsslint.config.ts'),
 		`import { defineConfig, defineRule } from ${importPath(configModule)};\n`
@@ -480,6 +490,92 @@ function stripAnsi(text: string): string {
 		);
 		const out = stripAnsi(runCli(dir).stdout);
 		check('no diagnostics after --fix', !out.includes('no-console'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 12 (content mapper): diagnostic directives suppress reports ───
+//
+// Shaped like Vue's output: template expressions are appended to the
+// script inside a generated function, `@vue-ignore` / `@vue-expect-error`
+// become Ignore / Expect directives over the next expression, and the
+// generated code between the script and the first expression is covered
+// by a synthesized Ignore (no original range). `__VLS_template` maps to
+// the `template` tag name with no language features, so without the
+// synthesized Ignore a report on it would land on `<template>`.
+{
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-int-cm-')));
+	writeMapperProject(
+		dir,
+		mapperServer(`
+function transform(content) {
+	const open = '<script lang="ts">';
+	const start = content.indexOf(open) + open.length;
+	const body = content.slice(start, content.indexOf('</script>'));
+	const mappings = [[0, body.length, start, body.length, 0, 1048575]];
+	const directives = [];
+	let text = body + '\\nexport {};\\nfunction ';
+	mappings.push([text.length, 14, 1, 8, 1, 0]);
+	text += '__VLS_template() {\\n';
+	directives.push([0, 0, body.length, text.length, 0]);
+	for (const m of content.matchAll(/(?:<!-- (@vue-ignore|@vue-expect-error) -->\\s*)?<p>\\{\\{ (.*?) \\}\\}<\\/p>/g)) {
+		const exprStart = m.index + m[0].indexOf('{{ ') + 3;
+		const virtualStart = text.length;
+		mappings.push([virtualStart, m[2].length, exprStart, m[2].length, 0, 1048575]);
+		text += m[2] + ';\\n';
+		const commentLength = m[0].indexOf('-->') + 3;
+		if (m[1] === '@vue-ignore') directives.push([m.index, commentLength, virtualStart, text.length, 0]);
+		if (m[1] === '@vue-expect-error') directives.push([m.index, commentLength, virtualStart, text.length, 1, 0]);
+	}
+	text += '}\\n';
+	return {
+		text,
+		extension: '.ts',
+		mappings,
+		diagnosticDirectives: { unusedExpectDirectiveDiagnostics: [{ code: 2578, messageText: 'Unused directive.' }], directives },
+	};
+}
+`),
+	);
+	fs.writeFileSync(
+		path.join(dir, 'tsslint.config.ts'),
+		`import { defineConfig, defineRule } from ${importPath(configModule)};\n`
+			+ `export default defineConfig({\n`
+			+ `  rules: {\n`
+			+ `    'no-console': (await import(${importPath(noConsoleRule)})),\n`
+			+ `    'generated': defineRule(({ file, report }) => {\n`
+			+ `      const start = file.text.indexOf('__VLS_template');\n`
+			+ `      report('generated identifier', start, start + 14);\n`
+			+ `    }),\n`
+			+ `  },\n`
+			+ `});\n`,
+	);
+	fs.writeFileSync(
+		path.join(dir, 'App.vue'),
+		[
+			'<template>',
+			'\t<!-- @vue-ignore -->',
+			`\t<p>{{ console.log('ignored') }}</p>`,
+			'\t<!-- @vue-expect-error -->',
+			`\t<p>{{ console.log('expected') }}</p>`,
+			`\t<p>{{ console.log('kept') }}</p>`,
+			'</template>',
+			'<script lang="ts">',
+			`console.log('script');`,
+			'</script>',
+			'',
+		].join('\n'),
+	);
+	try {
+		const out = stripAnsi(runCli(dir).stdout);
+		check('report outside directives is kept', out.includes('App.vue:6:8') && out.includes('App.vue:9:1'), out);
+		check('@vue-ignore suppresses the report in its range', !out.includes('App.vue:3:'), out);
+		check('@vue-expect-error suppresses the report in its range', !out.includes('App.vue:5:'), out);
+		check('synthesized Ignore suppresses the generated-code report', !out.includes('generated identifier'), out);
+		check('no unused report for directives', !/unused/i.test(out), out);
+		check('exactly the two kept reports', out.includes('2 messages'), out);
 	}
 	finally {
 		fs.rmSync(dir, { recursive: true, force: true });
