@@ -582,6 +582,95 @@ const ALL_GRAPH_FILES = 'a.ts,b.ts,c.ts,g.d.ts,m.ts,r.ts,u.ts';
 	}
 }
 
+function addGraphFiles(dir: string, files: Record<string, string>) {
+	const tsconfigPath = path.join(dir, 'tsconfig.json');
+	const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, 'utf8'));
+	for (const [name, text] of Object.entries(files)) {
+		fs.writeFileSync(path.join(dir, name), text);
+		tsconfig.files.push(name);
+	}
+	fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig));
+}
+
+// ── Test 16: a UMD module's names are global ────────────────────────────
+//
+// s.ts reaches umd.d.ts's exports through `export as namespace` alone.
+{
+	const { dir, markerPath } = makeGraphFixture();
+	const umd = path.join(dir, 'umd.d.ts');
+	try {
+		addGraphFiles(dir, {
+			'umd.d.ts': `export declare const V: number;\nexport as namespace U;\n`,
+			's.ts': `const sv = U.V;\n`,
+		});
+		runCli(dir);
+		editFile(umd, `export declare const V: string;\nexport as namespace U;\n`);
+		let out = '';
+		const linted = lintedDuring(markerPath, () => out = runCli(dir).stdout);
+		check('UMD type change re-lints the file using its global name', linted.split(',').includes('s.ts'), linted);
+		check('the global name reports the new type', out.includes('sv has type string'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 17: what reaches a module's augmentation blocks ─────────────────
+//
+// m.ts augments './t' without importing it, names `f` from './a' in the
+// block, and exports `h`, which i.ts imports. A change that doesn't reach
+// the block re-lints m.ts and its importers; one that does, everything.
+{
+	const { dir, markerPath, files } = makeGraphFixture();
+	const u = path.join(dir, 'u.ts');
+	const m = (h: string, local = '', field = '') =>
+		`import type { f } from './a';\n`
+		+ `import { u } from './u';\n`
+		+ `export function h() {\n\treturn ${h};\n}\n`
+		+ local
+		+ `declare module './t' {\n\tinterface Extra {\n\t\ty: ReturnType<typeof f>;${field}\n\t}\n}\n`;
+	const all = 'a.ts,b.ts,c.ts,g.d.ts,i.ts,m.ts,r.ts,t.ts,u.ts';
+	try {
+		fs.writeFileSync(files.m, m('u'));
+		addGraphFiles(dir, {
+			'i.ts': `import { h } from './m';\nexport const k = h();\n`,
+			't.ts': `export const t = 1;\n`,
+		});
+		runCli(dir);
+
+		editFile(u, `export const u = 'x';\n`);
+		const imported = lintedDuring(markerPath, () => runCli(dir));
+		check('an import the blocks do not name re-lints m.ts and its importers', imported === 'i.ts,m.ts,u.ts', imported);
+
+		editFile(files.m, m('String(u).length > 0'));
+		const own = lintedDuring(markerPath, () => runCli(dir));
+		check('an export the blocks do not name re-lints m.ts and its importers', own === 'i.ts,m.ts', own);
+
+		editFile(path.join(dir, 't.ts'), `export const t = 1;\nexport const extra = 1;\n`);
+		const augmented = lintedDuring(markerPath, () => runCli(dir));
+		check('a change of the augmented module re-lints everything', augmented === all, augmented);
+
+		editFile(files.a, `export function f() {\n\treturn 'x';\n}\n`);
+		const named = lintedDuring(markerPath, () => runCli(dir));
+		check('a change of an import the blocks name re-lints everything', named === all, named);
+
+		const local = (type: string) => `export interface Local {\n\tz: ${type};\n}\n`;
+		editFile(files.m, m('String(u).length > 0', local('number'), '\n\t\tl: Local;'));
+		const block = lintedDuring(markerPath, () => runCli(dir));
+		check('a block edit re-lints everything', block === all, block);
+
+		editFile(files.m, m('String(u).length > 0', local('string'), '\n\t\tl: Local;'));
+		const named2 = lintedDuring(markerPath, () => runCli(dir));
+		check('a change of a declaration the blocks name re-lints everything', named2 === all, named2);
+
+		const warm = lintedDuring(markerPath, () => runCli(dir));
+		check('warm run after it lints nothing', warm === '', warm);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // A minimal tsconfig content mapper process; `transform` is the source
 // of a `function transform(content)` returning the transform result.
 const mapperServer = (transform: string) => `

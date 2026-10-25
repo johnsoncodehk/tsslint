@@ -12,14 +12,16 @@
 // Some changes can affect any file; they re-lint everything:
 //   - compiler options, tsconfig files, content mappers, config and rule modules
 //   - files added to or removed from the program, or changes under `node_modules`
-//   - a changed signature of a file that declares globals or augments modules,
-//     or a file starting or stopping to do so
+//   - a changed signature of a script or a UMD module (`export as namespace`)
+//   - a changed `declare global` / `declare module '...'` block, or a changed
+//     signature of a module whose blocks name what changed
+//   - a file starting or stopping to declare globals
 
 import crypto = require('crypto');
 import fs = require('fs');
 import path = require('path');
-import type { SourceFile } from 'typescript/ast';
-import type { API, Program, Project } from 'typescript/sync';
+import * as ts from 'typescript/ast';
+import type { API, Project } from 'typescript/sync';
 import type { CacheData, GraphNode } from './cache.js';
 
 const CHUNK_SIZE = 500;
@@ -27,9 +29,23 @@ const CHUNK_SIZE = 500;
 interface FileInfo {
 	deps: string[];
 	global: boolean;
+	// For a module with `declare global` / `declare module '...'` blocks; a
+	// script or a UMD module is global as a whole.
+	scope?: Scope;
 	// How each module specifier and reference in the file resolved; `null`
 	// when it points outside the graph.
 	references: Map<string, string | null>;
+}
+
+interface Scope {
+	// Hash of the blocks' text.
+	hash: string;
+	// Identifiers and string literals in the blocks.
+	words: Set<string>;
+	// Names the module declares outside the blocks.
+	locals: Set<string>;
+	// Names bound by the imports of each module specifier.
+	imports: Map<string, Set<string>>;
 }
 
 export function invalidate(
@@ -89,8 +105,10 @@ export function invalidate(
 	}
 
 	const oldSignatures = new Map<string, string | undefined>();
+	let scopeChanged = false;
 	for (const fileName of changed) {
 		oldSignatures.set(fileName, cache.graph[fileName]?.signature);
+		scopeChanged ||= cache.graph[fileName].scope !== infos.get(fileName)!.scope?.hash;
 		setNode(cache, fileName, ownFiles.get(fileName)!, infos.get(fileName)!);
 	}
 	const importers = getImporters(cache);
@@ -111,7 +129,7 @@ export function invalidate(
 			}
 		}
 		const unemitted = wave.filter(fileName => !signatures.has(fileName));
-		for (const [fileName, declaration] of getDeclarations(api, program, unemitted)) {
+		for (const [fileName, declaration] of getDeclarations(api, project, unemitted)) {
 			declarations.set(fileName, declaration.declaration);
 			signatures.set(fileName, declaration.signature);
 			if (!changedSet.has(fileName)) {
@@ -142,9 +160,11 @@ export function invalidate(
 	for (const [fileName, signature] of signatures) {
 		cache.graph[fileName].signature = signature;
 	}
-	updateMissingSignatures(api, program, cache, importers);
+	updateMissingSignatures(api, project, cache, importers);
 	// The graph stays valid; only the results can't be reused.
-	if ([...signatureChanged].some(fileName => cache.graph[fileName].global)) {
+	if (
+		scopeChanged || [...signatureChanged].some(fileName => cache.graph[fileName].global && reachesGlobals(fileName))
+	) {
 		cache.files = {};
 		return;
 	}
@@ -175,7 +195,27 @@ export function invalidate(
 		for (const fileName of all) {
 			setNode(cache, fileName, ownFiles.get(fileName)!, allInfos.get(fileName)!);
 		}
-		updateMissingSignatures(api, program, cache);
+		updateMissingSignatures(api, project, cache);
+	}
+
+	// Whether a global file's changed signature reaches what it declares
+	// globally. Its blocks are unchanged here; what they name can still
+	// change, through an import or a declaration of the module itself.
+	function reachesGlobals(fileName: string) {
+		const { scope, references } = infos.get(fileName)!;
+		if (!scope) {
+			return true;
+		}
+		for (const [specifier, target] of references) {
+			if (target === null || target === fileName || !signatureChanged.has(target)) {
+				continue;
+			}
+			if (scope.words.has(specifier) || [...scope.imports.get(specifier) ?? []].some(name => scope.words.has(name))) {
+				return true;
+			}
+		}
+		// A local can change through a dependency, e.g. `type T = import('./a').T`.
+		return [...scope.locals].some(name => scope.words.has(name));
 	}
 
 	function hasSignatureChanged(fileName: string) {
@@ -204,6 +244,9 @@ export function invalidate(
 
 function setNode(cache: CacheData, fileName: string, stat: fs.Stats, info: FileInfo) {
 	const node: GraphNode = { mtime: stat.mtimeMs, size: stat.size, deps: info.deps, global: info.global };
+	if (info.scope) {
+		node.scope = info.scope.hash;
+	}
 	const signature = cache.graph[fileName]?.signature;
 	if (signature !== undefined) {
 		node.signature = signature;
@@ -229,7 +272,7 @@ function getImporters(cache: CacheData) {
 // files that declare globals.
 function updateMissingSignatures(
 	api: API,
-	program: Program,
+	project: Project,
 	cache: CacheData,
 	importers = getImporters(cache),
 ) {
@@ -242,14 +285,14 @@ function updateMissingSignatures(
 			missing.push(fileName);
 		}
 	}
-	for (const [fileName, { signature }] of getDeclarations(api, program, missing)) {
+	for (const [fileName, { signature }] of getDeclarations(api, project, missing)) {
 		cache.graph[fileName].signature = signature;
 	}
 }
 
 function analyze(
 	api: API,
-	program: Program,
+	program: Project['program'],
 	fileNames: string[],
 	ownFiles: Map<string, fs.Stats>,
 	known?: Map<string, FileInfo>,
@@ -267,9 +310,16 @@ function analyze(
 	}
 	for (let i = 0; i < pending.length; i += CHUNK_SIZE) {
 		const files = api.batch(...pending.slice(i, i + CHUNK_SIZE).map(fileName => program.getSourceFile.gen(fileName)))
-			.filter((file): file is SourceFile => !!file);
-		const requests = files.flatMap(file => [
-			...file.imports.map(specifier =>
+			.filter((file): file is ts.SourceFile => !!file);
+		// An augmented module needs no import.
+		const specifiers = files.map(file =>
+			[
+				...file.imports,
+				...file.moduleAugmentations.filter(name => ts.isStringLiteral(name)),
+			] as unknown as { text: string }[]
+		);
+		const requests = files.flatMap((file, i) => [
+			...specifiers[i].map(specifier =>
 				program.getResolvedModuleFromModuleSpecifier.gen(specifier as any, file.fileName)
 			),
 			...file.typeReferenceDirectives.map(ref =>
@@ -278,10 +328,10 @@ function analyze(
 		]);
 		const resolved = api.batch(...requests) as ({ resolvedFileName: string } | undefined)[];
 		let index = 0;
-		const targets = files.map(file => {
+		const targets = files.map((file, i) => {
 			const fileTargets: [specifier: string, target: string | undefined][] = [];
-			for (const specifier of file.imports) {
-				fileTargets.push([(specifier as unknown as { text: string }).text, resolved[index++]?.resolvedFileName]);
+			for (const specifier of specifiers[i]) {
+				fileTargets.push([specifier.text, resolved[index++]?.resolvedFileName]);
 			}
 			for (const ref of file.typeReferenceDirectives) {
 				fileTargets.push([ref.fileName, resolved[index++]?.resolvedFileName]);
@@ -327,31 +377,101 @@ function analyze(
 					references.set(specifier, dep);
 				}
 			}
-			infos.set(file.fileName, {
-				deps: [...deps],
-				global: !file.fileName.endsWith('.json') && (
+			const info: FileInfo = { deps: [...deps], global: false, references };
+			if (!file.fileName.endsWith('.json')) {
+				if (
 					!file.externalModuleIndicator
-					|| file.moduleAugmentations.length > 0
-					|| file.ambientModuleNames.length > 0
-				),
-				references,
-			});
+					|| (/\bexport\s+as\s+namespace\b/.test(file.text) && file.statements.some(ts.isNamespaceExportDeclaration))
+				) {
+					info.global = true;
+				}
+				else if (file.moduleAugmentations.length || file.ambientModuleNames.length) {
+					info.global = true;
+					info.scope = getScope(file);
+				}
+			}
+			infos.set(file.fileName, info);
 		});
 	}
 	return infos;
 }
 
+function getScope(file: ts.SourceFile): Scope {
+	let text = '';
+	const locals = new Set<string>();
+	const imports = new Map<string, Set<string>>();
+	const addImport = (specifier: string, names: Iterable<string>) => {
+		let set = imports.get(specifier);
+		if (!set) {
+			imports.set(specifier, set = new Set());
+		}
+		for (const name of names) {
+			set.add(name);
+		}
+	};
+	for (const statement of file.statements) {
+		const statementText = file.text.slice(statement.pos, statement.end);
+		if (ts.isModuleDeclaration(statement) && (ts.isStringLiteral(statement.name) || statement.name.text === 'global')) {
+			text += statementText + '\0';
+		}
+		else if (ts.isImportDeclaration(statement)) {
+			if (statement.importClause && ts.isStringLiteral(statement.moduleSpecifier)) {
+				const clause = file.text.slice(statement.importClause.pos, statement.importClause.end);
+				addImport(statement.moduleSpecifier.text, getWords(clause));
+			}
+		}
+		else if (
+			ts.isImportEqualsDeclaration(statement)
+			&& ts.isExternalModuleReference(statement.moduleReference)
+			&& ts.isStringLiteral(statement.moduleReference.expression)
+		) {
+			addImport(statement.moduleReference.expression.text, [statement.name.text]);
+		}
+		else if (ts.isVariableStatement(statement)) {
+			for (const declaration of statement.declarationList.declarations) {
+				for (const name of getWords(file.text.slice(declaration.name.pos, declaration.name.end))) {
+					locals.add(name);
+				}
+			}
+		}
+		else if ('name' in statement && statement.name && ts.isIdentifier(statement.name as ts.Node)) {
+			locals.add((statement.name as ts.Identifier).text);
+		}
+		else if (
+			!ts.isExportDeclaration(statement) && !ts.isExportAssignment(statement) && !ts.isExpressionStatement(statement)
+		) {
+			// e.g. a top-level `for (var x ...)`
+			for (const name of getWords(statementText)) {
+				locals.add(name);
+			}
+		}
+	}
+	return { hash: hash(text), words: new Set(getWords(text)), locals, imports };
+}
+
+// Identifiers and string literal contents; keywords and words inside
+// strings or comments only over-match.
+function* getWords(text: string) {
+	for (const match of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
+		yield match[0];
+	}
+	for (const match of text.matchAll(/['"]([^'"\n]*)['"]/g)) {
+		yield match[1];
+	}
+}
+
 // The declaration emit of each file, and its signature: a hash of the
 // declaration, or of the text when the file has none to compare.
-function getDeclarations(api: API, program: Program, fileNames: string[]) {
+function getDeclarations(api: API, project: Project, fileNames: string[]) {
+	const { program } = project;
 	const result = new Map<string, { declaration: string | undefined; signature: string }>();
 	for (let i = 0; i < fileNames.length; i += CHUNK_SIZE) {
 		const files = api.batch(...fileNames.slice(i, i + CHUNK_SIZE).map(fileName => program.getSourceFile.gen(fileName)))
-			.filter((file): file is SourceFile => !!file);
+			.filter((file): file is ts.SourceFile => !!file);
 		const emitted = files.filter(file => !file.isDeclarationFile);
 		const outputs = new Map<string, string[]>();
-		if (emitted.length) {
-			for (const [outputName, output] of program.getDeclarationEmit(emitted.map(file => file.fileName)).outputFiles) {
+		const collect = (outputFiles: ReturnType<typeof program.getDeclarationEmit>['outputFiles']) => {
+			for (const [outputName, output] of outputFiles) {
 				if (output.sourceFileName === undefined || outputName.endsWith('.map')) {
 					continue;
 				}
@@ -361,6 +481,9 @@ function getDeclarations(api: API, program: Program, fileNames: string[]) {
 				}
 				texts.push(output.text);
 			}
+		};
+		if (emitted.length) {
+			collect(program.getDeclarationEmit(emitted.map(file => file.fileName)).outputFiles);
 		}
 		for (const file of files) {
 			const declaration = file.isDeclarationFile ? file.text : outputs.get(file.fileName)?.sort().join('\0');
@@ -375,9 +498,11 @@ const SPECIFIER_PATTERNS = [
 	// A side-effect import starts a statement; elsewhere `import` followed by
 	// a quote can be a string, e.g. `with { 'resolution-mode': 'import' }`.
 	/^\s*import\s*['"]([^'"\n]+)['"]/gm,
-	/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+	// Also `import("x", { with: { "resolution-mode": "import" } })`.
+	/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*[,)]/g,
 	/\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
-	/\/\/\/\s*<reference\s+(?:path|types)\s*=\s*['"]([^'"\n]+)['"]/g,
+	// Attributes in any order, e.g. `resolution-mode="import" types="x"`.
+	/\/\/\/\s*<reference\s+[^>\n]*?\b(?:path|types)\s*=\s*['"]([^'"\n]+)['"]/g,
 	// Names inside an augmentation resolve in the augmented module.
 	/\bdeclare\s+module\s+['"]([^'"\n]+)['"]/g,
 ];

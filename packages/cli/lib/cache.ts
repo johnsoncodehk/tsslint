@@ -31,7 +31,7 @@ const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v6';
+const CACHE_FORMAT_VERSION = 'v7';
 
 export interface CacheData {
 	version: string;
@@ -55,6 +55,9 @@ export interface GraphNode {
 	// Declares globals or augments modules, so a signature change can affect
 	// any file.
 	global: boolean;
+	// Hash of the `declare global` / `declare module '...'` blocks of a
+	// global module; a script or a UMD module has none.
+	scope?: string;
 }
 
 // Diagnostics after plugins ran, as the CLI reports them.

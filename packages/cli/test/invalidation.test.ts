@@ -157,6 +157,55 @@ function bumpMtime(fileName: string) {
 	}
 }
 
+// b.ts's declaration names a.ts only through `reference`; when a.ts's
+// signature changes, b.ts's declaration text stays the same, but c.ts,
+// which imports b.ts, must be re-linted.
+function checkReference(name: string, reference: string, declaration: string) {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tsslint-inv-ref-')));
+	try {
+		const a = path.join(dir, 'a.ts');
+		const b = path.join(dir, 'b.ts');
+		const c = path.join(dir, 'c.ts');
+		fs.writeFileSync(a, 'export const x = 1;\n');
+		fs.writeFileSync(b, 'export {};\n');
+		fs.writeFileSync(c, `import { v } from './b';\n`);
+		const files = new Map<string, StubFile>([
+			[a, { text: '', imports: [], declaration: 'export declare const x = 1;\n' }],
+			[b, { text: '', imports: [reference], declaration }],
+			[c, { text: '', imports: ['./b'], declaration: 'export {};\n' }],
+		]);
+		const { api, project } = createStub(files, specifier => specifier === './b' ? b : a, new Map());
+
+		const cache = emptyCache();
+		invalidate(api, project, cache, '', new Map());
+		for (const fileName of [a, b, c]) {
+			cache.files[fileName] = { hasFix: false, diagnostics: [], touched: {} };
+		}
+		fs.writeFileSync(a, 'export const x = 2;\n');
+		bumpMtime(a);
+		files.get(a)!.declaration = 'export declare const x = 2;\n';
+		invalidate(api, project, cache, '', new Map());
+		check(name, !cache.files[c]);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── Test 3: an import type with attributes ─────────────────────────────
+checkReference(
+	'`import("./a", { with })` is a reference',
+	'./a',
+	`export declare const v: typeof import("./a", { with: { "resolution-mode": "import" } }).x;\n`,
+);
+
+// ── Test 4: a type reference with `resolution-mode` first ──────────────
+checkReference(
+	'`<reference resolution-mode types>` is a reference',
+	'./a',
+	`/// <reference resolution-mode="import" types="./a" />\nexport declare const v: number;\n`,
+);
+
 process.stdout.write('\n');
 if (failures.length) {
 	console.error(`\n${failures.length} failure(s):`);
