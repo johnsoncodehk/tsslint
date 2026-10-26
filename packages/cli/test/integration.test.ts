@@ -1285,6 +1285,27 @@ function transform(content) {
 	}
 }
 
+// ── Test 24 (content mapper): a lockfile change re-lints everything ────
+//
+// Upgrading a dependency of the mapper (e.g. `@vue/language-core`) changes
+// neither the mapper's package.json nor its `exec` files, only the lockfile.
+{
+	const { dir } = makeContentMapperFixture('\n');
+	const lockPath = path.join(dir, 'pnpm-lock.yaml');
+	fs.writeFileSync(lockPath, `lockfileVersion: '9.0'\n`);
+	try {
+		runCli(dir);
+		check('unchanged lockfile → cache hit', runCli(dir).stdout.includes('--force'));
+		editFile(lockPath, `lockfileVersion: '9.0'\n# upgraded\n`);
+		const out = runCli(dir).stdout;
+		check('lockfile edit → no cache hit', !out.includes('--force'), out);
+		check('lockfile edit still reports', out.includes('no-console'), out);
+	}
+	finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 // ── Done ────────────────────────────────────────────────────────────────
 process.stdout.write('\n');
 if (failures.length) {

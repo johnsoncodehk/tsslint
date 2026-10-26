@@ -1583,6 +1583,7 @@ function updateContentMappersHash(api: API, hash: crypto.Hash, configFile: strin
 		}
 		const packageJson = readFile(packageJsonPath);
 		hash.update(`\0${packageJsonPath}\0${packageJson}`);
+		updateLockfileHash(hash, path.dirname(packageJsonPath));
 		// Files the mapper runs, e.g. `"exec": ["node", "server.js"]`.
 		let exec: unknown;
 		try {
@@ -1602,6 +1603,29 @@ function updateContentMappersHash(api: API, hash: crypto.Hash, configFile: strin
 				hash.update(`\0${fileName}\0${stat.mtimeMs}\0${stat.size}`);
 			}
 		}
+	}
+}
+
+const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'bun.lock', 'bun.lockb'];
+
+// The mapper's own dependencies (e.g. `@vue/language-core`) are not in the
+// program, so an upgrade is seen through the nearest lockfile above it.
+function updateLockfileHash(hash: crypto.Hash, dir: string) {
+	while (true) {
+		let found = false;
+		for (const name of LOCKFILES) {
+			const fileName = path.join(dir, name);
+			const stat = fs.statSync(fileName, { throwIfNoEntry: false });
+			if (stat?.isFile()) {
+				hash.update(`\0${fileName}\0${stat.mtimeMs}\0${stat.size}`);
+				found = true;
+			}
+		}
+		const parent = path.dirname(dir);
+		if (found || parent === dir) {
+			return;
+		}
+		dir = parent;
 	}
 }
 
