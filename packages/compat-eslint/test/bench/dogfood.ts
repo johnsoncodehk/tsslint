@@ -14,14 +14,16 @@
 // - Output is grouped: each unique (rule, divergence-pattern) is
 //   collapsed to one entry plus a single example location.
 
-import * as fs from 'fs';
+import * as oracle from '@tsslint/estree-oracle';
 import * as path from 'path';
-import * as ts from 'typescript';
+import type { SourceFile } from 'typescript/ast';
+import type { Checker, Program } from 'typescript/sync';
+import { createProjectForFiles } from '../ts7';
 import { DOGFOOD_FILES } from './dogfood-corpus';
 
 const compat = require('../../index.js') as typeof import('../../index.js');
-const { Linter } = require('eslint') as typeof import('eslint');
-const tsParser = require('@typescript-eslint/parser');
+const { Linter } = oracle.eslint;
+const tsParser = oracle.parser;
 
 const { RULES } = require('./rules.config.js') as { RULES: Array<[string, unknown[]?]> };
 
@@ -35,76 +37,42 @@ interface DiagLoc {
 }
 
 function buildProgram(files: readonly string[]) {
-	const realLibPath = ts.getDefaultLibFilePath({ target: ts.ScriptTarget.ES2020 });
-	const realLibName = realLibPath.split(/[\\/]/).pop()!;
-	const realLib = ts.createSourceFile(
-		realLibPath,
-		ts.sys.readFile(realLibPath) ?? '',
-		ts.ScriptTarget.ES2020,
-		true,
-		ts.ScriptKind.TS,
-	);
-	const sources = new Map<string, ts.SourceFile>();
-	for (const f of files) {
-		const abs = path.join(REPO_ROOT, f);
-		const text = fs.readFileSync(abs, 'utf8');
-		// Use the in-repo absolute path so cross-imports between
-		// packages resolve naturally; the program never writes.
-		sources.set(abs, ts.createSourceFile(abs, text, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS));
-	}
-	const host: ts.CompilerHost = {
-		getSourceFile: name => sources.get(name) ?? (name === realLibPath ? realLib : undefined),
-		getDefaultLibFileName: () => realLibName,
-		writeFile: () => {},
-		getCurrentDirectory: () => REPO_ROOT,
-		getDirectories: () => [],
-		fileExists: name => sources.has(name) || name === realLibPath || ts.sys.fileExists(name),
-		readFile: name => {
-			const sf = sources.get(name);
-			if (sf) return sf.text;
-			if (name === realLibPath) return realLib.text;
-			return ts.sys.readFile(name);
-		},
-		getCanonicalFileName: n => n,
-		useCaseSensitiveFileNames: () => true,
-		getNewLine: () => '\n',
-	};
-	const program = ts.createProgram({
-		rootNames: [...sources.keys()],
-		options: {
-			target: ts.ScriptTarget.ES2020,
-			lib: ['es2020'],
-			module: ts.ModuleKind.NodeNext,
-			moduleResolution: ts.ModuleResolutionKind.NodeNext,
-			types: [],
-			noEmit: true,
-			strict: true,
-			noImplicitAny: false,
-			allowJs: false,
-			skipLibCheck: true,
-		},
-		host,
+	const absFiles = files.map(f => path.join(REPO_ROOT, f));
+	const { program, checker } = createProjectForFiles(absFiles, {
+		target: 'es2020',
+		lib: ['es2020'],
+		module: 'nodenext',
+		moduleResolution: 'nodenext',
+		types: [],
+		strict: true,
+		noImplicitAny: false,
+		skipLibCheck: true,
 	});
-	return { program, sources };
+	const sources = new Map<string, SourceFile>();
+	for (const abs of absFiles) sources.set(abs, program.getSourceFile(abs)!);
+	return { program, checker, sources };
 }
 
-let _tsPlugin: { rules: Record<string, unknown> } | undefined;
 function loadRule(ruleName: string): unknown {
-	if (ruleName.startsWith('@typescript-eslint/')) {
-		_tsPlugin ??= require('@typescript-eslint/eslint-plugin');
-		const short = ruleName.slice('@typescript-eslint/'.length);
-		const rule = _tsPlugin!.rules[short];
-		if (!rule) throw new Error(`@typescript-eslint plugin has no rule '${short}'`);
-		return rule;
-	}
 	const eslintRoot = path.dirname(require.resolve('eslint/package.json'));
 	return require(path.join(eslintRoot, 'lib/rules', ruleName + '.js'));
 }
 
-function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, options: unknown[]): DiagLoc[] {
-	const rule = loadRule(ruleName);
+// convertRule's shared traversal runs once per file with every rule
+// registered at that moment, so all rules must be converted up front.
+const convertedRules = new Map<string, ReturnType<typeof compat.convertRule>>();
+for (const [ruleName, options = []] of RULES) {
+	convertedRules.set(ruleName, compat.convertRule(loadRule(ruleName) as any, options as any[], { id: ruleName }));
+}
+
+function runTsslint(
+	program: Program,
+	checker: Checker,
+	sf: SourceFile,
+	ruleName: string,
+): DiagLoc[] {
 	const out: DiagLoc[] = [];
-	const tsslintRule = compat.convertRule(rule as any, options as any[], { id: ruleName });
+	const tsslintRule = convertedRules.get(ruleName)!;
 	const reportFn: any = (_msg: string, start: number, _end: number) => {
 		const lc = sf.getLineAndCharacterOfPosition(start);
 		out.push({ file: sf.fileName, line: lc.line + 1, column: lc.character + 1, ruleId: ruleName });
@@ -133,13 +101,10 @@ function runTsslint(program: ts.Program, sf: ts.SourceFile, ruleName: string, op
 			withUnnecessary() {
 				return r;
 			},
-			withoutCache() {
-				return r;
-			},
 		};
 		return r;
 	};
-	tsslintRule({ file: sf, report: reportFn, program } as any);
+	tsslintRule({ file: sf, report: reportFn, program, checker } as any);
 	return out;
 }
 
@@ -149,23 +114,15 @@ function runEslint(
 	fileName: string,
 	ruleName: string,
 	options: unknown[],
-	program: ts.Program,
 ): DiagLoc[] {
-	const isPluginRule = ruleName.startsWith('@typescript-eslint/');
 	const config: any = {
 		files: ['**/*.ts'],
 		languageOptions: {
 			parser: tsParser,
-			parserOptions: isPluginRule
-				? { ecmaVersion: 'latest', sourceType: 'module', programs: [program] }
-				: { ecmaVersion: 'latest', sourceType: 'module' },
+			parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
 		},
 		rules: { [ruleName]: ['error', ...options] },
 	};
-	if (isPluginRule) {
-		_tsPlugin ??= require('@typescript-eslint/eslint-plugin');
-		config.plugins = { '@typescript-eslint': _tsPlugin };
-	}
 	const messages = linter.verify(code, [config], fileName);
 	return messages
 		.filter(m => m.ruleId === ruleName)
@@ -191,7 +148,7 @@ interface DivergenceRecord {
 
 async function main() {
 	const corpus = DOGFOOD_FILES;
-	const { program, sources } = buildProgram(corpus);
+	const { program, checker, sources } = buildProgram(corpus);
 	// Linter's cwd defaults to process.cwd(); set it to REPO_ROOT so that
 	// absolute paths under the repo (e.g. /repo-root/packages/cli/index.ts)
 	// resolve to a relative form (`packages/cli/index.ts`) that matches
@@ -214,7 +171,7 @@ async function main() {
 			let t: DiagLoc[] | null = null;
 			let e: DiagLoc[] | null = null;
 			try {
-				t = runTsslint(program, sf, ruleName, options);
+				t = runTsslint(program, checker, sf, ruleName);
 			}
 			catch (err: any) {
 				crashes.push({ rule: ruleName, file, runner: 'tsslint', message: err?.message ?? String(err) });
@@ -224,7 +181,7 @@ async function main() {
 				// `parserOptions.programs` lookup succeeds (without it,
 				// type-aware plugin rules silently re-parse without type
 				// info and emit nothing).
-				e = runEslint(linter, code, abs, ruleName, options, program);
+				e = runEslint(linter, code, abs, ruleName, options);
 			}
 			catch (err: any) {
 				crashes.push({ rule: ruleName, file, runner: 'eslint', message: err?.message ?? String(err) });

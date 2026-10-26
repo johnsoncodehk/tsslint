@@ -6,7 +6,7 @@
 //     the previous emission was "content" (diagnostic or summary).
 //   - `summary()` always prepends a leading newline (even non-TTY) and
 //     marks itself as content so any follow-up `info()` (e.g. the
-//     `--list-rules` block) gets the same separator a diagnostic block
+//     `--debug-estree` block) gets the same separator a diagnostic block
 //     would have produced.
 //   - `diagnostic()` indents only in TTY mode, and prepends a newline.
 //
@@ -97,15 +97,15 @@ function withCapture(isTTY: boolean, fn: (renderer: import('../lib/render').Rend
 
 // ── Test 5: summary→info in TTY: blank-line separator ──────────────────
 // This is the recently fixed invariant. summary() must mark itself as
-// content so --list-rules block reads visually as its own section.
+// content so the --debug-estree block reads visually as its own section.
 {
 	const out = withCapture(true, r => {
 		r.summary(['5 passed']);
-		r.info('type-aware (1)');
+		r.info('estree node types');
 	});
 	check(
 		'summary→info: separator in TTY',
-		out === '\n5 passed\n\ntype-aware (1)\n',
+		out === '\n5 passed\n\nestree node types\n',
 		`got: ${JSON.stringify(out)}`,
 	);
 }
@@ -114,11 +114,11 @@ function withCapture(isTTY: boolean, fn: (renderer: import('../lib/render').Rend
 {
 	const out = withCapture(false, r => {
 		r.summary(['5 passed']);
-		r.info('type-aware (1)');
+		r.info('estree node types');
 	});
 	check(
 		'summary→info: no separator in non-TTY',
-		out === '\n5 passed\ntype-aware (1)\n',
+		out === '\n5 passed\nestree node types\n',
 		`got: ${JSON.stringify(out)}`,
 	);
 }

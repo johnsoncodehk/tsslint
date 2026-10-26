@@ -1,6 +1,16 @@
 import type * as TSSLint from '@tsslint/types';
+import { analyze } from '@typescript-eslint/scope-manager';
 import type * as ESLint from 'eslint';
-import * as ts from 'typescript';
+import {
+	type Checker,
+	type CompilerOptions,
+	DiagnosticCategory,
+	type Program,
+	ScriptKind,
+	type TextEdit,
+} from 'typescript/sync';
+import { ESLINT_BUILTIN_GLOBALS } from './lib/globals';
+import * as ts from './lib/ts';
 import CodePathAnalyzer = require('./lib/code-path-analysis/code-path-analyzer.js');
 import { convertLazy, LISTENER_PRE_MATERIALIZE } from './lib/lazy-estree';
 
@@ -11,7 +21,6 @@ import { LazySourceCode } from './lib/lazy-source-code';
 import { decomposeSimple, isCodePathListener } from './lib/selector-analysis';
 import { convertComments, convertTokens } from './lib/tokens';
 import { predicateAllKinds, predicateForTriggerSet, tsScanTraverse } from './lib/ts-ast-scan';
-import { applyEslintGlobals, TsScopeManager } from './lib/ts-scope-manager';
 import { visitorKeys } from './lib/visitor-keys';
 
 // Build a parse-time-named wrapper around a rule listener. V8's CPU
@@ -92,7 +101,7 @@ interface RuleEntry {
 	eslintRule: ESLint.Rule.RuleModule;
 	options: any[];
 	context: Partial<ESLint.Rule.RuleContext>;
-	category: ts.DiagnosticCategory;
+	category: DiagnosticCategory;
 }
 
 interface DeferredReport {
@@ -100,9 +109,9 @@ interface DeferredReport {
 	message: string;
 	start: number;
 	end: number;
-	category: ts.DiagnosticCategory;
-	textChanges?: ts.TextChange[];
-	suggestions?: { message: string; textChanges: ts.TextChange[] }[];
+	category: DiagnosticCategory;
+	textChanges?: TextEdit[];
+	suggestions?: { message: string; textChanges: TextEdit[] }[];
 }
 
 // Module-level state — populated by convertRule, queried at lint time.
@@ -116,8 +125,8 @@ const ruleRegistry = new Map</* eslintRule */ ESLint.Rule.RuleModule, RuleEntry>
 //   - `reports`: deferred per-rule reports collected during a single
 //     shared traversal; each tsslintRule call replays its own bucket.
 //   - `errors`: per-rule listener throws, captured so a rule's tsslintRule
-//     can rethrow at replay time (preserving TSSLint core's per-rule
-//     type-aware retry semantics).
+//     can rethrow at replay time, so core reports the crash under that
+//     rule.
 //
 // WeakMap (vs prior single-slot module variable) means concurrent files
 // don't thrash, and ts.SourceFile GC cleans up automatically.
@@ -128,16 +137,11 @@ const fileStates = new WeakMap<ts.SourceFile, {
 	errors: Map</* eslintRule */ ESLint.Rule.RuleModule, unknown>;
 }>();
 
-// `isExternalModule` checks `externalModuleIndicator` only (ESM-only).
-// `commonJsModuleIndicator` flags TS files that look like CJS — those
-// runtime-wrap in a function scope, so top-level vars are NOT global,
-// matching module semantics for our purposes. Fold both flags into one
-// classification; pure script (neither flag) is rare in real TS code
-// but classifying it correctly avoids `no-var` rewriting a genuinely
-// global `var` to `const` (which would change runtime visibility).
+// Pure script (no module indicator) is rare in real TS code but
+// classifying it correctly avoids `no-var` rewriting a genuinely global
+// `var` to `const` (which would change runtime visibility).
 function classifySourceType(file: ts.SourceFile): 'module' | 'script' {
-	const f = file as { externalModuleIndicator?: unknown; commonJsModuleIndicator?: unknown };
-	return (f.externalModuleIndicator || f.commonJsModuleIndicator) ? 'module' : 'script';
+	return file.externalModuleIndicator ? 'module' : 'script';
 }
 
 // Caller may pass an ESLint-style `Partial<RuleContext>` that includes
@@ -165,7 +169,7 @@ function stripDerivedFields(
 		console.warn(
 			`[@tsslint/compat-eslint] Dropping caller-supplied ${
 				dropped.join(', ')
-			}. tsslint derives these per-file from TS (sourceType from externalModuleIndicator/commonJsModuleIndicator; ecmaVersion fixed at 'latest'). Remove these from the convertRule context to silence this warning.`,
+			}. tsslint derives these per-file from TS (sourceType from externalModuleIndicator; ecmaVersion fixed at 'latest'). Remove these from the convertRule context to silence this warning.`,
 		);
 	}
 	const cleaned: Record<string, unknown> = { ...(context as Record<string, unknown>) };
@@ -196,7 +200,7 @@ export function convertRule(
 	eslintRule: ESLint.Rule.RuleModule,
 	options: any[] = [],
 	context: Partial<ESLint.Rule.RuleContext> = {},
-	category: ts.DiagnosticCategory = 3 satisfies ts.DiagnosticCategory.Message,
+	category: DiagnosticCategory = DiagnosticCategory.Message,
 ): TSSLint.Rule {
 	// ESLint deep-merges `meta.defaultOptions` into user options so each
 	// rule sees the FULL options object (with all defaults filled in).
@@ -226,10 +230,11 @@ export function convertRule(
 	const entry: RuleEntry = { id, eslintRule, options, context: cleanedContext, category };
 	ruleRegistry.set(eslintRule, entry);
 
-	const tsslintRule: TSSLint.Rule = ({ file, report, program }) => {
+	const tsslintRule: TSSLint.Rule = ctx => {
+		const { file, report, program } = ctx;
 		let perFileState = fileStates.get(file);
 		if (!perFileState) {
-			const { sourceCode, convertContext } = buildEstree(file, program, classifySourceType(file));
+			const { sourceCode, convertContext } = buildEstree(file, program, () => ctx.checker, classifySourceType(file));
 			perFileState = {
 				sourceCode,
 				convertContext,
@@ -252,20 +257,20 @@ export function convertRule(
 
 		for (const r of myReports) {
 			const reporter = report(r.message, r.start, r.end).at(r.stackErr, 1);
-			if (r.category === 0 satisfies ts.DiagnosticCategory.Warning) {
+			if (r.category === DiagnosticCategory.Warning) {
 				reporter.asWarning();
 			}
-			else if (r.category === 1 satisfies ts.DiagnosticCategory.Error) {
+			else if (r.category === DiagnosticCategory.Error) {
 				reporter.asError();
 			}
-			else if (r.category === 2 satisfies ts.DiagnosticCategory.Suggestion) {
+			else if (r.category === DiagnosticCategory.Suggestion) {
 				reporter.asSuggestion();
 			}
 			if (r.textChanges) {
 				const tc = r.textChanges;
 				reporter.withFix(
 					getTextChangeMessage(file, tc),
-					() => [{ fileName: file.fileName, textChanges: tc }],
+					() => tc,
 				);
 			}
 			if (r.suggestions) {
@@ -273,7 +278,7 @@ export function convertRule(
 					const tc = s.textChanges;
 					reporter.withRefactor(
 						s.message,
-						() => [{ fileName: file.fileName, textChanges: tc }],
+						() => tc,
 					);
 				}
 			}
@@ -285,7 +290,7 @@ export function convertRule(
 
 function runSharedTraversal(
 	file: ts.SourceFile,
-	program: ts.Program,
+	program: Program,
 	state: NonNullable<ReturnType<typeof fileStates.get>>,
 ) {
 	const { sourceCode, convertContext, reports, errors } = state;
@@ -306,12 +311,8 @@ function runSharedTraversal(
 	// files allow top-level `return`. Built once and reused for both the
 	// legacy `parserOptions` shape and modern `languageOptions.parserOptions`
 	// so rules reading either path see the same view.
-	// `scriptKind` isn't in TS's public SourceFile typing but is set at
-	// runtime when the file is parsed; same access pattern as
-	// `externalModuleIndicator` in classifySourceType.
-	const scriptKind = (file as { scriptKind?: ts.ScriptKind }).scriptKind;
 	const ecmaFeatures = {
-		jsx: scriptKind === ts.ScriptKind.TSX || scriptKind === ts.ScriptKind.JSX,
+		jsx: isJsxFile(file),
 		globalReturn: sourceType === 'script',
 		impliedStrict: sourceType === 'module',
 	} as const;
@@ -758,26 +759,26 @@ function runEntries(
 	}
 }
 
-function getTextChangeMessage(file: ts.SourceFile, textChanges: ts.TextChange[]) {
+function getTextChangeMessage(file: ts.SourceFile, textChanges: TextEdit[]) {
 	if (textChanges.length === 1) {
 		const change = textChanges[0];
-		const originalText = file.text.substring(change.span.start, change.span.start + change.span.length);
+		const originalText = file.text.substring(change.pos, change.end);
 		if (change.newText.length === 0) {
 			return `Remove \`${originalText}\`.`;
 		}
-		else if (change.span.length === 0) {
-			const line = file.getLineAndCharacterOfPosition(change.span.start).line;
+		else if (change.pos === change.end) {
+			const line = file.getLineAndCharacterOfPosition(change.pos).line;
 			const lineStart = file.getPositionOfLineAndCharacter(line, 0);
-			const lineText = file.text.substring(lineStart, change.span.start).trimStart();
+			const lineText = file.text.substring(lineStart, change.pos).trimStart();
 			return `Insert \`${change.newText}\` after \`${lineText}\`.`;
 		}
 	}
-	const changes = [...textChanges].sort((a, b) => a.span.start - b.span.start);
+	const changes = [...textChanges].sort((a, b) => a.pos - b.pos);
 	let text = '';
 	let newText = '';
 	for (let i = 0; i < changes.length; i++) {
 		const change = changes[i];
-		text += file.text.substring(change.span.start, change.span.start + change.span.length);
+		text += file.text.substring(change.pos, change.end);
 		newText += change.newText;
 		if (i !== changes.length - 1) {
 			text += '…';
@@ -831,7 +832,7 @@ function getTextChangeMessage(file: ts.SourceFile, textChanges: ts.TextChange[])
 function getTextChanges(
 	_file: ts.SourceFile,
 	fix: ESLint.Rule.ReportFixer | null | undefined,
-): ts.TextChange[] {
+): TextEdit[] {
 	if (!fix) {
 		return [];
 	}
@@ -866,10 +867,11 @@ function getTextChanges(
 		return [];
 	}
 	const fixes = isIterable(result) ? [...result] : [result];
-	const textChanges: ts.TextChange[] = [];
+	const textChanges: TextEdit[] = [];
 	for (const f of fixes) {
 		textChanges.push({
-			span: { start: f.range[0], length: f.range[1] - f.range[0] },
+			pos: f.range[0],
+			end: f.range[1],
 			newText: f.text,
 		});
 	}
@@ -878,6 +880,30 @@ function getTextChanges(
 
 function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 	return obj != null && typeof (obj as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function';
+}
+
+function isJsxFile(file: ts.SourceFile): boolean {
+	return file.scriptKind === ScriptKind.TSX || file.scriptKind === ScriptKind.JSX;
+}
+
+type Lib = NonNullable<NonNullable<Parameters<typeof analyze>[1]>['lib']>[number];
+
+// Mirrors @typescript-eslint/parser's `getLib`: explicit `lib` entries
+// (`lib.es2022.d.ts`) win; otherwise the default lib of `target`.
+function getLib(options: CompilerOptions): Lib[] {
+	if (options.lib) {
+		const libs: Lib[] = [];
+		for (const lib of options.lib) {
+			const match = /^lib\.(.+)\.d\.[cm]?ts$/.exec(lib.toLowerCase());
+			if (match) libs.push(match[1] as Lib);
+		}
+		return libs;
+	}
+	const target = options.target;
+	if (target === undefined || target === ts.ScriptTarget.ESNext) return ['esnext.full'];
+	if (target === ts.ScriptTarget.ES2015) return ['es6'];
+	const name = ts.ScriptTarget[target]?.toLowerCase();
+	return name?.startsWith('es20') ? [`${name}.full` as Lib] : ['esnext.full'];
 }
 
 // Build a fresh `LazySourceCode` + lazy-estree convert context for `file`.
@@ -889,7 +915,8 @@ function isIterable(obj: unknown): obj is Iterable<ESLint.Rule.Fix> {
 // ts.SourceFile for. Calling our own converter directly avoids the require.
 function buildEstree(
 	file: ts.SourceFile,
-	program: ts.Program,
+	program: Program,
+	getChecker: () => Checker,
 	sourceType: 'module' | 'script',
 ): {
 	sourceCode: ESLint.SourceCode;
@@ -938,19 +965,24 @@ function buildEstree(
 	// ESM syntax is present); that's intentional, since it reflects how
 	// the file is actually emitted/run.
 	estree.sourceType = sourceType;
-	const scopeManager = new TsScopeManager(file, program, estree, astMaps, sourceType);
-	// Inject ECMAScript built-ins + TS lib type globals so `no-undef`
-	// doesn't fire on `undefined` / `Math` / `Record<K, V>` / etc.
-	// `TsScopeManager` itself stays free of this lint-pipeline policy
-	// (upstream eslint-scope parity tests rely on the un-injected
-	// shape); the names + de-dupe logic live next to `addGlobals` in
-	// `ts-scope-manager.ts`.
-	applyEslintGlobals(scopeManager);
 	const sourceCode = new LazySourceCode({
 		text: file.text,
 		ast: estree,
 		tsFile: file,
-		scopeManager,
+		createScopeManager: () => {
+			const compilerOptions = program.getCompilerOptions();
+			const scopeManager = analyze(estree, {
+				childVisitorKeys: visitorKeys as Record<string, string[]>,
+				globalReturn: false,
+				impliedStrict: sourceType === 'module',
+				jsxPragma: compilerOptions.jsxFactory ?? 'React',
+				jsxFragmentName: compilerOptions.jsxFragmentFactory ?? null,
+				lib: getLib(compilerOptions),
+				sourceType,
+			});
+			scopeManager.addGlobals([...ESLINT_BUILTIN_GLOBALS]);
+			return scopeManager;
+		},
 		visitorKeys: visitorKeys as Record<string, string[]>,
 		parserServices: {
 			...astMaps,
@@ -959,10 +991,8 @@ function buildEstree(
 			emitDecoratorMetadata: undefined,
 			experimentalDecorators: undefined,
 			isolatedDeclarations: undefined,
-			getSymbolAtLocation: (node: any) =>
-				program.getTypeChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
-			getTypeAtLocation: (node: any) =>
-				program.getTypeChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+			getSymbolAtLocation: (node: any) => getChecker().getSymbolAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
+			getTypeAtLocation: (node: any) => getChecker().getTypeAtLocation(astMaps.esTreeNodeToTSNodeMap.get(node)),
 		},
 	}) as unknown as ESLint.SourceCode;
 	return { sourceCode, convertContext };

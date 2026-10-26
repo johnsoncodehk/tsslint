@@ -5,12 +5,13 @@
 //
 // Path key includes:
 //   - tsslint version (segment) → bumping the package invalidates everything
-//   - typescript version (segment) → .tsbuildinfo format / TS internals can
-//     change across TS majors, so segregate per TS version
-//   - hash of (configFilePath, tsconfig, languages, configFile mtime+size)
-//     → editing tsslint.config.ts mints a fresh cache file
+//   - typescript version (segment) → checker output can change across TS
+//     versions, so segregate per TS version
+//   - hash of (configFilePath, tsconfig)
 //
-// Cache file shape — see packages/cli/CACHE.md "Cache file format" section.
+// Everything else that can invalidate results (compiler options, config
+// and rule modules, content mappers, files in the program) is checked
+// through `globalKey` and the dependency graph; see `lib/invalidation.ts`.
 //
 // Soundness invariants the loader enforces:
 //   - any parse / shape / version mismatch returns an empty cache (treated
@@ -24,59 +25,73 @@ import fs = require('fs');
 import os = require('os');
 import crypto = require('crypto');
 
-import type * as ts from 'typescript';
-import type { IncrementalState } from './incremental-state.js';
+import type { Diagnostic } from '@tsslint/types';
 
 const pkg = require('../package.json');
 
 // Bump when the on-disk shape changes incompatibly. Mismatching version
 // returns an empty cache; we don't migrate (cold start is the safe default).
-const CACHE_FORMAT_VERSION = 'v2';
+const CACHE_FORMAT_VERSION = 'v11';
 
 export interface CacheData {
 	version: string;
-	// Sticky per-rule classification. Only "type-aware" entries are
-	// stored — anything missing is treated as syntactic (or unclassified,
-	// which currently means the same thing: cache write happens).
-	ruleModes: Record</* ruleId */ string, 'type-aware'>;
+	// Hash of every input whose change re-lints all files.
+	globalKey?: string;
+	// Every program file outside `node_modules`.
+	graph: Record</* abs file path */ string, GraphNode>;
+	// Lint results that are still valid, by linted file.
 	files: Record</* abs file path */ string, FileCache>;
-	// Layer 2 cross-session state. Present iff the previous session ran
-	// with `--incremental`. Lets the next session compute which files'
-	// type-relevant inputs (incl. ambient `.d.ts`) have changed since.
-	// See `lib/incremental-state.ts`. Optional so layer-1-only sessions
-	// stay schema-clean.
-	incrementalState?: IncrementalState;
 }
 
-export interface FileCache {
+export interface GraphNode {
 	mtime: number;
-	rules: Record</* ruleId */ string, RuleCache>;
+	size: number;
+	// Hash of the file's declaration emit, or of its text when there is
+	// none. Only kept for files that other files depend on, and for global
+	// files.
+	signature?: string;
+	// Program files outside `node_modules` this file imports or references.
+	deps: string[];
+	// Per dep, the export names this file imports from it; `\0\0` for the
+	// whole module.
+	uses?: string[][];
+	// Declares globals or augments modules, so a signature change can affect
+	// any file.
+	global: boolean;
+	// Hash of the `declare global` / `declare module '...'` blocks of a
+	// global module; a script or a UMD module has none.
+	scope?: string;
+	// What the blocks of a global module use, as references (see `names`).
+	scopeRefs?: string[];
+	// For a module other files depend on, per export name, per top-level
+	// declaration or import (`\0` + its name) and for `export *` (`\0*`):
+	// the hash of its declaration emit, then what it references. A reference
+	// is a key of the same file, `<i>\0<export name>` for an export of
+	// `deps[i]` (`<i>\0\0\0` for the whole module), or `''` for a module
+	// specifier that did not resolve. An empty hash marks one whose types
+	// changed through a reference since it was emitted.
+	names?: Record<string, string[]>;
+	// Keys of `names` whose references are not read yet; their entries only
+	// hold the hash until a change can reach the file.
+	pending?: string[];
 }
 
-export interface RuleCache {
+// Diagnostics after plugins ran, as the CLI reports them.
+export interface FileCache {
 	hasFix: boolean;
-	diagnostics: SerializedDiagnostic[];
+	diagnostics: Diagnostic[];
+	// Hash of the text of each other program file the rules read beyond its
+	// declarations (see `getTouchedFiles` in @tsslint/core).
+	touched: Record</* abs file path */ string, string>;
 }
-
-// `ts.DiagnosticWithLocation` minus the live `file` reference — that gets
-// re-attached on load by looking up the SourceFile from the current Program.
-// `relatedInformation` similarly stores `{ fileName }` placeholders.
-export type SerializedDiagnostic = Omit<ts.DiagnosticWithLocation, 'file' | 'relatedInformation'> & {
-	relatedInformation?: SerializedRelatedInfo[];
-};
-
-export type SerializedRelatedInfo = Omit<ts.DiagnosticRelatedInformation, 'file'> & {
-	file?: { fileName: string };
-};
 
 export function loadCache(
 	tsconfig: string,
 	configFilePath: string,
-	languages: string[],
 	tsVersion: string,
 	createHash: (s: string) => string = defaultHash,
 ): CacheData {
-	const filePath = getCacheFilePath(tsconfig, configFilePath, languages, tsVersion, createHash);
+	const filePath = getCacheFilePath(tsconfig, configFilePath, tsVersion, createHash);
 	if (!fs.statSync(filePath, { throwIfNoEntry: false })?.isFile()) {
 		return emptyCache();
 	}
@@ -106,12 +121,11 @@ export function loadCache(
 export function saveCache(
 	tsconfig: string,
 	configFilePath: string,
-	languages: string[],
 	tsVersion: string,
 	cache: CacheData,
 	createHash: (s: string) => string = defaultHash,
 ): void {
-	const filePath = getCacheFilePath(tsconfig, configFilePath, languages, tsVersion, createHash);
+	const filePath = getCacheFilePath(tsconfig, configFilePath, tsVersion, createHash);
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tmpPath = filePath + '.tmp';
 	fs.writeFileSync(tmpPath, JSON.stringify(cache));
@@ -123,7 +137,7 @@ export function saveCache(
 }
 
 export function emptyCache(): CacheData {
-	return { version: CACHE_FORMAT_VERSION, ruleModes: {}, files: {} };
+	return { version: CACHE_FORMAT_VERSION, graph: {}, files: {} };
 }
 
 // Deep shape check. A corrupt `files` entry (wrong `mtime` type, missing
@@ -134,19 +148,20 @@ function isCacheData(x: unknown): x is CacheData {
 	if (typeof x !== 'object' || x === null) return false;
 	const o = x as Record<string, unknown>;
 	if (typeof o.version !== 'string') return false;
-	if (typeof o.ruleModes !== 'object' || o.ruleModes === null) return false;
+	if (o.globalKey !== undefined && typeof o.globalKey !== 'string') return false;
+	if (typeof o.graph !== 'object' || o.graph === null) return false;
+	for (const v of Object.values(o.graph as Record<string, unknown>)) {
+		if (typeof v !== 'object' || v === null) return false;
+		const n = v as Record<string, unknown>;
+		if (typeof n.mtime !== 'number' || typeof n.size !== 'number') return false;
+		if (!Array.isArray(n.deps) || typeof n.global !== 'boolean') return false;
+	}
 	if (typeof o.files !== 'object' || o.files === null) return false;
 	for (const v of Object.values(o.files as Record<string, unknown>)) {
 		if (typeof v !== 'object' || v === null) return false;
 		const f = v as Record<string, unknown>;
-		if (typeof f.mtime !== 'number') return false;
-		if (typeof f.rules !== 'object' || f.rules === null) return false;
-	}
-	if (o.incrementalState !== undefined) {
-		if (typeof o.incrementalState !== 'object' || o.incrementalState === null) return false;
-		const inc = o.incrementalState as Record<string, unknown>;
-		if (typeof inc.version !== 'string') return false;
-		if (typeof inc.tsBuildInfoText !== 'string') return false;
+		if (typeof f.hasFix !== 'boolean' || !Array.isArray(f.diagnostics)) return false;
+		if (typeof f.touched !== 'object' || f.touched === null) return false;
 	}
 	return true;
 }
@@ -154,18 +169,10 @@ function isCacheData(x: unknown): x is CacheData {
 function getCacheFilePath(
 	tsconfig: string,
 	configFilePath: string,
-	languages: string[],
 	tsVersion: string,
 	createHash: (s: string) => string,
 ): string {
-	const configStat = fs.statSync(configFilePath, { throwIfNoEntry: false });
-	const cacheKey = [
-		configFilePath,
-		tsconfig,
-		languages.sort().join(','),
-		configStat?.mtimeMs ?? 0,
-		configStat?.size ?? 0,
-	].join('\0');
+	const cacheKey = [configFilePath, tsconfig].join('\0');
 	return path.join(
 		getTsslintCachePath(),
 		tsVersion,

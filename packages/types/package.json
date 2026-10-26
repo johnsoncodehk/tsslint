@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/types",
-	"version": "3.1.4",
+	"version": "4.0.0-alpha.1",
 	"license": "MIT",
 	"files": [
 		"**/*.js",
@@ -10,5 +10,8 @@
 		"type": "git",
 		"url": "https://github.com/johnsoncodehk/tsslint.git",
 		"directory": "packages/types"
+	},
+	"dependencies": {
+		"typescript": "7.1.0-beta"
 	}
 }

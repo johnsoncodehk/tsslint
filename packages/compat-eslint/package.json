@@ -1,6 +1,6 @@
 {
 	"name": "@tsslint/compat-eslint",
-	"version": "3.1.4",
+	"version": "4.0.0-alpha.1",
 	"license": "MIT",
 	"files": [
 		"index.js",
@@ -16,22 +16,25 @@
 	"scripts": {
 		"bench": "tsc --build && node test/bench/run.js",
 		"test:predicate-coverage": "tsc --build && node test/predicate-coverage.test.js",
-		"test:jsx-react-x": "tsc --build && node test/jsx-react-x.test.mjs",
-		"test:parser-options-gap": "tsc --build && node test/parser-options-gap.test.js",
-		"test:upstream": "tsc --build && node test/upstream-runner.js"
+		"test:parser-options-gap": "tsc --build && node test/parser-options-gap.test.js"
 	},
 	"devDependencies": {
+		"@tsslint/estree-oracle": "workspace:*",
 		"@types/eslint": "^8.56.10",
-		"@typescript-eslint/scope-manager": "^8.16.0",
-		"@typescript-eslint/typescript-estree": "^8.16.0",
-		"eslint": ">=9.39.0 <10.0.0",
-		"typescript": "latest"
+		"eslint": ">=9.39.0 <10.0.0"
 	},
 	"peerDependencies": {
-		"typescript": "*"
+		"eslint": ">=9.39.0 <10.0.0"
 	},
 	"dependencies": {
-		"@tsslint/types": "3.1.4",
-		"esquery": "^1.5.0"
+		"@tsslint/types": "4.0.0-alpha.1",
+		"@typescript-eslint/scope-manager": "^8.72.0",
+		"esquery": "^1.5.0",
+		"typescript": "7.1.0-beta"
+	},
+	"peerDependenciesMeta": {
+		"eslint": {
+			"optional": true
+		}
 	}
 }

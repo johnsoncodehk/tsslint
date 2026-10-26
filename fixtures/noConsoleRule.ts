@@ -1,7 +1,7 @@
 import { defineRule } from '../packages/config/index.js';
 
 export default defineRule(({ typescript: ts, file, report }) => {
-	ts.forEachChild(file, function cb(node) {
+	file.forEachChild(function cb(node): void {
 		if (
 			ts.isPropertyAccessExpression(node)
 			&& ts.isIdentifier(node.expression)
@@ -14,17 +14,12 @@ export default defineRule(({ typescript: ts, file, report }) => {
 			).withFix(
 				`Remove 'console.${node.name.text}'`,
 				() => [{
-					fileName: file.fileName,
-					textChanges: [{
-						newText: '/* deleted */',
-						span: {
-							start: node.parent.getStart(file),
-							length: node.parent.getWidth(file),
-						},
-					}],
+					newText: '/* deleted */',
+					pos: node.parent.getStart(file),
+					end: node.parent.getEnd(),
 				}],
 			);
 		}
-		ts.forEachChild(node, cb);
+		node.forEachChild(cb);
 	});
 });

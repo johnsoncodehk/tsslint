@@ -5,7 +5,6 @@
 	},
 	"include": ["tsslint.config.ts"],
 	"references": [
-		{ "path": "./packages/cli/tsconfig.json" },
-		{ "path": "./packages/typescript-plugin/tsconfig.json" }
+		{ "path": "./packages/cli/tsconfig.json" }
 	]
 }

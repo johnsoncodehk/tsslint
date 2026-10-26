@@ -11,6 +11,7 @@
 import path = require('path');
 import fs = require('fs');
 import os = require('os');
+import type { CacheData } from '../lib/cache.js';
 
 const cache = require('../lib/cache.js') as typeof import('../lib/cache.js');
 
@@ -34,125 +35,19 @@ function tmpFile(name: string, content = ''): string {
 	return p;
 }
 
-// Override the cache root path. The module hardcodes os.tmpdir() —
-// can't redirect cleanly, so just accept that test artefacts land
-// alongside real cache files. Use a unique tsslint version segment via
-// monkey-patching require.cache to make tests isolated.
-//
-// Simpler: just use unique configFile contents to force unique hashes.
-
+// The module hardcodes os.tmpdir(), so test artefacts land alongside real
+// cache files. Unique config paths force unique hashes.
 function configWithMarker(marker: string): string {
 	return tmpFile(`config-${marker}.ts`, `// ${marker}`);
 }
 
-// ── Test 1: empty load when file doesn't exist ───────────────────────────
-{
-	const tsconfig = tmpFile('tsconfig1.json', '{}');
-	const config = configWithMarker('t1-' + Date.now());
-	const data = cache.loadCache(tsconfig, config, [], '6.0.0');
-	check('empty cache when file missing', data.files !== undefined && Object.keys(data.files).length === 0);
-	check('ruleModes empty', Object.keys(data.ruleModes).length === 0);
-	check('version present', typeof data.version === 'string');
+function withMarker(marker: string, data: Partial<CacheData> = {}): CacheData {
+	return { ...cache.emptyCache(), globalKey: marker, ...data };
 }
 
-// ── Test 2: round-trip save → load ───────────────────────────────────────
-{
-	const tsconfig = tmpFile('tsconfig2.json', '{}');
-	const config = configWithMarker('t2-' + Date.now());
-	const original: import('../lib/cache.js').CacheData = {
-		version: 'v2',
-		ruleModes: { 'no-undef': 'type-aware' },
-		files: {
-			'/abs/foo.ts': {
-				mtime: 1234567890,
-				rules: {
-					'semi': { hasFix: false, diagnostics: [] },
-				},
-			},
-		},
-	};
-	cache.saveCache(tsconfig, config, [], '6.0.0', original);
-	const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-	check('round-trip: ruleModes preserved', loaded.ruleModes['no-undef'] === 'type-aware');
-	check('round-trip: file mtime preserved', loaded.files['/abs/foo.ts']?.mtime === 1234567890);
-	check('round-trip: rule entry preserved', !!loaded.files['/abs/foo.ts']?.rules['semi']);
-}
-
-// ── Test 3: corrupted JSON returns empty cache ───────────────────────────
-{
-	const tsconfig = tmpFile('tsconfig3.json', '{}');
-	const config = configWithMarker('t3-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
-
-	// Find the cache file and corrupt it.
-	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
-	const findCacheFile = (): string | null => {
-		const stack = [cacheRoot];
-		while (stack.length) {
-			const dir = stack.pop()!;
-			let entries: fs.Dirent[];
-			try {
-				entries = fs.readdirSync(dir, { withFileTypes: true });
-			}
-			catch {
-				continue;
-			}
-			for (const e of entries) {
-				const full = path.join(dir, e.name);
-				if (e.isDirectory()) stack.push(full);
-				else if (e.isFile() && full.endsWith('.cache.json')) {
-					try {
-						const content = fs.readFileSync(full, 'utf8');
-						const parsed = JSON.parse(content);
-						// Find the one we just wrote (heuristic: empty data).
-						if (
-							parsed.version === 'v2'
-							&& Object.keys(parsed.ruleModes).length === 0
-							&& Object.keys(parsed.files).length === 0
-						) {
-							return full;
-						}
-					}
-					catch { /* ignore */ }
-				}
-			}
-		}
-		return null;
-	};
-	const cacheFile = findCacheFile();
-	check('found newly-written cache file', !!cacheFile);
-	if (cacheFile) {
-		fs.writeFileSync(cacheFile, '{not valid json');
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('corrupted JSON → empty cache', Object.keys(loaded.files).length === 0);
-	}
-}
-
-// ── Test 4: version mismatch returns empty cache ─────────────────────────
-{
-	const tsconfig = tmpFile('tsconfig4.json', '{}');
-	const config = configWithMarker('t4-' + Date.now());
-	const stale = {
-		version: 'v1', // wrong
-		ruleModes: { 'old-rule': 'type-aware' },
-		files: { '/x': { mtime: 1, rules: {} } },
-	};
-	// Manually write a stale-version file
-	cache.saveCache(tsconfig, config, [], '6.0.0', stale as any);
-	const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-	check('version mismatch → empty', Object.keys(loaded.ruleModes).length === 0);
-}
-
-// ── Test 5: shape mismatch returns empty cache ───────────────────────────
-{
-	const tsconfig = tmpFile('tsconfig5.json', '{}');
-	const config = configWithMarker('t5-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
-	// Corrupt to a valid-JSON-but-wrong-shape value. Find the file we
-	// just wrote (heuristic: empty cache contents).
-	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
-	const all: string[] = [];
-	const stack = [cacheRoot];
+// Finds the cache file saved with `withMarker(marker)`.
+function findCacheFile(marker: string): string | undefined {
+	const stack = [path.join(os.tmpdir(), 'tsslint-cache')];
 	while (stack.length) {
 		const dir = stack.pop()!;
 		let entries: fs.Dirent[];
@@ -164,84 +59,126 @@ function configWithMarker(marker: string): string {
 		}
 		for (const e of entries) {
 			const full = path.join(dir, e.name);
-			if (e.isDirectory()) stack.push(full);
-			else if (e.isFile() && full.endsWith('.cache.json')) all.push(full);
-		}
-	}
-	// Look for one whose content is empty cache (the one we just wrote).
-	let target: string | null = null;
-	for (const f of all) {
-		try {
-			const o = JSON.parse(fs.readFileSync(f, 'utf8'));
-			if (
-				o.version === 'v2' && Object.keys(o.files).length === 0
-				&& Object.keys(o.ruleModes).length === 0
-			) {
-				// Could be from a previous test; pick first.
-				target = f;
-				break;
+			if (e.isDirectory()) {
+				stack.push(full);
+			}
+			else if (e.isFile() && full.endsWith('.cache.json')) {
+				try {
+					if (JSON.parse(fs.readFileSync(full, 'utf8')).globalKey === marker) {
+						return full;
+					}
+				}
+				catch { /* ignore */ }
 			}
 		}
-		catch { /* ignore */ }
 	}
+}
+
+// ── Test 1: empty load when file doesn't exist ───────────────────────────
+{
+	const tsconfig = tmpFile('tsconfig1.json', '{}');
+	const config = configWithMarker('t1-' + Date.now());
+	const data = cache.loadCache(tsconfig, config, '6.0.0');
+	check('empty cache when file missing', data.files !== undefined && Object.keys(data.files).length === 0);
+	check('graph empty', Object.keys(data.graph).length === 0);
+	check('globalKey absent', data.globalKey === undefined);
+	check('version present', typeof data.version === 'string');
+}
+
+// ── Test 2: round-trip save → load ───────────────────────────────────────
+{
+	const tsconfig = tmpFile('tsconfig2.json', '{}');
+	const marker = 't2-' + Date.now();
+	const config = configWithMarker(marker);
+	const original = withMarker(marker, {
+		graph: {
+			'/abs/foo.ts': { mtime: 1234567890, size: 10, signature: 'sig', deps: ['/abs/bar.ts'], global: false },
+		},
+		files: {
+			'/abs/foo.ts': { hasFix: true, diagnostics: [], touched: { '/abs/baz.ts': 'hash' } },
+		},
+	});
+	cache.saveCache(tsconfig, config, '6.0.0', original);
+	const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+	check('round-trip: globalKey preserved', loaded.globalKey === marker);
+	check('round-trip: graph mtime preserved', loaded.graph['/abs/foo.ts']?.mtime === 1234567890);
+	check('round-trip: signature preserved', loaded.graph['/abs/foo.ts']?.signature === 'sig');
+	check('round-trip: deps preserved', loaded.graph['/abs/foo.ts']?.deps[0] === '/abs/bar.ts');
+	check('round-trip: file entry preserved', loaded.files['/abs/foo.ts']?.hasFix === true);
+	check('round-trip: touched files preserved', loaded.files['/abs/foo.ts']?.touched['/abs/baz.ts'] === 'hash');
+}
+
+// ── Test 3: corrupted JSON returns empty cache ───────────────────────────
+{
+	const tsconfig = tmpFile('tsconfig3.json', '{}');
+	const marker = 't3-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
+	const cacheFile = findCacheFile(marker);
+	check('found newly-written cache file', !!cacheFile);
+	if (cacheFile) {
+		fs.writeFileSync(cacheFile, '{not valid json');
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+		check('corrupted JSON → empty cache', loaded.globalKey === undefined);
+	}
+}
+
+// ── Test 4: version mismatch returns empty cache ─────────────────────────
+{
+	const tsconfig = tmpFile('tsconfig4.json', '{}');
+	const marker = 't4-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker, { version: 'v4' }));
+	const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+	check('version mismatch → empty', loaded.globalKey === undefined);
+}
+
+// ── Test 5: shape mismatch returns empty cache ───────────────────────────
+{
+	const tsconfig = tmpFile('tsconfig5.json', '{}');
+	const marker = 't5-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
+	const target = findCacheFile(marker);
+	check('test 5 cache file found', !!target);
 	if (target) {
 		fs.writeFileSync(target, '"just a string"');
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('shape mismatch → empty', Object.keys(loaded.files).length === 0);
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+		check('shape mismatch → empty', loaded.globalKey === undefined);
 	}
 }
 
 // ── Test 6: different ts version → different cache file ──────────────────
 {
 	const tsconfig = tmpFile('tsconfig6.json', '{}');
-	const config = configWithMarker('t6-' + Date.now());
-	const data: import('../lib/cache.js').CacheData = {
-		version: 'v2',
-		ruleModes: { 'rule6a': 'type-aware' },
-		files: {},
-	};
-	cache.saveCache(tsconfig, config, [], '6.0.0', data);
-	const loadedSameVersion = cache.loadCache(tsconfig, config, [], '6.0.0');
-	const loadedDifferentVersion = cache.loadCache(tsconfig, config, [], '7.0.0');
+	const marker = 't6-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
+	const loadedSameVersion = cache.loadCache(tsconfig, config, '6.0.0');
+	const loadedDifferentVersion = cache.loadCache(tsconfig, config, '7.0.0');
 
-	check(
-		'same ts version finds the cache',
-		loadedSameVersion.ruleModes['rule6a'] === 'type-aware',
-	);
-	check(
-		'different ts version → different file → empty',
-		!loadedDifferentVersion.ruleModes['rule6a'],
-	);
+	check('same ts version finds the cache', loadedSameVersion.globalKey === marker);
+	check('different ts version → different file → empty', loadedDifferentVersion.globalKey === undefined);
 }
 
-// ── Test 7: editing config file changes cache file path ──────────────────
+// ── Test 7: editing the config file keeps the cache file ─────────────────
 //
-// configStat.mtimeMs / size is in the cache key. Mutating the config
-// content + bumping mtime should land at a different cache file.
+// The config and the modules it loads are part of `globalKey`, which
+// re-lints every file when it changes; the path only depends on which
+// config and tsconfig the cache belongs to.
 {
 	const tsconfig = tmpFile('tsconfig7.json', '{}');
-	const config = configWithMarker('t7-' + Date.now());
+	const marker = 't7-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
 
-	const data: import('../lib/cache.js').CacheData = {
-		version: 'v2',
-		ruleModes: { 'rule7': 'type-aware' },
-		files: {},
-	};
-	cache.saveCache(tsconfig, config, [], '6.0.0', data);
-
-	// Bump config size + mtime.
 	fs.writeFileSync(config, '// changed content');
-	// Bump mtime explicitly to make sure the test isn't flaky on
-	// filesystems with low mtime resolution.
 	const newTime = new Date(Date.now() + 60_000);
 	fs.utimesSync(config, newTime, newTime);
 
-	const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-	check(
-		'config edit invalidates cache (different path key)',
-		!loaded.ruleModes['rule7'],
-		'expected fresh cache after config mtime+size change',
-	);
+	const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+	check('config edit keeps the cache path', loaded.globalKey === marker);
+	check('different tsconfig → different file', cache.loadCache(config, tsconfig, '6.0.0').globalKey === undefined);
 }
 
 // ── Test 8: atomic write uses .tmp file ──────────────────────────────────
@@ -251,143 +188,69 @@ function configWithMarker(marker: string): string {
 // after a successful save.
 {
 	const tsconfig = tmpFile('tsconfig8.json', '{}');
-	const config = configWithMarker('t8-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
-
-	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
-	let tmpLeaked = false;
-	const stack = [cacheRoot];
-	while (stack.length) {
-		const dir = stack.pop()!;
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(dir, { withFileTypes: true });
-		}
-		catch {
-			continue;
-		}
-		for (const e of entries) {
-			const full = path.join(dir, e.name);
-			if (e.isDirectory()) stack.push(full);
-			else if (e.isFile() && full.endsWith('.tmp')) tmpLeaked = true;
-		}
-	}
-	check('no .tmp leaked after successful save', !tmpLeaked);
+	const marker = 't8-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
+	const target = findCacheFile(marker);
+	check('test 8 cache file found', !!target);
+	check('no .tmp leaked after successful save', !!target && !fs.existsSync(target + '.tmp'));
 }
 
-// ── Test 9: inner shape mismatch (corrupt file entry) → empty cache ─────
+// ── Test 9: inner shape mismatch → empty cache ──────────────────────────
 //
-// isCacheData now validates `files[*]` entries deeply: a bad inner shape
-// (mtime is a string, rules is null) must reject the whole cache instead
-// of letting the load succeed and crashing later in the lint loop.
+// isCacheData validates graph and file entries deeply: a bad inner shape
+// must reject the whole cache instead of letting the load succeed and
+// crashing later in the lint loop.
 {
 	const tsconfig = tmpFile('tsconfig9.json', '{}');
-	const config = configWithMarker('t9-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
-	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
-	let target: string | null = null;
-	const stack = [cacheRoot];
-	while (stack.length) {
-		const dir = stack.pop()!;
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(dir, { withFileTypes: true });
-		}
-		catch {
-			continue;
-		}
-		for (const e of entries) {
-			const full = path.join(dir, e.name);
-			if (e.isDirectory()) stack.push(full);
-			else if (e.isFile() && full.endsWith('.cache.json')) {
-				try {
-					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
-					if (o.version === 'v2' && Object.keys(o.files).length === 0) {
-						target = full;
-						break;
-					}
-				}
-				catch { /* ignore */ }
-			}
-		}
-		if (target) break;
-	}
+	const marker = 't9-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
+	const target = findCacheFile(marker);
+	check('test 9 cache file found', !!target);
 	if (target) {
-		// mtime is a string, not a number — must reject.
-		const corrupt = {
-			version: 'v2',
-			ruleModes: {},
-			files: { '/x': { mtime: 'not-a-number', rules: {} } },
-		};
-		fs.writeFileSync(target, JSON.stringify(corrupt));
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('inner mtime mismatch → empty cache', Object.keys(loaded.files).length === 0);
-
-		// rules is null — must also reject.
-		const corrupt2 = {
-			version: 'v2',
-			ruleModes: {},
-			files: { '/x': { mtime: 1, rules: null } },
-		};
-		fs.writeFileSync(target, JSON.stringify(corrupt2));
-		const loaded2 = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('inner rules null → empty cache', Object.keys(loaded2.files).length === 0);
+		const base = withMarker(marker);
+		const cases: [string, unknown][] = [
+			['graph mtime not a number', {
+				...base,
+				graph: { '/x': { mtime: 'nope', size: 1, deps: [], global: false } },
+			}],
+			['graph deps not an array', { ...base, graph: { '/x': { mtime: 1, size: 1, deps: null, global: false } } }],
+			['file diagnostics not an array', {
+				...base,
+				files: { '/x': { hasFix: false, diagnostics: null, touched: {} } },
+			}],
+			['file hasFix missing', { ...base, files: { '/x': { diagnostics: [], touched: {} } } }],
+			['file touched missing', { ...base, files: { '/x': { hasFix: false, diagnostics: [] } } }],
+		];
+		for (const [label, corrupt] of cases) {
+			fs.writeFileSync(target, JSON.stringify(corrupt));
+			const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+			check(`${label} → empty cache`, loaded.globalKey === undefined);
+		}
 	}
 }
 
-// ── Test 10: incrementalState shape gate ────────────────────────────────
+// ── Test 10: globalKey shape gate ───────────────────────────────────────
 //
-// `incrementalState` is optional, but if present must be a
-// `{version, tsBuildInfoText}` object. A stray `incrementalState: 42`
-// would otherwise sneak past and crash later when reconstructOldBuilder
-// reads `.tsBuildInfoText`.
+// `globalKey` is optional, but if present must be a string. A stray
+// `globalKey: 42` must not be compared against a real key as if it were
+// one.
 {
 	const tsconfig = tmpFile('tsconfig10.json', '{}');
-	const config = configWithMarker('t10-' + Date.now());
-	cache.saveCache(tsconfig, config, [], '6.0.0', cache.emptyCache());
-	const cacheRoot = path.join(os.tmpdir(), 'tsslint-cache');
-	let target: string | null = null;
-	const stack = [cacheRoot];
-	while (stack.length) {
-		const dir = stack.pop()!;
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(dir, { withFileTypes: true });
-		}
-		catch {
-			continue;
-		}
-		for (const e of entries) {
-			const full = path.join(dir, e.name);
-			if (e.isDirectory()) stack.push(full);
-			else if (e.isFile() && full.endsWith('.cache.json')) {
-				try {
-					const o = JSON.parse(fs.readFileSync(full, 'utf8'));
-					if (o.version === 'v2' && Object.keys(o.files).length === 0) {
-						target = full;
-						break;
-					}
-				}
-				catch { /* ignore */ }
-			}
-		}
-		if (target) break;
-	}
+	const marker = 't10-' + Date.now();
+	const config = configWithMarker(marker);
+	cache.saveCache(tsconfig, config, '6.0.0', withMarker(marker));
+	const target = findCacheFile(marker);
+	check('test 10 cache file found', !!target);
 	if (target) {
-		const corrupt = { version: 'v2', ruleModes: {}, files: {}, incrementalState: 42 };
-		fs.writeFileSync(target, JSON.stringify(corrupt));
-		const loaded = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('incrementalState wrong type → empty cache', loaded.incrementalState === undefined);
+		fs.writeFileSync(target, JSON.stringify({ ...cache.emptyCache(), globalKey: 42 }));
+		const loaded = cache.loadCache(tsconfig, config, '6.0.0');
+		check('globalKey wrong type → empty cache', loaded.globalKey === undefined);
 
-		const corrupt2 = {
-			version: 'v2',
-			ruleModes: {},
-			files: {},
-			incrementalState: { version: 'v3' /* tsBuildInfoText missing */ },
-		};
-		fs.writeFileSync(target, JSON.stringify(corrupt2));
-		const loaded2 = cache.loadCache(tsconfig, config, [], '6.0.0');
-		check('incrementalState missing field → empty cache', loaded2.incrementalState === undefined);
+		fs.writeFileSync(target, JSON.stringify({ ...cache.emptyCache(), globalKey: 'abc' }));
+		const loaded2 = cache.loadCache(tsconfig, config, '6.0.0');
+		check('globalKey string round-trips', loaded2.globalKey === 'abc');
 	}
 }
 

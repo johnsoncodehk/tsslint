@@ -1,13 +1,15 @@
 {
 	"name": "@tsslint/core",
-	"version": "3.1.4",
+	"version": "4.0.0-alpha.1",
 	"license": "MIT",
 	"engines": {
-		"node": ">=22.6.0"
+		"node": ">=22.15.0"
 	},
 	"files": [
 		"index.js",
-		"index.d.ts"
+		"index.d.ts",
+		"lib/**/*.js",
+		"lib/**/*.d.ts"
 	],
 	"repository": {
 		"type": "git",
@@ -15,7 +17,8 @@
 		"directory": "packages/core"
 	},
 	"dependencies": {
-		"@tsslint/types": "3.1.4",
-		"minimatch": "^10.0.1"
+		"@tsslint/types": "4.0.0-alpha.1",
+		"minimatch": "^10.0.1",
+		"typescript": "7.1.0-beta"
 	}
 }

@@ -8,9 +8,9 @@ export default defineConfig([
 		},
 	},
 	{
-		include: ['**/*.vue'],
+		include: ['**/*.mts'],
 		rules: {
-			'no-console-vue': (await import('../noConsoleRule.ts')),
+			'no-console-mts': (await import('../noConsoleRule.ts')),
 		},
 	},
 ]);

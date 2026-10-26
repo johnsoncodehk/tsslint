@@ -1,59 +1,49 @@
-import type { Config, LinterContext, Reporter, Rule, RuleContext, Rules } from '@tsslint/types';
-import type * as ts from 'typescript';
+import type {
+	CodeFixAction,
+	Config,
+	Diagnostic,
+	LinterContext,
+	LintTarget,
+	RefactorAction,
+	Reporter,
+	Rule,
+	RuleContext,
+	Rules,
+} from '@tsslint/types';
+import type { MappedDiagnosticDirective } from 'typescript/ast';
+import { DiagnosticCategory, type TextEdit } from 'typescript/sync';
+
+import { collectTouchedFiles, trackChecker, trackProgram } from './lib/tracking';
 
 import path = require('path');
 import minimatch = require('minimatch');
 
 export type Linter = ReturnType<typeof createLinter>;
 
-// Marker stamped onto diagnostics by `Reporter.withoutCache()`. The CLI
-// cache-flow filters these out before serialising to disk so they're
-// never replayed from a warm cache hit. Symbol-keyed (via Symbol.for so
-// it's stable across module instances) — invisible to JSON.stringify and
-// to `{...spread}` so it doesn't leak into the serialised cache.
-export const NO_CACHE = Symbol.for('@tsslint/no-cache');
-
 export function createLinter(
 	ctx: LinterContext,
 	rootDir: string,
 	config: Config | Config[],
-	getRelatedInformations: (err: Error, stackIndex: number) => ts.DiagnosticRelatedInformation[],
-	// Rule IDs already known to be type-aware from a prior session (via
-	// the cache file's `ruleModes` map). Pre-seeding lets us treat those
-	// rules as type-aware on their first invocation in this session,
-	// before the runtime probe has a chance to classify them — closing
-	// the cold-session-with-stale-cache hole 3.0.4 had.
-	initialTypeAwareRules?: Iterable<string>,
 ) {
-	const ts = ctx.typescript;
 	const fileRules = new Map<string, Record<string, Rule>>();
 	const fileConfigs = new Map<string, typeof configs>();
 	const lintResults = new Map<
 		/* fileName */ string,
 		[
-			file: ts.SourceFile,
-			diagnostic2Fixes: Map<ts.DiagnosticWithLocation, {
+			target: LintTarget,
+			diagnostic2Fixes: Map<Diagnostic, {
 				title: string;
-				getEdits: () => ts.FileTextChanges[];
+				getEdits: () => readonly TextEdit[];
 			}[]>,
 			refactors: {
 				title: string;
-				diagnostic: ts.DiagnosticWithLocation;
-				getEdits: () => ts.FileTextChanges[];
+				diagnostic: Diagnostic;
+				getEdits: () => readonly TextEdit[];
 			}[],
 		]
 	>();
-	// Snapshot of each file's rule output BEFORE plugin `resolveDiagnostics`
-	// runs. Plugins can suppress diagnostics (e.g. `eslint-disable-next-line`
-	// matching a fired diagnostic) — the suppression is the right thing for
-	// the live API, but the cache layer needs the unsuppressed view so a
-	// warm pass can re-feed plugins with the cached diagnostics that were
-	// originally suppressed. Without this, cache stores post-suppression
-	// state, the next warm pass restores nothing for skipped rules, and the
-	// ignore plugin can no longer match disable comments to rule output —
-	// turning every successful suppression into a warm-only unused-comment
-	// false positive.
-	const rawDiagnosticsByFile = new Map<string, ts.DiagnosticWithLocation[]>();
+	// Other program files the rules and plugins read while linting each file.
+	const touchedFilesByFile = new Map<string, string[]>();
 	const configs = (Array.isArray(config) ? config : [config])
 		.map(config => ({
 			include: config.include,
@@ -62,102 +52,70 @@ export function createLinter(
 			plugins: (config.plugins ?? []).map(plugin => plugin(ctx)),
 		}));
 	const normalizedPath = new Map<string, string>();
-	// Sticky type-aware classification. Once a rule has read
-	// `rulesContext.program` in any past or current session, it stays
-	// type-aware for the lifetime of this linter. Reads are gated by a
-	// getter on `program` that flips a per-rule flag during execution.
-	const typeAwareRules = new Set<string>(initialTypeAwareRules ?? []);
 
 	return {
-		// `options.skipRules`: rule IDs the caller already has cached
-		// results for. Core just doesn't run them — the caller is
-		// responsible for merging cached output into the final diagnostic
-		// list. Decoupling cache lifecycle from core means future cache
-		// changes (BuilderProgram-based invalidation, schema bumps) live
-		// in the CLI without churning this layer.
-		//
-		// `options.prevDiagnostics`: cached diagnostics from prior sessions
-		// for rules in `skipRules`. Seeded into the diagnostics array
-		// before plugin `resolveDiagnostics` runs so plugins see the same
-		// view they would on a cold pass — critical for `createIgnorePlugin`,
-		// which decides "is this disable comment used?" by matching against
-		// fired diagnostics.
-		lint(
-			fileName: string,
-			options?: {
-				skipRules?: ReadonlySet<string>;
-				prevDiagnostics?: readonly ts.DiagnosticWithLocation[];
-			},
-		): ts.DiagnosticWithLocation[] {
+		lint(target: LintTarget): Diagnostic[] {
 			let currentRuleId: string;
-			const skipRules = options?.skipRules;
+			const { program, checker, file } = target;
+			const fileName = file.fileName;
 
 			const rules = getRulesForFile(fileName);
-			const token = ctx.languageServiceHost.getCancellationToken?.();
 			const configs = getConfigsForFile(fileName);
 
-			const program = ctx.languageService.getProgram()!;
-			const file = program.getSourceFile(fileName)!;
-			let touchedProgram = false;
+			const trackedTarget: LintTarget = {
+				file,
+				program: trackProgram(program),
+				checker: trackChecker(checker, program),
+			};
 			const rulesContext: RuleContext = {
 				typescript: ctx.typescript,
-				file,
-				get program() {
-					touchedProgram = true;
-					return program;
-				},
+				...trackedTarget,
 				report,
 			};
 
-			lintResults.set(fileName, [rulesContext.file, new Map(), []]);
+			lintResults.set(fileName, [target, new Map(), []]);
 
 			const lintResult = lintResults.get(fileName)!;
 
-			for (const [ruleId, rule] of Object.entries(rules)) {
-				if (token?.isCancellationRequested()) {
-					break;
-				}
-
-				currentRuleId = ruleId;
-
-				if (skipRules?.has(currentRuleId)) {
-					continue;
-				}
-
-				touchedProgram = false;
-				try {
-					rule(rulesContext);
-				}
-				catch (err) {
-					if (err instanceof Error) {
-						report(err.stack ?? err.message, 0, 0).at(err, 0);
+			let diagnostics: Diagnostic[] = [];
+			const touchedFiles = collectTouchedFiles(() => {
+				for (const [ruleId, rule] of Object.entries(rules)) {
+					currentRuleId = ruleId;
+					try {
+						rule(rulesContext);
 					}
-					else {
-						report(String(err), 0, 0).at(new Error(), Number.MAX_VALUE);
+					catch (err) {
+						// A crash has no position, so it carries no `fileName`.
+						addDiagnostic({
+							category: DiagnosticCategory.Message,
+							code: 0,
+							ruleId: currentRuleId,
+							text: err instanceof Error ? err.stack ?? err.message : String(err),
+							pos: 0,
+							end: 0,
+						});
 					}
 				}
-				if (touchedProgram) {
-					typeAwareRules.add(currentRuleId);
+
+				diagnostics = [...lintResult[1].keys()];
+
+				const directives = file.diagnosticDirectives;
+				if (directives?.length) {
+					diagnostics = diagnostics.filter(diagnostic =>
+						diagnostic.fileName === undefined || !isInDirective(directives, diagnostic.pos)
+					);
 				}
-			}
 
-			// Snapshot fresh rule output for the cache layer (callers read
-			// it via `getRawLintResult`). Skipped rules' diagnostics aren't
-			// re-issued here — they live in the caller's cache.
-			rawDiagnosticsByFile.set(fileName, [...lintResult[1].keys()]);
-
-			let diagnostics: ts.DiagnosticWithLocation[] = [
-				...(options?.prevDiagnostics ?? []),
-				...lintResult[1].keys(),
-			];
-
-			for (const { plugins } of configs) {
-				for (const { resolveDiagnostics } of plugins) {
-					if (resolveDiagnostics) {
-						diagnostics = resolveDiagnostics(rulesContext.file, diagnostics);
+				for (const { plugins } of configs) {
+					for (const { resolveDiagnostics } of plugins) {
+						if (resolveDiagnostics) {
+							diagnostics = resolveDiagnostics(trackedTarget, diagnostics);
+						}
 					}
 				}
-			}
+			});
+			touchedFiles.delete(fileName);
+			touchedFilesByFile.set(fileName, [...touchedFiles]);
 
 			// Remove fixes and refactors that removed by resolveDiagnostics
 			const diagnosticSet = new Set(diagnostics);
@@ -170,49 +128,42 @@ export function createLinter(
 
 			return diagnostics;
 
-			function report(message: string, start: number, end: number): Reporter {
-				const error: ts.DiagnosticWithLocation = {
-					category: ts.DiagnosticCategory.Message,
-					code: currentRuleId as any,
-					messageText: message,
-					file: rulesContext.file,
-					start,
-					length: end - start,
-					source: 'tsslint',
-					get relatedInformation() {
-						return relatedInformation ??= getRelatedInformations(location[0], location[1]);
-					},
-					set relatedInformation(value) {
-						relatedInformation = value;
-					},
-				};
-				let location: [Error, number] = [new Error(), 1];
-				let relatedInformation: ts.DiagnosticRelatedInformation[] | undefined;
-
+			function addDiagnostic(diagnostic: Diagnostic) {
 				let lintResult = lintResults.get(fileName);
 				if (!lintResult) {
-					lintResults.set(fileName, lintResult = [rulesContext.file, new Map(), []]);
+					lintResults.set(fileName, lintResult = [target, new Map(), []]);
 				}
-				const diagnostic2Fixes = lintResult[1];
-				const refactors = lintResult[2];
-				diagnostic2Fixes.set(error, []);
-				const fixes = diagnostic2Fixes.get(error)!;
+				const fixes: { title: string; getEdits: () => readonly TextEdit[] }[] = [];
+				lintResult[1].set(diagnostic, fixes);
+				return { fixes, refactors: lintResult[2] };
+			}
+
+			function report(message: string, start: number, end: number): Reporter {
+				const error: Diagnostic = {
+					category: DiagnosticCategory.Message,
+					code: 0,
+					ruleId: currentRuleId,
+					text: message,
+					fileName: file.fileName,
+					pos: start,
+					end,
+				};
+				const { fixes, refactors } = addDiagnostic(error);
 
 				return {
-					at(err, stack) {
-						location = [err, stack];
+					at() {
 						return this;
 					},
 					asWarning() {
-						error.category = ts.DiagnosticCategory.Warning;
+						error.category = DiagnosticCategory.Warning;
 						return this;
 					},
 					asError() {
-						error.category = ts.DiagnosticCategory.Error;
+						error.category = DiagnosticCategory.Error;
 						return this;
 					},
 					asSuggestion() {
-						error.category = ts.DiagnosticCategory.Suggestion;
+						error.category = DiagnosticCategory.Suggestion;
 						return this;
 					},
 					withDeprecated() {
@@ -235,10 +186,6 @@ export function createLinter(
 						});
 						return this;
 					},
-					withoutCache() {
-						(error as any)[NO_CACHE] = true;
-						return this;
-					},
 				};
 			}
 		},
@@ -254,48 +201,39 @@ export function createLinter(
 			}
 			return false;
 		},
-		// Per-diagnostic fix presence — used by the CLI cache layer to
-		// snapshot `hasFix` for a rule's cache entry without reaching
-		// into core's internal `diagnostic2Fixes` map.
-		hasFixForDiagnostic(fileName: string, diagnostic: ts.DiagnosticWithLocation): boolean {
-			const lintResult = lintResults.get(fileName);
-			if (!lintResult) return false;
-			const fixes = lintResult[1].get(diagnostic);
-			return !!fixes && fixes.length > 0;
-		},
 		getCodeFixes(
 			fileName: string,
 			start: number,
 			end: number,
-			diagnostics?: ts.Diagnostic[],
+			diagnostics?: Diagnostic[],
 		) {
 			const lintResult = lintResults.get(fileName);
 			if (!lintResult) {
 				return [];
 			}
 
-			const file = lintResult[0];
+			const target = lintResult[0];
 			const configs = getConfigsForFile(fileName);
-			const result: ts.CodeFixAction[] = [];
+			const result: CodeFixAction[] = [];
 
 			for (const [diagnostic, actions] of lintResult[1]) {
 				if (diagnostics?.length && !diagnostics.includes(diagnostic)) {
 					continue;
 				}
-				const diagStart = diagnostic.start;
-				const diagEnd = diagStart + diagnostic.length;
+				const diagStart = diagnostic.pos;
+				const diagEnd = diagnostic.end;
 				if (
 					(diagStart >= start && diagStart <= end)
 					|| (diagEnd >= start && diagEnd <= end)
 					|| (start >= diagStart && start <= diagEnd)
 					|| (end >= diagStart && end <= diagEnd)
 				) {
-					let codeFixes: ts.CodeFixAction[] = [];
+					let codeFixes: CodeFixAction[] = [];
 					for (const action of actions) {
 						codeFixes.push({
-							fixName: `tsslint:${diagnostic.code}`,
+							fixName: `tsslint:${diagnostic.ruleId}`,
 							description: action.title,
-							changes: action.getEdits(),
+							edits: action.getEdits(),
 							fixId: 'tsslint',
 							fixAllDescription: 'Fix all TSSLint errors',
 						});
@@ -303,7 +241,7 @@ export function createLinter(
 					for (const { plugins } of configs) {
 						for (const { resolveCodeFixes } of plugins) {
 							if (resolveCodeFixes) {
-								codeFixes = resolveCodeFixes(file, diagnostic, codeFixes);
+								codeFixes = resolveCodeFixes(target, diagnostic, codeFixes);
 							}
 						}
 					}
@@ -319,12 +257,12 @@ export function createLinter(
 				return [];
 			}
 
-			const result: ts.RefactorActionInfo[] = [];
+			const result: RefactorAction[] = [];
 
 			for (let i = 0; i < lintResult[2].length; i++) {
 				const refactor = lintResult[2][i];
-				const diagStart = refactor.diagnostic.start;
-				const diagEnd = diagStart + refactor.diagnostic.length;
+				const diagStart = refactor.diagnostic.pos;
+				const diagEnd = refactor.diagnostic.end;
 				if (
 					(diagStart >= start && diagStart <= end)
 					|| (diagEnd >= start && diagEnd <= end)
@@ -356,18 +294,13 @@ export function createLinter(
 		},
 		getRules: getRulesForFile,
 		getConfigs: getConfigsForFile,
-		// Snapshot of rules classified type-aware so far. The CLI reads
-		// this after a lint pass to persist into the cache file's
-		// `ruleModes` map, then feeds it back via `initialTypeAwareRules`
-		// on the next session.
-		getTypeAwareRules(): ReadonlySet<string> {
-			return typeAwareRules;
-		},
-		// Pre-suppression rule output from the most recent `lint(fileName)`.
-		// Cache layer keys writes off this so suppressed-but-fired
-		// diagnostics survive into the next session's `prevDiagnostics`.
-		getRawLintResult(fileName: string): readonly ts.DiagnosticWithLocation[] {
-			return rawDiagnosticsByFile.get(fileName) ?? [];
+		/**
+		 * Other files the last `lint` of `fileName` read beyond their
+		 * declarations: their nodes, source files, diagnostics or emit. Names
+		 * passed to the API by the rule are returned as given.
+		 */
+		getTouchedFiles(fileName: string): readonly string[] {
+			return touchedFilesByFile.get(fileName) ?? [];
 		},
 	};
 
@@ -410,7 +343,7 @@ export function createLinter(
 		function _minimatch(pattern: string) {
 			let normalized = normalizedPath.get(pattern);
 			if (!normalized) {
-				normalized = ts.server.toNormalizedPath(path.resolve(rootDir, pattern));
+				normalized = path.resolve(rootDir, pattern).replace(/\\/g, '/');
 				normalizedPath.set(pattern, normalized);
 			}
 			return minimatch.minimatch(fileName, normalized, { dot: true });
@@ -428,7 +361,14 @@ export function createLinter(
 	}
 }
 
-export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
+// A content mapper's Ignore and Expect directives both suppress rule
+// reports that start inside their virtual range. An unused Expect is
+// reported by TypeScript itself, so there is nothing to add here.
+function isInDirective(directives: readonly MappedDiagnosticDirective[], start: number) {
+	return directives.some(({ virtualRange }) => start >= virtualRange.pos && start < virtualRange.end);
+}
+
+export function combineCodeFixes(fixes: CodeFixAction[]) {
 	// Match ESLint's `compareMessagesByFixRange` order so overlap resolution
 	// agrees with applyFixes: sort ASC by start, tie-break ASC by end. The
 	// earliest-starting fix wins; later overlapping fixes are dropped. (e.g.
@@ -436,48 +376,29 @@ export function combineCodeFixes(fileName: string, fixes: ts.CodeFixAction[]) {
 	// whole assertion and prefer-as-const just the inner literal, ESLint
 	// keeps the wider no-unnecessary fix and prefer-as-const is silently
 	// skipped — see eslint/lib/linter/source-code-fixer.js:124.)
-	const changes = fixes
-		.map(fix => fix.changes)
-		.flat()
-		.filter(change => change.fileName === fileName && change.textChanges.length)
-		.sort((a, b) => {
-			const aFirst = a.textChanges[0];
-			const bFirst = b.textChanges[0];
-			return aFirst.span.start - bFirst.span.start
-				|| (aFirst.span.start + aFirst.span.length) - (bFirst.span.start + bFirst.span.length);
-		});
+	const editLists = fixes
+		.map(fix => fix.edits)
+		.filter(edits => edits.length)
+		.sort((a, b) => a[0].pos - b[0].pos || a[0].end - b[0].end);
 
-	let lastChangeEndAt = -1;
-	let finalTextChanges: ts.TextChange[] = [];
+	let lastEditEndAt = -1;
+	let finalEdits: TextEdit[] = [];
 
-	for (const change of changes) {
-		const textChanges = [...change.textChanges].sort((a, b) => a.span.start - b.span.start);
-		const firstChange = textChanges[0];
-		const lastChange = textChanges[textChanges.length - 1];
-		if (firstChange.span.start >= lastChangeEndAt) {
-			lastChangeEndAt = lastChange.span.start + lastChange.span.length;
-			finalTextChanges = finalTextChanges.concat(textChanges);
+	for (const editList of editLists) {
+		const edits = [...editList].sort((a, b) => a.pos - b.pos);
+		if (edits[0].pos >= lastEditEndAt) {
+			lastEditEndAt = edits[edits.length - 1].end;
+			finalEdits = finalEdits.concat(edits);
 		}
 	}
 
-	return finalTextChanges;
+	return finalEdits;
 }
 
-export function applyTextChanges(baseSnapshot: ts.IScriptSnapshot, textChanges: ts.TextChange[]): ts.IScriptSnapshot {
-	textChanges = [...textChanges].sort((a, b) => b.span.start - a.span.start);
-	let text = baseSnapshot.getText(0, baseSnapshot.getLength());
-	for (const change of textChanges) {
-		text = text.slice(0, change.span.start) + change.newText + text.slice(change.span.start + change.span.length);
+export function applyTextEdits(text: string, edits: readonly TextEdit[]): string {
+	const sorted = [...edits].sort((a, b) => b.pos - a.pos);
+	for (const edit of sorted) {
+		text = text.slice(0, edit.pos) + edit.newText + text.slice(edit.end);
 	}
-	return {
-		getText(start, end) {
-			return text.substring(start, end);
-		},
-		getLength() {
-			return text.length;
-		},
-		getChangeRange() {
-			return undefined;
-		},
-	};
+	return text;
 }

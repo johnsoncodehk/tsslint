@@ -6,7 +6,6 @@ Adapter that lets ESLint rules run under TSSLint. Consumed by `importESLintRules
 
 ```bash
 npm install @tsslint/compat-eslint --save-dev
-npm install @typescript-eslint/eslint-plugin --save-dev   # for @typescript-eslint/* rules
 ```
 
 ```ts
@@ -16,7 +15,7 @@ export default defineConfig({
   rules: {
     ...await importESLintRules({
       'no-unused-vars': true,
-      '@typescript-eslint/no-explicit-any': 'warn',
+      'eqeqeq': 'warn',
     }),
   },
 });
@@ -24,7 +23,7 @@ export default defineConfig({
 
 For each `<plugin>/<rule>` you reference, install the matching `eslint-plugin-<plugin>` (or `@scope/eslint-plugin`) package.
 
-See the [root README](../../README.md) for full interop notes, including TSLint and TSL.
+`@typescript-eslint/eslint-plugin` does not load with `typescript@7` yet. See the [root README](../../README.md) for full interop notes.
 
 ---
 
