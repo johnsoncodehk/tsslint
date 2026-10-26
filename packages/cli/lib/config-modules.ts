@@ -17,10 +17,9 @@ export function trackImports() {
 		return;
 	}
 	tracking = true;
-	// Added in Node.js 22.15; on older versions only the config file itself
-	// is keyed (see `getConfigModulesKey`).
-	const registerHooks = (Module as { registerHooks?: (hooks: object) => void }).registerHooks;
-	registerHooks?.({
+	// `Module.registerHooks` was added in Node.js 22.15, the minimum version.
+	const registerHooks = (Module as unknown as { registerHooks: (hooks: object) => void }).registerHooks;
+	registerHooks({
 		resolve(
 			specifier: string,
 			context: { parentURL?: string },

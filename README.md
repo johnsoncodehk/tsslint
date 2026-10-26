@@ -124,7 +124,7 @@ defineConfig({
 The CLI caches each file's diagnostics on disk under `os.tmpdir()/tsslint-cache/`, and re-lints a file only when its result may have changed, the way `tsc --incremental` decides what to re-check:
 
 - the file itself changed (mtime or size), or
-- a file it imports or references changed its declaration signature (its `.d.ts` emit). Editing a function body re-lints only that file; changing an exported type re-lints its importers, and keeps going through files whose own signature changes as a result (e.g. re-exports), or
+- a file it imports or references changed its declaration signature (its `.d.ts` emit). Editing a function body re-lints only that file; changing an exported type re-lints only the importers that use a name the change reaches, and keeps going through files whose own signature changes as a result (e.g. re-exports), or
 - a rule read another file beyond its declarations while linting it — a declaration node such as a called function's body, the file's source, its diagnostics, or a checker query by file and position — and that file's text changed.
 
 Everything is re-linted when a change can affect any file: compiler options or a tsconfig file, the content mappers, `tsslint.config.ts` or any module it imports, files added to or removed from the program, files under `node_modules`, a changed declaration signature of a script without imports or exports or of a UMD module (`export as namespace`), or a change of what a `declare global` / `declare module '...'` block declares, including through the imports and declarations the block names. A module's other exports only re-lint its importers.
@@ -241,7 +241,7 @@ Build your own with the `Plugin` type from `@tsslint/types`.
 
 ## Requirements
 
-- Node.js **22.12.0+** (`tsslint.config.ts` is loaded with `--experimental-strip-types` — no transpile step)
+- Node.js **22.15.0+** (`tsslint.config.ts` is loaded with `--experimental-strip-types` — no transpile step)
 - TypeScript 7 comes bundled as a dependency, separate from the `typescript` your project compiles with. TypeScript 5/6 are not supported; see [docs/migration-v4.md](docs/migration-v4.md)
 
 ## License
